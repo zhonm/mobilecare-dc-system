@@ -1,9 +1,10 @@
-import React from 'react';
+import { Component } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import CommandPalette from './components/CommandPalette';
 import Dashboard from './components/Dashboard';
 import DataImport from './components/DataImport';
 import Forecasting from './components/Forecasting';
@@ -23,7 +24,15 @@ import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import './App.css';
 
 function MainApp() {
-  const { currentUser, pendingFirstTimeUser, activeTab, canAccess, toast } = useApp();
+  const {
+    currentUser,
+    pendingFirstTimeUser,
+    activeTab,
+    canAccess,
+    toast,
+    isCommandPaletteOpen,
+    setIsCommandPaletteOpen
+  } = useApp();
 
   // 1. Auth Guard: Show CreatePassword or Login if not authenticated
   if (!currentUser) {
@@ -83,6 +92,12 @@ function MainApp() {
         </main>
       </div>
 
+      {/* Global Command Palette (Cmd+K / Ctrl+K) */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+      />
+
       {/* Global Toast Notifications */}
       {toast && (
         <div className={`toast-notification toast-${toast.type}`}>
@@ -101,7 +116,7 @@ function MainApp() {
 }
 
 // Error Boundary to prevent blank white screens
-class ErrorBoundary extends React.Component {
+class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false, error: null };

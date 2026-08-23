@@ -1,35 +1,26 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
 import { calculateWeeklySplit } from '../utils/allocationEngine';
+import { CANONICAL_SITE_CODES } from '../constants/config';
 import SaveRecordModal from './SaveRecordModal';
 import {
   Split,
   Download,
   Printer,
   FileText,
-  Sparkles,
   UploadCloud,
   Layers,
   DollarSign,
   Package,
   Building2,
-  TrendingUp,
-  Percent,
   CheckCircle2,
   Smartphone,
   BatteryCharging,
   BookmarkPlus,
   RefreshCw
 } from 'lucide-react';
-
-const CANONICAL_SITE_CODES = [
-  'APP BHS', 'APP GB3', 'APP PPM', 'ASP GL5', 'ASP SMS', 'APP MOA', 'ASP POD',
-  'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP FES', 'ASP MRK',
-  'APP RM', 'ASP LIM', 'ASP NPM', 'ASP NAG', 'ASP LAU', 'ASP ILO', 'ASP CEB',
-  'ASP ZAM', 'ASP ABR', 'ASP COT', 'ASP CDO', 'APP LAN'
-];
 
 export default function AllocationMatrix() {
   const {
@@ -38,8 +29,6 @@ export default function AllocationMatrix() {
     parts,
     selectedCategory,
     updateSiteAllocation,
-    runAutoAllocation,
-    inventoryUnits,
     setActiveTab,
     isAutoRefreshing,
     lastSyncedAt,

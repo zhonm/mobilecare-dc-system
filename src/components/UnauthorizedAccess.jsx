@@ -1,6 +1,6 @@
-import React from 'react';
-import { useApp, ALL_PAGES } from '../context/AppContext';
-import { ShieldAlert, ArrowLeft, LogOut, Lock } from 'lucide-react';
+import { useApp } from '../context/AppContext';
+import { ALL_PAGES } from '../constants/navigation';
+import { ShieldAlert, ArrowLeft, LogOut } from 'lucide-react';
 
 export default function UnauthorizedAccess() {
   const { currentUser, setActiveTab, signOut, canAccess } = useApp();

@@ -190,7 +190,9 @@ class RateLimiter {
       const data = JSON.parse(localStorage.getItem(this.storageKey) || "{}");
       delete data[identifier];
       localStorage.setItem(this.storageKey, JSON.stringify(data));
-    } catch {}
+    } catch (err) {
+      console.debug('Rate limiter storage note:', err);
+    }
   }
 }
 

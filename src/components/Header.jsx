@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Plus, Barcode, PackageCheck, Database, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Search, Barcode, PackageCheck, Database, RefreshCw, CheckCircle2, Command } from 'lucide-react';
 
 export default function Header() {
   const {
@@ -16,7 +16,8 @@ export default function Header() {
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    activePeriod
+    activePeriod,
+    setIsCommandPaletteOpen
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -144,6 +145,27 @@ export default function Header() {
             </>
           )}
         </div>
+
+        {/* Global Command Palette Trigger */}
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => setIsCommandPaletteOpen(true)}
+          title="Open Command Palette (Cmd+K / Ctrl+K)"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'var(--bg-card)',
+            borderColor: 'var(--border-strong)',
+            color: 'var(--text-muted)'
+          }}
+        >
+          <Command size={13} color="var(--primary)" />
+          <span style={{ fontSize: '12px', fontWeight: 500 }}>Commands</span>
+          <kbd style={{ fontSize: '10px', background: 'var(--bg-subtle)', padding: '1px 5px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+            ⌘K
+          </kbd>
+        </button>
 
         <div className="search-input-box">
           <Search size={15} />

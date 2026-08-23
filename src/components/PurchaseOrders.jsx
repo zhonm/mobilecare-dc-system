@@ -1,17 +1,16 @@
-import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { ShoppingCart, Plus, Barcode, CheckCircle, Clock, UploadCloud } from 'lucide-react';
+import { ShoppingCart, Barcode, UploadCloud } from 'lucide-react';
 
 export default function PurchaseOrders() {
-  const { purchaseOrders, forecastItems, parts, setActiveTab, showToast } = useApp();
+  const { purchaseOrders, setActiveTab, showToast } = useApp();
 
   return (
-    <div className="purchase-orders-view">
+    <div className="purchase-orders-view" style={{ maxWidth: '1200px', margin: '0 auto' }}>
       <div className="card" style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <h3>Purchase Orders (DC Replenishment)</h3>
-            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+            <h3 style={{ fontSize: '18px', margin: 0 }}>Purchase Orders (DC Replenishment)</h3>
+            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
               Manage vendor POs placed against forecasted demand. Received units are serialized and scanned in.
             </p>
           </div>
@@ -73,24 +72,36 @@ export default function PurchaseOrders() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <h3 style={{ fontSize: '16px' }}>{po.po_number}</h3>
+                      <h3 style={{ fontSize: '16px', margin: 0 }}>{po.po_number}</h3>
                       <span className={`badge ${po.status === 'received' ? 'badge-success' : 'badge-warning'}`}>
                         {po.status.replace('_', ' ')}
                       </span>
                     </div>
-                    <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
                       Order Date: {po.order_date} • Expected Arrival: {po.expected_date} • {po.remarks}
                     </p>
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
-                      {totalReceived} / {totalOrdered} Units
+                    <div style={{ fontSize: '17px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                      {totalReceived} / {totalOrdered} Units ({pct}%)
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
                       Total Estimated Value: ${totalValue.toLocaleString()}
                     </div>
                   </div>
+                </div>
+
+                {/* Fulfillment Progress Bar */}
+                <div style={{ width: '100%', height: '6px', background: 'var(--bg-subtle)', borderRadius: '3px', overflow: 'hidden', marginBottom: '14px' }}>
+                  <div
+                    style={{
+                      width: `${pct}%`,
+                      height: '100%',
+                      background: pct === 100 ? 'var(--success)' : 'var(--primary)',
+                      transition: 'width 0.3s ease'
+                    }}
+                  />
                 </div>
 
                 {/* Line Items Table */}

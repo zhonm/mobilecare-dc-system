@@ -34,7 +34,7 @@ export function calculateLinearRegressionForecast(yValues = [], targetX = null) 
   const denominator = n * sumXX - sumX * sumX;
   if (denominator === 0) {
     const avg = sumY / n;
-    return Math.round(avg);
+    return Math.max(0, Math.round(avg));
   }
 
   // Slope (beta) and Intercept (alpha)
@@ -42,7 +42,60 @@ export function calculateLinearRegressionForecast(yValues = [], targetX = null) 
   const intercept = (sumY - slope * sumX) / n;
 
   const rawForecast = intercept + slope * target;
-  return Math.round(rawForecast);
+  return Math.max(0, Math.round(rawForecast));
+}
+
+/**
+ * Calculates trend direction and metrics over historical monthly numbers
+ * @param {number[]} yValues 
+ * @returns {{ slope: number, trend: 'increasing'|'decreasing'|'stable', momGrowthPct: number, average: number }}
+ */
+export function calculateForecastTrendMetrics(yValues = []) {
+  if (!yValues || yValues.length === 0) {
+    return { slope: 0, trend: 'stable', momGrowthPct: 0, average: 0 };
+  }
+
+  const n = yValues.length;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+
+  for (let i = 0; i < n; i++) {
+    const x = i + 1;
+    const y = Number(yValues[i]) || 0;
+    sumX += x;
+    sumY += y;
+    sumXY += x * y;
+    sumXX += x * x;
+  }
+
+  const avg = sumY / n;
+  const denominator = n * sumXX - sumX * sumX;
+  const slope = denominator !== 0 ? (n * sumXY - sumX * sumY) / denominator : 0;
+
+  let trend = 'stable';
+  if (slope > 0.35) trend = 'increasing';
+  else if (slope < -0.35) trend = 'decreasing';
+
+  // Month-over-month growth of the last 2 recorded periods
+  let momGrowthPct = 0;
+  if (n >= 2) {
+    const last = Number(yValues[n - 1]) || 0;
+    const prev = Number(yValues[n - 2]) || 0;
+    if (prev > 0) {
+      momGrowthPct = Math.round(((last - prev) / prev) * 100);
+    } else if (last > 0) {
+      momGrowthPct = 100;
+    }
+  }
+
+  return {
+    slope: Math.round(slope * 100) / 100,
+    trend,
+    momGrowthPct,
+    average: Math.round(avg * 10) / 10
+  };
 }
 
 /**

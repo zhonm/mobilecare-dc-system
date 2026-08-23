@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   BookmarkPlus,
@@ -8,10 +8,7 @@ import {
   X,
   AlertCircle,
   TrendingUp,
-  Split,
-  Package,
-  Building2,
-  CheckCircle2
+  Split
 } from 'lucide-react';
 
 const MONTH_NAMES = [

@@ -1,14 +1,26 @@
-import React, { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { calculateLinearRegressionForecast } from '../utils/forecastEngine';
+import { calculateLinearRegressionForecast, calculateForecastTrendMetrics } from '../utils/forecastEngine';
 import { exportForecastToExcel } from '../utils/excelParser';
 import SaveRecordModal from './SaveRecordModal';
-import { Download, TrendingUp, UploadCloud, BookmarkPlus, Printer, RefreshCw, CheckCircle2 } from 'lucide-react';
+import {
+  Download,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  UploadCloud,
+  BookmarkPlus,
+  Printer,
+  RefreshCw,
+  CheckCircle2,
+  XCircle,
+  Sliders,
+  ShieldCheck
+} from 'lucide-react';
 
 export default function Forecasting() {
   const {
     forecastItems,
-    parts,
     selectedCategory,
     updateForecastOverride,
     setActiveTab,
@@ -36,14 +48,37 @@ export default function Forecasting() {
   const targetMonthShort = activePeriod?.label ? activePeriod.label.split(' ')[0].substring(0, 3) : 'Sep';
 
   // Filter items by category
-  const filteredItems = forecastItems.filter(item => {
-    if (selectedCategory === 'ALL') return true;
-    if (selectedCategory === 'BATTERY') return item.category_id === 'cat-battery';
-    if (selectedCategory === 'DISPLAY') return item.category_id === 'cat-display';
-    if (selectedCategory === 'CAMERA') return item.category_id === 'cat-camera';
-    if (selectedCategory === 'BACK_GLASS') return item.category_id === 'cat-backglass';
-    return true;
-  });
+  const filteredItems = useMemo(() => {
+    return forecastItems.filter(item => {
+      if (selectedCategory === 'ALL') return true;
+      if (selectedCategory === 'BATTERY') return item.category_id === 'cat-battery';
+      if (selectedCategory === 'DISPLAY') return item.category_id === 'cat-display';
+      if (selectedCategory === 'CAMERA') return item.category_id === 'cat-camera';
+      if (selectedCategory === 'BACK_GLASS') return item.category_id === 'cat-backglass';
+      return true;
+    });
+  }, [forecastItems, selectedCategory]);
+
+  // High level metrics
+  const metrics = useMemo(() => {
+    let totalBase = 0;
+    let totalRecommended = 0;
+    let overrideCount = 0;
+
+    filteredItems.forEach(item => {
+      const counts = months.map((_, idx) => (item.ytd_monthly_counts || [])[idx] || 0);
+      const targetX = months.length + 1;
+      const computed = item.computed_forecast !== undefined ? item.computed_forecast : calculateLinearRegressionForecast(counts, targetX);
+      const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
+      const finalVal = hasOverride ? parseInt(item.admin_override, 10) : (item.final_forecast !== undefined ? item.final_forecast : computed);
+      
+      totalBase += computed;
+      totalRecommended += finalVal;
+      if (hasOverride) overrideCount++;
+    });
+
+    return { totalBase, totalRecommended, overrideCount };
+  }, [filteredItems, months]);
 
   const exportForecastExcelHandler = async () => {
     if (filteredItems.length === 0) {
@@ -64,65 +99,48 @@ export default function Forecasting() {
   };
 
   return (
-    <div className="forecasting-view">
-      {/* Controls & Metrics Header */}
-      <div className="card" style={{ marginBottom: '20px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+    <div className="forecasting-view" style={{ maxWidth: '1300px', margin: '0 auto' }}>
+      {/* Header with Title and Actions */}
+      <div className="card" style={{ marginBottom: '16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h3 style={{ margin: 0 }}>Demand Forecasting Engine ({activePeriod?.label || 'September 2026'})</h3>
-              <span
-                className="badge"
-                style={{
-                  background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
-                  color: isAutoRefreshing ? '#0284c7' : '#047857',
-                  border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  transition: 'all 0.2s ease'
-                }}
-                title={isAutoRefreshing ? "Auto-refreshing latest forecasting model from database..." : "Forecast data is auto-refreshed on page visit and synchronized across all accounts"}
-              >
-                {isAutoRefreshing ? (
-                  <>
-                    <RefreshCw size={11} className="spin" />
-                    <span>Auto-Refreshing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 size={11} />
-                    <span>Live Synced</span>
-                  </>
-                )}
-              </span>
+              <TrendingUp size={20} color="var(--primary)" />
+              <h2 style={{ fontSize: '18px', margin: 0 }}>
+                {activePeriod?.label || 'September 2026'} Demand Forecasting
+              </h2>
             </div>
-            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
-              Linear regression ($y = \alpha + \beta x$) computed over historical repair counts
-              {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
+              Calculates projected monthly usage with linear regression: <code>y = α + βx</code> plus standard safety stock buffer.
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Forecasting manual refresh' })}
+              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Forecasting refresh button' })}
               disabled={isAutoRefreshing}
-              title="Force reload latest forecasting data from database"
-              style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+              title="Revalidate forecast with latest cloud data"
             >
-              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
-              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin-animation' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud'}</span>
             </button>
 
+            {lastSyncedAt && (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <CheckCircle2 size={11} color="var(--success)" />
+                {lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-primary btn-sm"
               onClick={() => setShowSaveModal(true)}
               disabled={filteredItems.length === 0}
-              title="Save current forecast as a dated historical record"
+              title="Save current state to permanent period archive"
             >
               <BookmarkPlus size={14} />
-              <span>Save as Record</span>
+              <span>Save Period Record</span>
             </button>
 
             <button
@@ -146,6 +164,51 @@ export default function Forecasting() {
             </button>
           </div>
         </div>
+
+        {/* Quick Summary Strip */}
+        {filteredItems.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              gap: '16px',
+              marginTop: '14px',
+              paddingTop: '12px',
+              borderTop: '1px solid var(--border-subtle)',
+              flexWrap: 'wrap'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <TrendingUp size={15} color="var(--primary)" />
+              <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Base Projected:</span>
+              <strong style={{ fontSize: '13px', fontFamily: 'var(--font-mono)' }}>{metrics.totalBase.toLocaleString()} units</strong>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldCheck size={15} color="var(--success)" />
+              <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Recommended Order (w/ Buffer):</span>
+              <strong style={{ fontSize: '13px', fontFamily: 'var(--font-mono)', color: 'var(--success)' }}>
+                {metrics.totalRecommended.toLocaleString()} units
+              </strong>
+            </div>
+            {metrics.overrideCount > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Sliders size={15} color="var(--accent-orange)" />
+                <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Active Admin Overrides:</span>
+                <span
+                  style={{
+                    background: 'var(--accent-orange-light)',
+                    color: 'var(--accent-orange)',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    fontSize: '11.5px',
+                    fontWeight: 700
+                  }}
+                >
+                  {metrics.overrideCount} model{metrics.overrideCount > 1 ? 's' : ''}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Save Record Modal Dialog */}
@@ -193,6 +256,7 @@ export default function Forecasting() {
               <tr>
                 <th>Part Number</th>
                 <th>Part Description</th>
+                <th>Trend</th>
                 {months.map(m => (
                   <th key={m} style={{ textAlign: 'center' }}>{m}</th>
                 ))}
@@ -213,12 +277,72 @@ export default function Forecasting() {
                 const targetX = months.length + 1;
                 const computed = item.computed_forecast !== undefined ? item.computed_forecast : calculateLinearRegressionForecast(counts, targetX);
                 const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
-                const finalOrder = hasOverride ? parseInt(item.admin_override) : (item.final_forecast !== undefined ? item.final_forecast : computed);
+                const finalOrder = hasOverride ? parseInt(item.admin_override, 10) : (item.final_forecast !== undefined ? item.final_forecast : computed);
+                const trendMetrics = calculateForecastTrendMetrics(counts);
 
                 return (
                   <tr key={item.part_id}>
                     <td className="font-mono"><strong>{item.part_number}</strong></td>
                     <td>{item.description}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {trendMetrics.trend === 'increasing' && (
+                        <span
+                          title={`Upward trend: +${trendMetrics.momGrowthPct}% MoM`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
+                            color: '#15803d',
+                            background: '#dcfce7',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 600
+                          }}
+                        >
+                          <TrendingUp size={12} />
+                          +{trendMetrics.momGrowthPct}%
+                        </span>
+                      )}
+                      {trendMetrics.trend === 'decreasing' && (
+                        <span
+                          title={`Downward trend: ${trendMetrics.momGrowthPct}% MoM`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
+                            color: '#b91c1c',
+                            background: '#fee2e2',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 600
+                          }}
+                        >
+                          <TrendingDown size={12} />
+                          {trendMetrics.momGrowthPct}%
+                        </span>
+                      )}
+                      {trendMetrics.trend === 'stable' && (
+                        <span
+                          title="Stable consumption pattern"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
+                            color: '#64748b',
+                            background: '#f1f5f9',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 600
+                          }}
+                        >
+                          <Minus size={12} />
+                          Stable
+                        </span>
+                      )}
+                    </td>
                     {counts.map((cnt, idx) => (
                       <td key={idx} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
                         {cnt}
@@ -228,13 +352,33 @@ export default function Forecasting() {
                       {computed}
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      <input
-                        type="number"
-                        className="forecast-override-input"
-                        placeholder={String(computed)}
-                        value={hasOverride ? item.admin_override : ''}
-                        onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
-                      />
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <input
+                          type="number"
+                          className="forecast-override-input"
+                          placeholder={String(computed)}
+                          value={hasOverride ? item.admin_override : ''}
+                          onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
+                          style={{ width: '70px', textAlign: 'center' }}
+                        />
+                        {hasOverride && (
+                          <button
+                            type="button"
+                            onClick={() => updateForecastOverride(item.part_id, '')}
+                            title="Reset override to algorithmic calculation"
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#94a3b8',
+                              cursor: 'pointer',
+                              padding: '2px',
+                              display: 'flex'
+                            }}
+                          >
+                            <XCircle size={15} color="#ef4444" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', background: '#f0fdf4', color: '#15803d', fontSize: '15px' }}>
                       {finalOrder}

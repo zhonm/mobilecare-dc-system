@@ -1,4 +1,3 @@
-import React from 'react';
 import { useApp } from '../context/AppContext';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import {
@@ -17,8 +16,7 @@ import {
   Settings,
   ShieldCheck,
   Users,
-  LogOut,
-  MapPin
+  LogOut
 } from 'lucide-react';
 
 export default function Sidebar() {

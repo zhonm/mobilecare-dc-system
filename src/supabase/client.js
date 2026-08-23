@@ -15,11 +15,10 @@ export const checkSupabaseConnection = async () => {
     };
   }
   try {
-    const { data, error } = await supabase.from('parts').select('count', { count: 'exact', head: true });
+    const { error } = await supabase.from('parts').select('count', { count: 'exact', head: true });
     if (error) throw error;
     return { connected: true, message: 'Connected to Supabase PostgreSQL' };
   } catch (err) {
     return { connected: false, message: err.message || 'Running in local/offline storage mode' };
   }
 };
-

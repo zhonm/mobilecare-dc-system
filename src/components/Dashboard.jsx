@@ -1,29 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Boxes,
-  ShoppingCart,
   TrendingUp,
   Truck,
   ArrowUpRight,
   Barcode,
   PackageCheck,
-  FileSpreadsheet,
-  CheckCircle2,
-  AlertTriangle,
-  UploadCloud,
   ShieldCheck,
   Layers,
-  Activity,
-  Database,
   Sparkles,
-  Clock,
-  ArrowRight,
   Search,
   Building2,
-  Tag,
   ChevronRight,
-  Package,
   Calendar,
   Check,
   RefreshCw
@@ -42,27 +31,17 @@ import {
   CartesianGrid
 } from 'recharts';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
-
-const CATEGORY_COLORS = {
-  DISPLAY: '#0284c7',      // Sky Blue
-  BATTERY: '#10b981',      // Emerald Green
-  CAMERA: '#8b5cf6',       // Purple
-  BACK_GLASS: '#f59e0b',   // Amber
-  MID_REAR: '#64748b',     // Slate
-  OTHER: '#94a3b8'         // Gray
-};
+import { CATEGORY_COLORS } from '../constants/config';
 
 export default function Dashboard() {
   const {
     inventoryUnits,
-    purchaseOrders,
     forecastItems,
     shipments,
     dcIntakeRecords,
     parts,
     sites,
     currentUser,
-    cloudSyncStatus,
     activePeriod,
     setActiveTab,
     isAutoRefreshing,

@@ -77,7 +77,9 @@ class DbStorage {
           return JSON.parse(raw);
         }
       }
-    } catch (e) {}
+    } catch (err) {
+      console.debug('LocalStorage read fallback note:', err);
+    }
 
     return fallbackValue;
   }
@@ -89,7 +91,7 @@ class DbStorage {
         window.localStorage.setItem(key, JSON.stringify(value));
       }
     } catch (err) {
-      // LocalStorage quota may be exceeded for large files; IndexedDB handles it
+      console.debug('LocalStorage quota note:', err);
     }
 
     // 2. Persist to IndexedDB
@@ -114,7 +116,9 @@ class DbStorage {
       if (typeof window !== 'undefined' && window.localStorage) {
         window.localStorage.removeItem(key);
       }
-    } catch (e) {}
+    } catch (err) {
+      console.debug('LocalStorage remove note:', err);
+    }
 
     try {
       const db = await this.getDb();
@@ -155,7 +159,9 @@ class DbStorage {
         const raw = window.localStorage.getItem('mdc_saved_records');
         if (raw) return JSON.parse(raw);
       }
-    } catch (e) {}
+    } catch (err) {
+      console.debug('LocalStorage saved records read note:', err);
+    }
 
     return [];
   }
@@ -181,7 +187,9 @@ class DbStorage {
         const updated = [record, ...existing.filter(r => r.id !== record.id)].slice(0, 50);
         window.localStorage.setItem('mdc_saved_records', JSON.stringify(updated));
       }
-    } catch (e) {}
+    } catch (err) {
+      console.debug('LocalStorage put saved record note:', err);
+    }
   }
 
   async deleteSavedRecord(recordId) {
@@ -204,7 +212,9 @@ class DbStorage {
         const updated = existing.filter(r => r.id !== recordId);
         window.localStorage.setItem('mdc_saved_records', JSON.stringify(updated));
       }
-    } catch (e) {}
+    } catch (err) {
+      console.debug('LocalStorage delete saved record note:', err);
+    }
   }
 }
 

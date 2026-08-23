@@ -16,7 +16,9 @@ class SoundSynthesizer {
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch((err) => {
+        console.debug('Audio resume note:', err);
+      });
     }
   }
 
@@ -44,8 +46,8 @@ class SoundSynthesizer {
 
       osc.start(now);
       osc.stop(now + 0.12);
-    } catch (e) {
-      // Audio context might be restricted before user interaction
+    } catch (err) {
+      console.debug('Audio playback note:', err);
     }
   }
 
@@ -79,8 +81,8 @@ class SoundSynthesizer {
       osc2.start(now);
       osc1.stop(now + 0.28);
       osc2.stop(now + 0.28);
-    } catch (e) {
-      // Audio context error fallback
+    } catch (err) {
+      console.debug('Audio error playback note:', err);
     }
   }
 
@@ -111,8 +113,8 @@ class SoundSynthesizer {
         osc.start(startTime);
         osc.stop(startTime + 0.2);
       });
-    } catch (e) {
-      // Audio context fallback
+    } catch (err) {
+      console.debug('Audio fanfare note:', err);
     }
   }
 }

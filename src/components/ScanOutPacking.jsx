@@ -1,13 +1,13 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF, printPackingListDirect } from '../utils/pdfGenerator';
+import { calculateWeeklySplit } from '../utils/allocationEngine';
 import {
   PackageCheck,
   Printer,
   Download,
   AlertCircle,
   CheckCircle2,
-  Boxes,
   ArrowRight,
   Zap,
   Trash2,
@@ -23,15 +23,13 @@ import {
   Database,
   Eye,
   History,
-  Calendar,
-  Layers
+  Calendar
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 
 export default function ScanOutPacking() {
   const {
     sites,
-    parts,
     inventoryUnits,
     allocations,
     shipments,
@@ -131,7 +129,28 @@ export default function ScanOutPacking() {
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const selectedSite = sites.find(s => s.id === selectedSiteId) || serviceSites[0] || {};
+  const selectedSite = useMemo(() => {
+    return sites.find(s => s.id === selectedSiteId) || serviceSites[0] || {};
+  }, [sites, selectedSiteId, serviceSites]);
+
+  const branchAllocationProgress = useMemo(() => {
+    if (!allocations || allocations.length === 0 || !selectedSite?.id) return null;
+    let targetWeekTotal = 0;
+    allocations.forEach(alloc => {
+      const siteQty = alloc.site_quantities?.[selectedSite.id] ?? alloc.site_quantities?.[selectedSite.code] ?? 0;
+      if (siteQty > 0) {
+        const split = calculateWeeklySplit(siteQty, 0, 0);
+        const wQty = split[`w${selectedWeek}_qty`] || 0;
+        targetWeekTotal += wQty;
+      }
+    });
+    const packedTotal = (currentShipment?.items || []).length;
+    return {
+      targetWeekTotal,
+      packedTotal,
+      pct: targetWeekTotal > 0 ? Math.min(100, Math.round((packedTotal / targetWeekTotal) * 100)) : 0
+    };
+  }, [allocations, selectedSite, selectedWeek, currentShipment]);
 
   // Auto-focus Part Number input on mount
   useEffect(() => {
@@ -537,6 +556,41 @@ export default function ScanOutPacking() {
             />
           </div>
         </div>
+
+        {/* Branch Allocated Quota vs Packed Progress Banner */}
+        {branchAllocationProgress && branchAllocationProgress.targetWeekTotal > 0 && (
+          <div
+            style={{
+              background: '#0a0f1d',
+              border: '1px solid #1e293b',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              marginBottom: '16px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <PackageCheck size={16} color="#38bdf8" />
+                <span style={{ fontSize: '13px', color: '#e2e8f0' }}>
+                  {selectedSite?.name} • <strong>Week {selectedWeek} Allocation Target:</strong> {branchAllocationProgress.targetWeekTotal} units
+                </span>
+              </div>
+              <span style={{ fontSize: '12.5px', fontWeight: 700, color: branchAllocationProgress.pct >= 100 ? '#10b981' : '#38bdf8' }}>
+                {branchAllocationProgress.packedTotal} / {branchAllocationProgress.targetWeekTotal} units ({branchAllocationProgress.pct}%)
+              </span>
+            </div>
+            <div style={{ width: '100%', height: '6px', background: '#1e293b', borderRadius: '3px', overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${branchAllocationProgress.pct}%`,
+                  height: '100%',
+                  background: branchAllocationProgress.pct >= 100 ? '#10b981' : '#0284c7',
+                  transition: 'width 0.3s ease'
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Editable Manifest Details (Invoice Ref, Tracking, Verified By, Prepared By) */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '20px' }}>
@@ -1300,7 +1354,7 @@ export default function ScanOutPacking() {
                     <UploadCloud size={32} color="var(--primary)" />
                   </div>
                   <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>
-                    {isDragging ? 'Drop pack file here' : 'Click to browse or drag & drop scan-out file'}
+                    {isParsing ? 'Processing and validating batch file...' : isDragging ? 'Drop pack file here' : 'Click to browse or drag & drop scan-out file'}
                   </h4>
                   <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
                     Supports Microsoft Excel (<strong>.xlsx, .xls</strong>) and <strong>.csv</strong> files

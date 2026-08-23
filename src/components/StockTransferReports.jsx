@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   parseStockTransfersReportFile,
@@ -21,8 +21,6 @@ import {
   Pie,
   Cell,
   Legend,
-  LineChart,
-  Line,
   AreaChart,
   Area
 } from 'recharts';
@@ -323,75 +321,7 @@ export default function StockTransferReports() {
     printStockTransfersDirect(filteredRecords, stockTransferMetadata);
   };
 
-  // ── Shared filter + toolbar row ────────────────────────────────────────────
-  const FilterBar = () => (
-    <div className="card" style={{ padding: '12px 16px', marginBottom: '16px' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
-        {/* View tabs */}
-        <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '6px', padding: '3px', border: '1px solid #e2e8f0' }}>
-          {[
-            { id: 'overview', label: '📊 Charts & Graphs' },
-            { id: 'ledger',   label: '📋 Transfers Ledger' },
-            { id: 'routes',   label: '🔁 Route Matrix' },
-            { id: 'parts',    label: '📦 Part Movers' }
-          ].map(tab => (
-            <button key={tab.id}
-              className={`btn btn-sm ${viewMode === tab.id ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
-              style={{ border: 'none', fontSize: '11.5px', padding: '5px 12px', fontWeight: 600 }}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
 
-        {/* Search */}
-        <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
-          <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-          <input type="text" placeholder="Search part #, serial, hub…" value={searchQuery}
-            onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-            style={{ width: '100%', padding: '6px 10px 6px 28px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }} />
-        </div>
-
-        {/* Filters */}
-        {[
-          { label: 'From:', value: fromFilter, onChange: v => { setFromFilter(v); setCurrentPage(1); },
-            options: [{ value: 'ALL', label: `All Origins (${uniqueFromStocks.length})` }, ...uniqueFromStocks.map(s => ({ value: s, label: s }))] },
-          { label: 'To:', value: toFilter, onChange: v => { setToFilter(v); setCurrentPage(1); },
-            options: [{ value: 'ALL', label: `All Destinations (${uniqueToStocks.length})` }, ...uniqueToStocks.map(s => ({ value: s, label: s }))] },
-          { label: 'Type:', value: categoryFilter, onChange: v => { setCategoryFilter(v); setCurrentPage(1); },
-            options: [
-              { value: 'ALL', label: 'All Commodities' },
-              { value: 'BATTERY', label: `Battery (${analytics.battery})` },
-              { value: 'DISPLAY', label: `Display (${analytics.display})` },
-              { value: 'CAMERA', label: `Camera (${analytics.camera})` },
-              { value: 'OTHER', label: `Other (${analytics.other})` }
-            ] }
-        ].map(({ label, value, onChange, options }) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
-            <span style={{ color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
-            <select value={value} onChange={e => onChange(e.target.value)}
-              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', maxWidth: '140px' }}>
-              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        ))}
-
-        {/* Page size (ledger only) */}
-        {viewMode === 'ledger' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
-            <span style={{ color: '#64748b' }}>Show:</span>
-            <select value={pageSize}
-              onChange={e => { setPageSize(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value)); setCurrentPage(1); }}
-              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}>
-              {[25, 50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
-              <option value="ALL">All ({filteredRecords.length})</option>
-            </select>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   // ── Empty drop zone ────────────────────────────────────────────────────────
   if (stockTransferReports.length === 0) {
@@ -463,7 +393,25 @@ export default function StockTransferReports() {
       <KpiCards analytics={analytics} />
 
       {/* Filter + View Switcher */}
-      <FilterBar />
+      <FilterBar
+        viewMode={viewMode}
+        setViewMode={setViewMode}
+        setCurrentPage={setCurrentPage}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        fromFilter={fromFilter}
+        setFromFilter={setFromFilter}
+        uniqueFromStocks={uniqueFromStocks}
+        toFilter={toFilter}
+        setToFilter={setToFilter}
+        uniqueToStocks={uniqueToStocks}
+        categoryFilter={categoryFilter}
+        setCategoryFilter={setCategoryFilter}
+        analytics={analytics}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        filteredRecords={filteredRecords}
+      />
 
       {/* ── OVERVIEW / CHARTS VIEW ── */}
       {viewMode === 'overview' && <ChartsView analytics={analytics} />}
@@ -486,6 +434,106 @@ export default function StockTransferReports() {
 
       {/* ── PARTS VIEW ── */}
       {viewMode === 'parts' && <PartsView analytics={analytics} />}
+    </div>
+  );
+}
+
+// ── FilterBar ─────────────────────────────────────────────────────────────────
+function FilterBar({
+  viewMode,
+  setViewMode,
+  setCurrentPage,
+  searchQuery,
+  setSearchQuery,
+  fromFilter,
+  setFromFilter,
+  uniqueFromStocks,
+  toFilter,
+  setToFilter,
+  uniqueToStocks,
+  categoryFilter,
+  setCategoryFilter,
+  analytics,
+  pageSize,
+  setPageSize,
+  filteredRecords
+}) {
+  return (
+    <div className="card" style={{ padding: '12px 16px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+        {/* View tabs */}
+        <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '6px', padding: '3px', border: '1px solid #e2e8f0' }}>
+          {[
+            { id: 'overview', label: '📊 Charts & Graphs' },
+            { id: 'ledger',   label: '📋 Transfers Ledger' },
+            { id: 'routes',   label: '🔁 Route Matrix' },
+            { id: 'parts',    label: '📦 Part Movers' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              className={`btn btn-sm ${viewMode === tab.id ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
+              style={{ border: 'none', fontSize: '11.5px', padding: '5px 12px', fontWeight: 600 }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search */}
+        <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
+          <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+          <input
+            type="text"
+            placeholder="Search part #, serial, hub…"
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+            style={{ width: '100%', padding: '6px 10px 6px 28px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+          />
+        </div>
+
+        {/* Filters */}
+        {[
+          { label: 'From:', value: fromFilter, onChange: v => { setFromFilter(v); setCurrentPage(1); },
+            options: [{ value: 'ALL', label: `All Origins (${uniqueFromStocks.length})` }, ...uniqueFromStocks.map(s => ({ value: s, label: s }))] },
+          { label: 'To:', value: toFilter, onChange: v => { setToFilter(v); setCurrentPage(1); },
+            options: [{ value: 'ALL', label: `All Destinations (${uniqueToStocks.length})` }, ...uniqueToStocks.map(s => ({ value: s, label: s }))] },
+          { label: 'Type:', value: categoryFilter, onChange: v => { setCategoryFilter(v); setCurrentPage(1); },
+            options: [
+              { value: 'ALL', label: 'All Commodities' },
+              { value: 'BATTERY', label: `Battery (${analytics.battery})` },
+              { value: 'DISPLAY', label: `Display (${analytics.display})` },
+              { value: 'CAMERA', label: `Camera (${analytics.camera})` },
+              { value: 'OTHER', label: `Other (${analytics.other})` }
+            ] }
+        ].map(({ label, value, onChange, options }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+            <span style={{ color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
+            <select
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', maxWidth: '140px' }}
+            >
+              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        ))}
+
+        {/* Page size (ledger only) */}
+        {viewMode === 'ledger' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+            <span style={{ color: '#64748b' }}>Show:</span>
+            <select
+              value={pageSize}
+              onChange={e => { setPageSize(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value)); setCurrentPage(1); }}
+              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+            >
+              {[25, 50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
+              <option value="ALL">All ({filteredRecords.length})</option>
+            </select>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

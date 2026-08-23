@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import UserAccessManagement from './UserAccessManagement';
 import {
@@ -31,7 +31,6 @@ export default function SettingsCatalog() {
     deletePart,
     saveSite,
     refreshSitesFromCloud,
-    applyPmgDirectoryToSites,
     syncAllDataToCloud,
     currentUser,
     showToast

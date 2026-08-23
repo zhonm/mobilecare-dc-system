@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Barcode,
@@ -11,9 +11,7 @@ import {
   Download,
   X,
   FileText,
-  AlertTriangle,
   RefreshCw,
-  Layers,
   Sparkles,
   Search,
   Check,
@@ -33,8 +31,6 @@ export default function ScanInReceiving() {
     purchaseOrders,
     parts,
     inventoryUnits,
-    setInventoryUnits,
-    setActiveTab,
     cloudSyncStatus,
     isAutoRefreshing,
     lastSyncedAt,
@@ -986,7 +982,7 @@ export default function ScanInReceiving() {
                     <UploadCloud size={32} color="var(--primary)" />
                   </div>
                   <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>
-                    {isDragging ? 'Drop your file here' : 'Click to browse or drag & drop file'}
+                    {isParsing ? 'Processing and validating intake file...' : isDragging ? 'Drop your file here' : 'Click to browse or drag & drop file'}
                   </h4>
                   <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
                     Supports Microsoft Excel (<strong>.xlsx, .xls</strong>) and <strong>.csv</strong> files

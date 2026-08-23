@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { useApp, ALL_PAGES, ROLE_OPTIONS, ROLE_PRESETS, getDefaultRolePosition } from '../context/AppContext';
+import { useState } from 'react';
+import { useApp } from '../context/AppContext';
+import { ALL_PAGES } from '../constants/navigation';
+import { ROLE_OPTIONS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import {
   ShieldCheck,
   UserPlus,

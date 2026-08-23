@@ -92,7 +92,6 @@ export function calculate2DCumulativeAllocation(forecastQty, shareMatrix, matrix
   }
 
   const result = [];
-  let currentBoxSum = 0;
 
   for (let c = 0; c < numCols; c++) {
     // Sum bounding box from row 0..matrixRowIdx and col 0..c

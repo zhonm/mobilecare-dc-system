@@ -1,146 +1,39 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import seedData from '../data/seedData.json';
 import seedStockTransfers from '../data/seedStockTransfers.json';
-import { calculateLinearRegressionForecast, calculateRecommendedOrder } from '../utils/forecastEngine';
+import { calculateRecommendedOrder } from '../utils/forecastEngine';
 import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/allocationEngine';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { hashPassword, verifyPassword, sanitizeInput } from '../utils/security';
+import { hashPassword, verifyPassword } from '../utils/security';
+import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation';
+import {
+  ROLE_PRESETS,
+  ROLE_OPTIONS,
+  getDefaultRolePosition,
+  INITIAL_USERS,
+  LEGACY_MOCK_EMAILS,
+  LEGACY_MOCK_IDS
+} from '../constants/roles';
+import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+import { matchUserByEmail } from '../utils/userMatcher';
+
+// Re-export constants for backward compatibility
+export {
+  ALL_PAGES,
+  PAGE_TITLES,
+  ROLE_PRESETS,
+  ROLE_OPTIONS,
+  getDefaultRolePosition,
+  INITIAL_USERS,
+  LEGACY_MOCK_EMAILS,
+  LEGACY_MOCK_IDS,
+  LIVE_MASTER_RECORD_ID,
+  matchUserByEmail
+};
 
 const AppContext = createContext();
-
-export const LIVE_MASTER_RECORD_ID = '00000000-0000-0000-0000-000000000001';
-
-// All available navigable pages in MDC System 2
-export const ALL_PAGES = [
-  { id: 'dashboard', label: 'DC Overview', section: 'Core' },
-  { id: 'import', label: 'Fixably / GSX Data Import', section: 'Planning' },
-  { id: 'forecast', label: 'Demand Forecasting', section: 'Planning' },
-  { id: 'records', label: 'Saved Period Records', section: 'Planning' },
-  { id: 'orders', label: 'Purchase Orders', section: 'Planning' },
-  { id: 'scan-in', label: 'Receive Scan-In', section: 'Warehouse Operations' },
-  { id: 'intake-records', label: 'DC Intake Records', section: 'Warehouse Operations' },
-  { id: 'allocation', label: 'Allocation Matrix', section: 'Warehouse Operations' },
-  { id: 'scan-out', label: 'Pack Scan-Out', section: 'Warehouse Operations' },
-  { id: 'shipments', label: 'Shipments & Packing Lists', section: 'Distribution' },
-  { id: 'reports', label: 'Stock Transfer Reports', section: 'Reports & Analytics' },
-  { id: 'audit', label: 'Serialized Audit Log', section: 'Traceability' },
-  { id: 'settings', label: 'Parts & Site Catalog', section: 'Admin' },
-  { id: 'user-access', label: 'User Access Management', section: 'Admin' }
-];
-
-// Simplified Sensible default page permissions per role
-export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  user: ['dashboard', 'intake-records', 'shipments', 'reports', 'audit'],
-  // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports'],
-  site_staff: ['dashboard', 'shipments', 'reports'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'audit']
-};
-
-export const ROLE_OPTIONS = [
-  {
-    value: 'superadmin',
-    label: 'Superadmin',
-    description: 'Full access to all system features, configurations, and user permissions.'
-  },
-  {
-    value: 'admin',
-    label: 'Admin',
-    description: 'Operational administrator. Page access is assigned by Superadmin. Can edit user role positions.'
-  },
-  {
-    value: 'user',
-    label: 'User (View-Only)',
-    description: 'Primarily view-only access to operational dashboards, reports, and logs.'
-  }
-];
-
-export const getDefaultRolePosition = (role) => {
-  switch (role) {
-    case 'superadmin': return 'Lead System Architect & Superadmin';
-    case 'admin': return 'Distribution Operations Lead';
-    case 'user': return 'Warehouse Operations Specialist';
-    default: return 'DC Specialist';
-  }
-};
-
-// Initial provisioned users (Only Zhon Manaois and Joshua Juvida)
-const INITIAL_USERS = [
-  {
-    id: 'usr-superadmin-zhon',
-    email: 'zhon.manaois@mobilecareph.com',
-    fullName: 'Zhon Manaois',
-    role: 'superadmin',
-    rolePosition: 'Lead System Architect & Superadmin',
-    siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
-    isActive: true,
-    permittedPages: ROLE_PRESETS.superadmin
-  },
-  {
-    id: 'usr-superadmin-joshua',
-    email: 'joshua.juvida@mobilecareph.com',
-    fullName: 'Joshua Juvida',
-    role: 'superadmin',
-    rolePosition: 'DC Operations Lead & Superadmin',
-    siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
-    isActive: true,
-    permittedPages: ROLE_PRESETS.superadmin
-  }
-];
-
-export const LEGACY_MOCK_EMAILS = [
-  'anjo.alcazar@mobilecareph.com',
-  'warehouse@mobilecareph.com',
-  'npm.service@mobilecareph.com',
-  'newuser@mobilecareph.com'
-];
-
-export const LEGACY_MOCK_IDS = [
-  'usr-admin',
-  'usr-warehouse',
-  'usr-sitestaff',
-  'usr-firsttime'
-];
-
-// Helper to normalize and match users across domain variations and aliases
-export const matchUserByEmail = (users, rawInputEmail) => {
-  if (!rawInputEmail || !users || users.length === 0) return null;
-  const input = rawInputEmail.trim().toLowerCase();
-
-  // 1. Exact email match
-  let matched = users.find(u => u.email && u.email.trim().toLowerCase() === input);
-  if (matched) return matched;
-
-  // 2. Extract local part and domain
-  const [inputUser, inputDomain] = input.split('@');
-  if (!inputUser) return null;
-
-  const cleanInputUser = inputUser.replace(/[._-]/g, '');
-
-  matched = users.find(u => {
-    if (!u.email) return false;
-    const [uUser] = u.email.trim().toLowerCase().split('@');
-    const cleanUUser = (uUser || '').replace(/[._-]/g, '');
-
-    if (inputUser === uUser || cleanInputUser === cleanUUser) return true;
-
-    // Recognize name handles
-    const isZhon = (cleanInputUser.includes('zhon') || cleanInputUser.includes('manaois')) && (cleanUUser.includes('zhon') || cleanUUser.includes('manaois'));
-    const isJoshua = (cleanInputUser.includes('joshua') || cleanInputUser.includes('juvida')) && (cleanUUser.includes('joshua') || cleanUUser.includes('juvida'));
-
-    return isZhon || isJoshua;
-  });
-
-  return matched || null;
-};
 
 export function AppProvider({ children }) {
   // Navigation & UI State with URL Hash & LocalStorage persistence
@@ -158,6 +51,7 @@ export function AppProvider({ children }) {
 
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
   // Sync activeTab to URL Hash and LocalStorage so page refreshes stay on the exact active page
@@ -283,10 +177,13 @@ export function AppProvider({ children }) {
     }
   }, [currentUser, activeTab]);
 
-  // Global Keyboard Shortcuts (F1 for Scan-In, F2 for Scan-Out) with Permission Guard
+  // Global Keyboard Shortcuts (F1 for Scan-In, F2 for Scan-Out, Cmd+K for Command Palette) with Permission Guard
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'F1') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+      } else if (e.key === 'F1') {
         e.preventDefault();
         if (canAccess('scan-in')) {
           setActiveTab('scan-in');
@@ -1355,7 +1252,7 @@ export function AppProvider({ children }) {
 
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date());
-  const lastRefreshTimeRef = React.useRef(0);
+  const lastRefreshTimeRef = useRef(0);
 
   // Top-level Optimized Parallel Supabase Hydration function
   const hydrateFromSupabase = async () => {
@@ -1787,6 +1684,7 @@ export function AppProvider({ children }) {
     }
     lastRefreshTimeRef.current = now;
     setIsAutoRefreshing(true);
+    console.debug('[AutoRefresh] Sync trigger:', reason);
 
     try {
       try {
@@ -3303,7 +3201,7 @@ export function AppProvider({ children }) {
     if (!cleanPN) return { success: false, error: 'Missing part number' };
 
     setParts(prev => {
-      let updated = [];
+      let updated;
       // Match by explicit unique ID first, or by BOTH part_number AND description
       const matchIndex = prev.findIndex(p =>
         (partData.id && p.id === partData.id) ||
@@ -4286,7 +4184,9 @@ export function AppProvider({ children }) {
         lastSyncedAt,
         autoRefreshData,
         resetToDefaultData,
-        clearAllData
+        clearAllData,
+        isCommandPaletteOpen,
+        setIsCommandPaletteOpen
       }}
     >
       {children}

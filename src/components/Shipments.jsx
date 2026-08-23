@@ -1,12 +1,9 @@
-import React, { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
-  Truck,
   Download,
   CheckCircle,
-  Clock,
-  PackageCheck,
   Search,
   FileSpreadsheet,
   UploadCloud,
@@ -15,7 +12,6 @@ import {
   RefreshCw,
   RotateCcw,
   AlertTriangle,
-  Database,
   Check,
   Trash2
 } from 'lucide-react';
@@ -30,7 +26,6 @@ export default function Shipments() {
     deleteShipment,
     batchImportShipments,
     clearAllShipmentsData,
-    currentUser,
     showToast
   } = useApp();
 
@@ -42,6 +37,7 @@ export default function Shipments() {
   const [isDragging, setIsDragging] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
+  const fileInputRef = useRef(null);
 
   // Clear Confirmation Modal State
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
@@ -405,7 +401,7 @@ export default function Shipments() {
                     <UploadCloud size={32} color="var(--primary)" />
                   </div>
                   <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>
-                    {isDragging ? 'Drop manifest file here' : 'Click to browse or drag & drop shipment file'}
+                    {isParsing ? 'Processing and validating shipment manifest...' : isDragging ? 'Drop manifest file here' : 'Click to browse or drag & drop shipment file'}
                   </h4>
                   <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
                     Supports Microsoft Excel (<strong>.xlsx, .xls</strong>) and <strong>.csv</strong> files

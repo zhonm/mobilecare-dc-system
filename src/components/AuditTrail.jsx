@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   History,
@@ -9,17 +9,11 @@ import {
   Box,
   UploadCloud,
   FileSpreadsheet,
-  UserCheck,
-  TrendingUp,
-  Split,
-  Calendar,
-  Layers,
-  Sparkles,
-  ShieldAlert
+  Calendar
 } from 'lucide-react';
 
 export default function AuditTrail() {
-  const { inventoryUnits, scanLogs, shipments, sites, uploadAuditLogs, searchQuery, setSearchQuery } = useApp();
+  const { inventoryUnits, scanLogs, sites, uploadAuditLogs, searchQuery } = useApp();
   const [selectedSerial, setSelectedSerial] = useState('');
   const [auditTab, setAuditTab] = useState('uploads'); // 'uploads' | 'serial_tracer' | 'scan_logs'
 

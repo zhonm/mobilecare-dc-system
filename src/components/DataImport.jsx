@@ -1,25 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
 import {
   UploadCloud,
-  CheckCircle,
-  FileSpreadsheet,
-  AlertCircle,
   TrendingUp,
   Split,
   Boxes,
   FileText,
   Download,
-  Layers,
-  Activity,
-  Building2,
-  Cpu,
   RotateCcw,
   Sparkles,
   ArrowRight,
   RefreshCw,
-  Filter,
   Smartphone,
   Calendar,
   ShieldAlert,
@@ -27,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod } = useApp();
+  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [fileName, setFileName] = useState('');
@@ -194,10 +186,8 @@ export default function DataImport() {
     setParsedData(null);
     setFileName('');
     setLastFileObj(null);
-    setTimeout(() => {
-      window.location.hash = '#allocation';
-      window.location.reload();
-    }, 250);
+    setActiveTab('allocation');
+    showToast('Dataset imported and allocation matrix updated successfully!', 'success');
   };
 
   const handleDownloadTemplate = () => {
@@ -590,13 +580,13 @@ export default function DataImport() {
                           ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w1_cost ?? (item.w1_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w1_cost ?? (item.w1_qty * price)) || 0).toFixed(2)}</td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w2_cost ?? (item.w2_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w2_cost ?? (item.w2_qty * price)) || 0).toFixed(2)}</td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w3_cost ?? (item.w3_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w3_cost ?? (item.w3_qty * price)) || 0).toFixed(2)}</td>
                         <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty ?? 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w4_cost ?? (item.w4_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${((item.w4_cost ?? (item.w4_qty * price)) || 0).toFixed(2)}</td>
                       </tr>
                     );
                   })}

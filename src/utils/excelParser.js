@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import canonicalShares from '../data/canonicalShares.js';
 import canonicalAugustAllocations from '../data/canonicalAllocations.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
-import { calculateProportionalAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
+import { calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
 
 export function isForecastingMatrixSheet(rows) {
@@ -439,8 +439,6 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           const rawForecastRows = XLSX.utils.sheet_to_json(wsForecast, { header: 1, defval: '' });
           const parsedForecast = parseForecastingSheet(rawForecastRows, filterScope);
 
-          const finalSites = currentSites.filter(s => !s.is_dc);
-
           // Extract branch site distribution from raw repair logs sheet if available
           const siteCountsPerDesc = new Map();
           if (rawSheetName) {
@@ -521,7 +519,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           CANONICAL_DISPLAY_DESCS.forEach((desc, mIdx) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
-              part_number: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+              part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
               description: desc,
               category_id: 'cat-display',
               computed_forecast: 0,
@@ -570,7 +568,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           CANONICAL_BATTERY_DESCS.forEach((desc, mIdx) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
-              part_number: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+              part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
               description: desc,
               category_id: 'cat-battery',
               computed_forecast: 0,
@@ -700,7 +698,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           CANONICAL_DISPLAY_DESCS.forEach((desc, mIdx) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
-              part_number: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+              part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
               description: desc,
               category_id: 'cat-display',
               computed_forecast: 0,
@@ -748,7 +746,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           CANONICAL_BATTERY_DESCS.forEach((desc, mIdx) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
-              part_number: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+              part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
               description: desc,
               category_id: 'cat-battery',
               computed_forecast: 0,
@@ -1222,7 +1220,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   let filteredOutCount = 0;
 
   // Build canonical site index
-  const activeServiceSites = CANONICAL_SITE_LIST.map((cs, idx) => {
+  const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
     const existing = (existingSites || []).find(s => s.code === cs.code || cs.name.includes(s.name) || s.name.includes(cs.name));
     return existing || {
       id: `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
@@ -1430,7 +1428,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   // 1. Process Displays
   CANONICAL_DISPLAY_DESCS.forEach((desc, matrixRowIdx) => {
     const pData = partMap.get(desc) || {
-      partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+      partNumber: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-display',
       months: new Array(historyLength).fill(0),
@@ -1526,7 +1524,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   // 2. Process Batteries
   CANONICAL_BATTERY_DESCS.forEach((desc, matrixRowIdx) => {
     const pData = partMap.get(desc) || {
-      partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+      partNumber: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-battery',
       months: new Array(historyLength).fill(0),
@@ -2214,7 +2212,7 @@ export async function exportForecastToExcel(forecastItems, period = 'September 2
   URL.revokeObjectURL(url);
 }
 
-export function downloadSampleGsxFixablyCsv(existingSites = [], existingParts = []) {
+export function downloadSampleGsxFixablyCsv() {
   const sampleRecords = [
     {
       'Repair Number': 'RPR-2026-00101',
@@ -2243,7 +2241,7 @@ export function downloadSampleGsxFixablyCsv(existingSites = [], existingParts = 
 /**
  * Download a sample XLSX or CSV template specifically for Receive Scan-In parts intake
  */
-export function downloadScanInTemplate(format = 'xlsx', existingParts = [], purchaseOrders = []) {
+export function downloadScanInTemplate(format = 'xlsx', purchaseOrders = []) {
   const defaultPoNumber = purchaseOrders[0]?.po_number || 'PO-2026-08-001';
   
   const sampleRows = [
@@ -2972,7 +2970,8 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
       const shipDate = row['Shipment Date'] || new Date().toISOString().split('T')[0];
       const pn = row['Part Number'] || row['Part #'] || row['P/N'] || '';
       const sn = row['Serial Number'] || row['Serial #'] || row['S/N'] || '';
-      const desc = row['Description'] || `Part (${pn})`;
+      const partObj = (parts || []).find(p => p.part_number === pn);
+      const desc = row['Description'] || partObj?.description || `Part (${pn})`;
       const box = parseInt(row['Box Number'] || row['Box'], 10) || 1;
 
       const key = `${invoiceRef}__${shipmentNum}`;
@@ -3179,6 +3178,9 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
   workbook.creator = 'Mobile Care Services Phils. Inc.';
   workbook.lastModifiedBy = 'MDC DC System 2';
   workbook.created = new Date();
+  if (metadata?.fileName) {
+    workbook.title = metadata.fileName;
+  }
 
   const worksheet = workbook.addWorksheet('Stock Transfers Report', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }

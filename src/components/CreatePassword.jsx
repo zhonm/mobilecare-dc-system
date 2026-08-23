@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { ShieldCheck, Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw, Sparkles } from 'lucide-react';
+import { Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw } from 'lucide-react';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function CreatePassword() {
-  const { pendingFirstTimeUser, setPendingFirstTimeUser, createFirstTimePassword, showToast } = useApp();
+  const { pendingFirstTimeUser, setPendingFirstTimeUser, createFirstTimePassword } = useApp();
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');

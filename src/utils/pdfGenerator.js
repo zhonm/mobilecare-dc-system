@@ -14,7 +14,6 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   });
 
   const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 14;
 
   // Title: "Packing List" Centered with generous top margin
@@ -701,7 +700,10 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(255, 255, 255);
-  doc.text('MOBILE CARE SERVICES PHILS. INC. — Fixably Stock Transfers Report', margin + 6, 15.5);
+  const titleText = metadata?.fileName
+    ? `MOBILE CARE SERVICES PHILS. INC. — Fixably Stock Transfers (${metadata.fileName})`
+    : 'MOBILE CARE SERVICES PHILS. INC. — Fixably Stock Transfers Report';
+  doc.text(titleText, margin + 6, 15.5);
 
   const headers = [
     '#',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveRecordModal from './SaveRecordModal';
 import {
@@ -12,28 +12,15 @@ import {
   Eye,
   TrendingUp,
   Split,
-  Package,
-  Building2,
   Clock,
-  User,
-  FileText,
   CheckCircle2,
-  AlertTriangle,
   X,
-  Smartphone,
-  BatteryCharging,
-  DollarSign,
   RefreshCw
 } from 'lucide-react';
 
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-];
-
-const FULL_MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
 export default function SavedRecords() {
@@ -43,11 +30,9 @@ export default function SavedRecords() {
     deletePeriodRecord,
     forecastItems,
     allocations,
-    sites,
     isAutoRefreshing,
     lastSyncedAt,
-    autoRefreshData,
-    showToast
+    autoRefreshData
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
