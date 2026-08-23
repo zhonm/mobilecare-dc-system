@@ -6,7 +6,7 @@ import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { hashPassword, verifyPassword } from '../utils/security';
+import { hashPassword, verifyPassword, generateSessionSignature, verifySessionIntegrity } from '../utils/security';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation';
 import {
   ROLE_PRESETS,
@@ -17,7 +17,7 @@ import {
   LEGACY_MOCK_IDS
 } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
-import { matchUserByEmail } from '../utils/userMatcher';
+import { matchUserByEmail, isAllowedCompanyEmail } from '../utils/userMatcher';
 
 // Re-export constants for backward compatibility
 export {
@@ -124,13 +124,64 @@ export function AppProvider({ children }) {
     localStorage.setItem('mdc_users', JSON.stringify(usersList));
   }, [usersList]);
 
-  // Sync active auth user to local storage
+  // Sync active auth user to local storage with cryptographic signature
   useEffect(() => {
+    let isMounted = true;
     if (currentUser) {
       localStorage.setItem('mdc_auth_user', JSON.stringify(currentUser));
+      generateSessionSignature(currentUser).then(sig => {
+        if (isMounted && sig) {
+          localStorage.setItem('mdc_session_sig', sig);
+        }
+      });
     } else {
       localStorage.removeItem('mdc_auth_user');
+      localStorage.removeItem('mdc_session_sig');
     }
+    return () => { isMounted = false; };
+  }, [currentUser]);
+
+  // Verify session integrity on boot to prevent local storage role tampering
+  useEffect(() => {
+    if (currentUser) {
+      const savedSig = localStorage.getItem('mdc_session_sig');
+      if (savedSig) {
+        verifySessionIntegrity(currentUser, savedSig).then(isValid => {
+          if (!isValid) {
+            console.warn('[Security] Session integrity verification failed. Session revoked.');
+            setCurrentUser(null);
+            localStorage.removeItem('mdc_auth_user');
+            localStorage.removeItem('mdc_session_sig');
+          }
+        });
+      }
+    }
+  }, []);
+
+  // Internal Enterprise Inactivity Monitor (30 minutes auto-logout for warehouse terminals)
+  useEffect(() => {
+    if (!currentUser) return;
+    const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
+    let timer;
+
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        setCurrentUser(null);
+        localStorage.removeItem('mdc_auth_user');
+        localStorage.removeItem('mdc_session_sig');
+        showToast('Session expired after 30 minutes of inactivity for internal security.', 'warning');
+      }, INACTIVITY_LIMIT_MS);
+    };
+
+    const events = ['mousedown', 'mousemove', 'keydown', 'touchstart', 'scroll'];
+    resetTimer();
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }));
+
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, resetTimer));
+    };
   }, [currentUser]);
 
   // Check if active user has been deactivated mid-session
@@ -210,6 +261,14 @@ export function AppProvider({ children }) {
   // 1. Verify Company Email during Login
   const verifyLoginEmail = async (rawEmail) => {
     const email = rawEmail.trim().toLowerCase();
+
+    // Internal Security Check: Restrict to authorized company domains
+    if (!isAllowedCompanyEmail(email)) {
+      return {
+        success: false,
+        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel (@mobilecareph.com, @mobilecare.com.ph).'
+      };
+    }
 
     // Check in local state using smart alias & domain matching
     let user = matchUserByEmail(usersList, email);
@@ -432,6 +491,12 @@ export function AppProvider({ children }) {
   // 5. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
+
+    if (!isAllowedCompanyEmail(cleanEmail)) {
+      showToast('User email must belong to an official Mobile Care company domain (@mobilecareph.com, @mobilecare.com.ph).', 'error');
+      return { success: false, error: 'External email domains are prohibited for internal security.' };
+    }
+
     if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
       showToast(`User with email ${cleanEmail} is already provisioned!`, 'error');
       return { success: false, error: 'User already exists' };

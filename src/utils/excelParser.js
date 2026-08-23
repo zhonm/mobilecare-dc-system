@@ -1798,9 +1798,9 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
       subtotalW4 += split.w4_qty; subtotalW4Cost += split.w4_cost;
 
       const rowValues = [
-        catLabel,
-        item.part_number,
-        item.description,
+        sanitizeForSpreadsheet(catLabel),
+        sanitizeForSpreadsheet(item.part_number),
+        sanitizeForSpreadsheet(item.description),
         stockPrice,
         exchangePrice
       ];
@@ -2056,6 +2056,180 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   worksheet.getColumn(offset + 8).width = 9;
   worksheet.getColumn(offset + 9).width = 13;
   worksheet.getColumn(offset + 10).width = 18;
+
+  // Add Weekly Worksheets (Week 1, Week 2, Week 3, Week 4) matching Google Sheets multi-tab structure
+  for (let w = 1; w <= 4; w++) {
+    const wSheet = workbook.addWorksheet(`Week ${w}`, {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
+      views: [{ state: 'frozen', xSplit: 6, ySplit: 3 }]
+    });
+
+    const wLastColNum = 6 + sites.length;
+    const wLastColLetter = getExcelColLetter(wLastColNum);
+
+    // 1. Title Banner
+    wSheet.mergeCells(`A1:${wLastColLetter}1`);
+    const wTitle = wSheet.getCell('A1');
+    wTitle.value = `MOBILE CARE SERVICES PHILS. INC. — Week ${w} Allocation Matrix (${period})`;
+    wTitle.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+    wTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    wTitle.alignment = { horizontal: 'center', vertical: 'middle' };
+    wSheet.getRow(1).height = 28;
+
+    // 2. Subtitle Banner
+    wSheet.mergeCells(`A2:${wLastColLetter}2`);
+    const wSub = wSheet.getCell('A2');
+    wSub.value = `Week ${w} Proportional Branch Allocations across ${sites.length} Service Centers`;
+    wSub.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF94A3B8' } };
+    wSub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    wSub.alignment = { horizontal: 'center', vertical: 'middle' };
+    wSheet.getRow(2).height = 18;
+
+    // 3. Header Row (Matching Google Sheets: Product Category, Forecasted Quantity, Stocking Price, Exchange Price, P/N, Part Description, Branches)
+    const wHeaders = [
+      'Product Category',
+      'Forecasted Quantity',
+      'Stocking Price',
+      'Exchange Price',
+      'P/N',
+      'Part Description',
+      ...sites.map(s => s.code)
+    ];
+
+    const wHeadRow = wSheet.addRow(wHeaders);
+    wHeadRow.height = 26;
+    wHeadRow.eachCell((cell, cIdx) => {
+      cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cIdx <= 6 ? 'FF0F172A' : 'FF1E293B' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF334155' } },
+        bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+        left: { style: 'thin', color: { argb: 'FF334155' } },
+        right: { style: 'thin', color: { argb: 'FF334155' } }
+      };
+    });
+
+    const addWeeklyCategorySection = (items, catLabel) => {
+      let subtotalWQty = 0;
+      const subtotalWSites = {};
+
+      items.forEach((item, rIdx) => {
+        const stockPrice = item.stocking_price || (catLabel === 'DISPLAY' ? 279 : 99);
+        const exchPrice = item.exchange_price || (stockPrice * 0.84);
+        const split = calculateWeeklySplit(item.total_allocated_qty, (item.total_allocated_qty || 0) * stockPrice, rIdx + 3);
+        const rowWQty = split[`w${w}_qty`] || 0;
+        subtotalWQty += rowWQty;
+
+        const rowValues = [
+          sanitizeForSpreadsheet(catLabel),
+          rowWQty,
+          stockPrice,
+          exchPrice,
+          sanitizeForSpreadsheet(item.part_number),
+          sanitizeForSpreadsheet(item.description)
+        ];
+
+        sites.forEach(s => {
+          const bMonthly = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
+          const bSplit = calculateWeeklySplit(bMonthly, bMonthly * stockPrice, rIdx + 3);
+          const bWQty = bSplit[`w${w}_qty`] || 0;
+          subtotalWSites[s.id] = (subtotalWSites[s.id] || 0) + bWQty;
+          rowValues.push(bWQty);
+        });
+
+        const dRow = wSheet.addRow(rowValues);
+        dRow.height = 20;
+        const isZeroRow = rowWQty === 0;
+        const rowBgArgb = isZeroRow ? 'FFFEF2F2' : 'FFFFFFFF';
+
+        dRow.eachCell({ includeEmpty: true }, (cell, cIdx) => {
+          cell.font = { name: 'Arial', size: 9, color: { argb: isZeroRow ? 'FF991B1B' : 'FF0F172A' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgArgb } };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+
+          if (cIdx === 3 || cIdx === 4) {
+            cell.numFmt = '$#,##0.00';
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          } else if (cIdx === 1 || cIdx === 2 || cIdx === 5 || cIdx > 6) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            if (cIdx > 6 && cell.value > 0) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+              cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
+            }
+          } else {
+            cell.alignment = { horizontal: 'left', vertical: 'middle' };
+          }
+        });
+      });
+
+      // Category Subtotal Row (Matching Google Sheets Row 26 black banner)
+      const subRowValues = [
+        catLabel,
+        subtotalWQty,
+        '',
+        '',
+        'SUB-TOTAL',
+        `${items.length} Parts Sub-Total`
+      ];
+      sites.forEach(s => {
+        subRowValues.push(subtotalWSites[s.id] || 0);
+      });
+
+      const sRow = wSheet.addRow(subRowValues);
+      sRow.height = 22;
+      sRow.eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+
+      return { qty: subtotalWQty, sites: subtotalWSites };
+    };
+
+    const dispW = addWeeklyCategorySection(displayItems, 'DISPLAY');
+    const battW = addWeeklyCategorySection(batteryItems, 'BATTERY');
+
+    // Grand Total Row
+    const grandWRowValues = [
+      'TOTAL',
+      dispW.qty + battW.qty,
+      '',
+      '',
+      'GRAND TOTAL',
+      `Week ${w} Total`
+    ];
+    sites.forEach(s => {
+      grandWRowValues.push((dispW.sites[s.id] || 0) + (battW.sites[s.id] || 0));
+    });
+
+    const gRow = wSheet.addRow(grandWRowValues);
+    gRow.height = 24;
+    gRow.eachCell((cell) => {
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF38BDF8' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF38BDF8' } },
+        bottom: { style: 'double', color: { argb: 'FF38BDF8' } }
+      };
+    });
+
+    wSheet.getColumn(1).width = 14;
+    wSheet.getColumn(2).width = 16;
+    wSheet.getColumn(3).width = 13;
+    wSheet.getColumn(4).width = 13;
+    wSheet.getColumn(5).width = 15;
+    wSheet.getColumn(6).width = 30;
+    sites.forEach((s, idx) => {
+      wSheet.getColumn(7 + idx).width = 9;
+    });
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -3250,14 +3424,14 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
 
   records.forEach((r) => {
     const dRow = worksheet.addRow([
-      r.transfer_received_date || '',
-      r.from_stock || '',
-      r.to_stock || '',
-      r.product_code || '',
-      r.product_name || '',
+      sanitizeForSpreadsheet(r.transfer_received_date || ''),
+      sanitizeForSpreadsheet(r.from_stock || ''),
+      sanitizeForSpreadsheet(r.to_stock || ''),
+      sanitizeForSpreadsheet(r.product_code || ''),
+      sanitizeForSpreadsheet(r.product_name || ''),
       r.transfer_quantity || 1,
-      r.serial_number || '',
-      r.imei_number || '',
+      sanitizeForSpreadsheet(r.serial_number || ''),
+      sanitizeForSpreadsheet(r.imei_number || ''),
       r.transfer_value || 0
     ]);
     dRow.height = 20;
