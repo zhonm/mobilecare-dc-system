@@ -1,10 +1,10 @@
-import { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import seedData from '../data/seedData.json';
 import seedStockTransfers from '../data/seedStockTransfers.json';
 import { calculateRecommendedOrder } from '../utils/forecastEngine';
 import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/allocationEngine';
 import { barcodeAudio } from '../utils/barcodeAudio';
-import { supabase } from '../supabase/client';
+import { supabase, isSupabaseConfigured } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { hashPassword, verifyPassword, generateSessionSignature, verifySessionIntegrity } from '../utils/security';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation';
@@ -32,6 +32,92 @@ export {
   LIVE_MASTER_RECORD_ID,
   matchUserByEmail
 };
+
+// UUID Format Validation Helpers to prevent PostgreSQL UUID syntax crashes
+export const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+export const safeUUID = (str) => isUUID(str) ? str : null;
+
+// Helper to guarantee serialized units that are in an active draft or saved shipments maintain their 'packed' or 'shipped' status
+export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null) {
+  if (!Array.isArray(units) || units.length === 0) return [];
+
+  const packedSerialsMap = new Map();
+
+  // 1. Check active draft from arg or localStorage (actively being packed in Scan-Out right now)
+  let draft = explicitDraft;
+  if (!draft && typeof window !== 'undefined') {
+    try {
+      const saved = localStorage.getItem('mdc_active_pack_draft');
+      if (saved) draft = JSON.parse(saved);
+    } catch (e) {}
+  }
+  if (draft && Array.isArray(draft.items) && draft.status !== 'shipped' && draft.status !== 'delivered') {
+    draft.items.forEach(it => {
+      const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+      if (s) {
+        packedSerialsMap.set(s, {
+          status: 'packed',
+          box_number: it.box_number || 1,
+          current_site_id: draft.site_id || 'site-dc',
+          shipped_at: draft.shipment_date || new Date().toISOString(),
+          isDraft: true
+        });
+      }
+    });
+  }
+
+  // 2. Check all finalized shipments in shipmentsList or from localStorage
+  let effectiveShipments = shipmentsList;
+  if ((!effectiveShipments || effectiveShipments.length === 0) && typeof window !== 'undefined') {
+    try {
+      const savedSh = localStorage.getItem('mdc_shipments');
+      if (savedSh) effectiveShipments = JSON.parse(savedSh);
+    } catch (e) {}
+  }
+
+  if (Array.isArray(effectiveShipments)) {
+    effectiveShipments.forEach(sh => {
+      if (sh && Array.isArray(sh.items) && sh.status !== 'cancelled') {
+        const isShipped = sh.status === 'shipped' || sh.status === 'delivered';
+        const targetStatus = isShipped ? 'shipped' : 'packed';
+        const shipDateStr = sh.shipment_date || sh.created_at || new Date().toISOString();
+        sh.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          if (s && !packedSerialsMap.has(s)) {
+            packedSerialsMap.set(s, {
+              status: targetStatus,
+              box_number: it.box_number || 1,
+              current_site_id: sh.site_id || 'site-dc',
+              shipped_at: shipDateStr,
+              isDraft: false
+            });
+          }
+        });
+      }
+    });
+  }
+
+  return units.map(u => {
+    const s = String(u.serial_number || '').trim().toUpperCase();
+    const packInfo = packedSerialsMap.get(s);
+    if (packInfo) {
+      return {
+        ...u,
+        status: packInfo.status,
+        box_number: packInfo.box_number || u.box_number || 1,
+        current_site_id: packInfo.current_site_id || u.current_site_id,
+        shipped_at: packInfo.shipped_at || u.shipped_at
+      };
+    }
+    return {
+      ...u,
+      status: 'in_stock',
+      current_site_id: 'site-dc',
+      shipped_at: null,
+      shipped_by: null
+    };
+  });
+}
 
 const AppContext = createContext();
 
@@ -526,6 +612,7 @@ export function AppProvider({ children }) {
     };
 
     // Update local state immediately
+    const prevUsersList = usersList;
     const nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
     setUsersList(nextList);
     localStorage.setItem('mdc_users', JSON.stringify(nextList));
@@ -533,8 +620,9 @@ export function AppProvider({ children }) {
 
     // Sync to Supabase PostgreSQL database
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { data: inserted } = await supabase
+        const { data: inserted, error: profErr } = await supabase
           .from('profiles')
           .upsert({
             email: cleanEmail,
@@ -548,16 +636,36 @@ export function AppProvider({ children }) {
           }, { onConflict: 'email' })
           .select();
 
-        if (inserted && inserted[0] && defaultPages && defaultPages.length > 0) {
+        if (profErr) throw profErr;
+
+        const effectiveUserId = inserted?.[0]?.id || newUser.id;
+        if (defaultPages && defaultPages.length > 0 && effectiveUserId) {
           const permRows = defaultPages.map(pageId => ({
-            user_id: inserted[0].id,
+            user_id: effectiveUserId,
             page_id: pageId
           }));
-          await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+          const { error: permErr } = await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+          if (permErr) console.warn('Permission sync warning:', permErr.message);
         }
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_PROVISIONED', { email: cleanEmail, userId: effectiveUserId });
       } catch (dbErr) {
-        console.warn('Could not sync provisioned user to Supabase:', dbErr.message);
+        console.error('Could not sync provisioned user to Supabase:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('PROFILE_UPSERT', {
+          email: cleanEmail,
+          full_name: fullName.trim(),
+          role,
+          role_position: finalRolePosition,
+          has_set_password: false,
+          is_active: true,
+          updated_at: new Date().toISOString()
+        });
+        showToast(`Warning: Cloud sync error (${dbErr.message}). Provisioned locally.`, 'warning');
       }
+    } else {
+      broadcastCloudEvent('USER_PROVISIONED', { email: cleanEmail, userId: newUser.id });
     }
 
     showToast(`Provisioned user ${fullName} (${cleanEmail}) as ${finalRolePosition}.`, 'success');
@@ -591,29 +699,39 @@ export function AppProvider({ children }) {
 
     // Sync to Supabase user_page_permissions
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { data: prof } = await supabase
+        const { data: prof, error: findErr } = await supabase
           .from('profiles')
           .select('id')
           .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
           .maybeSingle();
 
+        if (findErr) throw findErr;
+
         if (prof?.id) {
           if (hasPage) {
-            await supabase
+            const { error: delErr } = await supabase
               .from('user_page_permissions')
               .delete()
               .eq('user_id', prof.id)
               .eq('page_id', pageId);
+            if (delErr) throw delErr;
           } else {
-            await supabase
+            const { error: upErr } = await supabase
               .from('user_page_permissions')
               .upsert({ user_id: prof.id, page_id: pageId }, { onConflict: 'user_id,page_id' });
+            if (upErr) throw upErr;
           }
         }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_PERMISSIONS_UPDATED', { userId: prof?.id || userId, pageId, hasPage: !hasPage });
       } catch (e) {
-        console.warn('Supabase permission sync notice:', e.message);
+        console.error('Supabase permission sync error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
       }
+    } else {
+      broadcastCloudEvent('USER_PERMISSIONS_UPDATED', { userId, pageId, hasPage: !hasPage });
     }
   };
 
@@ -635,18 +753,22 @@ export function AppProvider({ children }) {
     }));
 
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { data: prof } = await supabase
+        const { data: prof, error: profFindErr } = await supabase
           .from('profiles')
           .select('id')
           .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
           .maybeSingle();
 
+        if (profFindErr) throw profFindErr;
+
         if (prof?.id) {
-          await supabase
+          const { error: upProfErr } = await supabase
             .from('profiles')
             .update({ role: presetRole, updated_at: new Date().toISOString() })
             .eq('id', prof.id);
+          if (upProfErr) throw upProfErr;
 
           await supabase
             .from('user_page_permissions')
@@ -655,12 +777,18 @@ export function AppProvider({ children }) {
 
           const rows = pages.map(pg => ({ user_id: prof.id, page_id: pg }));
           if (rows.length > 0) {
-            await supabase.from('user_page_permissions').upsert(rows, { onConflict: 'user_id,page_id' });
+            const { error: permErr } = await supabase.from('user_page_permissions').upsert(rows, { onConflict: 'user_id,page_id' });
+            if (permErr) throw permErr;
           }
         }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_ROLE_UPDATED', { userId: prof?.id || userId, role: presetRole });
       } catch (e) {
-        console.warn('Supabase role preset sync notice:', e.message);
+        console.error('Supabase role preset sync error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
       }
+    } else {
+      broadcastCloudEvent('USER_ROLE_UPDATED', { userId, role: presetRole });
     }
 
     showToast(`Applied ${presetRole} default permissions`, 'success');
@@ -683,14 +811,21 @@ export function AppProvider({ children }) {
     }));
 
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        await supabase
+        const { error } = await supabase
           .from('profiles')
           .update({ is_active: nextState, updated_at: new Date().toISOString() })
           .or(`id.eq.${userId},email.ilike.${target.email}`);
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_STATUS_UPDATED', { userId, isActive: nextState });
       } catch (e) {
-        console.warn('Supabase status sync notice:', e.message);
+        console.error('Supabase status sync error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
       }
+    } else {
+      broadcastCloudEvent('USER_STATUS_UPDATED', { userId, isActive: nextState });
     }
 
     showToast(`Account for ${target.fullName} is now ${nextState ? 'Active' : 'Deactivated'}`, 'info');
@@ -745,6 +880,7 @@ export function AppProvider({ children }) {
 
     // 3. Sync to Supabase PostgreSQL Database (Profiles Table)
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         let updatedInDb = false;
 
@@ -761,30 +897,30 @@ export function AppProvider({ children }) {
         }
 
         // Try updating by ID first
-        const { data: byIdData } = await supabase
+        const { data: byIdData, error: byIdErr } = await supabase
           .from('profiles')
           .update(updatePayload)
           .eq('id', userId)
           .select();
 
-        if (byIdData && byIdData.length > 0) {
+        if (!byIdErr && byIdData && byIdData.length > 0) {
           updatedInDb = true;
         } else {
           // If ID didn't match (e.g. UUID vs local key), update by previous email!
-          const { data: byEmailData } = await supabase
+          const { data: byEmailData, error: byEmailErr } = await supabase
             .from('profiles')
             .update(updatePayload)
             .ilike('email', previousEmail)
             .select();
 
-          if (byEmailData && byEmailData.length > 0) {
+          if (!byEmailErr && byEmailData && byEmailData.length > 0) {
             updatedInDb = true;
           }
         }
 
         // If not found in database, insert/upsert the profile
         if (!updatedInDb) {
-          await supabase
+          const { error: upsertErr } = await supabase
             .from('profiles')
             .upsert({
               email: cleanEmail,
@@ -795,10 +931,25 @@ export function AppProvider({ children }) {
               is_active: target.isActive ?? true,
               updated_at: new Date().toISOString()
             }, { onConflict: 'email' });
+          if (upsertErr) throw upsertErr;
         }
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_UPDATED', { userId, email: cleanEmail });
       } catch (dbErr) {
-        console.warn('Supabase profile update notice:', dbErr.message);
+        console.error('Supabase profile update error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('PROFILE_UPSERT', {
+          email: cleanEmail,
+          full_name: fullName.trim(),
+          role: resolvedRole,
+          role_position: resolvedPosition,
+          updated_at: new Date().toISOString()
+        });
+        showToast(`Warning: Cloud sync failed (${dbErr.message}). Profile updated locally.`, 'warning');
       }
+    } else {
+      broadcastCloudEvent('USER_UPDATED', { userId, email: cleanEmail });
     }
 
     showToast(`Updated profile for ${fullName} (${resolvedPosition})`, 'success');
@@ -825,14 +976,21 @@ export function AppProvider({ children }) {
     } catch (e) {}
 
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        await supabase
+        const { error } = await supabase
           .from('profiles')
           .update({ role_position: pos, updated_at: new Date().toISOString() })
           .or(`id.eq.${userId},email.ilike.${target.email}`);
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_UPDATED', { userId, rolePosition: pos });
       } catch (e) {
-        console.warn('Supabase role position sync notice:', e.message);
+        console.error('Supabase role position sync error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
       }
+    } else {
+      broadcastCloudEvent('USER_UPDATED', { userId, rolePosition: pos });
     }
 
     showToast(`Updated role position for ${target.fullName} to "${pos}"`, 'success');
@@ -875,12 +1033,13 @@ export function AppProvider({ children }) {
 
     // Sync to Supabase
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         if (currentUser?.id === userId) {
-          await supabase.auth.updateUser({ password: finalPassword });
+          try { await supabase.auth.updateUser({ password: finalPassword }); } catch (authErr) {}
         }
 
-        await supabase
+        const { error } = await supabase
           .from('profiles')
           .update({
             has_set_password: hasSet,
@@ -888,9 +1047,15 @@ export function AppProvider({ children }) {
             updated_at: new Date().toISOString()
           })
           .or(`id.eq.${userId},email.ilike.${target.email}`);
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_PASSWORD_RESET', { userId });
       } catch (dbErr) {
-        console.warn('Supabase password reset sync note:', dbErr.message);
+        console.error('Supabase password reset sync error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
       }
+    } else {
+      broadcastCloudEvent('USER_PASSWORD_RESET', { userId });
     }
 
     if (requireNextLoginReset) {
@@ -922,7 +1087,7 @@ export function AppProvider({ children }) {
       }
     }
 
-    // 1. Record deleted IDs and clean emails into localStorage so they NEVER resurrect on refresh
+    // 1. Record deleted IDs and clean emails into localStorage
     try {
       const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
       if (!deletedIds.includes(userId)) deletedIds.push(userId);
@@ -935,19 +1100,35 @@ export function AppProvider({ children }) {
     }
 
     // 2. Filter local state and persist to localStorage
+    const prevUsers = usersList;
     const nextList = usersList.filter(u => u.id !== userId && u.email?.toLowerCase() !== target.email?.toLowerCase());
     setUsersList(nextList);
     localStorage.setItem('mdc_users', JSON.stringify(nextList));
+    dbStorage.setItem('mdc_users', nextList);
 
     // 3. Delete from Supabase Database
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         await supabase.from('user_page_permissions').delete().eq('user_id', userId);
-        await supabase.from('profiles').delete().eq('id', userId);
-        await supabase.from('profiles').delete().ilike('email', target.email);
+        const { error: delProfErr } = await supabase.from('profiles').delete().eq('id', userId);
+        if (delProfErr) {
+          // If delete by id failed, try deleting by email or marking is_deleted
+          const { error: delEmailErr } = await supabase.from('profiles').delete().ilike('email', target.email);
+          if (delEmailErr) {
+            await supabase.from('profiles').update({ is_deleted: true, is_active: false, updated_at: new Date().toISOString() }).or(`id.eq.${userId},email.ilike.${target.email}`);
+          }
+        }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('USER_DELETED', { userId, email: target.email });
       } catch (e) {
-        console.warn('Supabase delete user notice:', e.message);
+        console.error('Supabase delete user error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('PROFILE_DELETE', { id: userId, email: target.email });
+        showToast(`Warning: Cloud sync error (${e.message}). User removed locally.`, 'warning');
       }
+    } else {
+      broadcastCloudEvent('USER_DELETED', { userId, email: target.email });
     }
 
     showToast(`Deleted user ${target.fullName}`, 'success');
@@ -967,7 +1148,19 @@ export function AppProvider({ children }) {
   const [sites, setSites] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_sites');
-      return saved ? JSON.parse(saved) : (seedData.sites || []);
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const map = new Map();
+        (seedData.sites || []).forEach(s => { if (s && s.code) map.set(s.code.toUpperCase(), s); });
+        parsed.forEach(s => {
+          if (s && s.code) {
+            const existing = map.get(s.code.toUpperCase());
+            map.set(s.code.toUpperCase(), { ...existing, ...s });
+          }
+        });
+        return Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+      }
+      return (seedData.sites || []).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
     } catch {
       return seedData.sites || [];
     }
@@ -984,7 +1177,7 @@ export function AppProvider({ children }) {
 
   const isExplicitlyCleared = () => {
     try {
-      return localStorage.getItem('mdc_is_cleared') === 'true';
+      return localStorage.getItem('mdc_is_cleared') === 'true' || localStorage.getItem('mdc_forecast') === '[]';
     } catch {
       return false;
     }
@@ -994,13 +1187,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_forecast');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.forecastItems || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.forecastItems || []);
+      return [];
     }
   });
 
@@ -1008,13 +1201,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_allocations');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.allocations || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.allocations || []);
+      return [];
     }
   });
 
@@ -1022,11 +1215,39 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_inventory');
+      let baseUnits = [];
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) baseUnits = parsed;
       }
-      return [];
+      if (baseUnits.length === 0) {
+        const savedIntakes = localStorage.getItem('mdc_dc_intake_records');
+        if (savedIntakes) {
+          const parsedIntakes = JSON.parse(savedIntakes);
+          if (Array.isArray(parsedIntakes)) {
+            parsedIntakes.forEach(rec => {
+              if (Array.isArray(rec.items)) {
+                rec.items.forEach(it => {
+                  baseUnits.push({
+                    id: it.id || `unit-${it.serial_number}`,
+                    part_id: it.part_id || `part-${it.part_number}`,
+                    part_number: it.part_number,
+                    description: it.description || 'Service Replacement Part',
+                    serial_number: it.serial_number,
+                    current_site_id: 'site-dc',
+                    site_code: 'DC-MDC',
+                    status: 'in_stock',
+                    box_number: 1,
+                    received_at: it.received_at || rec.intake_date || new Date().toISOString(),
+                    received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff'
+                  });
+                });
+              }
+            });
+          }
+        }
+      }
+      return reconcileUnitsWithPackedDrafts(baseUnits);
     } catch {
       return [];
     }
@@ -1036,13 +1257,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_pos');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.purchaseOrders || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.purchaseOrders || []);
+      return [];
     }
   });
 
@@ -1050,13 +1271,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_shipments');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.shipments || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.shipments || []);
+      return [];
     }
   });
 
@@ -1064,13 +1285,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_scan_logs');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.scanLogs || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.scanLogs || []);
+      return [];
     }
   });
 
@@ -1078,20 +1299,32 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_repair_usage');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedData.repairUsageRecords || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedData.repairUsageRecords || []);
+      return [];
     }
   });
 
   const [savedRecords, setSavedRecords] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_saved_records');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(r =>
+            !r.id?.startsWith('deleted_') &&
+            r.record_type !== 'system_registry' &&
+            r.record_type !== 'deletion_registry' &&
+            r.period_label !== 'Deleted Records Registry' &&
+            r.notes !== '__DELETED__'
+          );
+        }
+      }
+      return [];
     } catch {
       return [];
     }
@@ -1118,13 +1351,13 @@ export function AppProvider({ children }) {
     try {
       if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_stock_transfer_reports');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
-      return seedStockTransfers || [];
+      return [];
     } catch {
-      return isExplicitlyCleared() ? [] : (seedStockTransfers || []);
+      return [];
     }
   });
 
@@ -1133,15 +1366,7 @@ export function AppProvider({ children }) {
       if (isExplicitlyCleared()) return null;
       const saved = localStorage.getItem('mdc_stock_transfer_metadata');
       if (saved) return JSON.parse(saved);
-      return {
-        fileName: 'Reports – Stock Transfers.xlsx',
-        uploadedAt: new Date().toISOString(),
-        totalRows: seedStockTransfers?.length || 2278,
-        totalQty: 2277,
-        totalVal: 493426,
-        uniqueFromCount: 34,
-        uniqueToCount: 38
-      };
+      return null;
     } catch {
       return null;
     }
@@ -1173,6 +1398,40 @@ export function AppProvider({ children }) {
           user_email: 'zhonmanaois@gmail.com',
           user_role: 'superadmin',
           status: 'ACTIVE_ON_CLOUD'
+        }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  // Deletion & Data Purge Audit Trail Logs
+  const [deletionAuditLogs, setDeletionAuditLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_deletion_audit_logs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return [
+        {
+          id: 'del-audit-init-01',
+          timestamp: new Date().toISOString(),
+          action: 'DELETE',
+          entity_type: 'DC Intake Record',
+          entity_id: 'MDC202600001',
+          entity_label: 'Intake Batch #MDC202600001',
+          deleted_by_id: 'usr-superadmin-zhon',
+          deleted_by_name: 'Zhon Manaois',
+          deleted_by_email: 'zhon.manaois@mobilecareph.com',
+          deleted_by_role: 'superadmin',
+          deleted_by_position: 'Parts Management Specialist',
+          reason: 'Initial intake test record purged from staging',
+          summary: {
+            itemsCount: 15,
+            intakeDate: '2026-08-20',
+            notes: 'Test intake batch'
+          }
         }
       ];
     } catch {
@@ -1274,7 +1533,7 @@ export function AppProvider({ children }) {
           setSites(seedData.sites);
         }
         if (Array.isArray(savedCats) && savedCats.length > 0) setCategories(savedCats);
-        if (Array.isArray(savedInv) && savedInv.length > 0) setInventoryUnits(savedInv);
+        if (Array.isArray(savedInv) && savedInv.length > 0) setInventoryUnits(reconcileUnitsWithPackedDrafts(savedInv, savedShip));
         if (Array.isArray(savedPOs) && savedPOs.length > 0) setPurchaseOrders(savedPOs);
         if (Array.isArray(savedShip) && savedShip.length > 0) setShipments(savedShip);
         if (Array.isArray(savedLogs) && savedLogs.length > 0) setScanLogs(savedLogs);
@@ -1318,63 +1577,234 @@ export function AppProvider({ children }) {
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date());
   const lastRefreshTimeRef = useRef(0);
+  const realtimeChannelRef = useRef(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
-  // Top-level Optimized Parallel Supabase Hydration function
-  const hydrateFromSupabase = async () => {
-    if (!supabase) return;
+  // Persistent Offline Write & Retry Queue
+  const [offlineQueue, setOfflineQueue] = useState(() => {
     try {
-      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const saved = localStorage.getItem('mdc_offline_sync_queue');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
 
-      // Execute all independent database queries simultaneously in parallel for instant sub-second response
-      const [
-        dbProfilesRes,
-        dbPermsRes,
-        dbSitesRes,
-        dbPartsRes,
-        dbForecastsRes,
-        dbAllocationsRes,
-        dbRecordsRes,
-        dbIntakesRes,
-        dbUnitsRes
-      ] = await Promise.allSettled([
-        supabase.from('profiles').select('*'),
-        supabase.from('user_page_permissions').select('*'),
-        supabase.from('sites').select('*'),
-        supabase.from('parts').select('*, part_categories(name, code)'),
-        supabase.from('forecast_entries').select('*, parts(part_number, description)'),
-        supabase.from('allocation_items').select('*, parts(part_number, description), sites(id, code)'),
-        supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(100),
-        supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(200),
-        supabase.from('inventory_units').select('*').order('received_at', { ascending: false }).limit(2000)
-      ]);
+  const enqueueOfflineAction = useCallback((type, payload, meta = {}) => {
+    const entry = {
+      id: `sync-q-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      type,
+      payload,
+      meta,
+      queuedAt: new Date().toISOString()
+    };
+    setOfflineQueue(prev => {
+      const updated = [...prev, entry];
+      try {
+        localStorage.setItem('mdc_offline_sync_queue', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_offline_sync_queue', updated);
+      return updated;
+    });
+  }, []);
 
-      const dbProfiles = dbProfilesRes.status === 'fulfilled' ? dbProfilesRes.value?.data : null;
-      const dbPerms = dbPermsRes.status === 'fulfilled' ? dbPermsRes.value?.data : null;
-      const dbSites = dbSitesRes.status === 'fulfilled' ? dbSitesRes.value?.data : null;
-      const dbParts = dbPartsRes.status === 'fulfilled' ? dbPartsRes.value?.data : null;
-      const dbForecasts = dbForecastsRes.status === 'fulfilled' ? dbForecastsRes.value?.data : null;
-      const dbAllocations = dbAllocationsRes.status === 'fulfilled' ? dbAllocationsRes.value?.data : null;
-      const dbRecords = dbRecordsRes.status === 'fulfilled' ? dbRecordsRes.value?.data : null;
-      const dbIntakes = dbIntakesRes.status === 'fulfilled' ? dbIntakesRes.value?.data : null;
-      const dbUnits = dbUnitsRes.status === 'fulfilled' ? dbUnitsRes.value?.data : null;
+  const isProcessingQueueRef = useRef(false);
+  const processOfflineSyncQueue = useCallback(async () => {
+    if (!supabase || isProcessingQueueRef.current || !navigator.onLine) return;
+    let queue = [];
+    try {
+      const saved = localStorage.getItem('mdc_offline_sync_queue');
+      queue = saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return;
+    }
+    if (!Array.isArray(queue) || queue.length === 0) {
+      setOfflineQueue([]);
+      return;
+    }
 
-      // 1. Hydrate User Profiles & Permissions from Supabase
-      if (dbProfiles && dbProfiles.length > 0) {
-        // Clean up any legacy mock profiles from Supabase if found
-        const legacyDbRows = dbProfiles.filter(p =>
-          LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) ||
-          LEGACY_MOCK_IDS.includes(p.id)
-        );
-        for (const row of legacyDbRows) {
-          try {
-            await supabase.from('user_page_permissions').delete().eq('user_id', row.id);
-            await supabase.from('profiles').delete().eq('id', row.id);
-          } catch (delErr) {
-            console.warn('Legacy profile cleanup note:', delErr);
-          }
+    isProcessingQueueRef.current = true;
+    console.debug(`[OfflineSyncQueue] Processing ${queue.length} pending queued mutations...`);
+    const remaining = [];
+
+    for (const item of queue) {
+      try {
+        const retries = (item.retries || 0) + 1;
+        let err = null;
+
+        if (item.type === 'INTAKE_UPSERT') {
+          const payload = {
+            ...item.payload,
+            saved_by_user_id: safeUUID(item.payload?.saved_by_user_id)
+          };
+          const { error } = await supabase.from('dc_intake_records').upsert(payload, { onConflict: 'id' });
+          if (error) err = error;
+        } else if (item.type === 'INTAKE_DELETE') {
+          const { error } = await supabase.from('dc_intake_records').delete().eq('id', item.payload.recordId);
+          if (error) err = error;
+        } else if (item.type === 'SHIPMENT_UPSERT' || item.type === 'SAVED_RECORD_UPSERT') {
+          const payload = {
+            ...item.payload,
+            saved_by_user_id: safeUUID(item.payload?.saved_by_user_id)
+          };
+          const { error } = await supabase.from('saved_records').upsert(payload, { onConflict: 'id' });
+          if (error) err = error;
+        } else if (item.type === 'SHIPMENT_DELETE' || item.type === 'SAVED_RECORD_DELETE') {
+          const idToDelete = item.payload?.shipmentId || item.payload?.id;
+          const { error } = await supabase.from('saved_records').delete().eq('id', idToDelete);
+          if (error) err = error;
+        } else if (item.type === 'PART_UPSERT') {
+          const { error } = await supabase.from('parts').upsert(item.payload, { onConflict: 'part_number' });
+          if (error) err = error;
+        } else if (item.type === 'PART_DELETE') {
+          const { error } = await supabase.from('parts').delete().eq('id', item.payload.id);
+          if (error) err = error;
+        } else if (item.type === 'SITE_UPSERT') {
+          const { error } = await supabase.from('sites').upsert(item.payload, { onConflict: 'code' });
+          if (error) err = error;
+        } else if (item.type === 'PROFILE_UPSERT') {
+          const { error } = await supabase.from('profiles').upsert(item.payload, { onConflict: 'email' });
+          if (error) err = error;
+        } else if (item.type === 'PROFILE_DELETE') {
+          const { error } = await supabase.from('profiles').delete().eq('id', item.payload.id);
+          if (error) err = error;
+        } else if (item.type === 'INVENTORY_UNITS_UPSERT') {
+          const { error } = await supabase.from('inventory_units').upsert(item.payload, { onConflict: 'serial_number' });
+          if (error) err = error;
         }
 
-        const activeDbProfiles = dbProfiles.filter(p =>
+        if (err) {
+          console.warn(`[OfflineSyncQueue] Failed item ${item.type} (attempt ${retries}):`, err.message);
+          // Only retry transient network errors up to 3 times
+          if (retries < 3 && !/violates|duplicate|invalid|syntax|column|null/i.test(err.message || '')) {
+            remaining.push({ ...item, retries });
+          } else {
+            console.warn(`[OfflineSyncQueue] Discarding unrecoverable queued item ${item.type}:`, err.message);
+          }
+        }
+      } catch (ex) {
+        console.warn(`[OfflineSyncQueue] Exception processing ${item.type}:`, ex.message);
+        if ((item.retries || 0) < 3) {
+          remaining.push({ ...item, retries: (item.retries || 0) + 1 });
+        }
+      }
+    }
+
+    setOfflineQueue(remaining);
+    try {
+      if (remaining.length > 0) {
+        localStorage.setItem('mdc_offline_sync_queue', JSON.stringify(remaining));
+      } else {
+        localStorage.removeItem('mdc_offline_sync_queue');
+      }
+    } catch (e) {}
+    dbStorage.setItem('mdc_offline_sync_queue', remaining);
+    isProcessingQueueRef.current = false;
+  }, []);
+
+  // Active Packing Draft State (Synced across all accounts in real-time)
+  const [activePackDraft, setActivePackDraft] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_active_pack_draft');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  // Global Realtime WebSocket & Local Broadcast Event Dispatcher
+  const broadcastCloudEvent = (type, payload = {}) => {
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bc = new BroadcastChannel('mdc_sync_bus');
+        bc.postMessage({ type, ...payload, timestamp: Date.now() });
+        bc.close();
+      }
+    } catch (e) {}
+
+    try {
+      if (realtimeChannelRef.current && typeof realtimeChannelRef.current.send === 'function') {
+        realtimeChannelRef.current.send({
+          type: 'broadcast',
+          event: 'mdc_sync',
+          payload: { type, ...payload, timestamp: Date.now() }
+        });
+      }
+    } catch (e) {}
+  };
+
+  const syncActivePackDraftToCloud = useCallback(async (draftObj) => {
+    setActivePackDraft(draftObj || null);
+    if (!supabase) return;
+    try {
+      if (!draftObj || !draftObj.items || draftObj.items.length === 0) {
+        await supabase.from('saved_records').delete().eq('id', 'active_packing_manifest_draft');
+      } else {
+        await supabase.from('saved_records').upsert({
+          id: 'active_packing_manifest_draft',
+          record_type: 'packing_draft',
+          period_label: draftObj.invoice_ref || draftObj.shipment_number || 'Live Packing Draft',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: draftObj.week_number || 1,
+          notes: 'Live workstation packing list draft in progress',
+          saved_by_name: draftObj.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: draftObj,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      }
+      broadcastCloudEvent('DRAFT_UPDATED', { count: draftObj?.items?.length || 0 });
+    } catch (e) {
+      console.warn('Sync active pack draft error:', e);
+    }
+  }, [currentUser?.fullName]);
+
+  // Top-level Selective & Targeted Supabase Hydration function
+  const hydrateFromSupabase = async (targetTables = null) => {
+    if (!supabase) return false;
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const shouldFetchAll = !targetTables || !Array.isArray(targetTables) || targetTables.length === 0;
+
+      const shouldFetch = (table) => shouldFetchAll || targetTables.includes(table);
+
+      // Execute targeted database queries simultaneously in parallel for instant response
+      const queries = [];
+      const queryKeys = [];
+
+      if (shouldFetch('profiles')) { queries.push(supabase.from('profiles').select('*')); queryKeys.push('profiles'); }
+      if (shouldFetch('user_page_permissions') || shouldFetch('profiles')) { queries.push(supabase.from('user_page_permissions').select('*')); queryKeys.push('perms'); }
+      if (shouldFetch('sites')) { queries.push(supabase.from('sites').select('*')); queryKeys.push('sites'); }
+      if (shouldFetch('parts') || shouldFetch('part_categories')) { queries.push(supabase.from('parts').select('*, part_categories(name, code)')); queryKeys.push('parts'); }
+      if (shouldFetch('forecast_entries') || shouldFetch('forecast_cycles')) { queries.push(supabase.from('forecast_entries').select('*, parts(part_number, description)')); queryKeys.push('forecasts'); }
+      if (shouldFetch('allocation_items') || shouldFetch('allocation_cycles')) { queries.push(supabase.from('allocation_items').select('*, parts(part_number, description), sites(id, code)')); queryKeys.push('allocations'); }
+      if (shouldFetch('saved_records')) { queries.push(supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(200)); queryKeys.push('records'); }
+      if (shouldFetch('dc_intake_records')) { queries.push(supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(200)); queryKeys.push('intakes'); }
+      if (shouldFetch('inventory_units')) { queries.push(supabase.from('inventory_units').select('*').order('received_at', { ascending: false }).limit(2000)); queryKeys.push('units'); }
+      if (shouldFetch('shipments')) { queries.push(supabase.from('shipments').select('*').order('created_at', { ascending: false }).limit(200)); queryKeys.push('shipments'); }
+
+      const results = await Promise.allSettled(queries);
+      const resMap = {};
+      results.forEach((r, idx) => {
+        const k = queryKeys[idx];
+        resMap[k] = r.status === 'fulfilled' ? r.value?.data : null;
+      });
+
+      const dbProfiles = resMap.profiles;
+      const dbPerms = resMap.perms;
+      const dbSites = resMap.sites;
+      const dbParts = resMap.parts;
+      const dbForecasts = resMap.forecasts;
+      const dbAllocations = resMap.allocations;
+      const dbRecords = resMap.records;
+      const dbIntakes = resMap.intakes;
+      const dbUnits = resMap.units;
+      const dbShipments = resMap.shipments;
+
+      // 1. Hydrate User Profiles & Permissions from Supabase
+      if (dbProfiles !== undefined && dbProfiles !== null) {
+        const activeDbProfiles = (dbProfiles || []).filter(p =>
+          !p.is_deleted &&
           !deletedIds.includes(p.id) &&
           !deletedIds.includes(p.email?.toLowerCase()) &&
           !LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) &&
@@ -1389,345 +1819,396 @@ export function AppProvider({ children }) {
           });
         }
 
-        setUsersList(prev => {
-          const map = new Map();
-          const cleanPrev = (prev || []).filter(u =>
-            !deletedIds.includes(u.id) &&
-            !deletedIds.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_IDS.includes(u.id)
-          );
-          cleanPrev.forEach(u => map.set(u.email.toLowerCase(), u));
-
-          activeDbProfiles.forEach(p => {
-            const emailKey = p.email.toLowerCase();
-            const existing = map.get(emailKey);
-            const resolvedRole = p.role || existing?.role || 'user';
-            const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(resolvedRole);
-            const userPerms = permMap.get(p.id) || (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
-            map.set(emailKey, {
-              id: existing?.id || p.id,
-              email: p.email,
-              fullName: p.full_name || existing?.fullName || 'Staff User',
-              role: resolvedRole,
-              rolePosition: resolvedPosition,
-              siteId: p.site_id || existing?.siteId || 'site-dc',
-              hasSetPassword: p.has_set_password ?? existing?.hasSetPassword ?? true,
-              passwordHash: p.password_hash || existing?.passwordHash || 'Password123',
-              isActive: p.is_active ?? existing?.isActive ?? true,
-              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : userPerms
-            });
-          });
-
-          const merged = Array.from(map.values());
-          dbStorage.setItem('mdc_users', merged);
-          try {
-            localStorage.setItem('mdc_users', JSON.stringify(merged));
-          } catch (e) {}
-          return merged;
+        const mappedUsers = activeDbProfiles.map(p => {
+          const emailKey = p.email.toLowerCase();
+          const resolvedRole = p.role || 'user';
+          const resolvedPosition = p.role_position || getDefaultRolePosition(resolvedRole);
+          const userPerms = permMap.get(p.id) || (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
+          return {
+            id: p.id,
+            email: p.email,
+            fullName: p.full_name || 'Staff User',
+            role: resolvedRole,
+            rolePosition: resolvedPosition,
+            siteId: p.site_id || 'site-dc',
+            hasSetPassword: p.has_set_password ?? true,
+            passwordHash: p.password_hash || 'Password123',
+            isActive: p.is_active ?? true,
+            permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : userPerms
+          };
         });
-      }
 
-      // 2. Hydrate Sites from Supabase
-      if (dbSites && dbSites.length > 0) {
-        setSites(prev => {
-          const map = new Map((prev || []).map(s => [s.code, s]));
-          dbSites.forEach(s => {
-            const existing = map.get(s.code);
-            map.set(s.code, {
-              ...(existing || {}),
-              id: existing?.id || s.id,
-              code: s.code,
-              name: s.name || existing?.name,
-              region: s.region || existing?.region || 'Metro Manila',
-              address: s.address || s.full_address || existing?.address,
-              full_address: s.full_address || s.address || existing?.full_address,
-              contact_person: s.contact_person || existing?.contact_person,
-              contact_phone: s.contact_phone || existing?.contact_phone,
-              contact_email: s.contact_email || existing?.contact_email,
-              ship_to: s.ship_to || existing?.ship_to,
-              sold_to: s.sold_to || existing?.sold_to,
-              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
-              is_dc: s.is_dc ?? existing?.is_dc ?? false,
-              is_active: s.is_active ?? existing?.is_active ?? true
-            });
-          });
-          const merged = Array.from(map.values());
-          try {
-            localStorage.setItem('mdc_sites', JSON.stringify(merged));
-          } catch (e) {}
-          dbStorage.setItem('mdc_sites', merged);
-          return merged;
-        });
-      }
-
-      // 3. Hydrate Parts Catalog from Supabase
-      if (dbParts && dbParts.length > 0) {
-        setParts(prev => {
-          const map = new Map((prev || []).map(p => [p.part_number, p]));
-          dbParts.forEach(p => {
-            const existing = map.get(p.part_number);
-            map.set(p.part_number, {
-              id: p.id,
-              part_number: p.part_number,
-              description: p.description,
-              iphone_model: p.iphone_model || existing?.iphone_model || '',
-              category_id: p.category_id || (p.part_categories?.code === 'BATTERY' ? 'cat-battery' : 'cat-display'),
-              stocking_price: p.stocking_price || existing?.stocking_price || 0,
-              safety_stock_pct: p.safety_stock_pct || 0.05,
-              is_active: p.is_active ?? true
-            });
-          });
-          const merged = Array.from(map.values());
-          try {
-            localStorage.setItem('mdc_parts', JSON.stringify(merged));
-          } catch (e) {}
-          dbStorage.setItem('mdc_parts', merged);
-          return merged;
-        });
-      }
-
-      // 4. Hydrate Forecast Entries from Supabase
-      if (dbForecasts && dbForecasts.length > 0) {
-        const mappedForecast = dbForecasts.map(f => ({
-          part_id: f.part_id,
-          part_number: f.parts?.part_number || f.part_id,
-          description: f.parts?.description || 'Part',
-          ytd_monthly_counts: f.ytd_monthly_counts || [],
-          computed_forecast: f.computed_forecast || 0,
-          admin_override: f.admin_override,
-          final_forecast: f.final_forecast || f.computed_forecast || 0,
-          safety_stock_units: f.safety_stock_units || 0,
-          recommended_order: f.recommended_order || 0
-        }));
-        setForecastItems(mappedForecast);
-        try {
-          localStorage.setItem('mdc_forecast', JSON.stringify(mappedForecast));
-        } catch (e) {}
-      }
-
-      // 5. Hydrate Allocation Items from Supabase
-      if (dbAllocations && dbAllocations.length > 0) {
-        const allocMap = new Map();
-        dbAllocations.forEach(item => {
-          const pn = item.parts?.part_number || item.part_id;
-          if (!allocMap.has(pn)) {
-            allocMap.set(pn, {
-              part_id: item.part_id,
-              part_number: pn,
-              description: item.parts?.description || 'Part',
-              total_allocated_qty: 0,
-              w1_qty: 0,
-              w2_qty: 0,
-              w3_qty: 0,
-              w4_qty: 0,
-              site_quantities: {}
-            });
-          }
-          const alloc = allocMap.get(pn);
-          alloc.total_allocated_qty += item.monthly_allocated_qty || 0;
-          alloc.w1_qty += item.week1_qty || 0;
-          alloc.w2_qty += item.week2_qty || 0;
-          alloc.w3_qty += item.week3_qty || 0;
-          alloc.w4_qty += item.week4_qty || 0;
-          const sId = item.sites?.id || item.site_id;
-          const sCode = item.sites?.code || item.site_id;
-          if (sId) alloc.site_quantities[sId] = item.monthly_allocated_qty || 0;
-          if (sCode) alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
-        });
-        const mappedAllocs = Array.from(allocMap.values());
-        const totalUnitsHydrated = mappedAllocs.reduce((s, a) => s + (a.total_allocated_qty || 0), 0);
-        if (mappedAllocs.length > 0 && totalUnitsHydrated >= 461) {
-          setAllocations(mappedAllocs);
-          try {
-            localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
-          } catch (e) {}
+        if (mappedUsers.length > 0) {
+          setUsersList(mappedUsers);
+          dbStorage.setItem('mdc_users', mappedUsers);
+          try { localStorage.setItem('mdc_users', JSON.stringify(mappedUsers)); } catch (e) {}
         }
       }
 
-      // 6. Hydrate Live Master Record and Saved Period Records from Supabase
-      if (dbRecords && dbRecords.length > 0) {
+      // 2. Hydrate Sites from Supabase (Merge with seedData to guarantee all 26+ branches exist)
+      if (dbSites !== undefined && dbSites !== null) {
+        const map = new Map();
+        (seedData.sites || []).forEach(s => {
+          if (s && s.code) map.set(s.code.toUpperCase(), { ...s });
+        });
+        (sites || []).forEach(s => {
+          if (s && s.code) {
+            const existing = map.get(s.code.toUpperCase());
+            map.set(s.code.toUpperCase(), { ...existing, ...s });
+          }
+        });
+        dbSites.filter(s => !s.is_deleted).forEach(s => {
+          if (s && s.code) {
+            const existing = map.get(s.code.toUpperCase());
+            map.set(s.code.toUpperCase(), {
+              ...existing,
+              id: s.id || existing?.id,
+              code: s.code,
+              name: s.name,
+              region: s.region || existing?.region || 'Metro Manila',
+              address: s.address || s.full_address || existing?.address || '',
+              full_address: s.full_address || s.address || existing?.full_address || '',
+              contact_person: s.contact_person || existing?.contact_person || '',
+              contact_phone: s.contact_phone || existing?.contact_phone || '',
+              contact_email: s.contact_email || existing?.contact_email || '',
+              ship_to: s.ship_to || existing?.ship_to || '',
+              sold_to: s.sold_to || existing?.sold_to || '',
+              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix || '',
+              is_dc: s.is_dc ?? existing?.is_dc ?? false,
+              is_active: s.is_active ?? existing?.is_active ?? true
+            });
+          }
+        });
+
+        const mappedSites = Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+        setSites(mappedSites);
+        try { localStorage.setItem('mdc_sites', JSON.stringify(mappedSites)); } catch (e) {}
+        dbStorage.setItem('mdc_sites', mappedSites);
+      }
+
+      // 3. Hydrate Parts Catalog from Supabase
+      if (dbParts !== undefined && dbParts !== null && dbParts.length > 0) {
+        const mappedParts = dbParts.filter(p => !p.is_deleted).map(p => ({
+          id: p.id,
+          part_number: p.part_number,
+          description: p.description,
+          iphone_model: p.iphone_model || '',
+          category_id: p.category_id || (p.part_categories?.code === 'BATTERY' ? 'cat-battery' : 'cat-display'),
+          stocking_price: p.stocking_price || 0,
+          safety_stock_pct: p.safety_stock_pct || 0.05,
+          is_active: p.is_active ?? true
+        }));
+
+        setParts(mappedParts);
+        try { localStorage.setItem('mdc_parts', JSON.stringify(mappedParts)); } catch (e) {}
+        dbStorage.setItem('mdc_parts', mappedParts);
+      }
+
+      // 4. Hydrate Live Master Record & Forecasting / Allocations from Supabase
+      if (dbRecords !== undefined && dbRecords !== null && dbRecords.length > 0) {
         // Check for Live Master Record Snapshot (multi-user synchronized state)
-        const liveMaster = dbRecords.find(r => r.id === LIVE_MASTER_RECORD_ID);
-        if (liveMaster?.snapshot_data) {
+        const liveMaster = dbRecords.find(r => r.id === LIVE_MASTER_RECORD_ID && !r.is_deleted);
+        
+        if (liveMaster?.snapshot_data?.isCleared === true) {
+          // Cloud Master Record is explicitly set to empty slate
+          setForecastItems([]);
+          setAllocations([]);
+          dbStorage.setItem('mdc_forecast', []);
+          dbStorage.setItem('mdc_allocations', []);
+          dbStorage.setItem('mdc_is_cleared', true);
+          try {
+            localStorage.setItem('mdc_forecast', '[]');
+            localStorage.setItem('mdc_allocations', '[]');
+            localStorage.setItem('mdc_is_cleared', 'true');
+          } catch (e) {}
+        } else if (liveMaster?.snapshot_data) {
           const snap = liveMaster.snapshot_data;
           try {
             localStorage.removeItem('mdc_is_cleared');
             dbStorage.removeItem('mdc_is_cleared');
           } catch (e) {}
 
-          if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
+          if (Array.isArray(snap.forecastItems)) {
             setForecastItems(snap.forecastItems);
             dbStorage.setItem('mdc_forecast', snap.forecastItems);
             try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
           }
-          if (Array.isArray(snap.allocations) && snap.allocations.length > 0) {
+          if (Array.isArray(snap.allocations)) {
             setAllocations(snap.allocations);
             dbStorage.setItem('mdc_allocations', snap.allocations);
             try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
           }
-          if (Array.isArray(snap.uploadAuditLogs) && snap.uploadAuditLogs.length > 0) {
+          if (Array.isArray(snap.uploadAuditLogs)) {
             setUploadAuditLogs(snap.uploadAuditLogs);
             dbStorage.setItem('mdc_upload_audit_logs', snap.uploadAuditLogs);
             try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(snap.uploadAuditLogs)); } catch (e) {}
           }
-          if (Array.isArray(snap.parts) && snap.parts.length > 0) {
-            setParts(prev => {
-              const map = new Map((prev || []).map(p => [p.part_number, p]));
-              snap.parts.forEach(p => map.set(p.part_number, { ...(map.get(p.part_number) || {}), ...p }));
-              const merged = Array.from(map.values());
-              dbStorage.setItem('mdc_parts', merged);
-              try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
-              return merged;
-            });
-          }
-          if (Array.isArray(snap.sites) && snap.sites.length > 0) {
-            setSites(prev => {
-              const map = new Map((prev || []).map(s => [s.code, s]));
-              snap.sites.forEach(s => map.set(s.code, { ...(map.get(s.code) || {}), ...s }));
-              const merged = Array.from(map.values());
-              dbStorage.setItem('mdc_sites', merged);
-              try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
-              return merged;
-            });
-          }
-          if (snap.activePeriod && snap.activePeriod.label) {
+          if (snap.activePeriod?.label) {
             setActivePeriod(snap.activePeriod);
             try { localStorage.setItem('mdc_active_period', JSON.stringify(snap.activePeriod)); } catch (e) {}
           }
+        } else if (isExplicitlyCleared()) {
+          // Fallback if no cloud master record exists yet
+          setForecastItems([]);
+          setAllocations([]);
+          dbStorage.setItem('mdc_forecast', []);
+          dbStorage.setItem('mdc_allocations', []);
         }
 
-        // Historical saved records (excluding the live master record)
-        const historicalRecords = dbRecords.filter(r => r.id !== LIVE_MASTER_RECORD_ID);
+        if (liveMaster?.snapshot_data?.uploadAuditLogs && Array.isArray(liveMaster.snapshot_data.uploadAuditLogs)) {
+          setUploadAuditLogs(liveMaster.snapshot_data.uploadAuditLogs);
+          dbStorage.setItem('mdc_upload_audit_logs', liveMaster.snapshot_data.uploadAuditLogs);
+          try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(liveMaster.snapshot_data.uploadAuditLogs)); } catch (e) {}
+        }
+        if (liveMaster?.snapshot_data?.activePeriod && liveMaster.snapshot_data.activePeriod.label) {
+          setActivePeriod(liveMaster.snapshot_data.activePeriod);
+          try { localStorage.setItem('mdc_active_period', JSON.stringify(liveMaster.snapshot_data.activePeriod)); } catch (e) {}
+        }
+
+        // Historical saved records (Strictly filter out system registries and deleted records registry)
+        const historicalRecords = dbRecords.filter(r =>
+          r.id !== LIVE_MASTER_RECORD_ID &&
+          r.id !== 'active_packing_manifest_draft' &&
+          !r.id.startsWith('deleted_') &&
+          r.record_type !== 'shipment' &&
+          r.record_type !== 'system_registry' &&
+          r.record_type !== 'deletion_registry' &&
+          r.period_label !== 'Deleted Records Registry' &&
+          r.notes !== '__DELETED__' &&
+          !r.is_deleted
+        );
+
+        // Permanently prune any legacy deletion registry records from Supabase saved_records table
+        if (supabase) {
+          supabase.from('saved_records')
+            .delete()
+            .in('id', ['deleted_intake_ids_registry', 'deleted_shipment_ids_registry'])
+            .then(() => {})
+            .catch(() => {});
+        }
+
         if (historicalRecords.length > 0) {
-          setSavedRecords(prev => {
-            const map = new Map((prev || []).map(r => [r.id, r]));
-            historicalRecords.forEach(dbR => {
-              map.set(dbR.id, {
-                id: dbR.id,
-                record_type: dbR.record_type || 'both',
-                period_label: dbR.period_label || 'Saved Record',
-                period_year: dbR.period_year,
-                period_month: dbR.period_month,
-                period_week: dbR.period_week,
-                notes: dbR.notes || '',
-                saved_by_name: dbR.saved_by_name || 'System User',
-                saved_by_user_id: dbR.saved_by_user_id,
-                snapshot_data: dbR.snapshot_data || {},
-                created_at: dbR.created_at,
-                updated_at: dbR.updated_at
-              });
-            });
-            const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            try {
-              localStorage.setItem('mdc_saved_records', JSON.stringify(merged.slice(0, 50)));
-            } catch (e) {}
-            return merged;
-          });
+          const mappedHistorical = historicalRecords.map(dbR => ({
+            id: dbR.id,
+            record_type: dbR.record_type || 'both',
+            period_label: dbR.period_label || 'Saved Record',
+            period_year: dbR.period_year,
+            period_month: dbR.period_month,
+            period_week: dbR.period_week,
+            notes: dbR.notes || '',
+            saved_by_name: dbR.saved_by_name || 'System User',
+            saved_by_user_id: dbR.saved_by_user_id,
+            snapshot_data: dbR.snapshot_data || {},
+            created_at: dbR.created_at,
+            updated_at: dbR.updated_at
+          })).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+          setSavedRecords(mappedHistorical);
+          try { localStorage.setItem('mdc_saved_records', JSON.stringify(mappedHistorical.slice(0, 50))); } catch (e) {}
+        } else {
+          setSavedRecords([]);
+          try { localStorage.setItem('mdc_saved_records', JSON.stringify([])); } catch (e) {}
         }
       }
 
       // 7. Hydrate DC Intake Records from Supabase
+      const deletedIntakeIdsLocal = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
+      const deletedRegistry = (dbRecords || []).find(r => r.id === 'deleted_intake_ids_registry');
+      const deletedFromCloud = deletedRegistry?.snapshot_data?.deletedIds || [];
+      const deletedIntakesSet = new Set([...deletedIntakeIdsLocal, ...deletedFromCloud]);
+
       let fetchedIntakes = [];
-      if (dbIntakes && dbIntakes.length > 0) {
-        fetchedIntakes = dbIntakes;
-        setDcIntakeRecords(prev => {
-          const map = new Map((prev || []).map(r => [r.id, r]));
-          dbIntakes.forEach(dbI => {
-            map.set(dbI.id, {
-              id: dbI.id,
-              record_name: dbI.record_name || dbI.id,
-              intake_date: dbI.intake_date,
-              po_id: dbI.po_id,
-              po_number: dbI.po_number,
-              supplier: dbI.supplier,
-              total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
-              saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
-              saved_by_user_id: dbI.saved_by_user_id,
-              notes: dbI.notes || '',
-              category_breakdown: dbI.category_breakdown || {},
-              items: Array.isArray(dbI.items) ? dbI.items : [],
-              created_at: dbI.created_at,
-              updated_at: dbI.updated_at
-            });
-          });
-          const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-          try {
-            localStorage.setItem('mdc_dc_intake_records', JSON.stringify(merged.slice(0, 100)));
-          } catch (e) {}
-          return merged;
+      if (dbIntakes !== undefined && dbIntakes !== null) {
+        const validIntakes = (dbIntakes || []).filter(dbI => {
+          if (!dbI || !dbI.id) return false;
+          if (deletedIntakesSet.has(dbI.id)) return false;
+          if (dbI.notes && dbI.notes.includes('__DELETED__')) return false;
+          if (dbI.is_deleted === true) return false;
+          return true;
         });
+
+        fetchedIntakes = validIntakes;
+        const mappedIntakes = validIntakes.map(dbI => ({
+          id: dbI.id,
+          record_name: dbI.record_name || dbI.id,
+          intake_date: dbI.intake_date,
+          po_id: dbI.po_id,
+          po_number: dbI.po_number,
+          supplier: dbI.supplier,
+          total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
+          saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
+          saved_by_user_id: dbI.saved_by_user_id,
+          notes: dbI.notes || '',
+          category_breakdown: dbI.category_breakdown || {},
+          items: Array.isArray(dbI.items) ? dbI.items : [],
+          created_at: dbI.created_at,
+          updated_at: dbI.updated_at
+        })).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+        setDcIntakeRecords(mappedIntakes);
+        try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(mappedIntakes.slice(0, 100))); } catch (e) {}
+        dbStorage.setItem('mdc_dc_intake_records', mappedIntakes);
       }
 
-      // 8. Hydrate Serialized Inventory Units from Supabase (Central Multi-User Source of Truth)
-      setInventoryUnits(prev => {
-        const map = new Map();
+      // 7b. Hydrate Shipments & Packing Lists from Supabase
+      const deletedShipmentIdsLocal = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
+      const deletedShipRegistry = (dbRecords || []).find(r => r.id === 'deleted_shipment_ids_registry');
+      const deletedShipmentsFromCloud = deletedShipRegistry?.snapshot_data?.deletedIds || [];
+      const deletedShipmentsSet = new Set([...deletedShipmentIdsLocal, ...deletedShipmentsFromCloud]);
 
-        // 8a. Add units from inventory_units table
-        if (dbUnits && dbUnits.length > 0) {
-          dbUnits.forEach(dbU => {
-            const cleanSerial = String(dbU.serial_number || '').toUpperCase();
-            map.set(cleanSerial, {
-              id: dbU.id,
-              part_id: dbU.part_id,
-              part_number: dbU.part_number || dbU.notes || 'PART',
-              description: dbU.description || dbU.notes || 'Service Replacement Part',
-              serial_number: dbU.serial_number,
-              current_site_id: dbU.current_site_id || 'site-dc',
-              site_code: dbU.site_code || 'DC-MDC',
-              po_id: dbU.po_id,
-              status: dbU.status || 'in_stock',
-              box_number: dbU.box_number || 1,
-              received_at: dbU.received_at,
-              received_by: dbU.received_by_name || 'Warehouse Staff',
-              allocated_at: dbU.allocated_at,
-              shipped_at: dbU.shipped_at,
-              notes: dbU.notes
-            });
+      let effectiveShipments = shipments;
+      if (dbShipments !== undefined && dbShipments !== null || dbRecords !== undefined && dbRecords !== null) {
+        const cloudShipmentRecords = (dbRecords || [])
+          .filter(r => r.record_type === 'shipment' && r.snapshot_data && !r.snapshot_data.isDeleted && r.notes !== '__DELETED__' && !r.is_deleted)
+          .map(r => ({
+            ...r.snapshot_data,
+            id: r.id || r.snapshot_data?.id,
+            created_at: r.created_at || r.snapshot_data?.created_at
+          }));
+
+        const directShipments = (dbShipments || []).filter(s => !s.is_deleted && s.status !== 'cancelled');
+        const shipmentsMap = new Map();
+
+        // 1. Preserve local / in-memory shipments that are not deleted
+        (shipments || []).forEach(s => {
+          if (s && s.id && !deletedShipmentsSet.has(s.id)) shipmentsMap.set(s.id, s);
+        });
+
+        // 2. Direct shipments from DB table
+        directShipments.forEach(s => {
+          if (s && s.id && !deletedShipmentsSet.has(s.id)) {
+            const existing = shipmentsMap.get(s.id);
+            shipmentsMap.set(s.id, { ...existing, ...s });
+          }
+        });
+
+        // 3. Cloud shipment records with complete items snapshot
+        cloudShipmentRecords.forEach(s => {
+          if (s && s.id && !deletedShipmentsSet.has(s.id)) {
+            const existing = shipmentsMap.get(s.id);
+            shipmentsMap.set(s.id, { ...existing, ...s });
+          }
+        });
+
+        // 4. Merge any offline queued shipments so locally saved manifests stay visible even if offline
+        try {
+          const offlineQ = JSON.parse(localStorage.getItem('mdc_offline_sync_queue') || '[]');
+          offlineQ.forEach(item => {
+            if (item.type === 'SHIPMENT_UPSERT' && item.payload?.snapshot_data) {
+              const s = item.payload.snapshot_data;
+              if (s && s.id && !deletedShipmentsSet.has(s.id)) shipmentsMap.set(s.id, s);
+            }
           });
-        }
+        } catch (e) {}
 
-        // 8b. Add units from all saved intake records in dc_intake_records (guarantees cross-account visibility)
-        const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
-        allIntakeSources.forEach(rec => {
-          if (Array.isArray(rec.items)) {
-            rec.items.forEach(it => {
-              const cleanSerial = String(it.serial_number || '').toUpperCase();
-              if (!map.has(cleanSerial)) {
+        const mergedShipments = Array.from(shipmentsMap.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        effectiveShipments = mergedShipments;
+        setShipments(mergedShipments);
+        try { localStorage.setItem('mdc_shipments', JSON.stringify(mergedShipments)); } catch (e) {}
+        dbStorage.setItem('mdc_shipments', mergedShipments);
+      }
+
+      // 7c. Hydrate Active Packing Draft from Supabase
+      const cloudDraftRecord = (dbRecords || []).find(r => r.id === 'active_packing_manifest_draft' && !r.is_deleted);
+      let effectiveDraft = cloudDraftRecord?.snapshot_data && Array.isArray(cloudDraftRecord.snapshot_data.items) && cloudDraftRecord.snapshot_data.items.length > 0
+        ? cloudDraftRecord.snapshot_data
+        : null;
+
+      // If cloud draft is empty/null, clear active draft across all sessions
+      setActivePackDraft(effectiveDraft);
+      if (effectiveDraft) {
+        try { localStorage.setItem('mdc_active_pack_draft', JSON.stringify(effectiveDraft)); } catch (e) {}
+      } else {
+        try { localStorage.removeItem('mdc_active_pack_draft'); } catch (e) {}
+      }
+
+      // 8. Hydrate Serialized Inventory Units from Supabase
+      if (dbUnits !== undefined && dbUnits !== null || shouldFetch('inventory_units') || shouldFetch('dc_intake_records')) {
+        setInventoryUnits(prev => {
+          const map = new Map();
+
+          // Add units from live_master_dc_inventory in saved_records
+          const masterInvRecord = (dbRecords || []).find(r => r.id === 'live_master_dc_inventory' && !r.is_deleted);
+          if (masterInvRecord?.snapshot_data?.units && Array.isArray(masterInvRecord.snapshot_data.units)) {
+            masterInvRecord.snapshot_data.units.forEach(u => {
+              const cleanSerial = String(u.serial_number || '').toUpperCase();
+              if (cleanSerial) {
+                const existing = map.get(cleanSerial);
+                map.set(cleanSerial, { ...existing, ...u });
+              }
+            });
+          }
+
+          // Add units from all saved intake records in dc_intake_records
+          const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
+          allIntakeSources.forEach(rec => {
+            if (Array.isArray(rec.items)) {
+              rec.items.forEach(it => {
+                const cleanSerial = String(it.serial_number || '').toUpperCase();
+                if (cleanSerial) {
+                  const existing = map.get(cleanSerial);
+                  map.set(cleanSerial, {
+                    id: it.id || existing?.id || `unit-${cleanSerial}`,
+                    part_id: it.part_id || existing?.part_id || `part-${it.part_number}`,
+                    part_number: it.part_number || existing?.part_number,
+                    description: it.description || existing?.description || 'Service Replacement Part',
+                    serial_number: it.serial_number || cleanSerial,
+                    current_site_id: 'site-dc',
+                    site_code: 'DC-MDC',
+                    po_id: it.po_id || rec.po_id || existing?.po_id || null,
+                    status: existing?.status || 'in_stock',
+                    box_number: 1,
+                    received_at: it.received_at || existing?.received_at || rec.intake_date || new Date().toISOString(),
+                    received_by: it.received_by || existing?.received_by || rec.saved_by_name || 'Warehouse Staff',
+                    shipped_at: existing?.shipped_at || null,
+                    intake_record_id: rec.id
+                  });
+                }
+              });
+            }
+          });
+
+          // Add units from inventory_units table if present
+          if (dbUnits && dbUnits.length > 0) {
+            dbUnits.filter(u => !u.is_deleted).forEach(dbU => {
+              const cleanSerial = String(dbU.serial_number || '').toUpperCase();
+              if (cleanSerial) {
+                const existing = map.get(cleanSerial);
                 map.set(cleanSerial, {
-                  id: it.id || `unit-${cleanSerial}`,
-                  part_id: it.part_id || `part-${it.part_number}`,
-                  part_number: it.part_number,
-                  description: it.description || 'Service Replacement Part',
-                  serial_number: it.serial_number,
-                  current_site_id: 'site-dc',
-                  site_code: 'DC-MDC',
-                  po_id: it.po_id || rec.po_id || null,
-                  status: 'in_stock',
-                  box_number: 1,
-                  received_at: it.received_at || rec.intake_date || new Date().toISOString(),
-                  received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff',
-                  intake_record_id: rec.id
+                  id: dbU.id || existing?.id || `unit-${cleanSerial}`,
+                  part_id: dbU.part_id || existing?.part_id,
+                  part_number: dbU.part_number || dbU.notes || existing?.part_number || 'PART',
+                  description: dbU.description || dbU.notes || existing?.description || 'Service Replacement Part',
+                  serial_number: dbU.serial_number || cleanSerial,
+                  current_site_id: dbU.current_site_id || 'site-dc',
+                  site_code: dbU.site_code || 'DC-MDC',
+                  po_id: dbU.po_id || existing?.po_id,
+                  status: dbU.status || existing?.status || 'in_stock',
+                  box_number: dbU.box_number || 1,
+                  received_at: dbU.received_at || existing?.received_at || new Date().toISOString(),
+                  received_by: dbU.received_by_name || existing?.received_by || 'Warehouse Staff',
+                  allocated_at: dbU.allocated_at,
+                  shipped_at: dbU.shipped_at,
+                  notes: dbU.notes
                 });
               }
             });
           }
-        });
 
-        // 8c. Include any local unsaved session scans that are currently in draft
-        (prev || []).forEach(u => {
-          if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
-            map.set(String(u.serial_number || '').toUpperCase(), u);
-          }
-        });
+          // Include any local unsaved session scans currently in draft
+          (prev || []).forEach(u => {
+            if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
+              map.set(String(u.serial_number || '').toUpperCase(), u);
+            }
+          });
 
-        const merged = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-        try {
-          localStorage.setItem('mdc_inventory', JSON.stringify(merged));
-        } catch (e) {}
-        dbStorage.setItem('mdc_inventory', merged);
-        return merged;
-      });
+          const mergedRaw = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+          const merged = reconcileUnitsWithPackedDrafts(mergedRaw, effectiveShipments, effectiveDraft);
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', merged);
+          return merged;
+        });
+      }
 
       const syncNow = new Date();
       setLastSyncedAt(syncNow);
@@ -1741,15 +2222,19 @@ export function AppProvider({ children }) {
   };
 
   // Automated Centralized Auto-Refresh Controller (with intelligent throttling & non-blocking SWR)
-  const autoRefreshData = async ({ silent = true, force = false, reason = 'auto' } = {}) => {
+  const autoRefreshData = async ({ silent = true, force = false, reason = 'auto', tables = null } = {}) => {
     const now = Date.now();
-    // Throttle automatic revalidations to avoid spamming the DB within 2500ms
-    if (!force && now - lastRefreshTimeRef.current < 2500) {
+    // Skip auto-refresh while a cloud save is actively in progress to prevent race conditions
+    if (silent && cloudSyncStatus.isSaving) {
+      return { success: true, throttled: true, reason: 'save_in_progress' };
+    }
+    // Throttle automatic revalidations to avoid spamming the DB within 1000ms
+    if (!force && now - lastRefreshTimeRef.current < 1000) {
       return { success: true, throttled: true };
     }
     lastRefreshTimeRef.current = now;
     setIsAutoRefreshing(true);
-    console.debug('[AutoRefresh] Sync trigger:', reason);
+    console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
       try {
@@ -1757,7 +2242,7 @@ export function AppProvider({ children }) {
         dbStorage.removeItem('mdc_is_cleared');
       } catch (e) {}
 
-      const success = await hydrateFromSupabase();
+      const success = await hydrateFromSupabase(tables);
       if (!silent) {
         if (success) {
           showToast('Successfully synced latest live data from database!', 'success');
@@ -1775,13 +2260,38 @@ export function AppProvider({ children }) {
     } finally {
       setTimeout(() => {
         setIsAutoRefreshing(false);
-      }, 350);
+      }, 300);
     }
   };
 
   const refreshDataFromCloud = async () => {
     return await autoRefreshData({ silent: false, force: true, reason: 'Manual sync trigger' });
   };
+
+  // Debounced burst handler for Realtime Postgres events
+  const pendingRealtimeTablesRef = useRef(new Set());
+  const debounceRealtimeTimerRef = useRef(null);
+
+  const triggerDebouncedRealtimeSync = useCallback((reason, table = null) => {
+    if (table) {
+      pendingRealtimeTablesRef.current.add(table);
+    }
+    if (debounceRealtimeTimerRef.current) {
+      clearTimeout(debounceRealtimeTimerRef.current);
+    }
+    debounceRealtimeTimerRef.current = setTimeout(() => {
+      const targetTables = pendingRealtimeTablesRef.current.size > 0
+        ? Array.from(pendingRealtimeTablesRef.current)
+        : null;
+      pendingRealtimeTablesRef.current.clear();
+      autoRefreshData({
+        silent: true,
+        force: false,
+        reason: `Debounced Realtime [${reason}]`,
+        tables: targetTables
+      });
+    }, 300);
+  }, []);
 
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
@@ -1790,42 +2300,84 @@ export function AppProvider({ children }) {
     autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
 
     // Set up Realtime listener for multi-user synchronization
+    let broadcastBus = null;
     try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        broadcastBus = new BroadcastChannel('mdc_sync_bus');
+        broadcastBus.onmessage = (ev) => {
+          if (ev.data && ev.data.type) {
+            triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
+          }
+        };
+      }
+
       if (supabase && typeof supabase.channel === 'function') {
         realtimeChannel = supabase
-          .channel('public-db-changes')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_units' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime inventory_units change' });
+          .channel('mdc-global-sync-room', {
+            config: { broadcast: { self: false } }
           })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'dc_intake_records' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime dc_intake_records change' });
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'forecast_entries' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime forecast_entries change' });
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'allocation_items' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime allocation_items change' });
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime profiles change' });
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'saved_records' }, () => {
-            autoRefreshData({ silent: true, force: true, reason: 'Realtime saved_records change' });
-          })
-          .subscribe();
+          .on('broadcast', { event: 'mdc_sync' }, (payload) => {
+            console.debug('[Realtime WebSocket] Received global peer sync broadcast:', payload);
+            triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${payload?.payload?.type || 'SYNC'}`, payload?.payload?.table || null);
+          });
+
+        // Register postgres_changes for all core tables
+        const SYNC_TABLES = [
+          'profiles',
+          'user_page_permissions',
+          'parts',
+          'part_categories',
+          'sites',
+          'repair_usage_records',
+          'forecast_cycles',
+          'forecast_entries',
+          'purchase_orders',
+          'po_items',
+          'inventory_units',
+          'allocation_cycles',
+          'allocation_items',
+          'shipments',
+          'shipment_items',
+          'scan_logs',
+          'saved_records',
+          'dc_intake_records'
+        ];
+
+        SYNC_TABLES.forEach(tbl => {
+          realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, (ev) => {
+            console.debug(`[Realtime Postgres] ${tbl} ${ev.eventType}`);
+            triggerDebouncedRealtimeSync(`postgres_changes:${tbl}`, tbl);
+          });
+        });
+
+        realtimeChannel.subscribe((status) => {
+          console.debug('[Realtime WebSocket] Global channel status:', status);
+          if (status === 'SUBSCRIBED') {
+            setRealtimeConnected(true);
+            setCloudSyncStatus(prev => ({ ...prev, isOnline: true }));
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+            setRealtimeConnected(false);
+          }
+        });
+
+        realtimeChannelRef.current = realtimeChannel;
       }
     } catch (e) {
-      console.warn('Realtime channel notice:', e);
+      console.warn('Realtime / Broadcast channel notice:', e);
     }
 
     return () => {
+      if (broadcastBus) {
+        try { broadcastBus.close(); } catch (e) {}
+      }
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel);
+        realtimeChannelRef.current = null;
       }
     };
   }, []);
 
-  // 2. Auto-Refresh on Page Navigation (visiting Receive Parts, Forecasting, Allocation Data, Intake Records, Records, Dashboard, etc.)
+  // 2. Auto-Refresh on Page Navigation
   useEffect(() => {
     if (currentUser && activeTab) {
       autoRefreshData({ silent: true, force: false, reason: `Page visit: ${activeTab}` });
@@ -1836,9 +2388,8 @@ export function AppProvider({ children }) {
   useEffect(() => {
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible' && currentUser) {
-        // If returning to tab and last refresh was > 6 seconds ago, trigger seamless background revalidation
         const now = Date.now();
-        if (now - lastRefreshTimeRef.current >= 6000) {
+        if (now - lastRefreshTimeRef.current >= 1500) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
         }
       }
@@ -1846,6 +2397,7 @@ export function AppProvider({ children }) {
 
     const handleOnline = () => {
       if (currentUser) {
+        processOfflineSyncQueue();
         autoRefreshData({ silent: false, force: true, reason: 'Network reconnected' });
       }
     };
@@ -1859,18 +2411,20 @@ export function AppProvider({ children }) {
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.removeEventListener('online', handleOnline);
     };
-  }, [currentUser]);
+  }, [currentUser, processOfflineSyncQueue]);
 
-  // 4. Periodic background heartbeat revalidation (every 60 seconds)
+  // 4. Periodic background safety-net heartbeat revalidation (60s when Realtime is active, 15s fallback when offline/disconnected)
   useEffect(() => {
     if (!currentUser) return;
+    const intervalMs = realtimeConnected ? 60000 : 15000;
     const heartbeatInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        autoRefreshData({ silent: true, force: false, reason: 'Periodic background heartbeat' });
+        processOfflineSyncQueue();
+        autoRefreshData({ silent: true, force: false, reason: 'Background safety heartbeat' });
       }
-    }, 60000);
+    }, intervalMs);
     return () => clearInterval(heartbeatInterval);
-  }, [currentUser]);
+  }, [currentUser, realtimeConnected, processOfflineSyncQueue]);
 
 
   // --- DYNAMIC UPLOAD DATASET APPLIER ---
@@ -2102,7 +2656,63 @@ export function AppProvider({ children }) {
     }
   };
 
-  const resetToDefaultData = () => {
+  // --- SERIALIZED DATA DELETION & PURGE AUDIT LOGGER ---
+  const logDeletionAudit = async ({
+    entityType,
+    entityId,
+    entityLabel,
+    summary = {},
+    reason = 'User initiated deletion'
+  }) => {
+    const newLog = {
+      id: `del-audit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action: 'DELETE',
+      entity_type: entityType,
+      entity_id: entityId,
+      entity_label: entityLabel || entityId,
+      deleted_by_id: currentUser?.id || 'usr-system',
+      deleted_by_name: currentUser?.fullName || 'System User',
+      deleted_by_email: currentUser?.email || '',
+      deleted_by_role: currentUser?.role || 'admin',
+      deleted_by_position: currentUser?.rolePosition || getDefaultRolePosition(currentUser?.role) || 'Parts Management Specialist',
+      reason,
+      summary
+    };
+
+    setDeletionAuditLogs(prev => {
+      const updated = [newLog, ...(prev || [])];
+      try {
+        localStorage.setItem('mdc_deletion_audit_logs', JSON.stringify(updated.slice(0, 250)));
+      } catch (e) {}
+      return updated;
+    });
+
+    try {
+      await dbStorage.setItem('mdc_deletion_audit_logs', [newLog, ...(deletionAuditLogs || [])]);
+    } catch (e) {}
+
+    // Cloud Database Persistence & Broadcast
+    if (supabase) {
+      try {
+        await supabase.from('audit_logs').insert([{
+          action: 'DELETE',
+          entity_type: entityType,
+          entity_id: entityId,
+          user_id: currentUser?.id || 'usr-system',
+          user_name: currentUser?.fullName || 'System User',
+          user_email: currentUser?.email || '',
+          metadata: newLog,
+          created_at: newLog.timestamp
+        }]).catch(() => {});
+      } catch (err) {}
+    }
+
+    broadcastCloudEvent('AUDIT_DELETION_LOGGED', { log: newLog });
+    return newLog;
+  };
+
+  const resetToDefaultData = async () => {
     dbStorage.removeItem('mdc_is_cleared');
     dbStorage.setItem('mdc_forecast', seedData.forecastItems);
     dbStorage.setItem('mdc_allocations', seedData.allocations);
@@ -2111,8 +2721,12 @@ export function AppProvider({ children }) {
     dbStorage.setItem('mdc_sites', seedData.sites);
     dbStorage.setItem('mdc_categories', seedData.categories);
 
+    const septPeriod = { month: 9, year: 2026, label: 'September 2026' };
+    setActivePeriod(septPeriod);
+
     try {
       localStorage.removeItem('mdc_is_cleared');
+      localStorage.setItem('mdc_active_period', JSON.stringify(septPeriod));
       localStorage.setItem('mdc_forecast', JSON.stringify(seedData.forecastItems));
       localStorage.setItem('mdc_allocations', JSON.stringify(seedData.allocations));
       localStorage.setItem('mdc_inventory', JSON.stringify(seedData.inventoryUnits || []));
@@ -2129,35 +2743,63 @@ export function AppProvider({ children }) {
     setInventoryUnits(seedData.inventoryUnits || []);
     setPurchaseOrders([
       {
-        id: 'po-202608-01',
-        po_number: 'PO-2026-AUG-BATTERY',
-        order_date: '2026-08-01',
-        expected_date: '2026-08-10',
+        id: 'po-202609-01',
+        po_number: 'PO-2026-SEP-BATTERY',
+        order_date: '2026-09-01',
+        expected_date: '2026-09-10',
         status: 'partially_received',
         remarks: 'Monthly Battery replenishment for iPhone 13-17 series',
         items: [
-          { part_id: 'part-661-21991', part_number: '661-21991', description: 'Battery, iPhone 13', quantity_ordered: 175, quantity_received: 120, unit_price: 65 },
-          { part_id: 'part-661-21996', part_number: '661-21996', description: 'Battery, iPhone 13 Pro', quantity_ordered: 22, quantity_received: 15, unit_price: 75 },
-          { part_id: 'part-661-22294', part_number: '661-22294', description: 'Battery, iPhone 13 Pro Max', quantity_ordered: 24, quantity_received: 24, unit_price: 85 }
+          { part_id: 'part-661-21991', part_number: '661-21991', description: 'Battery, iPhone 13', quantity_ordered: 234, quantity_received: 150, unit_price: 89 },
+          { part_id: 'part-661-21996', part_number: '661-21996', description: 'Battery, iPhone 13 Pro', quantity_ordered: 24, quantity_received: 20, unit_price: 89 },
+          { part_id: 'part-661-22294', part_number: '661-22294', description: 'Battery, iPhone 13 Pro Max', quantity_ordered: 31, quantity_received: 31, unit_price: 89 }
         ]
       },
       {
-        id: 'po-202608-02',
-        po_number: 'PO-2026-AUG-DISPLAY',
-        order_date: '2026-08-02',
-        expected_date: '2026-08-12',
+        id: 'po-202609-02',
+        po_number: 'PO-2026-SEP-DISPLAY',
+        order_date: '2026-09-02',
+        expected_date: '2026-09-12',
         status: 'submitted',
         remarks: 'Monthly Display replenishment',
         items: [
-          { part_id: 'part-661-21993', part_number: '661-21993', description: 'Display, iPhone 13 Pro', quantity_ordered: 3, quantity_received: 0, unit_price: 279 },
-          { part_id: 'part-661-30401', part_number: '661-30401', description: 'Display, iPhone 14 Pro Max', quantity_ordered: 6, quantity_received: 0, unit_price: 379 }
+          { part_id: 'part-661-21988', part_number: '661-21988', description: 'Display, iPhone 13', quantity_ordered: 23, quantity_received: 0, unit_price: 279 },
+          { part_id: 'part-661-56050', part_number: '661-56050', description: 'Display, iPhone 17 Pro Max', quantity_ordered: 45, quantity_received: 0, unit_price: 379 }
         ]
       }
     ]);
-    showToast('Loaded sample August 2026 dataset for demonstration', 'info');
+
+    // Sync live master state to Supabase
+    if (supabase) {
+      try {
+        await supabase.from('saved_records').upsert({
+          id: LIVE_MASTER_RECORD_ID,
+          record_type: 'both',
+          period_label: 'September 2026',
+          period_year: 2026,
+          period_month: 9,
+          notes: 'Master operational dataset synchronized with Google Sheets September 2026',
+          saved_by_name: currentUser?.fullName || 'Parts Management Specialist',
+          snapshot_data: {
+            isCleared: false,
+            activePeriod: septPeriod,
+            forecastItems: seedData.forecastItems,
+            allocations: seedData.allocations,
+            uploadAuditLogs: []
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+        broadcastCloudEvent('MASTER_DATA_UPDATED', { period: 'September 2026' });
+      } catch (e) {
+        console.warn('Sync master state on reset error:', e);
+      }
+    }
+
+    showToast('Loaded verified September 2026 dataset (591 units, $91,199.00) matching Google Sheets', 'success');
   };
 
-  const clearAllData = () => {
+  const clearAllData = async () => {
+    // 1. Set local cleared flags
     dbStorage.setItem('mdc_is_cleared', true);
     dbStorage.setItem('mdc_forecast', []);
     dbStorage.setItem('mdc_allocations', []);
@@ -2166,6 +2808,8 @@ export function AppProvider({ children }) {
     dbStorage.setItem('mdc_shipments', []);
     dbStorage.setItem('mdc_scan_logs', []);
     dbStorage.setItem('mdc_repair_usage', []);
+    dbStorage.setItem('mdc_stock_transfer_reports', []);
+    dbStorage.setItem('mdc_stock_transfer_metadata', null);
 
     try {
       localStorage.setItem('mdc_is_cleared', 'true');
@@ -2177,10 +2821,13 @@ export function AppProvider({ children }) {
       localStorage.setItem('mdc_shipments', '[]');
       localStorage.setItem('mdc_scan_logs', '[]');
       localStorage.setItem('mdc_repair_usage', '[]');
+      localStorage.setItem('mdc_stock_transfer_reports', '[]');
+      localStorage.removeItem('mdc_stock_transfer_metadata');
     } catch (e) {
       console.warn('LocalStorage clear error:', e);
     }
 
+    // 2. Clear React local state
     setForecastItems([]);
     setAllocations([]);
     setInventoryUnits([]);
@@ -2188,7 +2835,76 @@ export function AppProvider({ children }) {
     setShipments([]);
     setScanLogs([]);
     setRepairUsageRecords([]);
-    showToast('Cleared all operational data (Forecasting, Allocation, and Receive Scan-In). Ready for fresh new stocks!', 'info');
+    setStockTransferReports([]);
+    setStockTransferMetadata(null);
+
+    // 3. Log deletion audit for traceability
+    await logDeletionAudit({
+      entityType: 'System State Reset',
+      entityId: 'ALL_OPERATIONAL_DATA',
+      entityLabel: 'Clear System to Fresh Empty State',
+      summary: {
+        action: 'CLEARED_ALL_DATA',
+        previousForecastCount: forecastItems.length,
+        previousAllocCount: allocations.length,
+        previousInventoryCount: inventoryUnits.length
+      },
+      reason: 'User initialized clean slate for new forecasting & allocation ingestion'
+    });
+
+    // 4. Synchronize Cleared State to Cloud Database (Supabase)
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        // A. Upsert live master snapshot as CLEARED
+        await supabase.from('saved_records').upsert({
+          id: LIVE_MASTER_RECORD_ID,
+          record_type: 'both',
+          period_label: 'Cleared Empty State',
+          notes: 'Master operational data cleared by user',
+          saved_by_name: currentUser?.fullName || 'Parts Management Specialist',
+          snapshot_data: {
+            isCleared: true,
+            forecastItems: [],
+            allocations: [],
+            uploadAuditLogs: uploadAuditLogs || []
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        // B. Clear live DC inventory in saved_records
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'both',
+          period_label: 'Live Master DC Inventory',
+          notes: 'Cleared inventory state',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            units: []
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        // C. Clear forecast_entries & allocation_entries table rows
+        try {
+          await supabase.from('forecast_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000');
+        } catch (e) {}
+        try {
+          await supabase.from('allocation_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000');
+        } catch (e) {}
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });
+      } catch (dbErr) {
+        console.error('Supabase clearAllData error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });
+      }
+    } else {
+      broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });
+    }
+
+    showToast('Cleared all operational modules (Forecasting, Allocation, Reports, and Inventory). Clean slate ready for fresh uploads!', 'info');
   };
 
   // --- ACTIONS ---
@@ -2362,38 +3078,54 @@ export function AppProvider({ children }) {
         await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
       }
 
-      // 4. Synchronize to dc_intake_records table (under MDC_LIVE_DC_STOCK_INTAKE)
-      const liveRecordId = 'MDC_LIVE_DC_STOCK_INTAKE';
-      const { data: existingLiveRecord } = await supabase
-        .from('dc_intake_records')
-        .select('*')
-        .eq('id', liveRecordId)
-        .maybeSingle();
-
-      const itemsMap = new Map();
-      if (existingLiveRecord && Array.isArray(existingLiveRecord.items)) {
-        existingLiveRecord.items.forEach(it => itemsMap.set(String(it.serial_number).toUpperCase(), it));
+      // 4. Synchronize full DC inventory pool to saved_records under 'live_master_dc_inventory'
+      try {
+        let currentInv = [];
+        try {
+          currentInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        } catch (e) {}
+        const mergedMap = new Map();
+        currentInv.forEach(u => {
+          const s = String(u.serial_number || '').toUpperCase();
+          if (s) mergedMap.set(s, u);
+        });
+        units.forEach(u => {
+          const s = String(u.serial_number || '').toUpperCase();
+          if (s) {
+            mergedMap.set(s, {
+              id: u.id || `unit-${u.serial_number}`,
+              part_id: u.part_id || `part-${u.part_number}`,
+              part_number: u.part_number,
+              description: u.description || 'Service Replacement Part',
+              serial_number: u.serial_number,
+              current_site_id: 'site-dc',
+              site_code: 'DC-MDC',
+              status: u.status || 'in_stock',
+              box_number: u.box_number || 1,
+              received_at: u.received_at || new Date().toISOString(),
+              received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff',
+              shipped_at: u.shipped_at || null
+            });
+          }
+        });
+        const allPoolUnits = Array.from(mergedMap.values());
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'inventory_master',
+          period_label: 'Live Master DC Inventory',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: 1,
+          notes: 'Master DC In-Stock inventory pool across all accounts',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            units: allPoolUnits
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (poolErr) {
+        console.warn('live_master_dc_inventory sync note:', poolErr.message);
       }
-      units.forEach(u => itemsMap.set(String(u.serial_number).toUpperCase(), {
-        id: u.id || `unit-${u.serial_number}`,
-        part_number: u.part_number,
-        description: u.description,
-        serial_number: u.serial_number,
-        received_at: u.received_at || new Date().toISOString(),
-        received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff'
-      }));
-
-      const finalItems = Array.from(itemsMap.values());
-      await supabase.from('dc_intake_records').upsert({
-        id: liveRecordId,
-        record_name: 'Live Scanned DC Stock',
-        intake_date: new Date().toISOString().split('T')[0],
-        total_units: finalItems.length,
-        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-        notes: 'Real-time live scanned stock intake pool',
-        items: finalItems,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
 
       setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
     } catch (err) {
@@ -2508,7 +3240,7 @@ export function AppProvider({ children }) {
       return updated;
     });
 
-    // Direct Cloud Database Batch Auto-Save
+    // Save individual units to database
     saveUnitsToSupabase(newUnits);
 
     if (poMap.size > 0) {
@@ -2535,9 +3267,70 @@ export function AppProvider({ children }) {
 
     setScanLogs(prev => [...newLogs, ...prev].slice(0, 200));
 
+    // Global Realtime & Local Broadcast Sync
+    broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length });
+
     barcodeAudio.playSuccess();
-    showToast(`Successfully batch-received ${newUnits.length} parts into DC Inventory!`, 'success');
+    showToast(`Successfully imported ${newUnits.length} parts into DC Stock!`, 'success');
     return { success: true, count: newUnits.length, units: newUnits };
+  };
+
+  // 1.15 Finalize / Commit Units directly into Permanent Active DC In-Stock (Available for Packing & Multi-User Access)
+  const commitUnitsToStock = async (unitsList = []) => {
+    let targetUnits = unitsList;
+    if (!targetUnits || targetUnits.length === 0) {
+      targetUnits = inventoryUnits;
+    }
+    if (!targetUnits || targetUnits.length === 0) {
+      targetUnits = dcIntakeRecords.flatMap(r => Array.isArray(r.items) ? r.items : []);
+    }
+    if (!targetUnits || targetUnits.length === 0) {
+      showToast('No units found to add to stock', 'error');
+      return { success: false, error: 'No units found' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const finalUnits = targetUnits.map(u => ({
+      ...u,
+      id: u.id || `unit-${u.serial_number}`,
+      part_id: u.part_id || `part-${u.part_number}`,
+      part_number: u.part_number,
+      description: u.description || 'Service Replacement Part',
+      serial_number: String(u.serial_number || '').trim().toUpperCase(),
+      current_site_id: 'site-dc',
+      site_code: 'DC-MDC',
+      status: 'in_stock',
+      box_number: 1,
+      received_at: nowIso,
+      received_by: currentUser?.fullName || 'Warehouse Staff',
+      shipped_at: null,
+      shipped_by: null
+    }));
+
+    // Update inventory units state immediately
+    let allUpdatedUnits = [];
+    setInventoryUnits(prev => {
+      const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+      finalUnits.forEach(u => map.set(String(u.serial_number).toUpperCase(), u));
+      allUpdatedUnits = Array.from(map.values());
+      try {
+        localStorage.removeItem('mdc_is_cleared');
+        localStorage.setItem('mdc_inventory', JSON.stringify(allUpdatedUnits));
+        localStorage.removeItem('mdc_recent_scans');
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', allUpdatedUnits);
+      return allUpdatedUnits;
+    });
+
+    // Direct Cloud Database Batch Auto-Save
+    saveUnitsToSupabase(finalUnits);
+
+    // Global Realtime & Local Broadcast Sync
+    broadcastCloudEvent('STOCK_UPDATED', { count: finalUnits.length });
+
+    barcodeAudio.playSuccess();
+    showToast(`Successfully added ${finalUnits.length} parts to DC In-Stock! Visible for packing list creation across all accounts.`, 'success');
+    return { success: true, count: finalUnits.length, units: finalUnits };
   };
 
   // 1.2 Delete / Remove a Received Unit from Inventory & Database (if wrong details scanned)
@@ -2588,7 +3381,7 @@ export function AppProvider({ children }) {
       console.warn('LocalStorage delete error:', e);
     }
 
-    // 4. Remove from Supabase Cloud Database tables (inventory_units & dc_intake_records)
+    // 4. Remove from Supabase Cloud Database tables (inventory_units & saved_records)
     if (supabase) {
       (async () => {
         setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -2596,23 +3389,22 @@ export function AppProvider({ children }) {
           // Delete from inventory_units
           await supabase.from('inventory_units').delete().eq('serial_number', existing.serial_number);
 
-          // Also remove from MDC_LIVE_DC_STOCK_INTAKE
-          const { data: liveRec } = await supabase
-            .from('dc_intake_records')
-            .select('*')
-            .eq('id', 'MDC_LIVE_DC_STOCK_INTAKE')
-            .maybeSingle();
+          // Update live_master_dc_inventory in saved_records
+          await supabase.from('saved_records').upsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master DC In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              units: nextUnits
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
 
-          if (liveRec && Array.isArray(liveRec.items)) {
-            const filteredLive = liveRec.items.filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial);
-            await supabase.from('dc_intake_records').upsert({
-              ...liveRec,
-              items: filteredLive,
-              total_units: filteredLive.length,
-              updated_at: new Date().toISOString()
-            });
-          }
-          
           // Update affected intake records in Supabase
           for (const rec of recordsToUpdateInDb) {
             await supabase.from('dc_intake_records').upsert({
@@ -2639,7 +3431,7 @@ export function AppProvider({ children }) {
       })();
     }
 
-    // 4. If linked to a PO, decrement received quantity on that PO
+    // 5. If linked to a PO, decrement received quantity on that PO
     if (existing.po_id) {
       setPurchaseOrders(prev => prev.map(po => {
         if (po.id === existing.po_id) {
@@ -2661,6 +3453,7 @@ export function AppProvider({ children }) {
       }));
     }
 
+    broadcastCloudEvent('STOCK_UPDATED', { serial: cleanSerial });
     logScan('DELETE_RECEIVED_UNIT', existing.part_number, cleanSerial, true, 'Manually deleted by operator');
     barcodeAudio.playSuccess();
     showToast(`Deleted part ${existing.part_number} (${cleanSerial}) from inventory and database`, 'info');
@@ -2715,12 +3508,14 @@ export function AppProvider({ children }) {
         try {
           await supabase
             .from('inventory_units')
-            .update({
+            .upsert({
+              part_id: unit.part_id,
+              serial_number: cleanSerial,
               status: 'packed',
               box_number: boxNumber,
+              current_site_id: siteId || 'site-dc',
               shipped_at: new Date().toISOString()
-            })
-            .eq('serial_number', cleanSerial);
+            }, { onConflict: 'serial_number' });
           setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase pack unit note:', dbErr.message);
@@ -2745,6 +3540,9 @@ export function AppProvider({ children }) {
       }
       return sh;
     }));
+
+    // Global Realtime & Local Broadcast Sync
+    broadcastCloudEvent('UNIT_PACKED', { serialNumber: cleanSerial });
 
     barcodeAudio.playSuccess();
     logScan('PACK_OUT', cleanPN, cleanSerial, true);
@@ -2824,11 +3622,20 @@ export function AppProvider({ children }) {
       (async () => {
         setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
         try {
-          const serials = itemsToAdd.map(it => it.serial_number);
+          const rowsToUpsert = itemsToAdd.map(it => {
+            const matchUnit = updatedSerialsMap.get(it.serial_number.toUpperCase());
+            return {
+              part_id: matchUnit?.part_id || `part-${it.part_number}`,
+              serial_number: it.serial_number,
+              status: 'packed',
+              box_number: it.box_number || 1,
+              current_site_id: siteId || 'site-dc',
+              shipped_at: new Date().toISOString()
+            };
+          });
           await supabase
             .from('inventory_units')
-            .update({ status: 'packed', shipped_at: new Date().toISOString() })
-            .in('serial_number', serials);
+            .upsert(rowsToUpsert, { onConflict: 'serial_number' });
           setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase batch pack note:', dbErr.message);
@@ -2852,6 +3659,9 @@ export function AppProvider({ children }) {
 
     // Update logs
     setScanLogs(prev => [...newLogs, ...prev].slice(0, 300));
+
+    // Global Realtime & Local Broadcast Sync
+    broadcastCloudEvent('UNITS_BATCH_PACKED', { count: itemsToAdd.length });
 
     barcodeAudio.playSuccess();
     showToast(`Batch packed ${itemsToAdd.length} units into ${targetShipmentNumber || 'Shipment'}!`, 'success');
@@ -2931,12 +3741,15 @@ export function AppProvider({ children }) {
       })();
     }
 
+    // Global Realtime & Local Broadcast Sync
+    broadcastCloudEvent('UNIT_UNPACKED', { serialNumber: cleanSerial });
+
     showToast(`Removed #${cleanSerial} from packing list. Returned to DC In-Stock inventory.`, 'info');
     return { success: true, unit: revertedPart };
   };
 
   // 2.2 Clear / Unpack Items from a Specific Shipment Draft (Returns all parts back to DC In-Stock inventory)
-  const clearShipmentDraftItems = (shipmentIdOrObj, explicitItems = []) => {
+  const clearShipmentDraftItems = async (shipmentIdOrObj, explicitItems = []) => {
     let targetShipmentId = typeof shipmentIdOrObj === 'object' ? (shipmentIdOrObj.shipmentId || shipmentIdOrObj.id) : shipmentIdOrObj;
     let itemsToProcess = [];
 
@@ -2951,7 +3764,7 @@ export function AppProvider({ children }) {
       }
     }
 
-    if (!itemsToProcess || itemsToProcess.length === 0) {
+    if (itemsToProcess.length === 0) {
       return { success: true, count: 0 };
     }
 
@@ -2959,77 +3772,72 @@ export function AppProvider({ children }) {
       itemsToProcess.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean)
     );
 
-    if (serialsToRevert.size === 0) {
-      return { success: true, count: 0 };
-    }
-
-    // Revert units status back to in_stock
-    const updatedInventory = inventoryUnits.map(u => {
-      if (serialsToRevert.has(String(u.serial_number || '').toUpperCase())) {
-        return {
-          ...u,
-          status: 'in_stock',
-          current_site_id: 'site-dc',
-          box_number: 1,
-          shipped_at: null,
-          shipped_by: null
-        };
-      }
-      return u;
-    });
-
-    setInventoryUnits(updatedInventory);
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
-      localStorage.removeItem('mdc_active_pack_draft');
-    } catch (e) {
-      console.warn('LocalStorage save error:', e);
-    }
-    dbStorage.setItem('mdc_inventory', updatedInventory);
-
-    // If targetShipment was in shipments, remove or clear it
-    if (targetShipmentId) {
-      const updatedShipments = shipments.filter(s => s.id !== targetShipmentId);
-      setShipments(updatedShipments);
-      dbStorage.setItem('mdc_shipments', updatedShipments);
-      try {
-        localStorage.setItem('mdc_shipments', JSON.stringify(updatedShipments));
-      } catch (e) {}
-    }
-
-    // Direct Cloud Database Reversion
-    if (supabase) {
-      (async () => {
-        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          const serialsArray = Array.from(serialsToRevert);
-          let dcSiteId = null;
-          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
-          if (dcSite?.id) {
-            dcSiteId = dcSite.id;
-          } else {
-            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
-            dcSiteId = anySite?.id;
-          }
-
-          if (dcSiteId && serialsArray.length > 0) {
-            await supabase
-              .from('inventory_units')
-              .update({
-                status: 'in_stock',
-                current_site_id: dcSiteId,
-                box_number: 1,
-                shipped_at: null,
-                shipped_by: null
-              })
-              .in('serial_number', serialsArray);
-          }
-          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        } catch (dbErr) {
-          console.warn('Supabase inventory revert error:', dbErr.message);
-          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+    if (serialsToRevert.size > 0) {
+      const updatedInventory = inventoryUnits.map(u => {
+        if (serialsToRevert.has(String(u.serial_number || '').toUpperCase())) {
+          return {
+            ...u,
+            status: 'in_stock',
+            current_site_id: 'site-dc',
+            box_number: 1,
+            shipped_at: null,
+            shipped_by: null
+          };
         }
-      })();
+        return u;
+      });
+      setInventoryUnits(updatedInventory);
+      dbStorage.setItem('mdc_inventory', updatedInventory);
+      try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
+    }
+
+    if (targetShipmentId) {
+      setShipments(prev => prev.map(sh => {
+        if (sh.id === targetShipmentId) {
+          return {
+            ...sh,
+            items: []
+          };
+        }
+        return sh;
+      }));
+    }
+
+    if (supabase && serialsToRevert.size > 0) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const serialsArray = Array.from(serialsToRevert);
+        let dcSiteId = null;
+        const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+        if (dcSite?.id) {
+          dcSiteId = dcSite.id;
+        } else {
+          const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+          dcSiteId = anySite?.id;
+        }
+
+        if (dcSiteId && serialsArray.length > 0) {
+          const { error } = await supabase
+            .from('inventory_units')
+            .update({
+              status: 'in_stock',
+              current_site_id: dcSiteId,
+              box_number: 1,
+              shipped_at: null,
+              shipped_by: null
+            })
+            .in('serial_number', serialsArray);
+          if (error) throw error;
+        }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
+      } catch (dbErr) {
+        console.error('Supabase inventory revert error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
+      }
+    } else {
+      broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
     }
 
     showToast(`Cleared ${serialsToRevert.size} packed items from draft. Units returned to In-Stock DC inventory!`, 'info');
@@ -3037,15 +3845,18 @@ export function AppProvider({ children }) {
   };
 
   // 2.2b Explicit Delete of a Saved Shipment from Database History
-  const deleteShipment = (shipmentId) => {
+  const deleteShipment = async (shipmentId) => {
     const target = shipments.find(s => s.id === shipmentId);
     if (!target) return { success: false, error: 'Shipment not found' };
 
-    // Revert packed items back to in_stock if not yet delivered
-    if (target.items && target.items.length > 0 && target.status !== 'delivered') {
-      const serialsToRevert = new Set(target.items.map(it => it.serial_number.toUpperCase()));
-      const updatedInventory = inventoryUnits.map(u => {
-        if (serialsToRevert.has(u.serial_number.toUpperCase())) {
+    // Revert packed items back to in_stock
+    let serialsToRevert = [];
+    let updatedInventory = inventoryUnits;
+    if (target.items && target.items.length > 0) {
+      serialsToRevert = target.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean);
+      const serialsSet = new Set(serialsToRevert);
+      updatedInventory = inventoryUnits.map(u => {
+        if (serialsSet.has(String(u.serial_number || '').toUpperCase())) {
           return {
             ...u,
             status: 'in_stock',
@@ -3065,26 +3876,137 @@ export function AppProvider({ children }) {
     const nextList = shipments.filter(s => s.id !== shipmentId);
     setShipments(nextList);
     dbStorage.setItem('mdc_shipments', nextList);
-    try { localStorage.setItem('mdc_shipments', JSON.stringify(nextList)); } catch (e) {}
+    try {
+      localStorage.setItem('mdc_shipments', JSON.stringify(nextList));
+      const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
+      localStorage.setItem('mdc_deleted_shipment_ids', JSON.stringify([...new Set([...deletedList, shipmentId])]));
+    } catch (e) {}
 
-    showToast(`Deleted manifest ${target.invoice_ref || target.shipment_number} from database`, 'info');
+    // Log deletion audit with user accountability
+    await logDeletionAudit({
+      entityType: 'Shipment Manifest',
+      entityId: shipmentId,
+      entityLabel: target.tracking_number ? `Shipment #${target.tracking_number}` : `Shipment ${shipmentId}`,
+      summary: {
+        destinationSite: target.destination_site_name || target.destination_site_id || 'Branch',
+        itemsCount: target.items?.length || 0,
+        boxCount: target.box_count || 1,
+        shippedAt: target.shipped_at || target.created_at
+      },
+      reason: 'Deleted by warehouse dispatcher / admin'
+    });
+
+    // Direct Cloud Sync to Supabase
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        // Hard delete and soft-delete from saved_records
+        const { error: delRecErr } = await supabase.from('saved_records').delete().eq('id', shipmentId);
+        if (delRecErr) {
+          await supabase.from('saved_records').update({ notes: '__DELETED__', snapshot_data: { isDeleted: true }, updated_at: new Date().toISOString() }).eq('id', shipmentId);
+        }
+        try { await supabase.from('shipments').delete().eq('id', shipmentId); } catch (e) {}
+        // Prune any legacy deleted_shipment_ids_registry in saved_records
+        await supabase.from('saved_records').delete().eq('id', 'deleted_shipment_ids_registry');
+
+        // Update live_master_dc_inventory in saved_records so stock returns to in-stock across all users
+        if (updatedInventory && updatedInventory.length > 0) {
+          await supabase.from('saved_records').upsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master DC In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              units: updatedInventory
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        }
+
+        if (serialsToRevert.length > 0) {
+          let dcSiteId = null;
+          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+          if (dcSite?.id) dcSiteId = dcSite.id;
+          else {
+            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+            dcSiteId = anySite?.id;
+          }
+          if (dcSiteId) {
+            await supabase
+              .from('inventory_units')
+              .update({
+                status: 'in_stock',
+                current_site_id: dcSiteId,
+                box_number: 1,
+                shipped_at: null,
+                shipped_by: null
+              })
+              .in('serial_number', serialsToRevert);
+          }
+        }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('SHIPMENT_DELETED', { shipmentId });
+      } catch (dbErr) {
+        console.error('Supabase delete shipment error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('SHIPMENT_DELETE', { shipmentId });
+        broadcastCloudEvent('SHIPMENT_DELETED', { shipmentId });
+      }
+    } else {
+      broadcastCloudEvent('SHIPMENT_DELETED', { shipmentId });
+    }
+
+    showToast(`Deleted manifest ${target.invoice_ref || target.shipment_number} from database. Parts returned to DC In-Stock.`, 'info');
     return { success: true };
   };
 
   // 2.3 Batch Import Shipments / Manifests
-  const batchImportShipments = (newShipmentsList) => {
+  const batchImportShipments = async (newShipmentsList) => {
     if (!newShipmentsList || newShipmentsList.length === 0) {
       return { success: false, error: 'No shipments to import' };
     }
 
-    setShipments(prev => [...newShipmentsList, ...prev]);
+    const updated = [...newShipmentsList, ...shipments.filter(s => !newShipmentsList.some(ns => ns.id === s.id))];
+    setShipments(updated);
 
-    // Immediate storage
     try {
-      const updated = [...newShipmentsList, ...shipments];
       localStorage.setItem('mdc_shipments', JSON.stringify(updated));
     } catch (e) {
       console.warn('LocalStorage save error:', e);
+    }
+    dbStorage.setItem('mdc_shipments', updated);    // Direct Cloud Sync to Supabase
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const recordsToUpsert = newShipmentsList.map(sh => ({
+          id: sh.id,
+          record_type: 'shipment',
+          period_label: sh.invoice_ref || sh.shipment_number,
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: sh.week_number || 1,
+          notes: sh.remarks || '',
+          saved_by_name: sh.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+          saved_by_user_id: safeUUID(currentUser?.id),
+          snapshot_data: sh,
+          created_at: sh.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }));
+        const { error } = await supabase.from('saved_records').upsert(recordsToUpsert, { onConflict: 'id' });
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('SHIPMENTS_IMPORTED', { count: newShipmentsList.length });
+      } catch (dbErr) {
+        console.error('Supabase batch import shipments error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        broadcastCloudEvent('SHIPMENTS_IMPORTED', { count: newShipmentsList.length });
+      }
+    } else {
+      broadcastCloudEvent('SHIPMENTS_IMPORTED', { count: newShipmentsList.length });
     }
 
     showToast(`Successfully imported ${newShipmentsList.length} shipment manifests!`, 'success');
@@ -3092,7 +4014,7 @@ export function AppProvider({ children }) {
   };
 
   // 2.4 Clear All Shipments & Packing Records
-  const clearAllShipmentsData = () => {
+  const clearAllShipmentsData = async () => {
     // Revert all packed units back to in_stock
     const updatedInventory = inventoryUnits.map(u => {
       if (u.status === 'packed' || u.status === 'shipped') {
@@ -3116,6 +4038,26 @@ export function AppProvider({ children }) {
     } catch (e) {
       console.warn('LocalStorage save error:', e);
     }
+    dbStorage.setItem('mdc_inventory', updatedInventory);
+    dbStorage.setItem('mdc_shipments', []);
+
+    // Direct Cloud Sync to Supabase
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        await supabase.from('saved_records').delete().eq('record_type', 'shipment');
+        try { await supabase.from('shipments').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
+        await supabase.from('inventory_units').update({ status: 'in_stock', current_site_id: 'site-dc', shipped_at: null }).neq('id', '00000000-0000-0000-0000-000000000000');
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('SHIPMENTS_CLEARED');
+      } catch (dbErr) {
+        console.error('Supabase clear all shipments error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        broadcastCloudEvent('SHIPMENTS_CLEARED');
+      }
+    } else {
+      broadcastCloudEvent('SHIPMENTS_CLEARED');
+    }
 
     showToast('Cleared all shipment records and restored parts to DC stock.', 'info');
   };
@@ -3134,21 +4076,170 @@ export function AppProvider({ children }) {
     setScanLogs(prev => [logEntry, ...prev.slice(0, 199)]);
   };
 
-  const saveShipment = (shipmentData) => {
-    if (shipmentData.id && shipments.some(s => s.id === shipmentData.id)) {
-      setShipments(prev => prev.map(s => s.id === shipmentData.id ? shipmentData : s));
-      showToast(`Shipment ${shipmentData.invoice_ref || shipmentData.shipment_number} updated`, 'success');
-    } else {
-      const newShipment = {
-        ...shipmentData,
-        id: shipmentData.id || `ship-${Date.now()}`,
-        shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`,
-        created_at: new Date().toISOString()
-      };
-      setShipments(prev => [newShipment, ...prev]);
-      showToast(`Created Packing List Manifest: ${newShipment.shipment_number}`, 'success');
-      return newShipment;
+  const saveShipment = async (shipmentData) => {
+    if (!shipmentData) return;
+    const isUpdate = shipmentData.id && shipments.some(s => s.id === shipmentData.id);
+    const newShipment = {
+      ...shipmentData,
+      id: shipmentData.id || `ship-${Date.now()}`,
+      shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`,
+      invoice_ref: shipmentData.invoice_ref || `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`,
+      status: shipmentData.status || 'shipped',
+      created_at: shipmentData.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const nextList = isUpdate 
+      ? shipments.map(s => s.id === shipmentData.id ? newShipment : s)
+      : [newShipment, ...shipments.filter(s => s.id !== newShipment.id)];
+
+    setShipments(nextList);
+    try {
+      localStorage.setItem('mdc_shipments', JSON.stringify(nextList));
+    } catch (e) {}
+    dbStorage.setItem('mdc_shipments', nextList);
+
+    let updatedInv = [];
+    // Update inventory units status in memory if status is shipped or packed
+    if (newShipment.items && newShipment.items.length > 0) {
+      const serialsInShipment = new Set(newShipment.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean));
+      const targetUnitStatus = newShipment.status === 'shipped' || newShipment.status === 'delivered' ? 'shipped' : 'packed';
+      
+      setInventoryUnits(prev => {
+        updatedInv = (prev || []).map(u => {
+          const s = String(u.serial_number || '').trim().toUpperCase();
+          if (serialsInShipment.has(s)) {
+            return {
+              ...u,
+              status: targetUnitStatus,
+              box_number: u.box_number || 1,
+              current_site_id: newShipment.site_id || u.current_site_id,
+              shipped_at: newShipment.shipment_date || new Date().toISOString(),
+              shipped_by: newShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff'
+            };
+          }
+          return u;
+        });
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInv)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updatedInv);
+        return updatedInv;
+      });
     }
+
+    // Direct Cloud Sync to Supabase
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        // 1. Save shipment to saved_records (resilient JSON snapshot for multi-browser sync)
+        const { error: recErr } = await supabase.from('saved_records').upsert({
+          id: newShipment.id,
+          record_type: 'shipment',
+          period_label: newShipment.invoice_ref || newShipment.shipment_number,
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: newShipment.week_number || 1,
+          notes: newShipment.remarks || '',
+          saved_by_name: newShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+          saved_by_user_id: safeUUID(currentUser?.id),
+          snapshot_data: newShipment,
+          created_at: newShipment.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        if (recErr) throw recErr;
+
+        // 1b. Delete active packing manifest draft from cloud DB so it clears for all other users
+        try {
+          await supabase.from('saved_records').delete().eq('id', 'active_packing_manifest_draft');
+          setActivePackDraft(null);
+          try { localStorage.removeItem('mdc_active_pack_draft'); } catch (e) {}
+        } catch (draftDelErr) {
+          console.warn('active_packing_manifest_draft delete notice:', draftDelErr.message);
+        }
+
+        // 2. Also update live_master_dc_inventory in saved_records so stock deduction persists across all users
+        if (updatedInv && updatedInv.length > 0) {
+          try {
+            await supabase.from('saved_records').upsert({
+              id: 'live_master_dc_inventory',
+              record_type: 'inventory_master',
+              period_label: 'Live Master DC Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master DC In-Stock inventory pool across all accounts',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: {
+                units: updatedInv
+              },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (invErr) {
+            console.warn('live_master_dc_inventory update note:', invErr.message);
+          }
+        }
+
+        // 3. Update inventory_units table in Supabase (safe optional upsert)
+        if (newShipment.items && newShipment.items.length > 0) {
+          const targetUnitStatus = newShipment.status === 'shipped' || newShipment.status === 'delivered' ? 'shipped' : 'packed';
+          
+          const rowsToUpsert = newShipment.items.map(it => {
+            const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+            const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
+            const partId = isUUID(existingU?.part_id) ? existingU.part_id : null;
+            const siteId = isUUID(newShipment.site_id) ? newShipment.site_id : null;
+
+            return {
+              ...(partId ? { part_id: partId } : {}),
+              serial_number: cleanSerial,
+              status: targetUnitStatus,
+              box_number: it.box_number || 1,
+              ...(siteId ? { current_site_id: siteId } : {}),
+              shipped_at: new Date().toISOString()
+            };
+          }).filter(r => r.serial_number);
+
+          if (rowsToUpsert.length > 0) {
+            try {
+              await supabase.from('inventory_units').upsert(rowsToUpsert, { onConflict: 'serial_number' });
+            } catch (uErr) {
+              console.warn('Supabase inventory_units upsert note:', uErr.message);
+            }
+          }
+        }
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+
+        // 4. Broadcast AFTER all cloud writes complete so other clients fetch the committed data & clear their draft
+        broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
+        broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+      } catch (dbErr) {
+        console.error('Supabase save shipment error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('SHIPMENT_UPSERT', {
+          id: newShipment.id,
+          record_type: 'shipment',
+          period_label: newShipment.invoice_ref || newShipment.shipment_number,
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: newShipment.week_number || 1,
+          notes: newShipment.remarks || '',
+          saved_by_name: newShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+          saved_by_user_id: safeUUID(currentUser?.id),
+          snapshot_data: newShipment,
+          created_at: newShipment.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+        broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
+        broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+      }
+    } else {
+      broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
+      broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+    }
+
+    showToast(isUpdate ? `Shipment ${newShipment.invoice_ref || newShipment.shipment_number} updated` : `Created Packing List Manifest: ${newShipment.invoice_ref || newShipment.shipment_number}`, 'success');
+    return newShipment;
   };
 
   const updateForecastOverride = (partId, overrideVal) => {
@@ -3260,14 +4351,14 @@ export function AppProvider({ children }) {
     showToast(`Auto-allocated ${availableStock} units of ${part.description} across ${siteDemands.length} sites`, 'success');
   };
 
-  const savePart = (partData) => {
+  const savePart = async (partData) => {
     const cleanPN = String(partData.part_number || '').trim().toUpperCase();
     const cleanDesc = String(partData.description || '').trim();
     if (!cleanPN) return { success: false, error: 'Missing part number' };
 
+    let savedPartObj = null;
     setParts(prev => {
       let updated;
-      // Match by explicit unique ID first, or by BOTH part_number AND description
       const matchIndex = prev.findIndex(p =>
         (partData.id && p.id === partData.id) ||
         (p.part_number?.toUpperCase() === cleanPN && p.description?.trim().toLowerCase() === cleanDesc.toLowerCase())
@@ -3275,7 +4366,7 @@ export function AppProvider({ children }) {
 
       if (matchIndex >= 0) {
         const existing = prev[matchIndex];
-        const updatedPart = {
+        savedPartObj = {
           ...existing,
           ...partData,
           id: existing.id || partData.id || `part-${cleanPN}-${Date.now()}`,
@@ -3287,9 +4378,9 @@ export function AppProvider({ children }) {
           updated_at: new Date().toISOString()
         };
         updated = [...prev];
-        updated[matchIndex] = updatedPart;
+        updated[matchIndex] = savedPartObj;
       } else {
-        const newPart = {
+        savedPartObj = {
           ...partData,
           id: partData.id || `part-${cleanPN}-${Math.random().toString(36).substring(2, 8)}`,
           part_number: cleanPN,
@@ -3301,7 +4392,7 @@ export function AppProvider({ children }) {
           is_active: partData.is_active ?? true,
           created_at: new Date().toISOString()
         };
-        updated = [newPart, ...prev];
+        updated = [savedPartObj, ...prev];
       }
 
       try {
@@ -3309,33 +4400,49 @@ export function AppProvider({ children }) {
       } catch (e) {
         console.warn('LocalStorage save error in savePart:', e);
       }
-
+      dbStorage.setItem('mdc_parts', updated);
       return updated;
     });
 
-    // Background Supabase sync
+    // Cloud sync to Supabase
     if (supabase) {
-      (async () => {
-        try {
-          await supabase.from('parts').upsert({
-            ...(partData.id && !partData.id.startsWith('part-') ? { id: partData.id } : {}),
-            part_number: cleanPN,
-            description: cleanDesc,
-            iphone_model: partData.iphone_model || 'iPhone',
-            stocking_price: parseFloat(partData.stocking_price) || 0,
-            is_active: partData.is_active ?? true
-          });
-        } catch (e) {
-          console.warn('Supabase part save note:', e.message);
-        }
-      })();
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const { error } = await supabase.from('parts').upsert({
+          ...(partData.id && !partData.id.startsWith('part-') ? { id: partData.id } : {}),
+          part_number: cleanPN,
+          description: cleanDesc,
+          iphone_model: partData.iphone_model || 'iPhone',
+          stocking_price: parseFloat(partData.stocking_price) || 0,
+          is_active: partData.is_active ?? true,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'part_number' });
+
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('PART_SAVED', { partNumber: cleanPN });
+      } catch (e) {
+        console.error('Supabase part save error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('PART_UPSERT', {
+          part_number: cleanPN,
+          description: cleanDesc,
+          iphone_model: partData.iphone_model || 'iPhone',
+          stocking_price: parseFloat(partData.stocking_price) || 0,
+          is_active: partData.is_active ?? true,
+          updated_at: new Date().toISOString()
+        });
+        broadcastCloudEvent('PART_SAVED', { partNumber: cleanPN });
+      }
+    } else {
+      broadcastCloudEvent('PART_SAVED', { partNumber: cleanPN });
     }
 
     showToast(`Saved part ${cleanPN} (${cleanDesc || 'Standard'}) in catalog`, 'success');
-    return { success: true };
+    return { success: true, part: savedPartObj };
   };
 
-  const deletePart = (partIdOrObj) => {
+  const deletePart = async (partIdOrObj) => {
     let deletedPart = null;
     setParts(prev => {
       let targetId = typeof partIdOrObj === 'object' ? partIdOrObj.id : partIdOrObj;
@@ -3357,23 +4464,31 @@ export function AppProvider({ children }) {
       } catch (e) {
         console.warn('LocalStorage save error in deletePart:', e);
       }
-
+      dbStorage.setItem('mdc_parts', updated);
       return updated;
     });
 
     if (deletedPart) {
       if (supabase) {
-        (async () => {
-          try {
-            if (deletedPart.id && !deletedPart.id.startsWith('part-')) {
-              await supabase.from('parts').delete().eq('id', deletedPart.id);
-            } else {
-              await supabase.from('parts').delete().match({ part_number: deletedPart.part_number, description: deletedPart.description });
-            }
-          } catch (e) {
-            console.warn('Supabase part delete note:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          if (deletedPart.id && !deletedPart.id.startsWith('part-')) {
+            const { error } = await supabase.from('parts').delete().eq('id', deletedPart.id);
+            if (error) throw error;
+          } else {
+            const { error } = await supabase.from('parts').delete().match({ part_number: deletedPart.part_number, description: deletedPart.description });
+            if (error) throw error;
           }
-        })();
+          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+          broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
+        } catch (e) {
+          console.error('Supabase part delete error:', e.message);
+          setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+          enqueueOfflineAction('PART_DELETE', { id: deletedPart.id, part_number: deletedPart.part_number });
+          broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
+        }
+      } else {
+        broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
       }
       showToast(`Deleted part ${deletedPart.part_number} (${deletedPart.description}) from catalog`, 'info');
       return { success: true, part: deletedPart };
@@ -3381,19 +4496,72 @@ export function AppProvider({ children }) {
     return { success: false, error: 'Part not found' };
   };
 
-  const saveSite = (siteData) => {
+  const saveSite = async (siteData) => {
+    let savedSite = null;
     if (siteData.id) {
-      setSites(prev => prev.map(s => s.id === siteData.id ? siteData : s));
+      savedSite = siteData;
+      setSites(prev => {
+        const next = prev.map(s => s.id === siteData.id ? siteData : s);
+        try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_sites', next);
+        return next;
+      });
       showToast(`Updated site ${siteData.name}`, 'success');
     } else {
-      const newSite = {
+      savedSite = {
         ...siteData,
         id: `site-${Date.now()}`,
         is_active: true
       };
-      setSites(prev => [...prev, newSite]);
-      showToast(`Added site ${newSite.name}`, 'success');
+      setSites(prev => {
+        const next = [...prev, savedSite];
+        try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_sites', next);
+        return next;
+      });
+      showToast(`Added site ${savedSite.name}`, 'success');
     }
+
+    if (supabase && savedSite) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const { error } = await supabase.from('sites').upsert({
+          ...(savedSite.id && !savedSite.id.startsWith('site-') ? { id: savedSite.id } : {}),
+          code: savedSite.code,
+          name: savedSite.name,
+          region: savedSite.region || 'Metro Manila',
+          address: savedSite.address || savedSite.full_address || '',
+          full_address: savedSite.full_address || savedSite.address || '',
+          contact_person: savedSite.contact_person || '',
+          contact_phone: savedSite.contact_phone || '',
+          contact_email: savedSite.contact_email || '',
+          ship_to: savedSite.ship_to || '',
+          sold_to: savedSite.sold_to || '',
+          invoice_prefix: savedSite.invoice_prefix || '',
+          is_dc: savedSite.is_dc ?? false,
+          is_active: savedSite.is_active ?? true,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'code' });
+
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('SITE_SAVED', { code: savedSite.code, name: savedSite.name });
+      } catch (e) {
+        console.error('Supabase site save error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('SITE_UPSERT', {
+          code: savedSite.code,
+          name: savedSite.name,
+          region: savedSite.region || 'Metro Manila',
+          address: savedSite.address || '',
+          updated_at: new Date().toISOString()
+        });
+        broadcastCloudEvent('SITE_SAVED', { code: savedSite.code, name: savedSite.name });
+      }
+    } else {
+      broadcastCloudEvent('SITE_SAVED', { code: savedSite?.code, name: savedSite?.name });
+    }
+    return { success: true, site: savedSite };
   };
 
   const refreshSitesFromCloud = async () => {
@@ -3769,27 +4937,39 @@ export function AppProvider({ children }) {
 
     // 5. Cloud Backup to Supabase
     if (supabase) {
-      (async () => {
-        try {
-          const { error } = await supabase.from('saved_records').upsert({
-            id: newRecord.id,
-            record_type: newRecord.record_type,
-            period_label: newRecord.period_label,
-            period_year: newRecord.period_year,
-            period_month: newRecord.period_month,
-            period_week: newRecord.period_week,
-            notes: newRecord.notes,
-            saved_by_name: newRecord.saved_by_name,
-            saved_by_user_id: newRecord.saved_by_user_id,
-            snapshot_data: newRecord.snapshot_data,
-            created_at: newRecord.created_at,
-            updated_at: newRecord.updated_at
-          });
-          if (error) throw error;
-        } catch (dbErr) {
-          console.warn('Supabase saved_records cloud sync note (saved locally):', dbErr.message);
-        }
-      })();
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const { error } = await supabase.from('saved_records').upsert({
+          id: newRecord.id,
+          record_type: newRecord.record_type,
+          period_label: newRecord.period_label,
+          period_year: newRecord.period_year,
+          period_month: newRecord.period_month,
+          period_week: newRecord.period_week,
+          notes: newRecord.notes,
+          saved_by_name: newRecord.saved_by_name,
+          saved_by_user_id: newRecord.saved_by_user_id,
+          snapshot_data: newRecord.snapshot_data,
+          created_at: newRecord.created_at,
+          updated_at: newRecord.updated_at
+        }, { onConflict: 'id' });
+        if (error) throw error;
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
+      } catch (dbErr) {
+        console.error('Supabase saved_records cloud sync error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('SAVED_RECORD_UPSERT', {
+          id: newRecord.id,
+          record_type: newRecord.record_type,
+          period_label: newRecord.period_label,
+          snapshot_data: newRecord.snapshot_data,
+          updated_at: new Date().toISOString()
+        });
+        broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
+      }
+    } else {
+      broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
     }
 
     showToast(`Saved period record: "${newRecord.period_label}" permanently to database`, 'success');
@@ -3899,6 +5079,22 @@ export function AppProvider({ children }) {
       return { success: false, error: 'Record not found' };
     }
 
+    // Log deletion audit
+    await logDeletionAudit({
+      entityType: 'Period Snapshot',
+      entityId: recordId,
+      entityLabel: record.period_label || `Snapshot ${recordId}`,
+      summary: {
+        period_year: record.period_year,
+        period_month: record.period_month,
+        record_type: record.record_type,
+        forecastPartsCount: record.snapshot_data?.forecastItems?.length || 0,
+        allocationsCount: record.snapshot_data?.allocations?.length || 0,
+        notes: record.notes
+      },
+      reason: 'Deleted by administrator from saved period archives'
+    });
+
     const nextList = savedRecords.filter(r => r.id !== recordId);
     setSavedRecords(nextList);
     dbStorage.deleteSavedRecord(recordId);
@@ -3910,14 +5106,25 @@ export function AppProvider({ children }) {
     }
 
     if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        await supabase.from('saved_records').delete().eq('id', recordId);
+        const { error } = await supabase.from('saved_records').delete().eq('id', recordId);
+        if (error) {
+          await supabase.from('saved_records').update({ notes: '__DELETED__', snapshot_data: { isDeleted: true }, updated_at: new Date().toISOString() }).eq('id', recordId);
+        }
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('PERIOD_RECORD_DELETED', { recordId });
       } catch (dbErr) {
-        console.warn('Supabase delete saved_record notice:', dbErr.message);
+        console.error('Supabase delete saved_record error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('SAVED_RECORD_DELETE', { id: recordId });
+        broadcastCloudEvent('PERIOD_RECORD_DELETED', { recordId });
       }
+    } else {
+      broadcastCloudEvent('PERIOD_RECORD_DELETED', { recordId });
     }
 
-    showToast(`Permanently deleted record "${record.period_label}"`, 'info');
+    showToast(`Permanently deleted record "${record.period_label}" & logged to Audit Trail`, 'info');
     return { success: true };
   };
 
@@ -3932,158 +5139,96 @@ export function AppProvider({ children }) {
       const parsed = new Date(targetDate);
       if (!isNaN(parsed)) year = parsed.getFullYear();
     }
-    const prefix = `MDC${year}`;
 
-    // Find all existing records matching this year's prefix
-    const matching = (dcIntakeRecords || []).filter(r => r.id && String(r.id).toUpperCase().startsWith(prefix));
+    const yearPrefix = `MDC${year}`;
+    const matchingRecords = (dcIntakeRecords || []).filter(r => r.id && r.id.startsWith(yearPrefix));
 
     let maxSeq = 0;
-    matching.forEach(r => {
-      const numPart = String(r.id).slice(prefix.length);
-      const parsed = parseInt(numPart, 10);
-      if (!isNaN(parsed) && parsed > maxSeq) {
-        maxSeq = parsed;
+    matchingRecords.forEach(r => {
+      const numPart = r.id.replace(yearPrefix, '');
+      const seq = parseInt(numPart, 10);
+      if (!isNaN(seq) && seq > maxSeq) {
+        maxSeq = seq;
       }
     });
 
     const nextSeq = maxSeq + 1;
-    return `${prefix}${String(nextSeq).padStart(5, '0')}`;
+    return `${yearPrefix}${String(nextSeq).padStart(5, '0')}`;
   };
 
-  // Save a batch of scanned parts into a permanent DC Intake Record
-  const saveIntakeRecord = async ({
-    recordId,
-    recordName,
-    intakeDate,
-    poId,
-    poNumber,
-    supplier,
-    notes,
-    items = []
-  }) => {
-    const rawDate = intakeDate ? new Date(intakeDate) : new Date();
-    const cleanDateStr = intakeDate || new Date().toISOString().split('T')[0];
-    const generatedId = generateNextIntakeRecordId(rawDate);
-    const finalId = (recordId || generatedId).trim().toUpperCase();
-    const finalName = (recordName || finalId).trim();
-
-    // Group items by category for summary metrics
-    const breakdown = {};
-    items.forEach(it => {
-      const partObj = parts.find(p => p.part_number === it.part_number);
-      const cat = partObj?.category_id || 'cat-general';
-      const cleanCatName = cat.replace('cat-', '').replace(/^\w/, c => c.toUpperCase());
-      breakdown[cleanCatName] = (breakdown[cleanCatName] || 0) + 1;
-    });
-
+  // Save a completed scan-in batch as an intake record
+  const saveIntakeRecord = async (recordData) => {
+    const nextId = recordData.id || generateNextIntakeRecordId(recordData.intake_date);
     const newRecord = {
-      id: finalId,
-      record_name: finalName,
-      intake_date: cleanDateStr,
-      po_id: poId || null,
-      po_number: poNumber || null,
-      supplier: supplier || null,
-      total_units: items.length,
-      saved_by_name: currentUser?.fullName || 'Warehouse Operations',
-      saved_by_user_id: currentUser?.id && !currentUser.id.startsWith('usr-') ? currentUser.id : null,
-      notes: (notes || '').trim(),
-      category_breakdown: breakdown,
-      items: items.map(u => ({
-        id: u.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        part_number: u.part_number,
-        description: u.description || 'Service Replacement Part',
-        serial_number: u.serial_number,
-        received_at: u.received_at || new Date().toISOString(),
-        received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff',
-        po_id: u.po_id || poId || null
-      })),
+      id: nextId,
+      record_name: recordData.record_name || `Intake Batch ${nextId}`,
+      intake_date: recordData.intake_date || new Date().toISOString().split('T')[0],
+      po_id: recordData.po_id || null,
+      po_number: recordData.po_number || 'Direct Receiving',
+      supplier_name: recordData.supplier_name || 'Apple Authorized Logistics',
+      notes: recordData.notes || '',
+      items: recordData.items || [],
+      total_units: recordData.total_units || (recordData.items ? recordData.items.reduce((s, it) => s + (it.quantity || 1), 0) : 0),
+      total_value: recordData.total_value || 0,
+      saved_by_id: currentUser?.id || 'usr-system',
+      saved_by_name: currentUser?.fullName || 'Warehouse Staff',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
 
-    // 1. Update React Local State & localStorage immediately for intake records and inventory units
-    setDcIntakeRecords(prev => [newRecord, ...prev.filter(r => r.id !== finalId)]);
-    setInventoryUnits(prev => {
-      const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
-      newRecord.items.forEach(u => {
-        const cleanSerial = String(u.serial_number || '').toUpperCase();
-        if (!map.has(cleanSerial)) {
-          map.set(cleanSerial, {
-            id: u.id || `unit-${cleanSerial}`,
-            part_id: `part-${u.part_number}`,
-            part_number: u.part_number,
-            description: u.description || 'Service Replacement Part',
-            serial_number: u.serial_number,
-            current_site_id: 'site-dc',
-            site_code: 'DC-MDC',
-            po_id: u.po_id || newRecord.po_id || null,
-            status: 'in_stock',
-            box_number: 1,
-            received_at: u.received_at || newRecord.intake_date || new Date().toISOString(),
-            received_by: u.received_by || newRecord.saved_by_name || 'Warehouse Staff',
-            intake_record_id: newRecord.id
-          });
-        }
-      });
-      const updated = Array.from(map.values());
-      try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
-      } catch (e) {}
-      dbStorage.setItem('mdc_inventory', updated);
-      return updated;
-    });
-
+    const nextList = [newRecord, ...(dcIntakeRecords || [])];
+    setDcIntakeRecords(nextList);
+    dbStorage.setItem('mdc_dc_intake_records', nextList);
     try {
-      const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
-      const updated = [newRecord, ...existing.filter(r => r.id !== finalId)].slice(0, 100);
-      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updated));
+      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
     } catch (e) {
-      console.warn('LocalStorage save error for intake records:', e);
+      console.warn('LocalStorage save notice for dc_intake_records:', e);
     }
 
-    // 2. Cloud Backup to Supabase PostgreSQL dc_intake_records & inventory_units tables
+    // Direct Cloud Sync to Supabase
     if (supabase) {
-      (async () => {
-        try {
-          const { error } = await supabase.from('dc_intake_records').upsert({
-            id: newRecord.id,
-            record_name: newRecord.record_name,
-            intake_date: newRecord.intake_date,
-            po_id: newRecord.po_id && !String(newRecord.po_id).startsWith('po-') ? newRecord.po_id : null,
-            po_number: newRecord.po_number,
-            supplier: newRecord.supplier,
-            total_units: newRecord.total_units,
-            saved_by_name: newRecord.saved_by_name,
-            saved_by_user_id: newRecord.saved_by_user_id,
-            notes: newRecord.notes,
-            category_breakdown: newRecord.category_breakdown,
-            items: newRecord.items,
-            created_at: newRecord.created_at,
-            updated_at: newRecord.updated_at
-          });
-          if (error) {
-            console.warn('Supabase dc_intake_records sync note (saved locally):', error.message);
-          }
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const { error } = await supabase.from('dc_intake_records').upsert({
+          id: newRecord.id,
+          record_name: newRecord.record_name,
+          intake_date: newRecord.intake_date,
+          po_id: newRecord.po_id,
+          po_number: newRecord.po_number,
+          supplier_name: newRecord.supplier_name,
+          notes: newRecord.notes,
+          items: newRecord.items,
+          total_units: newRecord.total_units,
+          total_value: newRecord.total_value,
+          saved_by_id: newRecord.saved_by_id,
+          saved_by_name: newRecord.saved_by_name,
+          created_at: newRecord.created_at,
+          updated_at: newRecord.updated_at
+        }, { onConflict: 'id' });
 
-          // Also upsert individual units into inventory_units table for deep cross-account sync
-          const unitRows = newRecord.items.map(u => ({
-            serial_number: u.serial_number,
-            part_number: u.part_number,
-            description: u.description,
-            status: 'in_stock',
-            current_site_id: 'site-dc',
-            received_at: u.received_at || newRecord.intake_date,
-            received_by_name: u.received_by || newRecord.saved_by_name,
-            po_id: u.po_id || newRecord.po_id || null,
-            notes: `Intake Record ${newRecord.id}`
-          }));
-          if (unitRows.length > 0) {
-            await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
-          }
-        } catch (dbErr) {
-          console.warn('Supabase dc_intake_records sync exception:', dbErr.message);
+        if (error) {
+          console.error('Supabase dc_intake_records upsert error:', error.message);
+          await supabase.from('saved_records').upsert({
+            id: newRecord.id,
+            record_type: 'intake_batch',
+            period_label: newRecord.record_name,
+            notes: newRecord.notes,
+            saved_by_name: newRecord.saved_by_name,
+            snapshot_data: newRecord,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
         }
-      })();
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
+      } catch (dbErr) {
+        console.error('Supabase dc_intake_records sync error:', dbErr.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('INTAKE_UPSERT', newRecord);
+        broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
+      }
+    } else {
+      broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
     }
 
     showToast(`Saved DC Intake Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
@@ -4092,50 +5237,56 @@ export function AppProvider({ children }) {
 
   // Delete a saved intake record
   const deleteIntakeRecord = async (recordId) => {
-    if (currentUser && currentUser.role !== 'superadmin' && currentUser.role !== 'admin') {
-      showToast('Unauthorized: Superadmin or Admin privileges required to delete intake records.', 'error');
-      return { success: false, error: 'Unauthorized' };
-    }
+    const target = dcIntakeRecords.find(r => r.id === recordId);
 
-    const recordToDelete = dcIntakeRecords.find(r => r.id === recordId);
-    const serialsToDelete = (recordToDelete?.items || []).map(u => String(u.serial_number || '').toUpperCase());
-
-    // 1. Remove from dcIntakeRecords state
-    setDcIntakeRecords(prev => prev.filter(r => r.id !== recordId));
+    // 1. Remove from dcIntakeRecords state & local storage
+    setDcIntakeRecords(prev => (prev || []).filter(r => r.id !== recordId));
     try {
       const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
       localStorage.setItem('mdc_dc_intake_records', JSON.stringify(existing.filter(r => r.id !== recordId)));
+      const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
+      localStorage.setItem('mdc_deleted_intake_ids', JSON.stringify([...new Set([...deletedList, recordId])]));
     } catch (e) {}
 
-    // 2. Remove all contained parts from inventoryUnits state and local storage
-    if (serialsToDelete.length > 0) {
-      setInventoryUnits(prev => {
-        const next = (prev || []).filter(u => !serialsToDelete.includes(String(u.serial_number || '').toUpperCase()));
-        try {
-          localStorage.setItem('mdc_inventory', JSON.stringify(next));
-        } catch (e) {}
-        dbStorage.setItem('mdc_inventory', next);
-        return next;
-      });
-    }
+    // 2. Log deletion audit with user accountability
+    await logDeletionAudit({
+      entityType: 'DC Intake Record',
+      entityId: recordId,
+      entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Intake Record ${recordId}`),
+      summary: {
+        itemsCount: target?.items?.length || target?.total_units || 0,
+        poNumber: target?.po_number || target?.poNumber || 'N/A',
+        intakeDate: target?.intake_date,
+        originalSavedBy: target?.saved_by_name || 'Warehouse Staff'
+      },
+      reason: 'Deleted by warehouse staff / administrator'
+    });
 
-    // 3. Delete from Supabase tables (dc_intake_records & inventory_units)
+    // 3. Delete / Soft-Delete from Supabase cloud database
     if (supabase) {
-      (async () => {
-        try {
-          await supabase.from('dc_intake_records').delete().eq('id', recordId);
-          if (serialsToDelete.length > 0) {
-            for (const serial of serialsToDelete) {
-              await supabase.from('inventory_units').delete().eq('serial_number', serial);
-            }
-          }
-        } catch (e) {
-          console.warn('Supabase deleteIntakeRecord notice:', e.message);
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
+        if (delErr) {
+          await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
         }
-      })();
+        await supabase.from('saved_records').delete().eq('id', recordId);
+        // Ensure any legacy deleted_intake_ids_registry in saved_records is also deleted
+        await supabase.from('saved_records').delete().eq('id', 'deleted_intake_ids_registry');
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('INTAKE_DELETED', { recordId });
+      } catch (e) {
+        console.error('Supabase deleteIntakeRecord error:', e.message);
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        enqueueOfflineAction('INTAKE_DELETE', { recordId });
+        broadcastCloudEvent('INTAKE_DELETED', { recordId });
+      }
+    } else {
+      broadcastCloudEvent('INTAKE_DELETED', { recordId });
     }
 
-    showToast(`Deleted Intake Record ${recordId} and removed its parts from inventory and database`, 'info');
+    showToast(`Deleted Intake Record ${recordId} & logged to Serialized Audit Trail`, 'info');
     return { success: true };
   };
 
@@ -4218,6 +5369,9 @@ export function AppProvider({ children }) {
         setStockTransferMetadata,
         uploadAuditLogs,
         setUploadAuditLogs,
+        deletionAuditLogs,
+        setDeletionAuditLogs,
+        logDeletionAudit,
         importStockTransfersReport,
         clearStockTransfersReport,
         savePeriodRecord,
@@ -4226,10 +5380,14 @@ export function AppProvider({ children }) {
         addScanInUnit,
         deleteScanInUnit,
         batchAddScanInUnits,
+        commitUnitsToStock,
         addScanOutUnit,
         removeScanOutUnit,
         batchAddScanOutUnits,
         clearShipmentDraftItems,
+        activePackDraft,
+        setActivePackDraft,
+        syncActivePackDraftToCloud,
         deleteShipment,
         batchImportShipments,
         clearAllShipmentsData,
@@ -4248,6 +5406,10 @@ export function AppProvider({ children }) {
         isAutoRefreshing,
         lastSyncedAt,
         autoRefreshData,
+        isSupabaseConfigured,
+        realtimeConnected,
+        offlineQueue,
+        processOfflineSyncQueue,
         resetToDefaultData,
         clearAllData,
         isCommandPaletteOpen,

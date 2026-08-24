@@ -12,6 +12,7 @@ import {
   PackageCheck,
   Truck,
   FileSpreadsheet,
+  BarChart3,
   History,
   Settings,
   ShieldCheck,
@@ -48,6 +49,7 @@ export default function Sidebar() {
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Warehouse Operations' },
     { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Distribution' },
     { id: 'reports', label: 'Stock Transfer Reports', icon: FileSpreadsheet, section: 'Reports & Analytics' },
+    { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Analytics' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Traceability' },
     { id: 'settings', label: 'Parts & Site Catalog', icon: Settings, section: 'Admin' },
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Admin' }

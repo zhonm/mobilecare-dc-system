@@ -4,7 +4,7 @@ import { MOBILECARE_LOGO_BASE64 } from '../assets/logoBase64';
 import { calculateWeeklySplit } from './allocationEngine';
 
 /**
- * Generates and downloads a pixel-perfect, single-page Packing List PDF matching corporate standards
+ * Generates and downloads a pixel-perfect Packing List PDF matching corporate standards
  */
 export function generatePackingListPDF(shipment, items = [], site = {}) {
   const doc = new jsPDF({
@@ -14,40 +14,41 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   });
 
   const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 14;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
 
-  // Title: "Packing List" Centered with generous top margin
+  // Title: "Packing List" Centered
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
+  doc.setFontSize(15);
   doc.setTextColor(0, 0, 0);
-  doc.text('Packing List', pageWidth / 2, 18, { align: 'center' });
+  doc.text('Packing List', pageWidth / 2, 13, { align: 'center' });
 
   // Top Left: Mobile Care Logo + Company Info
-  const headerTopY = 26;
+  const headerTopY = 19;
   try {
     if (MOBILECARE_LOGO_BASE64) {
-      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', margin, headerTopY - 2, 18, 18);
+      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', margin, headerTopY - 1, 15, 15);
     }
   } catch (e) {
     console.warn('Could not render logo in PDF:', e);
   }
 
-  const compX = margin + 22;
-  doc.setFontSize(10.5);
+  const compX = margin + 18;
+  doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, headerTopY + 2);
   
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setTextColor(51, 65, 85);
-  doc.text('Business and Distribution Center', compX, headerTopY + 6.5);
-  doc.text('2/L Northeast Square, #47', compX, headerTopY + 11);
-  doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 15.5);
-  doc.text('San Juan City, Metro Manila', compX, headerTopY + 20);
+  doc.text('Business and Distribution Center', compX, headerTopY + 5.8);
+  doc.text('2/L Northeast Square, #47', compX, headerTopY + 9.6);
+  doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 13.4);
+  doc.text('San Juan City, Metro Manila', compX, headerTopY + 17.2);
 
   // Top Right: Invoice / Shipment Metadata Box
-  const rightBoxWidth = 88;
+  const rightBoxWidth = 86;
   const rightColX = pageWidth - margin - rightBoxWidth;
   const rightValX = pageWidth - margin;
 
@@ -55,47 +56,46 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     { label: 'INVOICE REF:', val: shipment.invoice_ref || `DCMSPIOWNED#20260818N` },
     { label: 'SHIPMENT DATE:', val: shipment.shipment_date || new Date().toLocaleDateString('en-US') },
     { label: 'BOX/S #:', val: String(shipment.total_boxes || 1) },
-    { label: 'CARRIER:', val: shipment.carrier || 'Lalamove' },
-    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || '20227303' }
+    { label: 'CARRIER:', val: shipment.carrier || 'Lite Express' },
+    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || '' }
   ];
 
-  let metaY = headerTopY + 1;
+  let metaY = headerTopY + 1.5;
   metaRows.forEach(row => {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setTextColor(15, 23, 42);
     doc.text(row.label, rightColX, metaY);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setTextColor(15, 23, 42);
     doc.text(String(row.val), rightValX, metaY, { align: 'right' });
-    metaY += 4.8;
+    metaY += 3.9;
   });
 
   // Ship To Section
-  const shipToY = headerTopY + 28;
+  const shipToY = headerTopY + 23;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(9);
   doc.setTextColor(15, 23, 42);
   doc.text('Ship To', margin, shipToY);
-  doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 18, shipToY);
+  doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 16, shipToY);
   
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setTextColor(71, 85, 105);
   const siteAddr = site.address || `${site.name || 'Branch'}, Philippines`;
-  doc.text(siteAddr, margin + 18, shipToY + 4.5, { maxWidth: pageWidth - margin - 30 });
+  doc.text(siteAddr, margin + 16, shipToY + 4, { maxWidth: pageWidth - margin - 26 });
 
-  // Items Table
+  // Items Table Sizing
   const totalItemsCount = items.length;
-  const isSmallBatch = totalItemsCount <= 12;
-  const isMediumBatch = totalItemsCount <= 22;
-  const isLargeBatch = totalItemsCount > 22 && totalItemsCount <= 32;
-  const isExtraLargeBatch = totalItemsCount > 32;
+  const isMediumBatch = totalItemsCount > 15 && totalItemsCount <= 26;
+  const isLargeBatch = totalItemsCount > 26 && totalItemsCount <= 34;
+  const isMultiPageBatch = totalItemsCount > 34;
 
-  const tableFontSize = isExtraLargeBatch ? 7.0 : isLargeBatch ? 7.5 : isMediumBatch ? 8.5 : 9.0;
-  const cellPaddingY = isExtraLargeBatch ? 0.9 : isLargeBatch ? 1.4 : isMediumBatch ? 2.2 : 2.8;
+  const tableFontSize = isMultiPageBatch ? 7.8 : isLargeBatch ? 7.0 : isMediumBatch ? 7.8 : 8.5;
+  const cellPaddingY = isMultiPageBatch ? 1.3 : isLargeBatch ? 0.8 : isMediumBatch ? 1.2 : 1.8;
 
   const tableData = items.map((item, index) => [
     index + 1,
@@ -105,7 +105,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     item.box_number || item.boxNumber || 1
   ]);
 
-  const tableStartY = shipToY + 12;
+  const tableStartY = shipToY + 9;
 
   autoTable(doc, {
     startY: tableStartY,
@@ -116,10 +116,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
       fillColor: [84, 89, 95], // Charcoal #54595F matching MSPI DC Packing List
       textColor: [255, 255, 255],
       fontStyle: 'bold',
-      fontSize: tableFontSize + 0.5,
+      fontSize: tableFontSize + 0.4,
       halign: 'center',
       valign: 'middle',
-      cellPadding: cellPaddingY + 0.4
+      cellPadding: cellPaddingY + 0.5
     },
     bodyStyles: {
       fontSize: tableFontSize,
@@ -127,80 +127,108 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
       cellPadding: cellPaddingY
     },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 10 },
-      1: { halign: 'center', cellWidth: 30, fontStyle: 'bold' },
-      2: { halign: 'left', cellWidth: 70 },
-      3: { halign: 'center', cellWidth: 55, font: 'courier' },
-      4: { halign: 'center', cellWidth: 17 }
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'center', cellWidth: 28, fontStyle: 'bold' },
+      2: { halign: 'left', cellWidth: 76 },
+      3: { halign: 'center', cellWidth: 58, font: 'helvetica', fontStyle: 'normal' }, // Plain text Helvetica for crisp printing
+      4: { halign: 'center', cellWidth: 16 }
     },
-    margin: { left: margin, right: margin }
+    margin: { left: margin, right: margin, bottom: 16 }
   });
 
-  const finalY = doc.lastAutoTable.finalY + 4;
+  let finalY = doc.lastAutoTable.finalY;
+
+  // Check if footer fits comfortably on current page without crowding
+  const requiredFooterHeight = 44;
+  if (finalY + requiredFooterHeight > pageHeight - 12) {
+    doc.addPage();
+    finalY = 18;
+  }
 
   // Remarks & Totals Block
+  const totalsY = finalY + 6;
+
+  // Remarks (Left Aligned)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('Remarks', margin, finalY + 4);
+  doc.text('Remarks', margin, totalsY + 3.2);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.remarks || 'KGB PARTS', margin, finalY + 9);
+  doc.setFontSize(8.5);
+  doc.text(shipment.remarks || 'KGB PARTS', margin, totalsY + 8);
 
-  // Totals Box (Right aligned)
-  const totalBoxWidth = 75;
+  // Totals Box (Right Aligned)
+  const totalBoxWidth = 72;
   const totalBoxX = pageWidth - margin - totalBoxWidth;
   const totalValX = pageWidth - margin - 3;
   const boxRowHeight = 5.2;
   
   // Total QTY Row
   doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, finalY, 44, boxRowHeight, 'F');
+  doc.rect(totalBoxX, totalsY, 42, boxRowHeight, 'F');
   doc.setDrawColor(84, 89, 95);
-  doc.rect(totalBoxX + 44, finalY, totalBoxWidth - 44, boxRowHeight, 'S');
+  doc.rect(totalBoxX + 42, totalsY, totalBoxWidth - 42, boxRowHeight, 'S');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(8);
-  doc.text('TOTAL QTY', totalBoxX + 22, finalY + 3.7, { align: 'center' });
+  doc.text('TOTAL QTY', totalBoxX + 21, totalsY + 3.7, { align: 'center' });
   doc.setTextColor(15, 23, 42);
-  doc.text(String(items.length), totalValX, finalY + 3.7, { align: 'right' });
+  doc.setFontSize(8.5);
+  doc.text(String(items.length), totalValX, totalsY + 3.7, { align: 'right' });
 
   // Total Boxes Row
   doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, finalY + boxRowHeight, 44, boxRowHeight, 'F');
-  doc.rect(totalBoxX + 44, finalY + boxRowHeight, totalBoxWidth - 44, boxRowHeight, 'S');
+  doc.rect(totalBoxX, totalsY + boxRowHeight, 42, boxRowHeight, 'F');
+  doc.rect(totalBoxX + 42, totalsY + boxRowHeight, totalBoxWidth - 42, boxRowHeight, 'S');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(255, 255, 255);
-  doc.text('TOTAL BOXES', totalBoxX + 22, finalY + boxRowHeight + 3.7, { align: 'center' });
+  doc.setFontSize(8);
+  doc.text('TOTAL BOXES', totalBoxX + 21, totalsY + boxRowHeight + 3.7, { align: 'center' });
   doc.setTextColor(15, 23, 42);
-  doc.text(String(shipment.total_boxes || 1), totalValX, finalY + boxRowHeight + 3.7, { align: 'right' });
+  doc.setFontSize(8.5);
+  doc.text(String(shipment.total_boxes || 1), totalValX, totalsY + boxRowHeight + 3.7, { align: 'right' });
 
-  // Signatures Section (Calculated gracefully to prevent crowding)
-  const preferredSigY = isSmallBatch ? Math.max(finalY + 28, 230) : isMediumBatch ? Math.max(finalY + 20, 245) : Math.min(finalY + 14, 268);
-  const sigY = Math.min(preferredSigY, 272);
+  // Signatures Section (Clean, spacious divider and generous breathing room)
+  const sigLineY = totalsY + (boxRowHeight * 2) + 8;
 
   doc.setDrawColor(203, 213, 225);
-  doc.line(margin, sigY - 4, pageWidth - margin, sigY - 4);
+  doc.setLineWidth(0.3);
+  doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
 
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
 
   // Prepared by
+  const sigRow1Y = sigLineY + 6;
   doc.setFont('helvetica', 'bold');
-  doc.text('Prepared and Counted by:', margin, sigY + 3);
+  doc.text('Prepared and Counted by:', margin, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 44, sigY + 3);
+  doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 44, sigRow1Y);
 
   // Verified by
   doc.setFont('helvetica', 'bold');
-  doc.text('Verified by:', margin + 98, sigY + 3);
+  doc.text('Verified by:', margin + 98, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.verified_by_name || 'Anjo Alcazar', margin + 118, sigY + 3);
+  doc.text(shipment.verified_by_name || 'Anjo Alcazar', margin + 118, sigRow1Y);
 
   // Receiving Branch Signature
+  const sigRow2Y = sigLineY + 13;
   doc.setFont('helvetica', 'bold');
-  doc.text('Receiving Branch Signature:', margin, sigY + 11);
+  doc.text('Receiving Branch Signature:', margin, sigRow2Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 44, sigY + 11);
+  doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 44, sigRow2Y);
+
+  // Multi-Page Page Numbers Footer
+  const totalPages = doc.internal.getNumberOfPages();
+  if (totalPages > 1) {
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Page ${p} of ${totalPages}`, pageWidth / 2, pageHeight - 6, { align: 'center' });
+    }
+  }
 
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
@@ -219,11 +247,11 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
 
   const tableRowsHtml = items.map((it, idx) => `
     <tr style="${idx % 2 === 1 ? 'background-color: #fbfcfd;' : ''}">
-      <td style="text-align: center; color: #64748b; padding: 5px 8px; border: 1px solid #cbd5e1;">${idx + 1}</td>
-      <td style="text-align: center; font-weight: 700; font-family: monospace; padding: 5px 8px; border: 1px solid #cbd5e1;">${it.part_number || it.partNumber || ''}</td>
-      <td style="text-align: left; padding: 5px 8px; border: 1px solid #cbd5e1;">${it.description || it.partDescription || ''}</td>
-      <td style="text-align: center; font-family: monospace; padding: 5px 8px; border: 1px solid #cbd5e1; font-size: 11px;">${it.serial_number || it.serialNumber || ''}</td>
-      <td style="text-align: center; padding: 5px 8px; border: 1px solid #cbd5e1;">${it.box_number || it.boxNumber || 1}</td>
+      <td style="text-align: center; color: #64748b; padding: 4.5px 6px; border: 1px solid #cbd5e1; font-size: 11px;">${idx + 1}</td>
+      <td style="text-align: center; font-weight: 700; padding: 4.5px 6px; border: 1px solid #cbd5e1; font-size: 11px;">${it.part_number || it.partNumber || ''}</td>
+      <td style="text-align: left; padding: 4.5px 8px; border: 1px solid #cbd5e1; font-size: 11px;">${it.description || it.partDescription || ''}</td>
+      <td style="text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 400; padding: 4.5px 6px; border: 1px solid #cbd5e1; font-size: 11px;">${it.serial_number || it.serialNumber || ''}</td>
+      <td style="text-align: center; padding: 4.5px 6px; border: 1px solid #cbd5e1; font-size: 11px;">${it.box_number || it.boxNumber || 1}</td>
     </tr>
   `).join('');
 
@@ -233,25 +261,25 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
     <head>
       <title>Packing List - ${shipment.invoice_ref || 'Manifest'}</title>
       <style>
-        @page { size: portrait; margin: 12mm 14mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 10px; font-size: 12px; }
-        .header-title { text-align: center; font-size: 18px; font-weight: 800; margin-bottom: 20px; letter-spacing: -0.01em; }
-        .top-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; margin-bottom: 18px; }
-        .company-title { font-size: 13px; font-weight: 800; color: #0f172a; }
-        .meta-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-        .meta-table td { padding: 3px 4px; }
+        @page { size: portrait; margin: 10mm 12mm; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 6px; font-size: 11.5px; }
+        .header-title { text-align: center; font-size: 18px; font-weight: 800; margin-bottom: 14px; letter-spacing: -0.01em; }
+        .top-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-bottom: 14px; }
+        .company-title { font-size: 12.5px; font-weight: 800; color: #0f172a; }
+        .meta-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .meta-table td { padding: 2.5px 4px; }
         .meta-label { font-weight: 700; color: #0f172a; width: 45%; }
         .meta-val { font-weight: 700; text-align: right; color: #0f172a; }
-        .shipto-box { margin-bottom: 18px; font-size: 12px; }
-        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; border: 1px solid #334155; }
-        .data-table th { background: #54595F; color: #ffffff; padding: 7px 8px; font-size: 11px; text-align: center; border: 1px solid #cbd5e1; font-weight: 700; }
-        .data-table td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 11px; }
-        .totals-wrap { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 14px; margin-bottom: 24px; }
-        .totals-table { width: 240px; border-collapse: collapse; border: 1px solid #54595F; }
-        .totals-table td { padding: 4px 10px; font-size: 11.5px; }
-        .totals-table .label-cell { background: #54595F; color: #ffffff; font-weight: 700; font-size: 11px; width: 55%; text-align: center; }
-        .totals-table .val-cell { text-align: right; font-weight: 800; font-size: 12px; background: #ffffff; border: 1px solid #54595F; }
-        .signatures-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 36px; border-top: 1px solid #cbd5e1; padding-top: 16px; font-size: 11.5px; }
+        .shipto-box { margin-bottom: 14px; font-size: 11.5px; }
+        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; border: 1px solid #334155; }
+        .data-table th { background: #54595F; color: #ffffff; padding: 6px 6px; font-size: 10.5px; text-align: center; border: 1px solid #cbd5e1; font-weight: 700; }
+        .data-table td { border: 1px solid #cbd5e1; padding: 4.5px 6px; font-size: 11px; }
+        .totals-wrap { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 14px; margin-bottom: 20px; page-break-inside: avoid; }
+        .totals-table { width: 230px; border-collapse: collapse; border: 1px solid #54595F; }
+        .totals-table td { padding: 4px 8px; font-size: 11px; }
+        .totals-table .label-cell { background: #54595F; color: #ffffff; font-weight: 700; font-size: 10.5px; width: 55%; text-align: center; }
+        .totals-table .val-cell { text-align: right; font-weight: 800; font-size: 11.5px; background: #ffffff; border: 1px solid #54595F; }
+        .signatures-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; border-top: 1px solid #cbd5e1; padding-top: 14px; font-size: 11px; page-break-inside: avoid; }
         @media print {
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
@@ -262,28 +290,28 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
       <div class="top-grid">
         <div>
           <div class="company-title">MOBILE CARE SERVICES PHILS. INC.</div>
-          <div style="color: #334155; font-size: 11.5px; margin-top: 2px;">Business and Distribution Center</div>
-          <div style="color: #475569; font-size: 11px;">2/L Northeast Square, #47</div>
-          <div style="color: #475569; font-size: 11px;">Connecticut St. Northeast Greenhills</div>
-          <div style="color: #475569; font-size: 11px;">San Juan City, Metro Manila</div>
+          <div style="color: #334155; font-size: 11px; margin-top: 2px;">Business and Distribution Center</div>
+          <div style="color: #475569; font-size: 10.5px;">2/L Northeast Square, #47</div>
+          <div style="color: #475569; font-size: 10.5px;">Connecticut St. Northeast Greenhills</div>
+          <div style="color: #475569; font-size: 10.5px;">San Juan City, Metro Manila</div>
         </div>
         <div>
           <table class="meta-table">
             <tr><td class="meta-label">INVOICE REF:</td><td class="meta-val">${shipment.invoice_ref || 'DCMSPIOWNED#20260818N'}</td></tr>
             <tr><td class="meta-label">SHIPMENT DATE:</td><td class="meta-val">${shipment.shipment_date || new Date().toLocaleDateString('en-US')}</td></tr>
             <tr><td class="meta-label">BOX/S #:</td><td class="meta-val">${shipment.total_boxes || 1}</td></tr>
-            <tr><td class="meta-label">CARRIER:</td><td class="meta-val">${shipment.carrier || 'Lalamove'}</td></tr>
-            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || '20227303'}</td></tr>
+            <tr><td class="meta-label">CARRIER:</td><td class="meta-val">${shipment.carrier || 'Lite Express'}</td></tr>
+            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || ''}</td></tr>
           </table>
         </div>
       </div>
 
       <div class="shipto-box">
-        <div style="display: flex; gap: 14px;">
-          <strong style="min-width: 55px;">Ship To</strong>
+        <div style="display: flex; gap: 12px;">
+          <strong style="min-width: 50px;">Ship To</strong>
           <div>
             <strong style="text-transform: uppercase;">${site.name || shipment.site_name || 'SERVICE HUB'}</strong><br/>
-            <span style="color: #334155; font-size: 11px;">${site.address || `${site.name || 'Branch'}, Philippines`}</span>
+            <span style="color: #334155; font-size: 10.5px;">${site.address || `${site.name || 'Branch'}, Philippines`}</span>
           </div>
         </div>
       </div>
@@ -291,11 +319,11 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
       <table class="data-table">
         <thead>
           <tr>
-            <th style="width: 42px;">#</th>
-            <th style="width: 130px;">PART NUMBER</th>
+            <th style="width: 38px;">#</th>
+            <th style="width: 125px;">PART NUMBER</th>
             <th>DESCRIPTION</th>
-            <th style="width: 190px;">SERIAL NUMBER</th>
-            <th style="width: 60px;">BOX #</th>
+            <th style="width: 180px;">SERIAL NUMBER</th>
+            <th style="width: 55px;">BOX #</th>
           </tr>
         </thead>
         <tbody>
@@ -305,8 +333,8 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
 
       <div class="totals-wrap">
         <div>
-          <strong style="font-size: 12px;">Remarks</strong><br/>
-          <span style="font-size: 11.5px; color: #0f172a;">${shipment.remarks || 'KGB PARTS'}</span>
+          <strong style="font-size: 11.5px;">Remarks</strong><br/>
+          <span style="font-size: 11px; color: #0f172a;">${shipment.remarks || 'KGB PARTS'}</span>
         </div>
         <table class="totals-table">
           <tr>
@@ -761,3 +789,263 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
 
   doc.save(`Stock_Transfers_Report_${new Date().toISOString().split('T')[0]}.pdf`);
 }
+
+/**
+ * Downloads landscape PDF for Fixably Forecasting Report
+ */
+export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) {
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 8;
+  const periodLabel = metadata?.periodLabel || 'September 2026';
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42);
+  doc.rect(margin, 8, pageWidth - (margin * 2), 12, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10.5);
+  doc.setTextColor(255, 255, 255);
+  const titleText = `MOBILE CARE SERVICES PHILS. INC. — Fixably Demand Forecasting Report (${periodLabel})`;
+  doc.text(titleText, margin + 6, 15.5);
+
+  const resolveStockPrice = (item) => {
+    if (!item) return 100;
+    if (typeof item.stocking_price === 'number' && item.stocking_price > 0) return item.stocking_price;
+    const desc = String(item.description || item.part_name || '').toLowerCase();
+    if (desc.includes('display')) return 279;
+    if (desc.includes('battery')) return 89;
+    if (desc.includes('camera')) return 129;
+    if (desc.includes('glass') || desc.includes('back')) return 99;
+    if (desc.includes('rear') || desc.includes('mid')) return 119;
+    return 100;
+  };
+
+  const totalForecastUnits = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
+  const totalValuation = forecastItems.reduce((s, it) => {
+    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
+    const price = resolveStockPrice(it);
+    return s + (qty * price);
+  }, 0);
+
+  // Sub-header Summary
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(
+    `Total Parts: ${forecastItems.length} SKUs  |  Recommended Demand: ${totalForecastUnits.toLocaleString()} units  |  Projected Stock Cost: $${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2 })}  |  Generated: ${new Date().toLocaleString()}`,
+    margin + 6,
+    24
+  );
+
+  const headers = [
+    '#',
+    'Part Number',
+    'Description',
+    'iPhone Model',
+    'Commodity',
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+    'Base',
+    'Final',
+    'Price ($)',
+    'Total Cost ($)'
+  ];
+
+  const tableData = forecastItems.map((it, idx) => {
+    const m = it.ytd_monthly_counts || [];
+    const base = it.computed_forecast ?? 0;
+    const finalVal = it.final_forecast ?? base;
+    const price = resolveStockPrice(it);
+    const cost = finalVal * price;
+
+    return [
+      idx + 1,
+      it.part_number || '',
+      it.description || '',
+      it.iphone_model || '',
+      it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General'),
+      m[0] || 0,
+      m[1] || 0,
+      m[2] || 0,
+      m[3] || 0,
+      m[4] || 0,
+      m[5] || 0,
+      m[6] || 0,
+      m[7] || 0,
+      base,
+      finalVal,
+      `$${price.toFixed(2)}`,
+      `$${cost.toFixed(2)}`
+    ];
+  });
+
+  autoTable(doc, {
+    startY: 28,
+    head: [headers],
+    body: tableData,
+    theme: 'grid',
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.5,
+      halign: 'center'
+    },
+    bodyStyles: {
+      fontSize: 6.8,
+      textColor: [15, 23, 42]
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 7 },
+      1: { halign: 'center', cellWidth: 20 },
+      2: { halign: 'left', cellWidth: 46 },
+      3: { halign: 'left', cellWidth: 28 },
+      4: { halign: 'center', cellWidth: 16 },
+      5: { halign: 'center', cellWidth: 8 },
+      6: { halign: 'center', cellWidth: 8 },
+      7: { halign: 'center', cellWidth: 8 },
+      8: { halign: 'center', cellWidth: 8 },
+      9: { halign: 'center', cellWidth: 8 },
+      10: { halign: 'center', cellWidth: 8 },
+      11: { halign: 'center', cellWidth: 8 },
+      12: { halign: 'center', cellWidth: 8 },
+      13: { halign: 'center', cellWidth: 12 },
+      14: { halign: 'center', cellWidth: 12 },
+      15: { halign: 'right', cellWidth: 18 },
+      16: { halign: 'right', cellWidth: 22 }
+    },
+    margin: { left: margin, right: margin }
+  });
+
+  doc.save(`Forecasting_Report_${periodLabel.replace(/\s+/g, '_')}.pdf`);
+}
+
+/**
+ * Direct print preview for Fixably Forecasting Report
+ */
+export function printForecastingReportDirect(forecastItems = [], metadata = {}) {
+  const periodLabel = metadata?.periodLabel || 'September 2026';
+  const resolveStockPrice = (item) => {
+    if (!item) return 100;
+    if (typeof item.stocking_price === 'number' && item.stocking_price > 0) return item.stocking_price;
+    const desc = String(item.description || item.part_name || '').toLowerCase();
+    if (desc.includes('display')) return 279;
+    if (desc.includes('battery')) return 89;
+    if (desc.includes('camera')) return 129;
+    if (desc.includes('glass') || desc.includes('back')) return 99;
+    if (desc.includes('rear') || desc.includes('mid')) return 119;
+    return 100;
+  };
+
+  const totalForecastUnits = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
+  const totalValuation = forecastItems.reduce((s, it) => {
+    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
+    const price = resolveStockPrice(it);
+    return s + (qty * price);
+  }, 0);
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert('Pop-up blocked. Please allow pop-ups for direct printing.');
+    return;
+  }
+
+  const rowsHtml = forecastItems.map((it, idx) => {
+    const m = it.ytd_monthly_counts || [];
+    const base = it.computed_forecast ?? 0;
+    const finalVal = it.final_forecast ?? base;
+    const price = resolveStockPrice(it);
+    const cost = finalVal * price;
+
+    return `
+      <tr>
+        <td style="text-align:center">${idx + 1}</td>
+        <td style="font-family:monospace;font-weight:bold;color:#0284c7">${it.part_number}</td>
+        <td>${it.description || ''}</td>
+        <td>${it.iphone_model || ''}</td>
+        <td style="text-align:center">${it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General')}</td>
+        <td style="text-align:center">${m[0] || 0}</td>
+        <td style="text-align:center">${m[1] || 0}</td>
+        <td style="text-align:center">${m[2] || 0}</td>
+        <td style="text-align:center">${m[3] || 0}</td>
+        <td style="text-align:center">${m[4] || 0}</td>
+        <td style="text-align:center">${m[5] || 0}</td>
+        <td style="text-align:center">${m[6] || 0}</td>
+        <td style="text-align:center">${m[7] || 0}</td>
+        <td style="text-align:center;font-weight:600">${base}</td>
+        <td style="text-align:center;font-weight:bold;color:#0f172a;background:#f8fafc">${finalVal}</td>
+        <td style="text-align:right">$${price.toFixed(2)}</td>
+        <td style="text-align:right;font-weight:bold">$${cost.toFixed(2)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Fixably Demand Forecasting Report - ${periodLabel}</title>
+      <style>
+        @page { size: landscape; margin: 8mm; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 0; font-size: 11px; }
+        .header-bar { background: #0f172a; color: #fff; padding: 12px 16px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .kpi-bar { display: flex; gap: 12px; margin-bottom: 14px; }
+        .kpi-card { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; }
+        .kpi-card strong { display: block; font-size: 14px; color: #0f172a; }
+        .kpi-card span { font-size: 10px; color: #64748b; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; font-size: 10px; }
+        th { background: #0f172a; color: #fff; font-weight: 700; padding: 6px 4px; text-align: center; border: 1px solid #334155; }
+        td { padding: 5px 4px; border: 1px solid #e2e8f0; }
+        tr:nth-child(even) { background: #f8fafc; }
+      </style>
+    </head>
+    <body>
+      <div class="header-bar">
+        <div>
+          <div style="font-size: 14px; font-weight: bold;">MOBILE CARE SERVICES PHILS. INC.</div>
+          <div style="font-size: 11px; color: #94a3b8;">Fixably Demand Forecasting Master Report — ${periodLabel}</div>
+        </div>
+        <div style="font-size: 10px; text-align: right; color: #94a3b8;">
+          Printed: ${new Date().toLocaleString()}
+        </div>
+      </div>
+
+      <div class="kpi-bar">
+        <div class="kpi-card"><span>Total SKUs</span><strong>${forecastItems.length} Part Models</strong></div>
+        <div class="kpi-card"><span>Total Demand</span><strong>${totalForecastUnits.toLocaleString()} units</strong></div>
+        <div class="kpi-card"><span>Projected Stock Valuation</span><strong>$${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong></div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Part Number</th>
+            <th>Description</th>
+            <th>iPhone Model</th>
+            <th>Commodity</th>
+            <th>Jan</th><th>Feb</th><th>Mar</th><th>Apr</th><th>May</th><th>Jun</th><th>Jul</th><th>Aug</th>
+            <th>Base</th>
+            <th>Final</th>
+            <th>Price</th>
+            <th>Total Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </body>
+    </html>
+  `);
+
+  printWindow.document.close();
+  setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 400);
+}
+

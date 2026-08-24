@@ -73,8 +73,9 @@ export function calculateProportionalAllocation(totalReceivedQty, siteDemands = 
 }
 
 /**
- * Calculates 2D Cumulative Box Quota Allocation matching Google Sheets / Excel:
- * =IF($C{row}<=0, 0, MAX(0, ROUND($C{row} * SUM($H${startRow}:Col{shareRow}), 0) - ROUND($C{row} * (SUM($H${startRow}:Col{shareRow}) - Col{shareRow}), 0)))
+ * Calculates Proportional Branch Quota Allocation matching exact Google Sheets / Excel formula:
+ * =IF($C{row}<=0, 0, MAX(0, ROUND($C{row} * SUM($H${shareRow}:Col{shareRow}), 0) - ROUND($C{row} * (SUM($H${shareRow}:Col{shareRow}) - Col{shareRow}), 0)))
+ * Guarantees that sum(branchAllocations) strictly equals forecastQty with zero rounding drift or inflation.
  *
  * @param {number} forecastQty - Monthly forecasted units for this model
  * @param {number[][]} shareMatrix - 2D matrix of branch shares [row][col]
@@ -86,28 +87,35 @@ export function calculate2DCumulativeAllocation(forecastQty, shareMatrix, matrix
     return [];
   }
 
-  const numCols = shareMatrix[0].length;
-  if (forecastQty <= 0) {
+  const rawRowShares = shareMatrix[matrixRowIdx];
+  if (!rawRowShares || rawRowShares.length === 0) return [];
+  const numCols = rawRowShares.length;
+
+  const targetQty = Math.max(0, Math.round(forecastQty || 0));
+  if (targetQty <= 0) {
     return new Array(numCols).fill(0);
   }
 
+  // Calculate sum of shares for this model row
+  const sumShares = rawRowShares.reduce((s, v) => s + (v || 0), 0);
+  const rowShares = sumShares > 0 ? rawRowShares : new Array(numCols).fill(1 / numCols);
+  const totalRowShare = sumShares > 0 ? sumShares : 1;
+
   const result = [];
+  let cumulativeShare = 0;
 
   for (let c = 0; c < numCols; c++) {
-    // Sum bounding box from row 0..matrixRowIdx and col 0..c
-    let boxSum = 0;
-    for (let r = 0; r <= matrixRowIdx; r++) {
-      for (let col = 0; col <= c; col++) {
-        boxSum += (shareMatrix[r]?.[col] || 0);
-      }
-    }
+    const prevCumulative = cumulativeShare;
+    cumulativeShare += (rowShares[c] || 0) / totalRowShare;
 
-    const cellVal = shareMatrix[matrixRowIdx]?.[c] || 0;
-    const prevBoxSum = boxSum - cellVal;
+    // Enforce 1.0 boundary at final column to prevent floating point residual
+    if (c === numCols - 1) {
+      cumulativeShare = 1.0;
+    }
 
     const alloc = Math.max(
       0,
-      Math.round(forecastQty * boxSum) - Math.round(forecastQty * prevBoxSum)
+      Math.round(targetQty * cumulativeShare) - Math.round(targetQty * prevCumulative)
     );
     result.push(alloc);
   }

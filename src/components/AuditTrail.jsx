@@ -9,13 +9,19 @@ import {
   Box,
   UploadCloud,
   FileSpreadsheet,
-  Calendar
+  Calendar,
+  Trash2,
+  Download,
+  AlertTriangle,
+  UserCheck,
+  FileText
 } from 'lucide-react';
 
 export default function AuditTrail() {
-  const { inventoryUnits, scanLogs, sites, uploadAuditLogs, searchQuery } = useApp();
+  const { inventoryUnits, scanLogs, sites, uploadAuditLogs, deletionAuditLogs, searchQuery } = useApp();
   const [selectedSerial, setSelectedSerial] = useState('');
-  const [auditTab, setAuditTab] = useState('uploads'); // 'uploads' | 'serial_tracer' | 'scan_logs'
+  const [auditTab, setAuditTab] = useState('uploads'); // 'uploads' | 'serial_tracer' | 'scan_logs' | 'deletions'
+  const [deletionEntityTypeFilter, setDeletionEntityTypeFilter] = useState('ALL');
 
   // Find unit details if a serial is searched
   const matchedUnit = selectedSerial.trim()
@@ -49,6 +55,53 @@ export default function AuditTrail() {
       );
     });
 
+  // Filter deletion logs (sorted newest first)
+  const filteredDeletions = (deletionAuditLogs || [])
+    .slice()
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .filter(log => {
+      if (deletionEntityTypeFilter !== 'ALL' && log.entity_type !== deletionEntityTypeFilter) {
+        return false;
+      }
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        log.entity_id?.toLowerCase().includes(q) ||
+        log.entity_label?.toLowerCase().includes(q) ||
+        log.entity_type?.toLowerCase().includes(q) ||
+        log.deleted_by_name?.toLowerCase().includes(q) ||
+        log.deleted_by_email?.toLowerCase().includes(q) ||
+        log.deleted_by_role?.toLowerCase().includes(q) ||
+        log.reason?.toLowerCase().includes(q)
+      );
+    });
+
+  // Export Deletions Audit to CSV
+  const exportDeletionsToCSV = () => {
+    if (!filteredDeletions || filteredDeletions.length === 0) return;
+    const headers = ['Timestamp', 'Entity Type', 'Record ID', 'Record Label', 'Deleted By (Name)', 'Deleted By (Email)', 'Role / Position', 'Reason', 'Details'];
+    const rows = filteredDeletions.map(d => [
+      `"${new Date(d.timestamp).toLocaleString()}"`,
+      `"${d.entity_type || ''}"`,
+      `"${d.entity_id || ''}"`,
+      `"${d.entity_label || ''}"`,
+      `"${d.deleted_by_name || ''}"`,
+      `"${d.deleted_by_email || ''}"`,
+      `"${(d.deleted_by_position && !d.deleted_by_position.includes('Lead System Architect')) ? d.deleted_by_position : 'Parts Management Specialist'}"`,
+      `"${d.reason || ''}"`,
+      `"${JSON.stringify(d.summary || {}).replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `MDC_Deletion_Audit_Log_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="audit-view" style={{ maxWidth: '1200px', margin: '0 auto' }}>
       {/* Header Banner */}
@@ -60,7 +113,7 @@ export default function AuditTrail() {
               <h2 style={{ fontSize: '18px', margin: 0 }}>Serialized Lifecycle &amp; Traceability Audit System</h2>
             </div>
             <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Enterprise custody chain and ingestion audit logs. Review who uploaded forecasting/allocation datasets, trace serialized part journeys, and monitor hardware barcode scanner logs.
+              Enterprise custody chain and ingestion audit logs. Review who uploaded datasets, trace serialized part journeys, monitor barcode scanner logs, and inspect immutable data deletion audits.
             </p>
           </div>
 
@@ -70,6 +123,9 @@ export default function AuditTrail() {
             </span>
             <span className="badge badge-neutral" style={{ padding: '6px 12px', fontSize: '12px' }}>
               {scanLogs?.length || 0} Barcode Scan Logs
+            </span>
+            <span className="badge badge-danger" style={{ padding: '6px 12px', fontSize: '12px' }}>
+              {deletionAuditLogs?.length || 0} Deletion Audits
             </span>
           </div>
         </div>
@@ -86,6 +142,19 @@ export default function AuditTrail() {
             <span>File Upload &amp; Master Ingestion Audits</span>
             <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.25)', padding: '1px 6px', borderRadius: '10px' }}>
               {uploadAuditLogs?.length || 0}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`btn btn-sm ${auditTab === 'deletions' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setAuditTab('deletions')}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: auditTab === 'deletions' ? '#b91c1c' : undefined, borderColor: auditTab === 'deletions' ? '#b91c1c' : undefined }}
+          >
+            <Trash2 size={14} />
+            <span>Data Deletions &amp; Purge Audits</span>
+            <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.25)', padding: '1px 6px', borderRadius: '10px' }}>
+              {deletionAuditLogs?.length || 0}
             </span>
           </button>
 
@@ -247,6 +316,237 @@ export default function AuditTrail() {
                               Superseded
                             </span>
                           )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: Data Deletions & Purge Audits */}
+      {auditTab === 'deletions' && (
+        <div className="card" style={{ marginBottom: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Trash2 size={18} color="#b91c1c" />
+                <h3 style={{ margin: 0, fontSize: '15px' }}>Data Deletions &amp; Purge Audit Trail</h3>
+              </div>
+              <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                Immutable enterprise log capturing who deleted records, batches, and manifests with user accountability and timestamps.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Entity Type Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Filter Entity:</span>
+                <select
+                  value={deletionEntityTypeFilter}
+                  onChange={(e) => setDeletionEntityTypeFilter(e.target.value)}
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border-light, #e2e8f0)',
+                    background: '#fff',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--text-main)'
+                  }}
+                >
+                  <option value="ALL">All Entity Types ({deletionAuditLogs?.length || 0})</option>
+                  <option value="DC Intake Record">DC Intake Records</option>
+                  <option value="Period Snapshot">Period Snapshots</option>
+                  <option value="Shipment Manifest">Shipment Manifests</option>
+                  <option value="Purchase Order">Purchase Orders</option>
+                  <option value="Inventory Unit">Inventory Units</option>
+                  <option value="Catalog Part">Catalog Parts</option>
+                  <option value="User Account">User Accounts</option>
+                </select>
+              </div>
+
+              {/* Export to CSV */}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={exportDeletionsToCSV}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                title="Export deletion audit log to CSV"
+              >
+                <Download size={13} />
+                <span>Export CSV</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="table-container" style={{ maxHeight: '460px' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '150px' }}>Timestamp</th>
+                  <th style={{ width: '130px' }}>Entity Type</th>
+                  <th>Deleted Record ID &amp; Label</th>
+                  <th>Deleted By</th>
+                  <th>Impact &amp; Data Summary</th>
+                  <th style={{ width: '140px' }}>Audit Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredDeletions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
+                      <Trash2 size={24} style={{ opacity: 0.3, marginBottom: '8px', display: 'block', margin: '0 auto 8px' }} />
+                      No deletion audit records found matching your filters.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDeletions.map((log) => {
+                    const isIntake = log.entity_type === 'DC Intake Record';
+                    const isSnapshot = log.entity_type === 'Period Snapshot';
+                    const isShipment = log.entity_type === 'Shipment Manifest';
+
+                    return (
+                      <tr key={log.id}>
+                        {/* Timestamp */}
+                        <td style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Calendar size={12} color="var(--text-muted)" />
+                            <strong>{new Date(log.timestamp).toLocaleDateString()}</strong>
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
+                            {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </div>
+                        </td>
+
+                        {/* Entity Type */}
+                        <td>
+                          <span
+                            className={`badge ${
+                              isIntake
+                                ? 'badge-warning'
+                                : isSnapshot
+                                ? 'badge-primary'
+                                : isShipment
+                                ? 'badge-info'
+                                : 'badge-danger'
+                            }`}
+                            style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px' }}
+                          >
+                            {log.entity_type}
+                          </span>
+                        </td>
+
+                        {/* Record ID & Label */}
+                        <td>
+                          <div style={{ fontFamily: 'var(--font-mono, monospace)', fontWeight: 700, fontSize: '12.5px', color: 'var(--text-main)' }}>
+                            {log.entity_id}
+                          </div>
+                          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {log.entity_label || log.entity_id}
+                          </div>
+                          {log.reason && (
+                            <div style={{ fontSize: '10.5px', color: '#b91c1c', marginTop: '3px', fontStyle: 'italic' }}>
+                              Reason: {log.reason}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Deleted By User Accountability */}
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '50%',
+                                background: '#fee2e2',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 800,
+                                fontSize: '11.5px',
+                                color: '#b91c1c'
+                              }}
+                            >
+                              {log.deleted_by_name ? log.deleted_by_name.charAt(0).toUpperCase() : 'U'}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '12.5px', color: '#0f172a' }}>
+                                {log.deleted_by_name || 'Zhon Manaois'}
+                              </div>
+                              <div style={{ fontSize: '10.5px', color: '#64748b' }}>
+                                {log.deleted_by_email || 'zhon.manaois@mobilecareph.com'}
+                              </div>
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  background: '#eff6ff',
+                                  color: '#0284c7',
+                                  border: '1px solid #bfdbfe',
+                                  padding: '2px 7px',
+                                  borderRadius: '4px',
+                                  marginTop: '3px',
+                                  display: 'inline-block'
+                                }}
+                              >
+                                {log.deleted_by_position && !log.deleted_by_position.includes('Lead System Architect')
+                                  ? log.deleted_by_position
+                                  : 'Parts Management Specialist'}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Impact / Data Summary */}
+                        <td style={{ fontSize: '11.5px' }}>
+                          {log.summary?.itemsCount !== undefined && (
+                            <div>
+                              <strong>{log.summary.itemsCount}</strong> units purged
+                            </div>
+                          )}
+                          {log.summary?.poNumber && (
+                            <div style={{ color: 'var(--text-muted)' }}>
+                              PO #: <span className="font-mono">{log.summary.poNumber}</span>
+                            </div>
+                          )}
+                          {log.summary?.destinationSite && (
+                            <div style={{ color: 'var(--text-muted)' }}>
+                              Destination: {log.summary.destinationSite}
+                            </div>
+                          )}
+                          {log.summary?.forecastPartsCount !== undefined && (
+                            <div style={{ color: 'var(--text-muted)' }}>
+                              {log.summary.forecastPartsCount} forecast parts &amp; {log.summary.allocationsCount || 0} allocations
+                            </div>
+                          )}
+                          {log.summary?.intakeDate && (
+                            <div style={{ color: '#94a3b8', fontSize: '10.5px' }}>
+                              Intake Date: {log.summary.intakeDate}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Audit Status */}
+                        <td>
+                          <span
+                            className="badge badge-success"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '4px 8px'
+                            }}
+                          >
+                            <ShieldCheck size={12} />
+                            Audit Logged
+                          </span>
                         </td>
                       </tr>
                     );

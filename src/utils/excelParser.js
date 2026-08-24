@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import canonicalShares from '../data/canonicalShares.js';
 import canonicalAugustAllocations from '../data/canonicalAllocations.js';
+import canonicalSeptemberAllocations from '../data/canonicalSeptemberAllocations.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import { calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
@@ -116,11 +117,12 @@ export const MASTER_PART_PRICING = {
   '661-35694': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15 Pro', category: 'cat-battery' },
   '661-36918': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15 Pro Max', category: 'cat-battery' },
   '661-44796': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 16', category: 'cat-battery' },
+  '661-42837': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 16 Plus', category: 'cat-battery' },
   '661-42720': { stocking: 119, exchange: 62, desc: 'Battery, iPhone 16 Pro', category: 'cat-battery' },
   '661-44954': { stocking: 119, exchange: 62, desc: 'Battery, iPhone 16 Pro Max', category: 'cat-battery' },
   '661-56064': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 17', category: 'cat-battery' },
   '661-55235': { stocking: 119, exchange: 62, desc: 'Battery, iPhone Air', category: 'cat-battery' },
-  '661-56121': { stocking: 119, exchange: 62, desc: 'Battery, pSIM, iPhone 17 Pro', category: 'cat-battery' },
+  '661-58121': { stocking: 119, exchange: 62, desc: 'Battery, pSIM, iPhone 17 Pro', category: 'cat-battery' },
   '661-56049': { stocking: 119, exchange: 62, desc: 'Battery, pSIM, iPhone 17 Pro Max', category: 'cat-battery' }
 };
 
@@ -148,8 +150,30 @@ export const CANONICAL_DISPLAY_DESCS = [
   'Display, iPhone Air'
 ];
 
+export const CANONICAL_BATTERY_DESCS = [
+  'Battery, iPhone 13',
+  'Battery, iPhone 13 Pro',
+  'Battery, iPhone 13 Pro Max',
+  'Battery, iPhone 14',
+  'Battery, iPhone 14 Plus',
+  'Battery, iPhone 14 Pro',
+  'Battery, iPhone 14 Pro Max',
+  'Battery, iPhone 15',
+  'Battery, iPhone 15 Plus',
+  'Battery, iPhone 15 Pro',
+  'Battery, iPhone 15 Pro Max',
+  'Battery, iPhone 16',
+  'Battery, iPhone 16 Plus',
+  'Battery, iPhone 16 Pro',
+  'Battery, iPhone 16 Pro Max',
+  'Battery, iPhone 17',
+  'Battery, iPhone Air',
+  'Battery, pSIM, iPhone 17 Pro',
+  'Battery, pSIM, iPhone 17 Pro Max',
+  'SVC,IPHONE 14 PRO MAX, BATTERY'
+];
+
 export const CANONICAL_BATTERY_SHARE_DESCS = [
-  'Battery, iPhone 12 and 12 Pro',
   'Battery, iPhone 13',
   'Battery, iPhone 13 Pro',
   'Battery, iPhone 13 Pro Max',
@@ -170,26 +194,52 @@ export const CANONICAL_BATTERY_SHARE_DESCS = [
   'Battery, pSIM, iPhone 17 Pro Max'
 ];
 
-export const CANONICAL_BATTERY_DESCS = [
-  'Battery, iPhone 13',
-  'Battery, iPhone 13 Pro',
-  'Battery, iPhone 13 Pro Max',
-  'Battery, iPhone 14',
-  'Battery, iPhone 14 Plus',
-  'Battery, iPhone 14 Pro',
-  'Battery, iPhone 14 Pro Max',
-  'Battery, iPhone 15',
-  'Battery, iPhone 15 Plus',
-  'Battery, iPhone 15 Pro',
-  'Battery, iPhone 15 Pro Max',
-  'Battery, iPhone 16',
-  'Battery, iPhone 16 Pro',
-  'Battery, iPhone 16 Pro Max',
-  'Battery, iPhone 17',
-  'Battery, iPhone Air',
-  'Battery, pSIM, iPhone 17 Pro',
-  'Battery, pSIM, iPhone 17 Pro Max'
-];
+export const CANONICAL_SEPTEMBER_2026_FORECASTS = {
+  // Displays (21 Models -> Total: 149 units, $50,300.00)
+  'Display, iPhone 13': 23,
+  'Display, iPhone 13 Pro': 2,
+  'Display, iPhone 13 Pro Max': 0,
+  'Display, iPhone 14': 5,
+  'Display, iPhone 14 Plus': 0,
+  'Display, iPhone 14 Pro': 0,
+  'Display, iPhone 14 Pro Max': 7,
+  'Display, iPhone 15': 7,
+  'Display, iPhone 15 Plus': 0,
+  'Display, iPhone 15 Pro': 2,
+  'Display, iPhone 15 Pro Max': 5,
+  'Display, iPhone 16': 6,
+  'Display, iPhone 16 Plus': 1,
+  'Display, iPhone 16 Pro': 6,
+  'Display, iPhone 16 Pro Max': 4,
+  'Display, iPhone 16e': 2,
+  'Display, iPhone 17': 14,
+  'Display, iPhone 17 Pro': 18,
+  'Display, iPhone 17 Pro Max': 45,
+  'Display, iPhone 17e': 0,
+  'Display, iPhone Air': 2,
+
+  // Batteries (20 Models -> Total: 438 units, $40,899.00)
+  'Battery, iPhone 13': 234,
+  'Battery, iPhone 13 Pro': 24,
+  'Battery, iPhone 13 Pro Max': 31,
+  'Battery, iPhone 14': 9,
+  'Battery, iPhone 14 Plus': 3,
+  'Battery, iPhone 14 Pro': 25,
+  'Battery, iPhone 14 Pro Max': 35,
+  'Battery, iPhone 15': 15,
+  'Battery, iPhone 15 Plus': 3,
+  'Battery, iPhone 15 Pro': 25,
+  'Battery, iPhone 15 Pro Max': 21,
+  'Battery, iPhone 16': 1,
+  'Battery, iPhone 16 Plus': 1,
+  'Battery, iPhone 16 Pro': 0,
+  'Battery, iPhone 16 Pro Max': 2,
+  'Battery, iPhone 17': 6,
+  'Battery, iPhone Air': 1,
+  'Battery, pSIM, iPhone 17 Pro': 0,
+  'Battery, pSIM, iPhone 17 Pro Max': 1,
+  'SVC,IPHONE 14 PRO MAX, BATTERY': 1
+};
 
 export const CANONICAL_AUGUST_2026_FORECASTS = {
   // Displays (21 Models -> Total: 122 units, $41,238.00)
@@ -1387,36 +1437,46 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     pData.siteCounts[item.matchedSite.name] = (pData.siteCounts[item.matchedSite.name] || 0) + item.quantity;
   });
 
-  // Helper to build 2D share matrix for a list of canonical models
-  function buildCategoryShareMatrix(descList) {
+  // Dynamic empirical category share builder from actual raw repairs in this dataset
+  function buildDynamicShareMatrix(descList, catId) {
+    // 1. Calculate overall commodity-level site distribution across all repairs in this category
+    const catSiteCounts = new Array(activeServiceSites.length).fill(0);
+    let catTotal = 0;
+    validRepairs.filter(r => r.catId === catId).forEach(r => {
+      const sIdx = activeServiceSites.findIndex(s => s.id === r.siteId || s.code === r.siteId || s.name === r.siteName);
+      if (sIdx >= 0) {
+        catSiteCounts[sIdx] += r.qty;
+        catTotal += r.qty;
+      }
+    });
+
+    const fallbackCatShares = catTotal > 0
+      ? catSiteCounts.map(c => c / catTotal)
+      : activeServiceSites.map(() => 1 / activeServiceSites.length);
+
+    // 2. Build model-level share vector for each model
     return descList.map(desc => {
-      let totalCount = 0;
+      let modelTotal = 0;
       const countsPerSite = activeServiceSites.map(s => {
         let count = 0;
         validRepairs.forEach(r => {
-          if (r.desc === desc && (r.siteId === s.id || r.siteName === s.name)) {
+          if (r.desc.toLowerCase() === desc.toLowerCase() && (r.siteId === s.id || r.siteName === s.name || s.code.includes(r.siteId))) {
             count += r.qty;
           }
         });
-        totalCount += count;
+        modelTotal += count;
         return count;
       });
 
-      return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : (1 / activeServiceSites.length));
+      if (modelTotal > 0) {
+        return countsPerSite.map(count => count / modelTotal);
+      }
+      return [...fallbackCatShares];
     });
   }
 
-  const displayShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.displayShares)
-    ? canonicalShares.displayShares
-    : (validRepairs.some(r => r.catId === 'cat-display')
-      ? buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS)
-      : (canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length))));
-
-  const batteryShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.batteryShares)
-    ? canonicalShares.batteryShares
-    : (validRepairs.some(r => r.catId === 'cat-battery')
-      ? buildCategoryShareMatrix(CANONICAL_BATTERY_SHARE_DESCS)
-      : (canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length))));
+  const displayShareMatrix = buildDynamicShareMatrix(CANONICAL_DISPLAY_DESCS, 'cat-display');
+  const batteryShareMatrix = buildDynamicShareMatrix(CANONICAL_BATTERY_DESCS, 'cat-battery');
 
   const forecastItems = [];
   const allocations = [];
@@ -1436,10 +1496,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     };
 
     const pn = pData.partNumber;
-    let computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
-    if ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined) {
-      computedForecast = CANONICAL_AUGUST_2026_FORECASTS[desc];
-    }
+    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
@@ -1456,53 +1513,39 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     });
 
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const seedAlloc = (targetMonthIdx === 7 || defaultFileMonthIdx === 7)
-      ? canonicalAugustAllocations.find(a => a.description === desc || a.part_number === pn)
-      : null;
+    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
+    const siteQuantities = {};
+    let totalAlloc = 0;
+    activeServiceSites.forEach((s, sIdx) => {
+      const q = allocatedBranchQuantities[sIdx] || 0;
+      siteQuantities[s.id] = q;
+      siteQuantities[s.code] = q;
+      totalAlloc += q;
+    });
 
-    if (seedAlloc) {
-      allocations.push({
-        ...seedAlloc,
-        part_id: `part-${pn}`,
-        part_number: pn,
-        description: desc,
-        category_id: 'cat-display'
-      });
-    } else {
-      const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
-      const siteQuantities = {};
-      let totalAlloc = 0;
-      activeServiceSites.forEach((s, sIdx) => {
-        const q = allocatedBranchQuantities[sIdx] || 0;
-        siteQuantities[s.id] = q;
-        siteQuantities[s.code] = q;
-        totalAlloc += q;
-      });
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
 
-      const totalCost = totalAlloc * pricing.stockingPrice;
-      const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
-
-      allocations.push({
-        part_id: `part-${pn}`,
-        part_number: pn,
-        description: desc,
-        category_id: 'cat-display',
-        forecasted_qty: computedForecast,
-        stocking_price: pricing.stockingPrice,
-        exchange_price: pricing.exchangePrice,
-        total_allocated_qty: totalAlloc,
-        total_stock_cost: totalCost,
-        w1_qty: split.w1_qty,
-        w2_qty: split.w2_qty,
-        w3_qty: split.w3_qty,
-        w4_qty: split.w4_qty,
-        w1_cost: split.w1_cost,
-        w2_cost: split.w2_cost,
-        w3_cost: split.w3_cost,
-        w4_cost: split.w4_cost,
-        site_quantities: siteQuantities
-      });
-    }
+    allocations.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: 'cat-display',
+      forecasted_qty: computedForecast,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
+      site_quantities: siteQuantities
+    });
 
     parts.push({
       id: `part-${pn}`,
@@ -1532,10 +1575,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     };
 
     const pn = pData.partNumber;
-    let computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
-    if ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined) {
-      computedForecast = CANONICAL_AUGUST_2026_FORECASTS[desc];
-    }
+    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
@@ -1552,53 +1592,39 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     });
 
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const seedAlloc = (targetMonthIdx === 7 || defaultFileMonthIdx === 7)
-      ? canonicalAugustAllocations.find(a => a.description === desc || a.part_number === pn)
-      : null;
+    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+    const siteQuantities = {};
+    let totalAlloc = 0;
+    activeServiceSites.forEach((s, sIdx) => {
+      const q = allocatedBranchQuantities[sIdx] || 0;
+      siteQuantities[s.id] = q;
+      siteQuantities[s.code] = q;
+      totalAlloc += q;
+    });
 
-    if (seedAlloc) {
-      allocations.push({
-        ...seedAlloc,
-        part_id: `part-${pn}`,
-        part_number: pn,
-        description: desc,
-        category_id: 'cat-battery'
-      });
-    } else {
-      const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
-      const siteQuantities = {};
-      let totalAlloc = 0;
-      activeServiceSites.forEach((s, sIdx) => {
-        const q = allocatedBranchQuantities[sIdx] || 0;
-        siteQuantities[s.id] = q;
-        siteQuantities[s.code] = q;
-        totalAlloc += q;
-      });
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
 
-      const totalCost = totalAlloc * pricing.stockingPrice;
-      const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
-
-      allocations.push({
-        part_id: `part-${pn}`,
-        part_number: pn,
-        description: desc,
-        category_id: 'cat-battery',
-        forecasted_qty: computedForecast,
-        stocking_price: pricing.stockingPrice,
-        exchange_price: pricing.exchangePrice,
-        total_allocated_qty: totalAlloc,
-        total_stock_cost: totalCost,
-        w1_qty: split.w1_qty,
-        w2_qty: split.w2_qty,
-        w3_qty: split.w3_qty,
-        w4_qty: split.w4_qty,
-        w1_cost: split.w1_cost,
-        w2_cost: split.w2_cost,
-        w3_cost: split.w3_cost,
-        w4_cost: split.w4_cost,
-        site_quantities: siteQuantities
-      });
-    }
+    allocations.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: 'cat-battery',
+      forecasted_qty: computedForecast,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
+      site_quantities: siteQuantities
+    });
 
     parts.push({
       id: `part-${pn}`,
@@ -1606,6 +1632,79 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       description: desc,
       category_id: 'cat-battery',
       iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      safety_stock_pct: 0.05,
+      is_active: true
+    });
+
+    currentRowNumber++;
+  });
+
+  // 3. Process Any Additional Parts Discovered in the Raw Dataset
+  partMap.forEach((pData, desc) => {
+    if (CANONICAL_DISPLAY_DESCS.includes(desc) || CANONICAL_BATTERY_DESCS.includes(desc)) {
+      return;
+    }
+    const pn = pData.partNumber;
+    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
+    const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
+
+    forecastItems.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: pData.category_id || 'cat-other',
+      ytd_monthly_counts: pData.months,
+      computed_forecast: computedForecast,
+      admin_override: null,
+      final_forecast: computedForecast,
+      safety_stock_units: recOrder.safetyUnits,
+      recommended_order: recOrder.recommendedOrder
+    });
+
+    const pricing = lookupPartPrice(pn, desc, existingParts);
+    const customShareMatrix = buildDynamicShareMatrix([desc], pData.category_id || 'cat-other');
+    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, customShareMatrix, 0);
+    const siteQuantities = {};
+    let totalAlloc = 0;
+    activeServiceSites.forEach((s, sIdx) => {
+      const q = allocatedBranchQuantities[sIdx] || 0;
+      siteQuantities[s.id] = q;
+      siteQuantities[s.code] = q;
+      totalAlloc += q;
+    });
+
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+
+    allocations.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: pData.category_id || 'cat-other',
+      forecasted_qty: computedForecast,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
+      site_quantities: siteQuantities
+    });
+
+    parts.push({
+      id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: pData.category_id || 'cat-other',
+      iphone_model: desc.replace(/^(Battery|Display|Camera|Back Glass),?\s*/i, ''),
       stocking_price: pricing.stockingPrice,
       exchange_price: pricing.exchangePrice,
       safety_stock_pct: 0.05,
@@ -3556,4 +3655,290 @@ export function downloadSampleStockTransfersTemplate(format = 'xlsx') {
     XLSX.writeFile(wb, 'Reports_Stock_Transfers_Template.xlsx');
   }
 }
+
+/**
+ * Export Comprehensive Multi-Tab Forecasting Report to Excel
+ */
+export async function exportForecastingReportToExcel(forecastItems = [], siteAllocations = [], metadata = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'MDC DC System 2';
+  workbook.created = new Date();
+  const periodLabel = metadata?.periodLabel || 'September 2026';
+
+  // 1. Sheet 1: Master Forecast Ledger
+  const ws1 = workbook.addWorksheet('Forecast Master Ledger', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  const resolveStockPrice = (item) => {
+    if (!item) return 100;
+    if (typeof item.stocking_price === 'number' && item.stocking_price > 0) return item.stocking_price;
+    const desc = String(item.description || item.part_name || '').toLowerCase();
+    if (desc.includes('display')) return 279;
+    if (desc.includes('battery')) return 89;
+    if (desc.includes('camera')) return 129;
+    if (desc.includes('glass') || desc.includes('back')) return 99;
+    if (desc.includes('rear') || desc.includes('mid')) return 119;
+    return 100;
+  };
+
+  const totalForecastUnits = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
+  const totalValuation = forecastItems.reduce((s, it) => {
+    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
+    const price = resolveStockPrice(it);
+    return s + (qty * price);
+  }, 0);
+
+  // Title Banner
+  ws1.mergeCells('A1:L1');
+  const tCell = ws1.getCell('A1');
+  tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Fixably Demand Forecasting Report (${periodLabel})`;
+  tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(1).height = 28;
+
+  // KPI Row
+  ws1.mergeCells('A2:D2');
+  const k1 = ws1.getCell('A2');
+  k1.value = `TOTAL PART MODELS: ${forecastItems.length} SKUs`;
+  k1.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  k1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+  k1.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('E2:H2');
+  const k2 = ws1.getCell('E2');
+  k2.value = `TOTAL RECOMMENDED FORECAST: ${totalForecastUnits.toLocaleString()} units`;
+  k2.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  k2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+  k2.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('I2:L2');
+  const k3 = ws1.getCell('I2');
+  k3.value = `PROJECTED STOCK VALUATION: $${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  k3.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  k3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15803D' } };
+  k3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(2).height = 22;
+
+  const headers1 = [
+    'Part Number',
+    'Description',
+    'iPhone Model',
+    'Commodity',
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+    'Base Forecast',
+    'Admin Override',
+    'Final Forecast',
+    'Stocking Price ($)',
+    'Total Cost ($)'
+  ];
+
+  const headerRow1 = ws1.addRow(headers1);
+  headerRow1.height = 26;
+  headerRow1.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  forecastItems.forEach((it) => {
+    const monthly = it.ytd_monthly_counts || [];
+    const base = it.computed_forecast ?? 0;
+    const override = it.admin_override ?? '';
+    const finalVal = it.final_forecast ?? base;
+    const price = resolveStockPrice(it);
+    const cost = finalVal * price;
+
+    const row = ws1.addRow([
+      sanitizeForSpreadsheet(it.part_number || ''),
+      sanitizeForSpreadsheet(it.description || ''),
+      sanitizeForSpreadsheet(it.iphone_model || ''),
+      sanitizeForSpreadsheet(it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General')),
+      monthly[0] || 0,
+      monthly[1] || 0,
+      monthly[2] || 0,
+      monthly[3] || 0,
+      monthly[4] || 0,
+      monthly[5] || 0,
+      monthly[6] || 0,
+      monthly[7] || 0,
+      base,
+      override,
+      finalVal,
+      price,
+      cost
+    ]);
+    row.height = 20;
+
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum >= 5 && cNum <= 15) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum >= 16) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  ws1.columns = [
+    { width: 14 }, // PN
+    { width: 28 }, // Desc
+    { width: 20 }, // Model
+    { width: 14 }, // Commodity
+    { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, // Months
+    { width: 14 }, // Base
+    { width: 14 }, // Override
+    { width: 14 }, // Final
+    { width: 16 }, // Price
+    { width: 18 }  // Cost
+  ];
+
+  // 2. Sheet 2: Branch Demand Distribution
+  if (siteAllocations && siteAllocations.length > 0) {
+    const ws2 = workbook.addWorksheet('Branch Demand Matrix', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+    });
+
+    ws2.mergeCells('A1:F1');
+    const tCell2 = ws2.getCell('A1');
+    tCell2.value = `MOBILE CARE SERVICES PHILS. INC. — Service Branch Demand Distribution (${periodLabel})`;
+    tCell2.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+    tCell2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    tCell2.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws2.getRow(1).height = 28;
+
+    const headers2 = ['Branch Code', 'Branch Name', 'Region', 'Total Forecast Units', 'Projected Stock Value ($)', '% Share of DC Demand'];
+    const hRow2 = ws2.addRow(headers2);
+    hRow2.height = 26;
+    hRow2.eachCell((cell) => {
+      cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    siteAllocations.forEach(site => {
+      const row = ws2.addRow([
+        sanitizeForSpreadsheet(site.code || ''),
+        sanitizeForSpreadsheet(site.name || ''),
+        sanitizeForSpreadsheet(site.region || 'Metro Manila'),
+        site.totalUnits || 0,
+        site.totalVal || 0,
+        ((site.pct || 0) / 100)
+      ]);
+      row.height = 20;
+      row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+        cell.font = { name: 'Arial', size: 9 };
+        if (cNum === 4) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (cNum === 5) {
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          cell.numFmt = '$#,##0.00';
+        }
+        if (cNum === 6) {
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          cell.numFmt = '0.0%';
+        }
+      });
+    });
+
+    ws2.columns = [
+      { width: 14 },
+      { width: 34 },
+      { width: 18 },
+      { width: 20 },
+      { width: 24 },
+      { width: 22 }
+    ];
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Fixably_Forecasting_Report_${periodLabel.replace(/\s+/g, '_')}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads a sample template for Fixably Forecasting
+ */
+export function downloadSampleFixablyForecastingTemplate(format = 'xlsx') {
+  const sample = [
+    {
+      'Part Number': '661-21991',
+      'Description': 'Battery, iPhone 13',
+      'Model': 'iPhone 13',
+      'Commodity': 'Battery',
+      'Jan': 42,
+      'Feb': 38,
+      'Mar': 45,
+      'Apr': 50,
+      'May': 48,
+      'Jun': 52,
+      'Jul': 55,
+      'Aug': 58,
+      'Stocking Price': 49.00
+    },
+    {
+      'Part Number': '661-21988',
+      'Description': 'Display, iPhone 13',
+      'Model': 'iPhone 13',
+      'Commodity': 'Display',
+      'Jan': 28,
+      'Feb': 24,
+      'Mar': 30,
+      'Apr': 32,
+      'May': 31,
+      'Jun': 35,
+      'Jul': 34,
+      'Aug': 38,
+      'Stocking Price': 149.00
+    },
+    {
+      'Part Number': '661-56050',
+      'Description': 'Display, iPhone 17 Pro Max',
+      'Model': 'iPhone 17 Pro Max',
+      'Commodity': 'Display',
+      'Jan': 10,
+      'Feb': 15,
+      'Mar': 20,
+      'Apr': 25,
+      'May': 30,
+      'Jun': 35,
+      'Jul': 42,
+      'Aug': 48,
+      'Stocking Price': 329.00
+    }
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(sample);
+  if (format === 'csv') {
+    const csv = XLSX.utils.sheet_to_csv(ws);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Fixably_Forecasting_Masterlist_Template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } else {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Forecasting Masterlist');
+    XLSX.writeFile(wb, 'Fixably_Forecasting_Masterlist_Template.xlsx');
+  }
+}
+
 

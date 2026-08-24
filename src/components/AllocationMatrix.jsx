@@ -20,7 +20,8 @@ import {
   BatteryCharging,
   BookmarkPlus,
   RefreshCw,
-  Calendar
+  Calendar,
+  RotateCcw
 } from 'lucide-react';
 
 export default function AllocationMatrix() {
@@ -35,7 +36,8 @@ export default function AllocationMatrix() {
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    activePeriod
+    activePeriod,
+    clearAllData
   } = useApp();
 
   // View Mode: 'sheet' (Master) | 'week-1' | 'week-2' | 'week-3' | 'week-4' | 'shares'
@@ -563,6 +565,16 @@ export default function AllocationMatrix() {
             >
               <Printer size={14} />
               <span>Print Matrix</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={clearAllData}
+              title="Clear all allocation and forecasting records to empty state"
+              style={{ fontWeight: 600, padding: '6px 14px', color: '#b91c1c' }}
+            >
+              <RotateCcw size={14} />
+              <span>Clear Data</span>
             </button>
           </div>
         </div>

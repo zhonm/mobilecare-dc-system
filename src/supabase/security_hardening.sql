@@ -36,6 +36,11 @@ DO $$ BEGIN
         FOR UPDATE TO public USING (true) WITH CHECK (true);
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 
+DO $$ BEGIN
+    CREATE POLICY "Allow authenticated delete profiles" ON profiles
+        FOR DELETE TO public USING (true);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+
 -- 4. Hardened Policies for Saved Period Records & Intake Records
 DO $$ BEGIN
     CREATE POLICY "Allow read saved_records" ON saved_records
@@ -53,6 +58,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 DO $$ BEGIN
+    CREATE POLICY "Allow delete saved_records" ON saved_records
+        FOR DELETE TO public USING (true);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+DO $$ BEGIN
     CREATE POLICY "Allow read dc_intake_records" ON dc_intake_records
         FOR SELECT TO public USING (true);
 EXCEPTION WHEN duplicate_object THEN null; END $$;
@@ -65,6 +75,11 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 DO $$ BEGIN
     CREATE POLICY "Allow update dc_intake_records" ON dc_intake_records
         FOR UPDATE TO public USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+DO $$ BEGIN
+    CREATE POLICY "Allow delete dc_intake_records" ON dc_intake_records
+        FOR DELETE TO public USING (true);
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- 5. Inventory Units Security
@@ -81,4 +96,9 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 DO $$ BEGIN
     CREATE POLICY "Allow update inventory_units" ON inventory_units
         FOR UPDATE TO public USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+DO $$ BEGIN
+    CREATE POLICY "Allow delete inventory_units" ON inventory_units
+        FOR DELETE TO public USING (true);
 EXCEPTION WHEN duplicate_object THEN null; END $$;

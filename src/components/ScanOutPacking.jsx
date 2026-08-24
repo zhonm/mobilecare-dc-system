@@ -23,7 +23,15 @@ import {
   Database,
   Eye,
   History,
-  Calendar
+  Calendar,
+  Boxes,
+  Layers,
+  Copy,
+  ListOrdered,
+  Plus,
+  Building2,
+  MapPin,
+  ChevronDown
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 
@@ -31,6 +39,8 @@ export default function ScanOutPacking() {
   const {
     sites,
     inventoryUnits,
+    parts,
+    categories,
     allocations,
     shipments,
     saveShipment,
@@ -39,12 +49,29 @@ export default function ScanOutPacking() {
     removeScanOutUnit,
     batchAddScanOutUnits,
     clearShipmentDraftItems,
+    activePackDraft,
+    syncActivePackDraftToCloud,
     currentUser,
-    showToast
+    showToast,
+    autoRefreshData,
+    isAutoRefreshing
   } = useApp();
 
-  const serviceSites = sites.filter(s => !s.is_dc);
-  const [selectedSiteId, setSelectedSiteId] = useState(serviceSites[0]?.id || '');
+  const serviceSites = useMemo(() => {
+    return (sites || []).filter(s => !s.is_dc);
+  }, [sites]);
+
+  const [selectedSiteId, setSelectedSiteId] = useState(() => serviceSites[0]?.id || '');
+
+  const selectedSite = useMemo(() => {
+    return sites.find(s => s.id === selectedSiteId) || serviceSites[0] || {};
+  }, [sites, selectedSiteId, serviceSites]);
+
+  // Pop-up Site Selection Modal State
+  const [isSiteModalOpen, setIsSiteModalOpen] = useState(false);
+  const [siteSearchQuery, setSiteSearchQuery] = useState('');
+  const [siteRegionFilter, setSiteRegionFilter] = useState('ALL');
+
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [boxNumber, setBoxNumber] = useState(1);
   const [inspectShipmentModal, setInspectShipmentModal] = useState(null);
@@ -56,8 +83,11 @@ export default function ScanOutPacking() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.id) {
+          const rawTrk = parsed.tracking_number;
+          const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
           return {
             ...parsed,
+            tracking_number: cleanTrk,
             prepared_by_name: currentUser?.fullName || parsed.prepared_by_name || ''
           };
         }
@@ -67,20 +97,23 @@ export default function ScanOutPacking() {
     }
     const existing = shipments.find(s => s.site_id === serviceSites[0]?.id && s.status === 'draft');
     if (existing) {
+      const rawTrk = existing.tracking_number;
+      const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
       return {
         ...existing,
+        tracking_number: cleanTrk,
         prepared_by_name: currentUser?.fullName || existing.prepared_by_name || ''
       };
     }
     return {
       id: `ship-${Date.now()}`,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
-      invoice_ref: `DCMSPIOWNED#20260808G`,
+      invoice_ref: `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`,
       site_id: serviceSites[0]?.id,
       week_number: 1,
       shipment_date: new Date().toLocaleDateString('en-US'),
       carrier: 'Lite Express',
-      tracking_number: '20227258',
+      tracking_number: '',
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
@@ -90,6 +123,10 @@ export default function ScanOutPacking() {
       items: []
     };
   });
+
+  // Tracking Number Required Prompt Modal State
+  const [trackingModalState, setTrackingModalState] = useState(null);
+  // trackingModalState: { shipment, items, site, action: 'print' | 'pdf', isDraft, trackingInput, carrierInput }
 
   // Automatically synchronize Prepared By with currently logged-in user's full name
   useEffect(() => {
@@ -101,14 +138,89 @@ export default function ScanOutPacking() {
     }
   }, [currentUser?.fullName, currentUser?.id]);
 
-  // Keep active draft synced to LocalStorage
+  // Ref to track timestamp of local workstation edits (prevents race conditions with cloud broadcasts)
+  const lastLocalEditTimeRef = useRef(0);
+
+  // Synchronize incoming activePackDraft from cloud to local currentShipment across all users
   useEffect(() => {
-    try {
-      localStorage.setItem('mdc_active_pack_draft', JSON.stringify(currentShipment));
-    } catch (e) {
-      console.warn('Could not persist pack draft:', e);
+    // Check if the current local shipment has already been saved/finalized in the database
+    const isCurrentShipmentSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
+
+    // Case 1: If current shipment was finalized and saved into database history, reset local workstation
+    if (isCurrentShipmentSaved) {
+      const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`;
+      const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+      try {
+        localStorage.removeItem('mdc_active_pack_draft');
+      } catch (e) {}
+      setCurrentShipment({
+        id: `ship-${Date.now()}`,
+        shipment_number: nextShipmentNumber,
+        invoice_ref: nextInvoiceRef,
+        site_id: selectedSiteId,
+        week_number: selectedWeek,
+        shipment_date: new Date().toLocaleDateString('en-US'),
+        carrier: 'Lite Express',
+        tracking_number: '',
+        total_boxes: 1,
+        status: 'draft',
+        prepared_by_name: currentUser?.fullName || '',
+        verified_by_name: 'Zhon Manaois',
+        receiving_signature: selectedSite?.code || 'ASP NPM',
+        remarks: 'KGB PARTS',
+        items: []
+      });
+      return;
     }
-  }, [currentShipment]);
+
+    // Case 2: Incoming active draft with items from cloud
+    if (activePackDraft && activePackDraft.id && Array.isArray(activePackDraft.items) && activePackDraft.items.length > 0) {
+      // If the incoming cloud draft is already marked as finalized/saved in shipments, ignore it
+      const isCloudDraftSaved = shipments.some(s => s.id === activePackDraft.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
+      if (isCloudDraftSaved) return;
+
+      // If this browser recently made a local edit within the last 4 seconds and has at least as many items, protect local items from stale cloud overwrite
+      const isRecentLocalEdit = (Date.now() - lastLocalEditTimeRef.current) < 4000;
+      if (isRecentLocalEdit && (currentShipment?.items || []).length >= activePackDraft.items.length) {
+        return;
+      }
+
+      setCurrentShipment(prev => {
+        // If current local shipment already has all items or is ahead, keep local
+        if (prev.id === activePackDraft.id && (prev.items || []).length >= activePackDraft.items.length) {
+          return prev;
+        }
+        const rawTrk = activePackDraft.tracking_number;
+        const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
+        return {
+          ...activePackDraft,
+          tracking_number: cleanTrk,
+          prepared_by_name: currentUser?.fullName || activePackDraft.prepared_by_name || ''
+        };
+      });
+    }
+  }, [activePackDraft, shipments, selectedSiteId, selectedWeek, selectedSite?.code, currentUser?.fullName, currentShipment?.id, currentShipment?.items?.length]);
+
+  // Keep active draft synced to LocalStorage and Supabase Cloud
+  useEffect(() => {
+    // If this shipment is already finalized/saved in database history, do NOT sync it as an active draft
+    const isSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
+    if (isSaved) return;
+
+    if (currentShipment?.items && currentShipment.items.length > 0) {
+      try {
+        localStorage.setItem('mdc_active_pack_draft', JSON.stringify(currentShipment));
+      } catch (e) {
+        console.warn('Could not persist pack draft:', e);
+      }
+      syncActivePackDraftToCloud(currentShipment);
+    } else {
+      try {
+        localStorage.removeItem('mdc_active_pack_draft');
+      } catch (e) {}
+      syncActivePackDraftToCloud(null);
+    }
+  }, [currentShipment, shipments, syncActivePackDraftToCloud]);
 
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
@@ -128,10 +240,6 @@ export default function ScanOutPacking() {
   const pnInputRef = useRef(null);
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
-
-  const selectedSite = useMemo(() => {
-    return sites.find(s => s.id === selectedSiteId) || serviceSites[0] || {};
-  }, [sites, selectedSiteId, serviceSites]);
 
   const branchAllocationProgress = useMemo(() => {
     if (!allocations || allocations.length === 0 || !selectedSite?.id) return null;
@@ -168,6 +276,37 @@ export default function ScanOutPacking() {
     }));
   };
 
+  // Filtered sites for Pop-up Modal
+  const availableRegions = useMemo(() => {
+    const set = new Set(serviceSites.map(s => s.region || 'Metro Manila'));
+    return ['ALL', ...Array.from(set)];
+  }, [serviceSites]);
+
+  const filteredServiceSites = useMemo(() => {
+    return serviceSites.filter(site => {
+      if (siteRegionFilter !== 'ALL' && (site.region || 'Metro Manila') !== siteRegionFilter) {
+        return false;
+      }
+      if (siteSearchQuery.trim()) {
+        const q = siteSearchQuery.toLowerCase().trim();
+        const code = (site.code || '').toLowerCase();
+        const name = (site.name || '').toLowerCase();
+        const region = (site.region || '').toLowerCase();
+        const addr = (site.address || site.full_address || '').toLowerCase();
+        const contact = (site.contact_person || '').toLowerCase();
+        const shipTo = (site.ship_to || '').toLowerCase();
+        return code.includes(q) || name.includes(q) || region.includes(q) || addr.includes(q) || contact.includes(q) || shipTo.includes(q);
+      }
+      return true;
+    });
+  }, [serviceSites, siteRegionFilter, siteSearchQuery]);
+
+  const handleSelectSiteFromModal = (site) => {
+    handleSiteChange(site.id);
+    setIsSiteModalOpen(false);
+    showToast(`Destination branch set to ${site.code} (${site.name})`, 'success');
+  };
+
   // Keyboard HID submission handlers
   const handlePnKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -193,6 +332,8 @@ export default function ScanOutPacking() {
       setScanResult({ type: 'error', message: 'Please scan both Part Number and Serial Number' });
       return;
     }
+
+    lastLocalEditTimeRef.current = Date.now();
 
     const res = addScanOutUnit({
       shipmentId: currentShipment.id,
@@ -224,32 +365,161 @@ export default function ScanOutPacking() {
     }
   };
 
-  // Quick simulator for testing pack-out
-  const availableStockUnits = inventoryUnits.filter(u => u.status === 'in_stock');
+  // Packed serial numbers in active draft set for O(1) deduplication
+  const packedSerialsSet = useMemo(() => {
+    const set = new Set();
+    (currentShipment?.items || []).forEach(it => {
+      const s = String(it.serial_number || '').trim().toUpperCase();
+      if (s) set.add(s);
+    });
+    return set;
+  }, [currentShipment.items]);
+
+  // Reliable Available Stock Calculation (excluding items already in active draft)
+  const availableStockUnits = useMemo(() => {
+    return (inventoryUnits || []).filter(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      if (packedSerialsSet.has(cleanSerial)) return false;
+      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+    });
+  }, [inventoryUnits, packedSerialsSet]);
+
+  // State for upgraded Available Stock Verification UI
+  const [stockSearch, setStockSearch] = useState('');
+  const [stockCategoryTab, setStockCategoryTab] = useState('ALL'); // 'ALL' | category code
+  const [stockViewMode, setStockViewMode] = useState('SUMMARY'); // 'SUMMARY' | 'SERIALIZED' | 'CHIPS'
+  const [stockInspectUnit, setStockInspectUnit] = useState(null); // unit for detail modal
+  const [copiedSerial, setCopiedSerial] = useState(null);
+
+  const handleCopySerial = (serial) => {
+    if (!serial) return;
+    try {
+      navigator.clipboard?.writeText(serial);
+      setCopiedSerial(serial);
+      showToast(`Copied serial #${serial} to clipboard`, 'info');
+      setTimeout(() => setCopiedSerial(null), 2500);
+    } catch (e) {}
+  };
+
+  const getCategoryBadgeStyle = (catCode = '') => {
+    const code = String(catCode).toUpperCase();
+    if (code.includes('BATTERY')) return { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' };
+    if (code.includes('DISPLAY')) return { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' };
+    if (code.includes('CAMERA')) return { background: '#f3e8ff', color: '#7e22ce', border: '1px solid #e9d5ff' };
+    if (code.includes('BACK') || code.includes('GLASS')) return { background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' };
+    if (code.includes('MID') || code.includes('REAR')) return { background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca' };
+    return { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' };
+  };
+
+  // Enrich available stock units with part catalog info
+  const enrichedStockUnits = useMemo(() => {
+    const partsMap = new Map((parts || []).map(p => [String(p.part_number || '').toUpperCase(), p]));
+    const catMap = new Map((categories || []).map(c => [c.id, c]));
+
+    return availableStockUnits.map(unit => {
+      const pn = String(unit.part_number || '').toUpperCase();
+      const partInfo = partsMap.get(pn);
+      const categoryObj = partInfo?.category_id ? catMap.get(partInfo.category_id) : null;
+      const categoryName = categoryObj?.name || (pn.startsWith('661-') ? 'Apple Part' : 'General');
+      const categoryCode = categoryObj?.code || 'GENERAL';
+      const iphoneModel = partInfo?.iphone_model || unit.iphone_model || '';
+
+      return {
+        ...unit,
+        description: unit.description || partInfo?.description || 'Service Replacement Part',
+        iphone_model: iphoneModel,
+        category_name: categoryName,
+        category_code: categoryCode,
+        stocking_price: partInfo?.stocking_price || 0
+      };
+    });
+  }, [availableStockUnits, parts, categories]);
+
+  // Filtered Stock Units based on search & category
+  const filteredStockUnits = useMemo(() => {
+    return enrichedStockUnits.filter(u => {
+      // Category filter
+      if (stockCategoryTab !== 'ALL') {
+        const targetCode = stockCategoryTab.toUpperCase();
+        const uCode = (u.category_code || '').toUpperCase();
+        const uName = (u.category_name || '').toUpperCase();
+        if (uCode !== targetCode && !uName.includes(targetCode)) {
+          return false;
+        }
+      }
+      // Search filter
+      if (stockSearch.trim()) {
+        const q = stockSearch.toLowerCase().trim();
+        const matchesPn = (u.part_number || '').toLowerCase().includes(q);
+        const matchesSn = (u.serial_number || '').toLowerCase().includes(q);
+        const matchesDesc = (u.description || '').toLowerCase().includes(q);
+        const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
+        const matchesCat = (u.category_name || '').toLowerCase().includes(q);
+        if (!matchesPn && !matchesSn && !matchesDesc && !matchesModel && !matchesCat) return false;
+      }
+      return true;
+    });
+  }, [enrichedStockUnits, stockCategoryTab, stockSearch]);
+
+  // Grouped Stock Summary by Part Number
+  const groupedStockSummary = useMemo(() => {
+    const map = new Map();
+    filteredStockUnits.forEach(u => {
+      const pn = (u.part_number || '').toUpperCase();
+      if (!map.has(pn)) {
+        map.set(pn, {
+          part_number: u.part_number,
+          description: u.description,
+          iphone_model: u.iphone_model,
+          category_name: u.category_name,
+          category_code: u.category_code,
+          stocking_price: u.stocking_price,
+          totalQty: 0,
+          units: []
+        });
+      }
+      const group = map.get(pn);
+      group.totalQty += 1;
+      group.units.push(u);
+    });
+    return Array.from(map.values()).sort((a, b) => b.totalQty - a.totalQty);
+  }, [filteredStockUnits]);
+
+  const uniquePartTypesCount = useMemo(() => {
+    const set = new Set(availableStockUnits.map(u => (u.part_number || '').toUpperCase()));
+    return set.size;
+  }, [availableStockUnits]);
+
   const handleSimulatePack = (unit) => {
+    lastLocalEditTimeRef.current = Date.now();
     setPartNumberInput(unit.part_number);
     setSerialInput(unit.serial_number);
-    setTimeout(() => {
-      const res = addScanOutUnit({
-        shipmentId: currentShipment.id,
-        siteId: selectedSiteId,
-        partNumber: unit.part_number,
-        serialNumber: unit.serial_number,
-        boxNumber: boxNumber
+    const res = addScanOutUnit({
+      shipmentId: currentShipment.id,
+      siteId: selectedSiteId,
+      partNumber: unit.part_number,
+      serialNumber: unit.serial_number,
+      boxNumber: boxNumber
+    });
+    if (res.success) {
+      setScanResult({
+        type: 'success',
+        message: `[PACKED] ${res.item.description} (#${res.item.serial_number}) into Box ${boxNumber}`
       });
-      if (res.success) {
-        setScanResult({
-          type: 'success',
-          message: `[PACKED] ${res.item.description} (#${res.item.serial_number})`
-        });
-        setCurrentShipment(prev => ({
-          ...prev,
-          items: [...(prev.items || []), res.item]
-        }));
-      } else {
-        setScanResult({ type: 'error', message: res.error });
-      }
-    }, 150);
+      setCurrentShipment(prev => ({
+        ...prev,
+        items: [...(prev.items || []), res.item]
+      }));
+      setSerialInput('');
+    } else {
+      setScanResult({ type: 'error', message: res.error });
+    }
+  };
+
+  const handlePackNextForPart = (partGroup) => {
+    if (!partGroup.units || partGroup.units.length === 0) return;
+    const nextUnit = partGroup.units[0];
+    handleSimulatePack(nextUnit);
   };
 
   // --- XLSX / CSV File Import Handling ---
@@ -288,6 +558,8 @@ export default function ScanOutPacking() {
       return;
     }
 
+    lastLocalEditTimeRef.current = Date.now();
+
     const res = batchAddScanOutUnits({
       shipmentId: currentShipment.id,
       siteId: selectedSiteId,
@@ -315,6 +587,7 @@ export default function ScanOutPacking() {
 
   // --- Safe Individual Item Removal (returns part to DC stock) ---
   const handleRemoveItem = (serialNumber) => {
+    lastLocalEditTimeRef.current = Date.now();
     const res = removeScanOutUnit({
       shipmentId: currentShipment.id,
       serialNumber: serialNumber
@@ -340,6 +613,7 @@ export default function ScanOutPacking() {
     try {
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {}
+    syncActivePackDraftToCloud(null);
 
     // Generate fresh new draft so the user can start a new packing list for another site
     const newDraftId = `ship-${Date.now()}`;
@@ -353,7 +627,7 @@ export default function ScanOutPacking() {
       week_number: selectedWeek,
       shipment_date: new Date().toLocaleDateString('en-US'),
       carrier: 'Lite Express',
-      tracking_number: '20227258',
+      tracking_number: '',
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
@@ -369,35 +643,44 @@ export default function ScanOutPacking() {
   };
 
   // --- Combined Action: Save to Database & Finalize Packing List ---
-  const handleFinalizeShipment = () => {
+  const handleFinalizeShipment = async () => {
     if (!currentShipment.items || currentShipment.items.length === 0) {
       showToast('Cannot finalize an empty packing list. Please add parts first.', 'error');
       return;
     }
 
     try {
+      const cleanTracking = String(currentShipment.tracking_number || '').trim();
       const finalized = {
         ...currentShipment,
         id: currentShipment.id || `ship-${Date.now()}`,
+        tracking_number: cleanTracking,
         status: 'shipped',
         created_at: currentShipment.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
 
-      // 1. Permanently save to Database History and Cloud DB
-      saveShipment(finalized);
+      // 1. Permanently save to Database History and Cloud DB (AWAITED)
+      await saveShipment(finalized);
 
-      // 2. Automatically generate and download formatted corporate PDF
-      try {
-        generatePackingListPDF(finalized, finalized.items || [], selectedSite);
-      } catch (pdfErr) {
-        console.warn('PDF generation note:', pdfErr);
+      // 2. Automatically generate and download formatted corporate PDF ONLY if tracking number is provided
+      if (cleanTracking) {
+        try {
+          generatePackingListPDF(finalized, finalized.items || [], selectedSite);
+          showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database with PDF downloaded!`, 'success');
+        } catch (pdfErr) {
+          console.warn('PDF generation note:', pdfErr);
+          showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database!`, 'success');
+        }
+      } else {
+        showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database! (Tracking # is blank — PDF download skipped until tracking # is provided).`, 'success');
       }
       
-      // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
+      // 3. Reset draft from localStorage, cloud, and initialize fresh workstation for next shipment
       try {
         localStorage.removeItem('mdc_active_pack_draft');
       } catch (e) {}
+      syncActivePackDraftToCloud(null);
 
       const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
       const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
@@ -410,7 +693,7 @@ export default function ScanOutPacking() {
         week_number: selectedWeek,
         shipment_date: new Date().toLocaleDateString('en-US'),
         carrier: 'Lite Express',
-        tracking_number: '20227258',
+        tracking_number: '',
         total_boxes: 1,
         status: 'draft',
         prepared_by_name: currentUser?.fullName || '',
@@ -421,11 +704,70 @@ export default function ScanOutPacking() {
       });
 
       setScanResult(null);
-      showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database! Station ready for next shipment.`, 'success');
     } catch (err) {
       console.error('Finalize shipment error:', err);
       showToast('Error saving and finalizing packing list: ' + err.message, 'error');
     }
+  };
+
+  // --- Safe Print / PDF Request Handler (Requires Tracking Number) ---
+  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'print', isDraft = false) => {
+    const trk = String(shipmentObj.tracking_number || '').trim();
+    if (!trk) {
+      // Prompt user to provide tracking number before printing/downloading PDF
+      setTrackingModalState({
+        shipment: shipmentObj,
+        items: items || [],
+        site: siteObj || {},
+        action,
+        isDraft,
+        trackingInput: '',
+        carrierInput: shipmentObj.carrier || 'Lite Express'
+      });
+      return;
+    }
+
+    if (action === 'pdf') {
+      generatePackingListPDF(shipmentObj, items || [], siteObj || {});
+      showToast(`Downloaded PDF for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    } else {
+      printPackingListDirect(shipmentObj, items || [], siteObj || {});
+    }
+  };
+
+  const handleConfirmTrackingModal = async () => {
+    if (!trackingModalState) return;
+    const cleanTrk = String(trackingModalState.trackingInput || '').trim();
+    if (!cleanTrk) {
+      showToast('Please enter a tracking number before printing/downloading PDF.', 'warning');
+      return;
+    }
+
+    const updatedShipment = {
+      ...trackingModalState.shipment,
+      tracking_number: cleanTrk,
+      carrier: trackingModalState.carrierInput || trackingModalState.shipment.carrier || 'Lite Express'
+    };
+
+    if (trackingModalState.isDraft) {
+      setCurrentShipment(prev => ({
+        ...prev,
+        tracking_number: cleanTrk,
+        carrier: updatedShipment.carrier
+      }));
+    } else {
+      await saveShipment(updatedShipment);
+    }
+
+    showToast(`Tracking number #${cleanTrk} saved!`, 'success');
+
+    if (trackingModalState.action === 'pdf') {
+      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site);
+    } else {
+      printPackingListDirect(updatedShipment, trackingModalState.items, trackingModalState.site);
+    }
+
+    setTrackingModalState(null);
   };
 
   const filteredManifestItems = useMemo(() => {
@@ -499,19 +841,61 @@ export default function ScanOutPacking() {
         {/* Site & Batch Selectors */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
           <div>
-            <label className="scanner-field-label">Destination Service Site</label>
-            <select
-              className="form-select"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-              value={selectedSiteId}
-              onChange={(e) => handleSiteChange(e.target.value)}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <label className="scanner-field-label" style={{ margin: 0 }}>Destination Service Site</label>
+              <button
+                type="button"
+                onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
+                style={{
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  color: '#38bdf8',
+                  borderRadius: '4px',
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                title="Search across all 26+ branch sites"
+              >
+                <Search size={11} />
+                <span>Search ({serviceSites.length})</span>
+              </button>
+            </div>
+
+            <div
+              onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
+              style={{
+                width: '100%',
+                background: '#1e293b',
+                color: '#fff',
+                border: '1px solid #334155',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                height: '42px',
+                boxSizing: 'border-box'
+              }}
+              title="Click to search and select destination branch site"
             >
-              {serviceSites.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.code} - {s.name}
-                </option>
-              ))}
-            </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                <Building2 size={16} color="#38bdf8" style={{ flexShrink: 0 }} />
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <strong style={{ color: '#38bdf8' }}>{selectedSite.code || 'SELECT SITE'}</strong>
+                  <span style={{ color: '#94a3b8', fontSize: '12px', marginLeft: '6px' }}>
+                    {selectedSite.name || 'Click to select destination branch site'}
+                  </span>
+                </div>
+              </div>
+              <ChevronDown size={15} color="#94a3b8" style={{ flexShrink: 0 }} />
+            </div>
           </div>
 
           <div>
@@ -612,8 +996,8 @@ export default function ScanOutPacking() {
               type="text"
               className="form-input font-mono"
               style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.tracking_number ?? '20227258'}
-              placeholder="e.g. 20227258"
+              value={currentShipment.tracking_number || ''}
+              placeholder="Enter Tracking # (Optional)"
               onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
             />
           </div>
@@ -696,34 +1080,380 @@ export default function ScanOutPacking() {
         )}
       </div>
 
-      {/* Simulator for Available DC Stock */}
-      <div className="card" style={{ marginBottom: '24px', background: '#f8fafc' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Zap size={16} color="var(--primary)" />
-            <strong style={{ fontSize: '13px' }}>Available Stock Units in DC ({availableStockUnits.length} in-stock)</strong>
+      {/* Upgraded Available DC Inventory & Stock Verification Card */}
+      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0' }}>
+        {/* Header with Title, Stats Badges, View Selector */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Boxes size={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a', fontWeight: 700 }}>
+                  Available Stock Units in DC
+                </h3>
+                <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '3px 8px' }}>
+                  {availableStockUnits.length} in-stock
+                </span>
+                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '3px 8px' }}>
+                  {uniquePartTypesCount} Part Models
+                </span>
+                {currentShipment.items && currentShipment.items.length > 0 && (
+                  <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '11px', padding: '3px 8px' }}>
+                    {currentShipment.items.length} In Active Manifest
+                  </span>
+                )}
+              </div>
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                Click any part or serial to pack immediately • Double-check full serials and quantities
+              </p>
+            </div>
           </div>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Click to test single unit packing
-          </span>
+
+          {/* View Mode Switcher */}
+          <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: 'var(--radius-md)', gap: '2px' }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${stockViewMode === 'SUMMARY' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setStockViewMode('SUMMARY')}
+              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Grouped by Part Number with Total Quantities"
+            >
+              <Layers size={13} />
+              <span>Summary by Part ({groupedStockSummary.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${stockViewMode === 'SERIALIZED' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setStockViewMode('SERIALIZED')}
+              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Table view of all serialized units"
+            >
+              <ListOrdered size={13} />
+              <span>All Units Table ({filteredStockUnits.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${stockViewMode === 'CHIPS' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setStockViewMode('CHIPS')}
+              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Quick pack pill buttons for all units"
+            >
+              <Zap size={13} />
+              <span>Quick Chips ({filteredStockUnits.length})</span>
+            </button>
+          </div>
         </div>
 
-        {availableStockUnits.length === 0 ? (
-          <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '8px 0' }}>
-            No units in DC stock. Receive or import parts in the Receive Scan-In page first.
-          </p>
-        ) : (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', maxHeight: '90px', overflowY: 'auto' }}>
-            {availableStockUnits.slice(0, 10).map(unit => (
+        {/* Filter & Search Bar */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
+          {/* Category Tabs */}
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '4px' }}>Filter:</span>
+            <button
+              type="button"
+              className={`btn btn-sm ${stockCategoryTab === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setStockCategoryTab('ALL')}
+              style={{ padding: '3px 8px', fontSize: '11.5px', borderRadius: 'var(--radius-full)' }}
+            >
+              All Parts ({availableStockUnits.length})
+            </button>
+            {categories.map(cat => {
+              const countForCat = enrichedStockUnits.filter(u => u.category_code === cat.code || u.category_name?.toUpperCase().includes(cat.code)).length;
+              if (countForCat === 0 && stockCategoryTab !== cat.code) return null;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  className={`btn btn-sm ${stockCategoryTab === cat.code ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setStockCategoryTab(cat.code)}
+                  style={{ padding: '3px 8px', fontSize: '11.5px', borderRadius: 'var(--radius-full)' }}
+                >
+                  {cat.name} ({countForCat})
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Quick Search in Stock */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ position: 'relative', width: '220px' }}>
+              <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Search P/N, Serial, Model..."
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+                className="form-input"
+                style={{ paddingLeft: '26px', paddingRight: stockSearch ? '24px' : '8px', height: '32px', fontSize: '12px', width: '100%' }}
+              />
+              {stockSearch && (
+                <button
+                  type="button"
+                  onClick={() => setStockSearch('')}
+                  style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {autoRefreshData && (
               <button
-                key={unit.id}
+                type="button"
                 className="btn btn-secondary btn-sm"
-                style={{ fontSize: '11.5px', background: '#fff' }}
-                onClick={() => handleSimulatePack(unit)}
+                onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Stock card refresh' })}
+                disabled={isAutoRefreshing}
+                title="Sync latest stock from database"
+                style={{ height: '32px', padding: '0 8px' }}
               >
-                <span>+ {unit.part_number} ({unit.serial_number.slice(0, 8)}...)</span>
+                <RefreshCw size={12} className={isAutoRefreshing ? 'spin' : ''} />
               </button>
-            ))}
+            )}
+          </div>
+        </div>
+
+        {/* Content Views */}
+        {availableStockUnits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 16px', background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px dashed #cbd5e1' }}>
+            <CheckCircle2 size={32} color="#10b981" style={{ margin: '0 auto 8px' }} />
+            <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', color: '#0f172a' }}>All Available DC Units Packed</h4>
+            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)' }}>
+              {currentShipment.items && currentShipment.items.length > 0
+                ? `All ${currentShipment.items.length} units in DC stock are currently loaded into the active manifest.`
+                : 'No units in DC stock. Receive or import parts in the Receive Scan-In page first.'}
+            </p>
+          </div>
+        ) : filteredStockUnits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '24px 16px', background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px dashed #cbd5e1' }}>
+            <Search size={24} color="#94a3b8" style={{ margin: '0 auto 6px' }} />
+            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)' }}>
+              No available parts match "{stockSearch}". Try adjusting your search term or category filter.
+            </p>
+          </div>
+        ) : stockViewMode === 'SUMMARY' ? (
+          /* View 1: Summary by Part Number with Total Quantities & Clickable Serial Pills */
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '12px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px' }}>
+            {groupedStockSummary.map((group) => {
+              const catBadge = getCategoryBadgeStyle(group.category_code);
+              return (
+                <div
+                  key={group.part_number}
+                  style={{
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    transition: 'border-color 0.15s ease'
+                  }}
+                >
+                  {/* Top: Part Number, Category & Quantity */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <strong className="font-mono" style={{ fontSize: '13px', color: '#0f172a' }}>
+                          {group.part_number}
+                        </strong>
+                        <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
+                          {group.category_name}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#334155', marginTop: '2px', fontWeight: 500 }}>
+                        {group.description}
+                      </div>
+                      {group.iphone_model && (
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
+                          Model: <strong>{group.iphone_model}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <span
+                        className="badge"
+                        style={{
+                          background: '#ecfdf5',
+                          color: '#047857',
+                          border: '1px solid #a7f3d0',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          padding: '3px 8px'
+                        }}
+                      >
+                        {group.totalQty} in-stock
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Serials Sub-Grid */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                        Available Serial Numbers:
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => handlePackNextForPart(group)}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '10.5px',
+                          background: '#0284c7',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          cursor: 'pointer'
+                        }}
+                        title={`Pack first available ${group.part_number} into Box ${boxNumber}`}
+                      >
+                        <Plus size={11} />
+                        <span>Pack Next</span>
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', maxHeight: '72px', overflowY: 'auto' }}>
+                      {group.units.map(unit => (
+                        <button
+                          key={unit.id || unit.serial_number}
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleSimulatePack(unit)}
+                          style={{
+                            fontSize: '10.5px',
+                            fontFamily: 'var(--font-mono)',
+                            padding: '2px 6px',
+                            background: '#fff',
+                            borderColor: '#cbd5e1',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                          title={`Click to pack SN: ${unit.serial_number} into Box ${boxNumber}`}
+                        >
+                          <Plus size={10} color="#0284c7" />
+                          <span>{unit.serial_number}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : stockViewMode === 'SERIALIZED' ? (
+          /* View 2: All Serialized Units Full Table with Double-Check Inspection */
+          <div className="table-container" style={{ maxHeight: '340px', overflowY: 'auto' }}>
+            <table className="data-table" style={{ fontSize: '12px' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: '38px' }}>#</th>
+                  <th>Part Number</th>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th>Serial Number</th>
+                  <th>Intake / Received</th>
+                  <th style={{ textAlign: 'right', width: '130px' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredStockUnits.map((unit, idx) => {
+                  const catBadge = getCategoryBadgeStyle(unit.category_code);
+                  return (
+                    <tr key={unit.id || `${unit.serial_number}-${idx}`}>
+                      <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                      <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                        {unit.part_number}
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 500 }}>{unit.description}</div>
+                        {unit.iphone_model && <div style={{ fontSize: '11px', color: '#64748b' }}>{unit.iphone_model}</div>}
+                      </td>
+                      <td>
+                        <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
+                          {unit.category_name}
+                        </span>
+                      </td>
+                      <td className="font-mono" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <span>{unit.serial_number}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopySerial(unit.serial_number)}
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                            title="Copy Serial Number"
+                          >
+                            <Copy size={11} />
+                          </button>
+                        </div>
+                      </td>
+                      <td style={{ fontSize: '11px', color: '#64748b' }}>
+                        {unit.received_at ? new Date(unit.received_at).toLocaleDateString('en-US') : 'In Stock'}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', gap: '4px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setStockInspectUnit(unit)}
+                            style={{ padding: '3px 6px', fontSize: '11px' }}
+                            title="Double-check part details"
+                          >
+                            <Eye size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handleSimulatePack(unit)}
+                            style={{ padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                            title={`Pack ${unit.part_number} (${unit.serial_number}) into Box ${boxNumber}`}
+                          >
+                            <Plus size={11} />
+                            <span>Pack Unit</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* View 3: Quick-Pack Chips (All Units without artificial 10-item limit!) */
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', maxHeight: '220px', overflowY: 'auto', padding: '4px 0' }}>
+            {filteredStockUnits.map((unit) => {
+              const catBadge = getCategoryBadgeStyle(unit.category_code);
+              return (
+                <button
+                  key={unit.id || unit.serial_number}
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    fontSize: '11px',
+                    background: '#fff',
+                    borderColor: '#cbd5e1',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '4px 8px'
+                  }}
+                  onClick={() => handleSimulatePack(unit)}
+                  title={`Click to pack: ${unit.description} (#${unit.serial_number}) into Box ${boxNumber}`}
+                >
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: catBadge.color }} />
+                  <strong className="font-mono">+{unit.part_number}</strong>
+                  <span className="font-mono" style={{ color: '#64748b' }}>({unit.serial_number})</span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -772,9 +1502,9 @@ export default function ScanOutPacking() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => printPackingListDirect(currentShipment, currentShipment.items, selectedSite)}
+              onClick={() => handleRequestPrintOrPDF(currentShipment, currentShipment.items, selectedSite, 'print', true)}
               style={{ height: '34px' }}
-              title="Preview and print packing list"
+              title="Preview and print packing list (Requires Tracking #)"
             >
               <Printer size={14} />
               <span>Print Preview</span>
@@ -878,8 +1608,8 @@ export default function ScanOutPacking() {
                   type="text"
                   className="packing-inline-input font-mono"
                   style={{ width: '140px' }}
-                  value={currentShipment.tracking_number ?? '20227303'}
-                  placeholder="20227303"
+                  value={currentShipment.tracking_number || ''}
+                  placeholder="Enter Tracking #"
                   title="Click to edit Tracking Number"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
                 />
@@ -926,7 +1656,7 @@ export default function ScanOutPacking() {
                       <td style={{ textAlign: 'center', color: '#64748b' }}>{i + 1}</td>
                       <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
                       <td style={{ textAlign: 'left' }}>{it.description}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', letterSpacing: '0.02em' }}>{it.serial_number}</td>
+                      <td style={{ textAlign: 'center', fontSize: '11.5px' }}>{it.serial_number}</td>
                       <td style={{ textAlign: 'center' }}>{it.box_number || 1}</td>
                       <td className="hide-on-print" style={{ textAlign: 'center' }}>
                         <button
@@ -1127,8 +1857,8 @@ export default function ScanOutPacking() {
                             </button>
                             <button
                               className="btn btn-secondary btn-sm"
-                              onClick={() => generatePackingListPDF(s, s.items || [], destSite)}
-                              title="Download PDF"
+                              onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'pdf', false)}
+                              title="Download PDF (Requires Tracking #)"
                               style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                             >
                               <Download size={12} />
@@ -1136,8 +1866,8 @@ export default function ScanOutPacking() {
                             </button>
                             <button
                               className="btn btn-secondary btn-sm"
-                              onClick={() => printPackingListDirect(s, s.items || [], destSite)}
-                              title="Print Manifest"
+                              onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'print', false)}
+                              title="Print Manifest (Requires Tracking #)"
                               style={{ padding: '4px 8px', fontSize: '11.5px' }}
                             >
                               <Printer size={12} />
@@ -1215,24 +1945,147 @@ export default function ScanOutPacking() {
 
             <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
               <div style={{ fontSize: '12px', color: '#64748b' }}>
-                Carrier: <strong>{inspectShipmentModal.carrier || 'Lite Express'}</strong> • Tracking: <span className="font-mono">#{inspectShipmentModal.tracking_number || 'N/A'}</span>
+                Carrier: <strong>{inspectShipmentModal.carrier || 'Lite Express'}</strong> • Tracking: <span className="font-mono">{inspectShipmentModal.tracking_number ? `#${inspectShipmentModal.tracking_number}` : 'None'}</span>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   className="btn btn-secondary"
                   onClick={() => {
                     const dest = sites.find(s => s.id === inspectShipmentModal.site_id) || {};
-                    generatePackingListPDF(inspectShipmentModal, inspectShipmentModal.items || [], dest);
+                    handleRequestPrintOrPDF(inspectShipmentModal, inspectShipmentModal.items || [], dest, 'pdf', false);
                   }}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <Download size={14} />
                   <span>Download PDF</span>
                 </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const dest = sites.find(s => s.id === inspectShipmentModal.site_id) || {};
+                    handleRequestPrintOrPDF(inspectShipmentModal, inspectShipmentModal.items || [], dest, 'print', false);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Printer size={14} />
+                  <span>Print</span>
+                </button>
                 <button className="btn btn-primary" onClick={() => setInspectShipmentModal(null)}>
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Double-Check Part & Serial Details --- */}
+      {stockInspectUnit && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setStockInspectUnit(null); }}>
+          <div className="modal-content" style={{ maxWidth: '560px' }}>
+            <div className="modal-header" style={{ background: '#0f172a' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
+                  <Boxes size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '16.5px', margin: 0 }}>
+                    Part Verification & Details
+                  </h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Serialized DC Inventory Unit
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setStockInspectUnit(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: '20px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div>
+                    <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Part Number</span>
+                    <div className="font-mono" style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                      {stockInspectUnit.part_number}
+                    </div>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Category</span>
+                    <div style={{ marginTop: '2px' }}>
+                      <span className="badge" style={getCategoryBadgeStyle(stockInspectUnit.category_code)}>
+                        {stockInspectUnit.category_name}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Description</span>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b', marginTop: '2px' }}>
+                      {stockInspectUnit.description}
+                    </div>
+                    {stockInspectUnit.iphone_model && (
+                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                        Device Compatibility: <strong>{stockInspectUnit.iphone_model}</strong>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '14px', borderRadius: '8px' }}>
+                  <span style={{ fontSize: '11px', color: '#16a34a', textTransform: 'uppercase', fontWeight: 700 }}>Serial Number</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
+                    <span className="font-mono" style={{ fontSize: '15px', fontWeight: 700, color: '#047857', letterSpacing: '0.04em' }}>
+                      {stockInspectUnit.serial_number}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => handleCopySerial(stockInspectUnit.serial_number)}
+                      style={{ background: '#fff', fontSize: '11.5px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Copy size={12} />
+                      <span>{copiedSerial === stockInspectUnit.serial_number ? 'Copied!' : 'Copy S/N'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Current Storage:</span>{' '}
+                    <strong style={{ color: '#0f172a' }}>Distribution Center (DC-MDC)</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Inventory Status:</span>{' '}
+                    <span className="badge badge-success" style={{ fontSize: '10.5px' }}>In Stock</span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Received Date:</span>{' '}
+                    <strong>{stockInspectUnit.received_at ? new Date(stockInspectUnit.received_at).toLocaleDateString('en-US') : 'Recent Intake'}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b' }}>Received By:</span>{' '}
+                    <strong>{stockInspectUnit.received_by || 'Warehouse Staff'}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+              <button className="btn btn-secondary" onClick={() => setStockInspectUnit(null)}>
+                Close
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  handleSimulatePack(stockInspectUnit);
+                  setStockInspectUnit(null);
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <PackageCheck size={16} />
+                <span>Pack into Current Manifest (Box {boxNumber})</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1475,6 +2328,302 @@ export default function ScanOutPacking() {
                   <span>Pack {parsedBatch.summary.valid} Valid Units into Manifest</span>
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Tracking Number Required for Official Print / PDF --- */}
+      {trackingModalState && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setTrackingModalState(null); }}>
+          <div className="modal-content" style={{ maxWidth: '500px' }}>
+            <div className="modal-header" style={{ background: '#0f172a' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
+                  <Printer size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
+                    Tracking Number Required
+                  </h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Manifest {trackingModalState.shipment?.invoice_ref || trackingModalState.shipment?.shipment_number || 'Draft'}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setTrackingModalState(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => { e.preventDefault(); handleConfirmTrackingModal(); }}>
+              <div className="modal-body">
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                    To generate, download, or print the official corporate packing list, please provide the carrier tracking number for this shipment.
+                  </p>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12.5px' }}>
+                    Tracking Number <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input font-mono"
+                    placeholder="e.g. 20227258, TRK-987654"
+                    value={trackingModalState.trackingInput}
+                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, trackingInput: e.target.value }))}
+                    autoFocus
+                    required
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '6px' }}>
+                  <label className="form-label" style={{ fontSize: '12.5px' }}>
+                    Courier / Carrier
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Lite Express, Lalamove, J&T"
+                    value={trackingModalState.carrierInput}
+                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, carrierInput: e.target.value }))}
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setTrackingModalState(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  {trackingModalState.action === 'pdf' ? <Download size={14} /> : <Printer size={14} />}
+                  <span>Save & {trackingModalState.action === 'pdf' ? 'Download PDF' : 'Print Manifest'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Searchable Destination Branch Site Selector --- */}
+      {isSiteModalOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => { if (e.target === e.currentTarget) setIsSiteModalOpen(false); }}
+          style={{ zIndex: 1100 }}
+        >
+          <div className="modal-content" style={{ maxWidth: '840px', width: '95%', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
+            {/* Modal Header */}
+            <div className="modal-header" style={{ background: '#0f172a', padding: '16px 20px', borderBottom: '1px solid #1e293b' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '8px', borderRadius: '8px' }}>
+                  <Building2 size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0, fontWeight: 700 }}>
+                    Select Destination Branch Site
+                  </h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Choose destination for Packing List • <strong>{serviceSites.length} Active Branch Sites Available</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSiteModalOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+                title="Close (Esc)"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Search & Region Filter Toolbar */}
+            <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+              <div style={{ position: 'relative', marginBottom: '12px' }}>
+                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Search by branch code (e.g. BHS, NAG, PPM), branch name, region, address, or contact person..."
+                  value={siteSearchQuery}
+                  onChange={(e) => setSiteSearchQuery(e.target.value)}
+                  autoFocus
+                  style={{
+                    paddingLeft: '38px',
+                    paddingRight: siteSearchQuery ? '36px' : '12px',
+                    height: '42px',
+                    fontSize: '13.5px',
+                    borderRadius: '8px',
+                    background: '#fff',
+                    borderColor: '#cbd5e1',
+                    width: '100%',
+                    boxSizing: 'border-box'
+                  }}
+                />
+                {siteSearchQuery && (
+                  <button
+                    onClick={() => setSiteSearchQuery('')}
+                    style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                      padding: '4px'
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Region Filter Chips */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflowX: 'auto', paddingBottom: '2px' }}>
+                <span style={{ fontSize: '11.5px', fontWeight: 600, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
+                  Region:
+                </span>
+                {availableRegions.map(reg => {
+                  const count = reg === 'ALL'
+                    ? serviceSites.length
+                    : serviceSites.filter(s => (s.region || 'Metro Manila') === reg).length;
+                  const isActive = siteRegionFilter === reg;
+                  return (
+                    <button
+                      key={reg}
+                      type="button"
+                      onClick={() => setSiteRegionFilter(reg)}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11.5px',
+                        fontWeight: isActive ? 700 : 500,
+                        borderRadius: '6px',
+                        border: isActive ? '1px solid #0284c7' : '1px solid #e2e8f0',
+                        background: isActive ? '#0284c7' : '#ffffff',
+                        color: isActive ? '#ffffff' : '#475569',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {reg} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Modal Body: Grid of Branch Cards */}
+            <div className="modal-body" style={{ maxHeight: '460px', overflowY: 'auto', padding: '16px 20px', background: '#f1f5f9' }}>
+              {filteredServiceSites.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: '#64748b' }}>
+                  <Building2 size={36} color="#cbd5e1" style={{ margin: '0 auto 12px auto' }} />
+                  <h4 style={{ margin: '0 0 6px 0', color: '#334155' }}>No branch sites found</h4>
+                  <p style={{ margin: 0, fontSize: '13px' }}>
+                    No sites match &ldquo;{siteSearchQuery}&rdquo;. Try clearing your search or selecting &ldquo;ALL&rdquo; regions.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '12px' }}>
+                  {filteredServiceSites.map(site => {
+                    const isSelected = selectedSiteId === site.id;
+                    return (
+                      <div
+                        key={site.id}
+                        onClick={() => handleSelectSiteFromModal(site)}
+                        style={{
+                          background: isSelected ? '#eff6ff' : '#ffffff',
+                          border: isSelected ? '2px solid #0284c7' : '1px solid #e2e8f0',
+                          borderRadius: '10px',
+                          padding: '14px 16px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          gap: '10px',
+                          transition: 'all 0.15s ease',
+                          boxShadow: isSelected ? '0 2px 8px rgba(2, 132, 199, 0.15)' : '0 1px 2px rgba(0,0,0,0.03)',
+                          position: 'relative'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span
+                                style={{
+                                  background: isSelected ? '#0284c7' : '#0f172a',
+                                  color: '#fff',
+                                  padding: '3px 8px',
+                                  borderRadius: '5px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  fontFamily: 'var(--font-mono, monospace)'
+                                }}
+                              >
+                                {site.code}
+                              </span>
+                              <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '2px 7px', borderRadius: '4px' }}>
+                                {site.region || 'Metro Manila'}
+                              </span>
+                            </div>
+
+                            {isSelected && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 700, color: '#0284c7' }}>
+                                <Check size={14} />
+                                <span>Active</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#0f172a', lineHeight: 1.3 }}>
+                            {site.name}
+                          </h4>
+
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: '12px', color: '#475569', lineHeight: 1.4 }}>
+                            <MapPin size={13} color="#94a3b8" style={{ flexShrink: 0, marginTop: '2px' }} />
+                            <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                              {site.full_address || site.address || 'Address on file'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid #f1f5f9', fontSize: '11.5px', color: '#64748b' }}>
+                          <div>
+                            {site.contact_person && <span>Contact: <strong>{site.contact_person}</strong></span>}
+                          </div>
+                          <span style={{ color: '#0284c7', fontWeight: 600 }}>
+                            {isSelected ? '✓ Selected' : 'Select Branch →'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="modal-footer" style={{ background: '#ffffff', borderTop: '1px solid #e2e8f0', padding: '12px 20px', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: '12.5px', color: '#64748b' }}>
+                Showing <strong>{filteredServiceSites.length}</strong> of <strong>{serviceSites.length}</strong> branch service hubs
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIsSiteModalOpen(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

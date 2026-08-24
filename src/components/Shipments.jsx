@@ -1,8 +1,9 @@
 import { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { generatePackingListPDF } from '../utils/pdfGenerator';
+import { generatePackingListPDF, printPackingListDirect } from '../utils/pdfGenerator';
 import {
   Download,
+  Printer,
   CheckCircle,
   Search,
   FileSpreadsheet,
@@ -32,6 +33,9 @@ export default function Shipments() {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
 
+  // Tracking Number Required Prompt Modal State
+  const [trackingModalState, setTrackingModalState] = useState(null);
+
   // Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -41,6 +45,55 @@ export default function Shipments() {
 
   // Clear Confirmation Modal State
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+
+  // Safe Print / PDF Request Handler (Requires Tracking Number)
+  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'pdf') => {
+    const trk = String(shipmentObj.tracking_number || '').trim();
+    if (!trk) {
+      setTrackingModalState({
+        shipment: shipmentObj,
+        items: items || [],
+        site: siteObj || {},
+        action,
+        trackingInput: '',
+        carrierInput: shipmentObj.carrier || 'Lite Express'
+      });
+      return;
+    }
+
+    if (action === 'pdf') {
+      generatePackingListPDF(shipmentObj, items || [], siteObj || {});
+      showToast(`Downloaded PDF for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    } else {
+      printPackingListDirect(shipmentObj, items || [], siteObj || {});
+    }
+  };
+
+  const handleConfirmTrackingModal = async () => {
+    if (!trackingModalState) return;
+    const cleanTrk = String(trackingModalState.trackingInput || '').trim();
+    if (!cleanTrk) {
+      showToast('Please enter a tracking number before printing/downloading PDF.', 'warning');
+      return;
+    }
+
+    const updatedShipment = {
+      ...trackingModalState.shipment,
+      tracking_number: cleanTrk,
+      carrier: trackingModalState.carrierInput || trackingModalState.shipment.carrier || 'Lite Express'
+    };
+
+    await saveShipment(updatedShipment);
+    showToast(`Tracking number #${cleanTrk} saved!`, 'success');
+
+    if (trackingModalState.action === 'pdf') {
+      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site);
+    } else {
+      printPackingListDirect(updatedShipment, trackingModalState.items, trackingModalState.site);
+    }
+
+    setTrackingModalState(null);
+  };
 
   const filteredShipments = shipments.filter(s => {
     if (filterStatus !== 'ALL' && s.status !== filterStatus) return false;
@@ -223,7 +276,7 @@ export default function Shipments() {
                       <td>
                         <div>{sh.carrier || 'Lite Express'}</div>
                         <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                          #{sh.tracking_number || '20227258'}
+                          {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
                         </div>
                       </td>
                       <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
@@ -244,11 +297,19 @@ export default function Shipments() {
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                           <button
                             className="btn btn-secondary btn-sm"
-                            onClick={() => generatePackingListPDF(sh, sh.items, destSite)}
-                            title="Download Corporate PDF Manifest"
+                            onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
+                            title="Download Corporate PDF Manifest (Requires Tracking #)"
                           >
                             <Download size={13} />
                             <span>PDF</span>
+                          </button>
+
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'print')}
+                            title="Print Packing List Direct (Requires Tracking #)"
+                          >
+                            <Printer size={13} />
                           </button>
 
                           {sh.status === 'shipped' && (
@@ -474,6 +535,86 @@ export default function Shipments() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Modal: Tracking Number Required for Official Print / PDF --- */}
+      {trackingModalState && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setTrackingModalState(null); }}>
+          <div className="modal-content" style={{ maxWidth: '500px' }}>
+            <div className="modal-header" style={{ background: '#0f172a' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
+                  <Printer size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
+                    Tracking Number Required
+                  </h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Manifest {trackingModalState.shipment?.invoice_ref || trackingModalState.shipment?.shipment_number || 'Shipment'}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setTrackingModalState(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => { e.preventDefault(); handleConfirmTrackingModal(); }}>
+              <div className="modal-body">
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                    To generate, download, or print the official corporate packing list, please provide the carrier tracking number for this shipment.
+                  </p>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12.5px' }}>
+                    Tracking Number <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input font-mono"
+                    placeholder="e.g. 20227258, TRK-987654"
+                    value={trackingModalState.trackingInput}
+                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, trackingInput: e.target.value }))}
+                    autoFocus
+                    required
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '6px' }}>
+                  <label className="form-label" style={{ fontSize: '12.5px' }}>
+                    Courier / Carrier
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Lite Express, Lalamove, J&T"
+                    value={trackingModalState.carrierInput}
+                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, carrierInput: e.target.value }))}
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setTrackingModalState(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  {trackingModalState.action === 'pdf' ? <Download size={14} /> : <Printer size={14} />}
+                  <span>Save & {trackingModalState.action === 'pdf' ? 'Download PDF' : 'Print Manifest'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

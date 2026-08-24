@@ -48,11 +48,21 @@ export default function SavedRecords() {
   const [restoreAllocation, setRestoreAllocation] = useState(true);
   const [recordToDelete, setRecordToDelete] = useState(null);
 
+  // Filter valid historical period snapshots (exclude system registries and deleted records registries)
+  const validSavedRecords = (savedRecords || []).filter(rec =>
+    rec &&
+    !rec.id?.startsWith('deleted_') &&
+    rec.record_type !== 'system_registry' &&
+    rec.record_type !== 'deletion_registry' &&
+    rec.period_label !== 'Deleted Records Registry' &&
+    rec.notes !== '__DELETED__'
+  );
+
   // Derive unique years from saved records for filter dropdown
-  const availableYears = Array.from(new Set(savedRecords.map(r => r.period_year).filter(Boolean))).sort((a, b) => b - a);
+  const availableYears = Array.from(new Set(validSavedRecords.map(r => r.period_year).filter(Boolean))).sort((a, b) => b - a);
 
   // Filter records
-  const filteredRecords = savedRecords.filter(rec => {
+  const filteredRecords = validSavedRecords.filter(rec => {
     // Type filter
     if (typeFilter !== 'ALL' && rec.record_type !== typeFilter) {
       return false;
@@ -80,8 +90,8 @@ export default function SavedRecords() {
   });
 
   // Calculate Metrics
-  const totalSavedCount = savedRecords.length;
-  const latestRecord = savedRecords[0];
+  const totalSavedCount = validSavedRecords.length;
+  const latestRecord = validSavedRecords[0];
 
   const handleOpenRestoreModal = (record) => {
     setRecordToRestore(record);

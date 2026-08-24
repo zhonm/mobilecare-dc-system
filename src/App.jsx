@@ -16,6 +16,7 @@ import AllocationMatrix from './components/AllocationMatrix';
 import ScanOutPacking from './components/ScanOutPacking';
 import Shipments from './components/Shipments';
 import StockTransferReports from './components/StockTransferReports';
+import ForecastingReports from './components/ForecastingReports';
 import AuditTrail from './components/AuditTrail';
 import SettingsCatalog from './components/SettingsCatalog';
 import UserAccessManagement from './components/UserAccessManagement';
@@ -72,6 +73,8 @@ function MainApp() {
         return <Shipments />;
       case 'reports':
         return <StockTransferReports />;
+      case 'forecast-reports':
+        return <ForecastingReports />;
       case 'audit':
         return <AuditTrail />;
       case 'settings':

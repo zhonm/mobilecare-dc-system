@@ -18,7 +18,9 @@ import {
   BookmarkPlus,
   Building2,
   Database,
-  Trash2
+  Trash2,
+  PackageCheck,
+  ArrowUpRight
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
@@ -31,11 +33,14 @@ export default function ScanInReceiving() {
     purchaseOrders,
     parts,
     inventoryUnits,
+    dcIntakeRecords,
     cloudSyncStatus,
     isAutoRefreshing,
     lastSyncedAt,
     autoRefreshData,
-    showToast
+    showToast,
+    commitUnitsToStock,
+    setActiveTab
   } = useApp();
 
   const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
@@ -98,8 +103,8 @@ export default function ScanInReceiving() {
     } catch (e) {}
   }, [sessionScans]);
 
-  // View & Filter States for Table (Defaults to active scanning session)
-  const [activeTableView, setActiveTableView] = useState('SESSION_SCANS'); // 'SESSION_SCANS' | 'ALL_DC_STOCK'
+  // View & Filter States for Table (Defaults to All DC Stock)
+  const [activeTableView, setActiveTableView] = useState('ALL_DC_STOCK'); // 'ALL_DC_STOCK' | 'SESSION_SCANS'
   const [tableSearch, setTableSearch] = useState('');
 
   // Import Modal State
@@ -407,8 +412,8 @@ export default function ScanInReceiving() {
         message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts from "${parsedBatch.fileName}" into DC Database!`
       });
 
-      // Switch view to show the newly imported items in current session
-      setActiveTableView('SESSION_SCANS');
+      // Switch view to show the newly imported items in All DC Stock
+      setActiveTableView('ALL_DC_STOCK');
 
       // Reset and close modal
       setParsedBatch(null);
@@ -461,6 +466,46 @@ export default function ScanInReceiving() {
     await deleteScanInUnit(serial);
     setSessionScans(prev => prev.filter(u => String(u.serial_number).toUpperCase() !== String(serial).toUpperCase()));
     setUnitToDelete(null);
+  };
+
+  const [isAddingToStock, setIsAddingToStock] = useState(false);
+
+  const handleAddAllToStock = async () => {
+    setIsAddingToStock(true);
+    try {
+      let targetUnits = [];
+      if (sessionScans && sessionScans.length > 0) {
+        targetUnits = sessionScans;
+      } else if (availableInStockUnits && availableInStockUnits.length > 0) {
+        targetUnits = availableInStockUnits;
+      } else if (inventoryUnits && inventoryUnits.length > 0) {
+        targetUnits = inventoryUnits;
+      } else if (dcIntakeRecords && dcIntakeRecords.length > 0) {
+        targetUnits = dcIntakeRecords.flatMap(r => Array.isArray(r.items) ? r.items : []);
+      }
+
+      if (targetUnits.length === 0) {
+        showToast('No scanned or imported parts to add to stock. Please scan barcodes or import a spreadsheet first.', 'info');
+        return;
+      }
+
+      const res = await commitUnitsToStock(targetUnits);
+
+      if (res.success) {
+        setScanResult({
+          type: 'success',
+          message: `[STOCK FINALIZED] Successfully added ${targetUnits.length} units to DC Stock! All parts are now in-stock, accessible to other users, and visible for packing list creation.`
+        });
+        setSessionScans([]);
+        localStorage.removeItem('mdc_recent_scans');
+        setActiveTableView('ALL_DC_STOCK');
+      }
+    } catch (err) {
+      console.error('Add to stock error:', err);
+      showToast('Error finalizing parts to DC stock', 'error');
+    } finally {
+      setIsAddingToStock(false);
+    }
   };
 
   return (
@@ -588,11 +633,24 @@ export default function ScanInReceiving() {
               <button
                 type="button"
                 className="action-btn-emerald"
-                onClick={() => setIsSaveIntakeModalOpen(true)}
-                title="Save current scanned parts into a permanent DC Intake Record (MDC202600015)"
+                onClick={handleAddAllToStock}
+                disabled={isAddingToStock || (sessionScans.length === 0 && availableInStockUnits.length === 0)}
+                style={{
+                  background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  boxShadow: '0 3px 10px rgba(16, 185, 129, 0.35)',
+                  border: '1px solid #34d399',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer'
+                }}
+                title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
               >
-                <BookmarkPlus size={15} />
-                <span>Save Intake Record ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
+                {isAddingToStock ? <RefreshCw size={15} className="spin" /> : <PackageCheck size={16} />}
+                <span>Add to Stock ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
               </button>
 
               <button
@@ -603,6 +661,17 @@ export default function ScanInReceiving() {
               >
                 <FileSpreadsheet size={15} />
                 <span>Import Spreadsheet</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setIsSaveIntakeModalOpen(true)}
+                title="Save current scanned parts into a named DC Intake Record (MDC202600015)"
+                style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
+              >
+                <BookmarkPlus size={14} />
+                <span>Save Intake Record Batch</span>
               </button>
             </div>
           </div>
@@ -787,6 +856,47 @@ export default function ScanInReceiving() {
             >
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
+            {/* Direct Add to Stock button in Table Toolbar */}
+            {sessionScans.length > 0 && (
+              <button
+                className="btn btn-sm btn-primary"
+                onClick={handleAddAllToStock}
+                disabled={isAddingToStock}
+                style={{
+                  background: '#10b981',
+                  borderColor: '#059669',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: 600,
+                  height: '34px'
+                }}
+                title="Finalize recent session parts and add them to permanent DC Stock"
+              >
+                {isAddingToStock ? <RefreshCw size={13} className="spin" /> : <PackageCheck size={14} />}
+                <span>Add to Stock ({sessionScans.length})</span>
+              </button>
+            )}
+
+            {/* Quick jump to Pack Scan-Out button */}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setActiveTab('scan-out')}
+              style={{
+                height: '34px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                color: '#38bdf8',
+                borderColor: 'rgba(56, 189, 248, 0.3)',
+                background: 'rgba(56, 189, 248, 0.08)'
+              }}
+              title="Navigate to Pack Scan-Out to create packing lists with available stock"
+            >
+              <ArrowUpRight size={14} />
+              <span>Create Packing List</span>
             </button>
 
             {sessionScans.length > 0 && activeTableView === 'SESSION_SCANS' && (

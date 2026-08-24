@@ -1,11 +1,11 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  user: ['dashboard', 'intake-records', 'shipments', 'reports', 'audit'],
+  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access'],
+  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access'],
+  user: ['dashboard', 'intake-records', 'shipments', 'reports', 'forecast-reports', 'audit'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports'],
-  site_staff: ['dashboard', 'shipments', 'reports'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'audit']
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports'],
+  site_staff: ['dashboard', 'shipments', 'reports', 'forecast-reports'],
+  management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'forecast-reports', 'audit']
 };
 
 export const ROLE_OPTIONS = [
@@ -28,10 +28,10 @@ export const ROLE_OPTIONS = [
 
 export const getDefaultRolePosition = (role) => {
   switch (role) {
-    case 'superadmin': return 'Lead System Architect & Superadmin';
+    case 'superadmin': return 'Parts Management Specialist';
     case 'admin': return 'Distribution Operations Lead';
     case 'user': return 'Warehouse Operations Specialist';
-    default: return 'DC Specialist';
+    default: return 'Parts Management Specialist';
   }
 };
 
@@ -41,7 +41,7 @@ export const INITIAL_USERS = [
     email: 'zhon.manaois@mobilecareph.com',
     fullName: 'Zhon Manaois',
     role: 'superadmin',
-    rolePosition: 'Lead System Architect & Superadmin',
+    rolePosition: 'Parts Management Specialist',
     siteId: 'site-dc',
     hasSetPassword: true,
     passwordHash: 'Password123',

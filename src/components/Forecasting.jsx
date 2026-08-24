@@ -15,7 +15,8 @@ import {
   CheckCircle2,
   XCircle,
   Sliders,
-  ShieldCheck
+  ShieldCheck,
+  RotateCcw
 } from 'lucide-react';
 
 export default function Forecasting() {
@@ -28,7 +29,8 @@ export default function Forecasting() {
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    activePeriod
+    activePeriod,
+    clearAllData
   } = useApp();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -161,6 +163,16 @@ export default function Forecasting() {
             >
               <Printer size={14} />
               <span>Print</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={clearAllData}
+              title="Clear all forecasting and allocation data to empty state"
+              style={{ color: '#b91c1c' }}
+            >
+              <RotateCcw size={14} />
+              <span>Clear Data</span>
             </button>
           </div>
         </div>
