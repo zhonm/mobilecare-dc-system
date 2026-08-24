@@ -20,15 +20,21 @@ import {
   Database,
   Trash2,
   PackageCheck,
-  ArrowUpRight
+  ShieldAlert,
+  ShieldCheck,
+  Layers,
+  Tag,
+  ArrowLeftRight
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
+import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 
 export default function ScanInReceiving() {
   const {
     addScanInUnit,
     deleteScanInUnit,
+    updateUnitAssignment,
     batchAddScanInUnits,
     purchaseOrders,
     parts,
@@ -40,6 +46,7 @@ export default function ScanInReceiving() {
     autoRefreshData,
     showToast,
     commitUnitsToStock,
+    deleteAllStockUnits,
     setActiveTab
   } = useApp();
 
@@ -49,6 +56,25 @@ export default function ScanInReceiving() {
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
   const [isSaveIntakeModalOpen, setIsSaveIntakeModalOpen] = useState(false);
   const [unitToDelete, setUnitToDelete] = useState(null);
+  const [showPnDropdown, setShowPnDropdown] = useState(false);
+
+  // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR'
+  const [intakeAssignment, setIntakeAssignment] = useState(() => {
+    try {
+      return localStorage.getItem('mdc_intake_assignment') || 'DC - CRBR';
+    } catch (e) {
+      return 'DC - CRBR';
+    }
+  });
+
+  // Keep intakeAssignmentRef synced to eliminate any closure stale-state during rapid barcode scanner firing
+  const intakeAssignmentRef = useRef(intakeAssignment);
+  useEffect(() => {
+    intakeAssignmentRef.current = intakeAssignment;
+    try {
+      localStorage.setItem('mdc_intake_assignment', intakeAssignment);
+    } catch (e) {}
+  }, [intakeAssignment]);
 
   // Auto-Receive Feature State with localStorage persistence
   const [autoReceive, setAutoReceive] = useState(() => {
@@ -105,10 +131,12 @@ export default function ScanInReceiving() {
 
   // View & Filter States for Table (Defaults to All DC Stock)
   const [activeTableView, setActiveTableView] = useState('ALL_DC_STOCK'); // 'ALL_DC_STOCK' | 'SESSION_SCANS'
+  const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR'
   const [tableSearch, setTableSearch] = useState('');
 
   // Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [modalAssignment, setModalAssignment] = useState('DC - CRBR');
   const [isDragging, setIsDragging] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
@@ -119,6 +147,7 @@ export default function ScanInReceiving() {
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const autoScanTimerRef = useRef(null);
+  const dropdownRef = useRef(null);
 
   // Auto-focus Part Number input on mount
   useEffect(() => {
@@ -130,25 +159,92 @@ export default function ScanInReceiving() {
     };
   }, []);
 
+  // Close suggestions dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target) && pnInputRef.current && !pnInputRef.current.contains(e.target)) {
+        setShowPnDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Sync modal PO with hero PO when opening
   useEffect(() => {
     if (isImportModalOpen) {
       setModalPoId(selectedPoId);
+      setModalAssignment(intakeAssignment);
     }
-  }, [isImportModalOpen, selectedPoId]);
+  }, [isImportModalOpen, selectedPoId, intakeAssignment]);
 
-  // Helper to parse combined 2D / GS1 / Tab-delimited barcode formats
+  // Real-time resolved Apple genuine part from user's current P/N or description input
+  const matchedPart = useMemo(() => {
+    return resolvePartInfo(partNumberInput, parts);
+  }, [partNumberInput, parts]);
+
+  // Autocomplete Suggestions for Part Number field
+  const suggestedParts = useMemo(() => {
+    if (!partNumberInput.trim()) return [];
+    const q = partNumberInput.toLowerCase().trim();
+    return (parts || []).filter(p => {
+      const pn = (p.part_number || '').toLowerCase();
+      const desc = (p.description || '').toLowerCase();
+      const model = (p.iphone_model || '').toLowerCase();
+      return pn.includes(q) || desc.includes(q) || model.includes(q);
+    }).slice(0, 6);
+  }, [partNumberInput, parts]);
+
+  // Real-time Serial Number Security Validation
+  const serialValidation = useMemo(() => {
+    if (!serialInput.trim()) return null;
+    const currentPn = matchedPart ? matchedPart.part_number : partNumberInput;
+    return validateAppleSerialNumber(serialInput, currentPn, parts);
+  }, [serialInput, matchedPart, partNumberInput, parts]);
+
+  // Select part from autocomplete dropdown
+  const handleSelectSuggestedPart = (p) => {
+    setPartNumberInput(p.part_number);
+    setShowPnDropdown(false);
+    showToast(`Selected ${p.part_number} — ${p.description}`, 'info');
+    serialInputRef.current?.focus();
+    serialInputRef.current?.select();
+  };
+
+  // Helper to parse combined 2D / GS1 DataMatrix / Tab / Slash delimited barcode formats
   const parseBarcodeData = (raw) => {
     if (!raw) return null;
-    const str = raw.trim();
-    const match = str.match(/^([A-Za-z0-9-]+)[,\t/|#;]([A-Za-z0-9-]+)$/);
+    let str = String(raw).trim();
+
+    // 1. GS1 DataMatrix with Group Separators or control headers
+    if (str.startsWith('[)>') || str.includes('06\x1d') || str.includes('\x1d') || str.includes('\x1e')) {
+      const pMatch = str.match(/P([0-9]{3}-?[0-9]{4,6})/i);
+      const sMatch = str.match(/S([A-Za-z0-9]{8,24})/i);
+      if (pMatch && sMatch) {
+        let pn = pMatch[1];
+        if (/^[0-9]{7,9}$/.test(pn)) pn = `${pn.slice(0, 3)}-${pn.slice(3)}`;
+        return { pn, sn: sMatch[1] };
+      }
+    }
+
+    // 2. Delimited formats: PN,SN or PN/SN or PN\tSN or PN|SN or PN#SN
+    const match = str.match(/^([A-Za-z0-9-,s]+?)[,\t/|#;]([A-Za-z0-9-]+)$/);
     if (match) {
-      return { pn: match[1].trim(), sn: match[2].trim() };
+      let pn = match[1].trim();
+      let sn = match[2].trim();
+      if (/^1?P[0-9]{3}-?[0-9]{4,6}$/i.test(pn)) pn = pn.replace(/^1?P/i, '');
+      if (/^1?S[A-Za-z0-9]{8,24}$/i.test(sn) && sn.length > 10) sn = sn.replace(/^1?S/i, '');
+      return { pn, sn };
     }
-    const spaceMatch = str.match(/^([0-9]{3}-[0-9]{4,5})\s+([A-Za-z0-9-]+)$/);
+
+    // 3. Space-separated: PN SN
+    const spaceMatch = str.match(/^([0-9]{3}-?[0-9]{4,6}|[A-Za-z0-9-,s]+?)\s+([A-Za-z0-9]{8,24})$/);
     if (spaceMatch) {
-      return { pn: spaceMatch[1].trim(), sn: spaceMatch[2].trim() };
+      let pn = spaceMatch[1].trim();
+      let sn = spaceMatch[2].trim();
+      return { pn, sn };
     }
+
     return null;
   };
 
@@ -158,10 +254,10 @@ export default function ScanInReceiving() {
       autoScanTimerRef.current = null;
     }
 
-    const pnToUse = (overridePn !== null ? overridePn : partNumberInput).trim();
-    const snToUse = (overrideSn !== null ? overrideSn : serialInput).trim();
+    const rawPn = (overridePn !== null ? overridePn : partNumberInput).trim();
+    const rawSn = (overrideSn !== null ? overrideSn : serialInput).trim();
 
-    if (!pnToUse || !snToUse) {
+    if (!rawPn || !rawSn) {
       setScanResult({
         type: 'error',
         message: 'Please provide both Part Number and Serial Number'
@@ -169,18 +265,39 @@ export default function ScanInReceiving() {
       return false;
     }
 
+    // Resolve canonical Apple Part Number (661-xxxxx)
+    const resolved = resolvePartInfo(rawPn, parts);
+    const pnToUse = resolved ? resolved.part_number : rawPn;
+
+    // Security Verification: Validate Serial Number before adding
+    const validation = validateAppleSerialNumber(rawSn, pnToUse, parts);
+    if (!validation.isValid) {
+      setScanResult({
+        type: 'error',
+        message: validation.error
+      });
+      serialInputRef.current?.select();
+      return false;
+    }
+
+    const snToUse = validation.cleanSerial;
+    const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
+
     const res = addScanInUnit({
       partNumber: pnToUse,
       serialNumber: snToUse,
-      poId: selectedPoId || null
+      poId: selectedPoId || null,
+      intakeAssignment: currentAssignment,
+      notes: currentAssignment
     });
 
     if (res.success) {
       setScanResult({
         type: 'success',
-        message: `Successfully received: ${res.unit.description} (SN: ${res.unit.serial_number})`
+        message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
       });
       setSessionScans(prev => [res.unit, ...prev]);
+      setShowPnDropdown(false);
       
       // Clear inputs and refocus based on continuous batch scanning preferences
       setSerialInput('');
@@ -201,37 +318,44 @@ export default function ScanInReceiving() {
     }
   };
 
-  // Handle Part Number change (detects barcode scanner stream, combined barcodes, and auto-advance)
+  // Handle Part Number change
   const handlePnChange = (e) => {
     const val = e.target.value;
     setPartNumberInput(val);
+    setShowPnDropdown(true);
 
     if (autoScanTimerRef.current) {
       clearTimeout(autoScanTimerRef.current);
       autoScanTimerRef.current = null;
     }
 
-    if (!autoReceive) return;
-
     const cleanPn = val.trim();
     const combined = parseBarcodeData(cleanPn);
     if (combined) {
-      setPartNumberInput(combined.pn);
+      const resolved = resolvePartInfo(combined.pn, parts);
+      const actualPn = resolved ? resolved.part_number : combined.pn;
+      setPartNumberInput(actualPn);
       setSerialInput(combined.sn);
-      executeScan(combined.pn, combined.sn);
+      setShowPnDropdown(false);
+      if (autoReceive) {
+        executeScan(actualPn, combined.sn);
+      } else {
+        serialInputRef.current?.focus();
+      }
       return;
     }
 
-    // Auto-advance to Serial field once valid Apple Part Number is scanned (e.g. 661-xxxxx)
-    if (/^[0-9]{3}-[0-9]{4,6}$/i.test(cleanPn) || (cleanPn.length >= 9 && cleanPn.includes('-'))) {
+    // Auto-advance to Serial field once valid Apple Part Number is entered (e.g. 661-xxxxx)
+    if (/^[0-9]{3}-[0-9]{4,6}$/i.test(cleanPn)) {
       autoScanTimerRef.current = setTimeout(() => {
+        setShowPnDropdown(false);
         serialInputRef.current?.focus();
         serialInputRef.current?.select();
-      }, 140);
+      }, 150);
     }
   };
 
-  // Handle Serial change (instantly auto-receives once full serial number is complete and scanned!)
+  // Handle Serial change with security verification
   const handleSerialChange = (e) => {
     const val = e.target.value;
     setSerialInput(val);
@@ -241,59 +365,88 @@ export default function ScanInReceiving() {
       autoScanTimerRef.current = null;
     }
 
-    if (!autoReceive) return;
-
     const cleanSerial = val.trim();
-    const cleanPn = partNumberInput.trim();
+    const cleanPn = (matchedPart ? matchedPart.part_number : partNumberInput).trim();
 
+    // Check for combined 2D barcode format
     const combined = parseBarcodeData(cleanSerial);
     if (combined) {
-      setPartNumberInput(combined.pn);
+      const resolved = resolvePartInfo(combined.pn, parts);
+      const actualPn = resolved ? resolved.part_number : combined.pn;
+      setPartNumberInput(actualPn);
       setSerialInput(combined.sn);
-      executeScan(combined.pn, combined.sn);
+      setShowPnDropdown(false);
+      if (autoReceive) {
+        executeScan(actualPn, combined.sn);
+      } else {
+        serialInputRef.current?.focus();
+      }
       return;
     }
 
-    // When full serial number is scanned and complete (>= 8 chars), automatically receive!
-    if (cleanPn && cleanSerial.length >= 8) {
+    // Security Verification: If entered value is an Apple Part Number, block auto-receive and alert user!
+    const validation = validateAppleSerialNumber(cleanSerial, cleanPn, parts);
+    if (validation.isPartNumber) {
+      setScanResult({
+        type: 'error',
+        message: validation.error
+      });
+      return; // Do NOT auto-receive when a Part Number is entered into Serial field!
+    }
+
+    // When full valid serial number is scanned and part number is present, auto-receive!
+    if (autoReceive && cleanPn && validation.isValid) {
       autoScanTimerRef.current = setTimeout(() => {
-        executeScan(cleanPn, cleanSerial);
+        executeScan(cleanPn, validation.cleanSerial);
       }, 160);
     }
   };
 
-  // Handle Part Number submission (Enter key from scanner)
+  // Handle Part Number Enter key
   const handlePnKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const combined = parseBarcodeData(partNumberInput);
       if (combined) {
-        setPartNumberInput(combined.pn);
+        const resolved = resolvePartInfo(combined.pn, parts);
+        const actualPn = resolved ? resolved.part_number : combined.pn;
+        setPartNumberInput(actualPn);
         setSerialInput(combined.sn);
+        setShowPnDropdown(false);
         if (autoReceive) {
-          executeScan(combined.pn, combined.sn);
+          executeScan(actualPn, combined.sn);
         } else {
           serialInputRef.current?.focus();
         }
         return;
       }
-      if (partNumberInput.trim()) {
-        serialInputRef.current?.focus();
-        serialInputRef.current?.select();
+
+      // If matched part from text
+      const resolved = resolvePartInfo(partNumberInput, parts);
+      if (resolved) {
+        setPartNumberInput(resolved.part_number);
       }
+      setShowPnDropdown(false);
+      serialInputRef.current?.focus();
+      serialInputRef.current?.select();
+    } else if (e.key === 'Escape') {
+      setShowPnDropdown(false);
     }
   };
 
-  // Handle Serial submission (Enter key from scanner)
+  // Handle Serial Enter key
   const handleSerialKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const combined = parseBarcodeData(serialInput);
       if (combined) {
-        setPartNumberInput(combined.pn);
+        const resolved = resolvePartInfo(combined.pn, parts);
+        const actualPn = resolved ? resolved.part_number : combined.pn;
+        setPartNumberInput(actualPn);
         setSerialInput(combined.sn);
+        setShowPnDropdown(false);
         if (autoReceive) {
-          executeScan(combined.pn, combined.sn);
+          executeScan(actualPn, combined.sn);
         } else {
           serialInputRef.current?.focus();
         }
@@ -303,30 +456,39 @@ export default function ScanInReceiving() {
     }
   };
 
-  // Quick Mock Scanner Simulator (for testing without a physical barcode scanner)
+  // Quick Mock Scanner Simulator with Genuine 17-Character Apple Serial Numbers
   const testSampleParts = [
-    { pn: '661-21991', desc: 'Battery, iPhone 13', prefix: 'DN8', suffix: 'MCN3R' },
-    { pn: '661-21996', desc: 'Battery, iPhone 13 Pro', prefix: 'DNM', suffix: '33817' },
-    { pn: '661-22294', desc: 'Battery, iPhone 13 Pro Max', prefix: 'F8Y', suffix: '13XCB' },
-    { pn: '661-30401', desc: 'Display, iPhone 14 Pro Max', prefix: 'GH3', suffix: '00MUZ' }
+    { pn: '661-30373', desc: 'Battery, iPhone 14', prefix: 'F8Y6234C9A', suffix: 'R231LB3' },
+    { pn: '661-30394', desc: 'Battery, iPhone 14 Plus', prefix: 'F8Y6235D1B', suffix: 'R235LB4' },
+    { pn: '661-30366', desc: 'Display, iPhone 14', prefix: 'GH3891MZP0', suffix: '1289XC' },
+    { pn: '661-21991', desc: 'Battery, iPhone 13', prefix: 'DN86234C1U', suffix: 'QMCN3R' },
+    { pn: '661-21996', desc: 'Battery, iPhone 13 Pro', prefix: 'DNM6234C2U', suffix: 'Q33817' },
+    { pn: '661-22294', desc: 'Battery, iPhone 13 Pro Max', prefix: 'F8Y6235C3Z', suffix: 'A13XCBB' },
+    { pn: '661-36918', desc: 'Battery, iPhone 15 Pro Max', prefix: 'FG9HTN0049', suffix: 'R00006TT' },
+    { pn: '661-30401', desc: 'Display, iPhone 14 Pro Max', prefix: 'GH36234D9A', suffix: '00MUZ' }
   ];
 
-  const handleSimulateScan = (pn, prefix = 'DN8', suffix = 'MCN3R') => {
-    const randomSerial = `${prefix}${Date.now().toString().slice(-6)}${suffix}`;
+  const handleSimulateScan = (pn, prefix = 'F8Y6234C9A', suffix = 'R231LB3') => {
+    const randomSerial = `${prefix}${Date.now().toString().slice(-4)}${suffix}`;
     const serial = randomSerial;
     setPartNumberInput(pn);
     setSerialInput(serial);
+    setShowPnDropdown(false);
+    const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
+
     if (autoReceive) {
       setTimeout(() => {
         const res = addScanInUnit({
           partNumber: pn,
           serialNumber: serial,
-          poId: selectedPoId || null
+          poId: selectedPoId || null,
+          intakeAssignment: currentAssignment,
+          notes: currentAssignment
         });
         if (res.success) {
           setScanResult({
             type: 'success',
-            message: `[AUTO-RECEIVED] ${res.unit.description} (SN: ${res.unit.serial_number})`
+            message: `[AUTO-RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
           });
           setSessionScans(prev => [res.unit, ...prev]);
           setSerialInput('');
@@ -347,7 +509,6 @@ export default function ScanInReceiving() {
   };
 
   // --- XLSX / CSV File Import Handling ---
-
   const handleFileSelect = async (file) => {
     if (!file) return;
     setIsParsing(true);
@@ -395,27 +556,30 @@ export default function ScanInReceiving() {
   const handleConfirmBatchImport = () => {
     if (!parsedBatch || !parsedBatch.items) return;
 
-    const validItems = parsedBatch.items.filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY');
+    const validItems = parsedBatch.items
+      .filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY')
+      .map(it => ({
+        ...it,
+        intake_assignment: it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment,
+        notes: it.notes || modalAssignment
+      }));
+
     if (validItems.length === 0) {
       showToast('No valid parts to import.', 'error');
       return;
     }
 
-    const res = batchAddScanInUnits(validItems, modalPoId || selectedPoId || null);
+    const res = batchAddScanInUnits(validItems, modalPoId || selectedPoId || null, modalAssignment);
     if (res.success) {
-      // Mark imported units with import source badge
       const importedWithFlag = res.units.map(u => ({ ...u, isImported: true }));
       setSessionScans(prev => [...importedWithFlag, ...prev]);
 
       setScanResult({
         type: 'success',
-        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts from "${parsedBatch.fileName}" into DC Database!`
+        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts (${modalAssignment}) from "${parsedBatch.fileName}" into DC Database!`
       });
 
-      // Switch view to show the newly imported items in All DC Stock
       setActiveTableView('ALL_DC_STOCK');
-
-      // Reset and close modal
       setParsedBatch(null);
       setIsImportModalOpen(false);
       pnInputRef.current?.focus();
@@ -431,18 +595,31 @@ export default function ScanInReceiving() {
     return true;
   });
 
-  // Filter for currently available IN-STOCK units in DC (packed/shipped units are automatically deducted)
+  // Filter for currently available IN-STOCK units in DC (normalized to ensure Apple P/N and exclude mislabeled units)
   const availableInStockUnits = useMemo(() => {
-    return (inventoryUnits || []).filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc'));
-  }, [inventoryUnits]);
+    const raw = (inventoryUnits || []).filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc'));
+    return normalizeInventoryUnits(raw, parts);
+  }, [inventoryUnits, parts]);
 
-  // Table items calculation
+  // Normalized session scans
+  const normalizedSessionScans = useMemo(() => {
+    return normalizeInventoryUnits(sessionScans, parts);
+  }, [sessionScans, parts]);
+
+  // Table items calculation with Assignment Filter
   const displayedUnits = useMemo(() => {
     let sourceList = activeTableView === 'ALL_DC_STOCK'
       ? availableInStockUnits
-      : sessionScans;
+      : normalizedSessionScans;
 
     if (!sourceList) sourceList = [];
+
+    // Assignment filter
+    if (assignmentFilter === 'MDC - Forecasting') {
+      sourceList = sourceList.filter(u => !u.intake_assignment?.includes('CRBR') && !u.notes?.includes('CRBR'));
+    } else if (assignmentFilter === 'DC - CRBR') {
+      sourceList = sourceList.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR'));
+    }
 
     if (!tableSearch.trim()) return sourceList;
 
@@ -450,9 +627,11 @@ export default function ScanInReceiving() {
     return sourceList.filter(u =>
       (u.part_number && u.part_number.toLowerCase().includes(q)) ||
       (u.serial_number && u.serial_number.toLowerCase().includes(q)) ||
-      (u.description && u.description.toLowerCase().includes(q))
+      (u.description && u.description.toLowerCase().includes(q)) ||
+      (u.intake_assignment && u.intake_assignment.toLowerCase().includes(q)) ||
+      (u.notes && u.notes.toLowerCase().includes(q))
     );
-  }, [activeTableView, availableInStockUnits, sessionScans, tableSearch]);
+  }, [activeTableView, assignmentFilter, availableInStockUnits, normalizedSessionScans, tableSearch]);
 
   const handleClearSessionHistory = () => {
     setSessionScans([]);
@@ -508,11 +687,22 @@ export default function ScanInReceiving() {
     }
   };
 
+  // Metric counts for assignment
+  const forecastingCount = useMemo(() => {
+    const list = activeTableView === 'ALL_DC_STOCK' ? availableInStockUnits : normalizedSessionScans;
+    return list.filter(u => !u.intake_assignment?.includes('CRBR') && !u.notes?.includes('CRBR')).length;
+  }, [activeTableView, availableInStockUnits, normalizedSessionScans]);
+
+  const crbrCount = useMemo(() => {
+    const list = activeTableView === 'ALL_DC_STOCK' ? availableInStockUnits : normalizedSessionScans;
+    return list.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR')).length;
+  }, [activeTableView, availableInStockUnits, normalizedSessionScans]);
+
   return (
     <div className="scanner-container">
       {/* Scanner Workstation Hero Card */}
       <div className="scanner-hero">
-        {/* Header Row: Title & System Telemetry Status (Read-Only Badges) */}
+        {/* Header Row: Title & System Telemetry Status */}
         <div className="scanner-hero-header" style={{ marginBottom: '18px', alignItems: 'flex-start' }}>
           <div>
             <h2 style={{ color: '#fff', fontSize: '21px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
@@ -520,11 +710,11 @@ export default function ScanInReceiving() {
               <span>DC Receive Scan-In Station</span>
             </h2>
             <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '3px', margin: '3px 0 0 0' }}>
-              Physical Keyboard HID Barcode Scanner Active • Automatic Database Persistence
+              Physical Keyboard HID Barcode Scanner Active • Current Destination: <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8' }}>{intakeAssignment}</strong>
             </p>
           </div>
 
-          {/* System Telemetry Badges (Read-Only Information Badges) */}
+          {/* System Telemetry Badges */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div
               className="telemetry-badge"
@@ -559,8 +749,8 @@ export default function ScanInReceiving() {
           </div>
         </div>
 
-        {/* Workstation Controls & Actions Toolbar (3 Distinct Logical Columns) */}
-        <div className="workstation-controls-bar">
+        {/* Workstation Controls & Actions Toolbar */}
+        <div className="workstation-controls-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
           {/* Column 1: PO Selector */}
           <div>
             <label className="workstation-col-label">
@@ -582,11 +772,91 @@ export default function ScanInReceiving() {
             </select>
           </div>
 
-          {/* Column 2: Auto-Receive Switch & Settings */}
+          {/* Column 2: Part Assignment Classification (CRBR vs Forecasting) */}
+          <div>
+            <label className="workstation-col-label">
+              <Layers size={13} color="#38bdf8" />
+              <span>2. Part Assignment Category</span>
+            </label>
+            <div style={{
+              display: 'flex',
+              gap: '6px',
+              background: '#0f172a',
+              padding: '4px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid #334155',
+              height: '42px',
+              alignItems: 'center'
+            }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = 'MDC - Forecasting';
+                  setIntakeAssignment(next);
+                  intakeAssignmentRef.current = next;
+                  try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                  showToast('Part assignment set to "MDC - Forecasting"', 'info');
+                }}
+                style={{
+                  flex: 1,
+                  height: '32px',
+                  background: intakeAssignment === 'MDC - Forecasting' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+                  color: intakeAssignment === 'MDC - Forecasting' ? '#fff' : '#94a3b8',
+                  border: intakeAssignment === 'MDC - Forecasting' ? '1px solid #38bdf8' : 'none',
+                  borderRadius: '4px',
+                  fontSize: '11.5px',
+                  fontWeight: intakeAssignment === 'MDC - Forecasting' ? 700 : 500,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px',
+                  transition: 'all 0.15s'
+                }}
+                title="Designated for Monthly Forecasting & Branch Stock Allocation"
+              >
+                <span>MDC - Forecasting</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = 'DC - CRBR';
+                  setIntakeAssignment(next);
+                  intakeAssignmentRef.current = next;
+                  try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                  showToast('Part assignment set to "DC - CRBR"', 'info');
+                }}
+                style={{
+                  flex: 1,
+                  height: '32px',
+                  background: intakeAssignment === 'DC - CRBR' ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)' : 'transparent',
+                  color: intakeAssignment === 'DC - CRBR' ? '#fff' : '#94a3b8',
+                  border: intakeAssignment === 'DC - CRBR' ? '1px solid #f59e0b' : 'none',
+                  borderRadius: '4px',
+                  fontSize: '11.5px',
+                  fontWeight: intakeAssignment === 'DC - CRBR' ? 700 : 500,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px',
+                  transition: 'all 0.15s'
+                }}
+                title="Designated for Customer Return / Repair Buffer Returns (CRBR) — Separate from Forecasting"
+              >
+                <span>DC - CRBR</span>
+              </button>
+            </div>
+            <span style={{ fontSize: '11px', color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
+              {intakeAssignment === 'DC - CRBR' ? '• Tagged: DC - CRBR (Customer Return & Buffer)' : '• Tagged: MDC - Forecasting (Stock Allocation)'}
+            </span>
+          </div>
+
+          {/* Column 3: Auto-Receive Switch & Settings */}
           <div>
             <label className="workstation-col-label">
               <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
-              <span>2. Scanner Intake Mode</span>
+              <span>3. Scanner Intake Mode</span>
             </label>
             <div
               className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
@@ -623,11 +893,11 @@ export default function ScanInReceiving() {
             )}
           </div>
 
-          {/* Column 3: Workstation Action Buttons */}
+          {/* Column 4: Workstation Action Buttons */}
           <div>
             <label className="workstation-col-label">
               <Sparkles size={13} color="#38bdf8" />
-              <span>3. Batch Actions</span>
+              <span>4. Batch Actions</span>
             </label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <button
@@ -677,34 +947,234 @@ export default function ScanInReceiving() {
           </div>
         </div>
 
-        {/* Dual Input Fields for Barcode Scans */}
-        <div className="scan-input-grid">
-          <div>
-            <label className="scanner-field-label">1. Part Number (P/N)</label>
-            <input
-              ref={pnInputRef}
-              type="text"
-              className="scanner-input"
-              placeholder="e.g. 661-21991"
-              value={partNumberInput}
-              onChange={handlePnChange}
-              onKeyDown={handlePnKeyDown}
-            />
+        {/* Dual Input Fields for Barcode Scans with Autocomplete & Security Validation */}
+        <div className="scan-input-grid" style={{ position: 'relative' }}>
+          {/* Part Number Input Column */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label className="scanner-field-label">1. Part Number (P/N)</label>
+              {matchedPart && (
+                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                  ✓ {matchedPart.part_number}
+                </span>
+              )}
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              <input
+                ref={pnInputRef}
+                type="text"
+                className="scanner-input"
+                placeholder="Scan barcode or type e.g. 661-30373 or Battery, iPhone 14"
+                value={partNumberInput}
+                onChange={handlePnChange}
+                onKeyDown={handlePnKeyDown}
+                onFocus={() => setShowPnDropdown(true)}
+                style={{
+                  borderColor: matchedPart ? '#10b981' : undefined,
+                  boxShadow: matchedPart ? '0 0 0 1px rgba(16, 185, 129, 0.3)' : undefined
+                }}
+              />
+
+              {/* Clear button */}
+              {partNumberInput && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPartNumberInput('');
+                    setShowPnDropdown(false);
+                    pnInputRef.current?.focus();
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Live Apple Genuine Part Recognition Banner */}
+            {matchedPart && (
+              <div style={{
+                background: 'rgba(16, 185, 129, 0.15)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                marginTop: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: '12px',
+                color: '#34d399'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Check size={13} color="#34d399" />
+                  <span><strong>{matchedPart.part_number}</strong> — {matchedPart.description}</span>
+                </div>
+                <span style={{ color: '#cbd5e1', fontSize: '11px' }}>
+                  {matchedPart.iphone_model || 'Genuine Service Part'}
+                </span>
+              </div>
+            )}
+
+            {/* Interactive Suggestions Dropdown */}
+            {showPnDropdown && suggestedParts.length > 0 && !matchedPart && (
+              <div
+                ref={dropdownRef}
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  zIndex: 100,
+                  background: '#1e293b',
+                  border: '1px solid #334155',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                  marginTop: '4px',
+                  maxHeight: '260px',
+                  overflowY: 'auto'
+                }}
+              >
+                <div style={{ padding: '6px 10px', fontSize: '11px', color: '#94a3b8', borderBottom: '1px solid #334155', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Select Matching Apple Part:
+                </div>
+                {suggestedParts.map((p) => (
+                  <div
+                    key={p.id || p.part_number}
+                    onClick={() => handleSelectSuggestedPart(p)}
+                    style={{
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      borderBottom: '1px solid #334155',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      transition: 'background 0.15s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#334155'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <div>
+                      <span className="font-mono" style={{ color: '#38bdf8', fontWeight: 700, fontSize: '12.5px', marginRight: '8px' }}>
+                        {p.part_number}
+                      </span>
+                      <span style={{ color: '#fff', fontSize: '12px' }}>
+                        {p.description}
+                      </span>
+                    </div>
+                    <span className="badge" style={{ background: '#0f172a', color: '#94a3b8', fontSize: '11px' }}>
+                      {p.iphone_model || 'Part'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div>
-            <label className="scanner-field-label">2. Serial Number (S/N)</label>
-            <input
-              ref={serialInputRef}
-              type="text"
-              className="scanner-input"
-              placeholder="e.g. F8Y6276C1UQ13XCB1"
-              value={serialInput}
-              onChange={handleSerialChange}
-              onKeyDown={handleSerialKeyDown}
-            />
+          {/* Serial Number Input Column with Security Validation */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label className="scanner-field-label">2. Serial Number (S/N)</label>
+              {serialValidation && serialValidation.isValid && (
+                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                  ✓ Valid S/N
+                </span>
+              )}
+              {serialValidation && serialValidation.isPartNumber && (
+                <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 6px', background: '#dc2626' }}>
+                  ⚠️ Part Number Detected
+                </span>
+              )}
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              <input
+                ref={serialInputRef}
+                type="text"
+                className="scanner-input"
+                placeholder="Scan barcode e.g. F8Y6234C9AR231LB3"
+                value={serialInput}
+                onChange={handleSerialChange}
+                onKeyDown={handleSerialKeyDown}
+                style={{
+                  borderColor: serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
+                  boxShadow: serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined
+                }}
+              />
+
+              {/* Clear button */}
+              {serialInput && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSerialInput('');
+                    serialInputRef.current?.focus();
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Serial Number Security Warning Banner */}
+            {serialValidation?.isPartNumber && (
+              <div style={{
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                marginTop: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                color: '#f87171'
+              }}>
+                <ShieldAlert size={14} color="#ef4444" />
+                <span><strong>Security Guard:</strong> "{serialInput}" is a Part Number! Please scan the component's unique Serial Number (S/N).</span>
+              </div>
+            )}
+
+            {/* Serial Number Verified Banner */}
+            {serialValidation?.isValid && (
+              <div style={{
+                background: 'rgba(16, 185, 129, 0.12)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                marginTop: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                color: '#34d399'
+              }}>
+                <ShieldCheck size={14} color="#34d399" />
+                <span>Verified Component Serial: <strong>{serialValidation.cleanSerial}</strong></span>
+              </div>
+            )}
           </div>
 
+          {/* Receive Submit Button */}
           <div>
             <button
               className={`btn ${autoReceive ? 'btn-primary' : 'btn-secondary'} btn-lg`}
@@ -749,7 +1219,7 @@ export default function ScanInReceiving() {
             <Zap size={16} color="var(--primary)" />
             <strong style={{ fontSize: '13px' }}>Scanner Simulator & Quick Tools</strong>
           </div>
-          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>No hardware required</span>
+          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Click any sample part to simulate hardware scan into <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#d97706' : '#0284c7' }}>{intakeAssignment}</strong></span>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -758,145 +1228,141 @@ export default function ScanInReceiving() {
               key={idx}
               className="btn btn-secondary btn-sm"
               onClick={() => handleSimulateScan(sample.pn, sample.prefix, sample.suffix)}
+              style={{
+                background: '#fff',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px'
+              }}
+              title={`Simulate scanning ${sample.pn} (${sample.desc}) into ${intakeAssignment}`}
             >
-              <span>+ Scan {sample.desc}</span>
+              <Barcode size={13} color="var(--primary)" />
+              <span><strong>{sample.pn}</strong> — {sample.desc}</span>
             </button>
           ))}
-
-          <div style={{ marginLeft: 'auto' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setIsImportModalOpen(true)}
-              style={{ background: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}
-            >
-              <UploadCloud size={14} color="var(--primary)" />
-              <span>Upload Parts Spreadsheet</span>
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* Inventory & Intake History Table (Persistent & Live) */}
+      {/* Scanned DC Inventory Units Table */}
       <div className="card">
+        {/* Table Header Controls */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h3 style={{ margin: 0 }}>Received DC Stock & Intake History</h3>
-              <span
-                className="badge"
-                style={{
-                  background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
-                  color: isAutoRefreshing ? '#0284c7' : '#047857',
-                  border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  transition: 'all 0.2s ease'
-                }}
-                title={isAutoRefreshing ? "Auto-refreshing latest inventory from database..." : "Data auto-refreshed on page visit and synced with database"}
-              >
-                {isAutoRefreshing ? (
-                  <>
-                    <RefreshCw size={11} className="spin" />
-                    <span>Auto-Refreshing...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check size={11} />
-                    <span>Live Synced</span>
-                  </>
-                )}
-              </span>
-            </div>
-            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-              Total DC In-Stock Units: <strong>{availableInStockUnits.length}</strong> • Recent Session Intake: <strong>{sessionScans.length}</strong>
-              {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            {/* View Filter Switcher */}
-            <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>Received DC Stock & Intake History</h3>
+            {/* View Switcher: All DC Stock vs Current Session */}
+            <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
               <button
-                className={`btn btn-sm ${activeTableView === 'ALL_DC_STOCK' ? 'btn-primary' : 'btn-secondary'}`}
+                type="button"
                 onClick={() => setActiveTableView('ALL_DC_STOCK')}
-                style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px' }}
+                style={{
+                  background: activeTableView === 'ALL_DC_STOCK' ? '#fff' : 'transparent',
+                  color: activeTableView === 'ALL_DC_STOCK' ? 'var(--text-main)' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '4px 10px',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: activeTableView === 'ALL_DC_STOCK' ? 600 : 400,
+                  cursor: 'pointer',
+                  boxShadow: activeTableView === 'ALL_DC_STOCK' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
+                }}
               >
                 All DC Stock ({availableInStockUnits.length})
               </button>
               <button
-                className={`btn btn-sm ${activeTableView === 'SESSION_SCANS' ? 'btn-primary' : 'btn-secondary'}`}
+                type="button"
                 onClick={() => setActiveTableView('SESSION_SCANS')}
-                style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px' }}
+                style={{
+                  background: activeTableView === 'SESSION_SCANS' ? '#fff' : 'transparent',
+                  color: activeTableView === 'SESSION_SCANS' ? 'var(--text-main)' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '4px 10px',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: activeTableView === 'SESSION_SCANS' ? 600 : 400,
+                  cursor: 'pointer',
+                  boxShadow: activeTableView === 'SESSION_SCANS' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
+                }}
               >
-                Recent Session ({sessionScans.length})
+                Current Session ({normalizedSessionScans.length})
               </button>
             </div>
 
-            {/* Quick Search */}
-            <div style={{ position: 'relative', minWidth: '200px' }}>
-              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            {/* Assignment Filter Switcher */}
+            <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+              <button
+                type="button"
+                onClick={() => setAssignmentFilter('ALL')}
+                style={{
+                  background: assignmentFilter === 'ALL' ? '#fff' : 'transparent',
+                  color: assignmentFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  fontSize: '11.5px',
+                  fontWeight: assignmentFilter === 'ALL' ? 600 : 400,
+                  cursor: 'pointer'
+                }}
+              >
+                All Destinations
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssignmentFilter('MDC - Forecasting')}
+                style={{
+                  background: assignmentFilter === 'MDC - Forecasting' ? '#0284c7' : 'transparent',
+                  color: assignmentFilter === 'MDC - Forecasting' ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  fontSize: '11.5px',
+                  fontWeight: assignmentFilter === 'MDC - Forecasting' ? 600 : 400,
+                  cursor: 'pointer'
+                }}
+              >
+                MDC - Forecasting ({forecastingCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAssignmentFilter('DC - CRBR')}
+                style={{
+                  background: assignmentFilter === 'DC - CRBR' ? '#d97706' : 'transparent',
+                  color: assignmentFilter === 'DC - CRBR' ? '#fff' : 'var(--text-muted)',
+                  border: 'none',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  fontSize: '11.5px',
+                  fontWeight: assignmentFilter === 'DC - CRBR' ? 600 : 400,
+                  cursor: 'pointer'
+                }}
+              >
+                DC - CRBR ({crbrCount})
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{ position: 'relative', width: '220px' }}>
+              <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
-                placeholder="Search P/N, serial..."
+                placeholder="Filter P/N, S/N, destination..."
                 value={tableSearch}
                 onChange={(e) => setTableSearch(e.target.value)}
                 className="form-input"
-                style={{ paddingLeft: '30px', paddingRight: '10px', height: '34px', fontSize: '12.5px', width: '100%' }}
+                style={{ paddingLeft: '28px', height: '34px', fontSize: '12px', width: '100%' }}
               />
             </div>
 
-            {/* Quick Manual Refresh Button */}
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'ScanInReceiving manual refresh' })}
-              disabled={isAutoRefreshing}
-              title="Force reload latest inventory from database"
-              style={{ height: '34px', display: 'flex', alignItems: 'center', gap: '5px' }}
+              onClick={() => setActiveTab('intake-records')}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', height: '34px' }}
+              title="View all stock grouped by date in DC Intake Records"
             >
-              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
-              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
-            </button>
-
-            {/* Direct Add to Stock button in Table Toolbar */}
-            {sessionScans.length > 0 && (
-              <button
-                className="btn btn-sm btn-primary"
-                onClick={handleAddAllToStock}
-                disabled={isAddingToStock}
-                style={{
-                  background: '#10b981',
-                  borderColor: '#059669',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  fontWeight: 600,
-                  height: '34px'
-                }}
-                title="Finalize recent session parts and add them to permanent DC Stock"
-              >
-                {isAddingToStock ? <RefreshCw size={13} className="spin" /> : <PackageCheck size={14} />}
-                <span>Add to Stock ({sessionScans.length})</span>
-              </button>
-            )}
-
-            {/* Quick jump to Pack Scan-Out button */}
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('scan-out')}
-              style={{
-                height: '34px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                color: '#38bdf8',
-                borderColor: 'rgba(56, 189, 248, 0.3)',
-                background: 'rgba(56, 189, 248, 0.08)'
-              }}
-              title="Navigate to Pack Scan-Out to create packing lists with available stock"
-            >
-              <ArrowUpRight size={14} />
-              <span>Create Packing List</span>
+              <BookmarkPlus size={14} color="#0284c7" />
+              <span>Intake Records</span>
             </button>
 
             {sessionScans.length > 0 && activeTableView === 'SESSION_SCANS' && (
@@ -909,8 +1375,8 @@ export default function ScanInReceiving() {
 
         {displayedUnits.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13.5px' }}>
-            {tableSearch ? (
-              <span>No parts found matching "{tableSearch}". Try a different search term.</span>
+            {tableSearch || assignmentFilter !== 'ALL' ? (
+              <span>No parts found matching current filters. Try resetting search or destination filters.</span>
             ) : activeTableView === 'ALL_DC_STOCK' ? (
               <span>No parts currently in DC inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
             ) : (
@@ -926,6 +1392,7 @@ export default function ScanInReceiving() {
                   <th>Part Number</th>
                   <th>Description</th>
                   <th>Serial Number</th>
+                  <th>Assignment / Note (Click to switch)</th>
                   <th>Intake Source</th>
                   <th>Timestamp</th>
                   <th>Status</th>
@@ -933,54 +1400,89 @@ export default function ScanInReceiving() {
                 </tr>
               </thead>
               <tbody>
-                {displayedUnits.map((unit, idx) => (
-                  <tr key={unit.id || `${unit.serial_number}-${idx}`}>
-                    <td className="font-mono">{idx + 1}</td>
-                    <td className="font-mono"><strong>{unit.part_number}</strong></td>
-                    <td>{unit.description}</td>
-                    <td className="font-mono">{unit.serial_number}</td>
-                    <td>
-                      {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
-                        <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }}>
-                          <FileSpreadsheet size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                          Spreadsheet Import
-                        </span>
-                      ) : (
-                        <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}>
-                          <Barcode size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                          Barcode Scan
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {unit.received_at ? new Date(unit.received_at).toLocaleTimeString() : 'Recent'}
-                    </td>
-                    <td>
-                      <span className="badge badge-success">In Stock</span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setUnitToDelete(unit)}
-                        style={{
-                          padding: '4px 8px',
-                          fontSize: '11.5px',
-                          color: '#ef4444',
-                          borderColor: '#fca5a5',
-                          background: '#fff',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px'
-                        }}
-                        title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
-                      >
-                        <Trash2 size={13} />
-                        <span>Delete</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {displayedUnits.map((unit, idx) => {
+                  const isCrbr = unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR');
+                  return (
+                    <tr key={unit.id || `${unit.serial_number}-${idx}`}>
+                      <td className="font-mono">{idx + 1}</td>
+                      <td className="font-mono">
+                        <strong style={{ color: '#0f172a' }}>{unit.part_number}</strong>
+                      </td>
+                      <td>{unit.description}</td>
+                      <td className="font-mono">{unit.serial_number}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newDest = isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
+                            updateUnitAssignment(unit.serial_number, newDest);
+                            setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest } : u));
+                          }}
+                          className="badge"
+                          style={{
+                            background: isCrbr ? '#fef3c7' : '#e0f2fe',
+                            color: isCrbr ? '#92400e' : '#0369a1',
+                            border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                            fontWeight: 700,
+                            fontSize: '11.5px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            cursor: 'pointer',
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            transition: 'all 0.15s'
+                          }}
+                          title={`Click to toggle destination to ${isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
+                        >
+                          {isCrbr ? <Tag size={11} /> : <Layers size={11} />}
+                          <span>{isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                          <ArrowLeftRight size={10} style={{ opacity: 0.6, marginLeft: '2px' }} />
+                        </button>
+                      </td>
+                      <td>
+                        {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
+                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }}>
+                            <FileSpreadsheet size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                            Spreadsheet Import
+                          </span>
+                        ) : (
+                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}>
+                            <Barcode size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                            Barcode Scan
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {unit.received_at ? new Date(unit.received_at).toLocaleTimeString() : 'Recent'}
+                      </td>
+                      <td>
+                        <span className="badge badge-success">In Stock</span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setUnitToDelete(unit)}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '11.5px',
+                            color: '#ef4444',
+                            borderColor: '#fca5a5',
+                            background: '#fff',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                          title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
+                        >
+                          <Trash2 size={13} />
+                          <span>Delete</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1000,7 +1502,7 @@ export default function ScanInReceiving() {
                 <div>
                   <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Import Parts (XLSX / CSV)</h3>
                   <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Bulk receive parts with serial numbers and save directly to persistent database
+                    Bulk receive parts with serial numbers, destination assignment, and persistent database save
                   </p>
                 </div>
               </div>
@@ -1051,24 +1553,41 @@ export default function ScanInReceiving() {
                 </div>
               </div>
 
-              {/* Linked PO Selector inside modal */}
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
-                  Default Purchase Order for this Intake:
-                </label>
-                <select
-                  className="form-select"
-                  style={{ width: '100%', maxWidth: '450px' }}
-                  value={modalPoId}
-                  onChange={(e) => setModalPoId(e.target.value)}
-                >
-                  <option value="">-- No PO (Direct DC Intake) --</option>
-                  {purchaseOrders.map(po => (
-                    <option key={po.id} value={po.id}>
-                      {po.po_number} ({po.status}) - {po.supplier || 'Apple Direct'}
-                    </option>
-                  ))}
-                </select>
+              {/* Grid: PO Selector & Assignment Selector */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
+                    Default Purchase Order:
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%' }}
+                    value={modalPoId}
+                    onChange={(e) => setModalPoId(e.target.value)}
+                  >
+                    <option value="">-- No PO (Direct DC Intake) --</option>
+                    {purchaseOrders.map(po => (
+                      <option key={po.id} value={po.id}>
+                        {po.po_number} ({po.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
+                    Intake Assignment / Destination:
+                  </label>
+                  <select
+                    className="form-select"
+                    style={{ width: '100%' }}
+                    value={modalAssignment}
+                    onChange={(e) => setModalAssignment(e.target.value)}
+                  >
+                    <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
+                    <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
+                  </select>
+                </div>
               </div>
 
               {/* Dropzone Area */}
@@ -1117,6 +1636,12 @@ export default function ScanInReceiving() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <FileSpreadsheet size={18} color="var(--primary)" />
                       <strong style={{ fontSize: '13px' }}>{parsedBatch.fileName}</strong>
+                      <span className="badge" style={{
+                        background: modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe',
+                        color: modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1'
+                      }}>
+                        {modalAssignment}
+                      </span>
                     </div>
                     <button
                       className="btn btn-secondary btn-sm"
@@ -1148,7 +1673,7 @@ export default function ScanInReceiving() {
                     </div>
                     <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.duplicates > 0 ? '#fecaca' : '#e2e8f0' }}>
                       <span className="import-stat-label" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
-                        Repeated in File
+                        Duplicates in File
                       </span>
                       <span className="import-stat-value" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
                         {parsedBatch.summary.duplicates}
@@ -1156,90 +1681,70 @@ export default function ScanInReceiving() {
                     </div>
                   </div>
 
-                  {/* Filter tabs */}
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                  {/* Filter Tabs */}
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                     <button
                       className={`btn btn-sm ${importFilter === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setImportFilter('ALL')}
+                      style={{ fontSize: '12px' }}
                     >
-                      All ({parsedBatch.items.length})
+                      All Items ({parsedBatch.items.length})
                     </button>
                     <button
                       className={`btn btn-sm ${importFilter === 'VALID' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setImportFilter('VALID')}
+                      style={{ fontSize: '12px' }}
                     >
-                      Ready to Receive ({parsedBatch.summary.valid})
+                      Valid ({parsedBatch.summary.valid})
                     </button>
-                    {(parsedBatch.summary.existingInStock || 0) > 0 && (
-                      <button
-                        className={`btn btn-sm ${importFilter === 'EXISTING' ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => setImportFilter('EXISTING')}
-                        style={{ background: importFilter === 'EXISTING' ? '#0284c7' : 'transparent', color: importFilter === 'EXISTING' ? '#fff' : '#0369a1', borderColor: '#bae6fd' }}
-                      >
-                        In-Stock Updates ({parsedBatch.summary.existingInStock})
-                      </button>
-                    )}
                     {parsedBatch.summary.duplicates > 0 && (
                       <button
-                        className={`btn btn-sm ${importFilter === 'DUPLICATE' ? 'btn-danger' : 'btn-secondary'}`}
+                        className={`btn btn-sm ${importFilter === 'DUPLICATE' ? 'btn-primary' : 'btn-secondary'}`}
                         onClick={() => setImportFilter('DUPLICATE')}
+                        style={{ fontSize: '12px' }}
                       >
-                        Repeated ({parsedBatch.summary.duplicates})
+                        Duplicates ({parsedBatch.summary.duplicates})
                       </button>
                     )}
                   </div>
 
                   {/* Preview Table */}
-                  <div className="table-container" style={{ maxHeight: '240px', overflowY: 'auto' }}>
-                    <table className="data-table" style={{ fontSize: '12.5px' }}>
+                  <div className="table-container" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                    <table className="data-table" style={{ fontSize: '12px' }}>
                       <thead>
                         <tr>
                           <th>Row</th>
-                          <th>Status</th>
                           <th>Part Number</th>
                           <th>Description</th>
                           <th>Serial Number</th>
-                          <th>Target PO</th>
+                          <th>Destination</th>
+                          <th>Status</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredPreviewItems.map((item) => (
-                          <tr key={item.id}>
-                            <td className="font-mono" style={{ fontSize: '11.5px' }}>#{item.rowNumber}</td>
-                            <td>
-                              {item.status === 'VALID' && (
-                                <span className="badge badge-success" style={{ fontSize: '11px' }}>
-                                  Ready
-                                </span>
-                              )}
-                              {item.status === 'EXISTING_INVENTORY' && (
-                                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '11px' }} title="Part already registered in DC inventory - Will update & sync intake record">
-                                  In-Stock (Update)
-                                </span>
-                              )}
-                              {item.status === 'NEW_PART' && (
-                                <span className="badge" style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', fontSize: '11px' }}>
-                                  New Part
-                                </span>
-                              )}
-                              {item.status === 'DUPLICATE' && (
-                                <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', fontSize: '11px' }} title="Same serial appears on multiple rows in this spreadsheet">
-                                  Repeated in File
-                                </span>
-                              )}
-                              {item.status === 'ERROR' && (
-                                <span className="badge badge-danger" style={{ fontSize: '11px' }}>
-                                  Error
-                                </span>
-                              )}
-                            </td>
+                        {filteredPreviewItems.map((item, idx) => (
+                          <tr key={item.id || idx}>
+                            <td>{item.rowNumber}</td>
                             <td className="font-mono"><strong>{item.partNumber}</strong></td>
-                            <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {item.description}
+                            <td>{item.description}</td>
+                            <td className="font-mono">{item.serialNumber}</td>
+                            <td>
+                              <span className="badge" style={{
+                                background: modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe',
+                                color: modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1',
+                                fontSize: '11px'
+                              }}>
+                                {modalAssignment}
+                              </span>
                             </td>
-                            <td className="font-mono" style={{ fontSize: '11.5px' }}>{item.serialNumber}</td>
-                            <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                              {item.poNumber || (modalPoId ? purchaseOrders.find(p => p.id === modalPoId)?.po_number : 'Direct Intake')}
+                            <td>
+                              <span className={`badge ${
+                                item.status === 'VALID' ? 'badge-success' :
+                                item.status === 'NEW_PART' ? 'badge-info' :
+                                item.status === 'EXISTING_INVENTORY' ? 'badge-warning' : 'badge-danger'
+                              }`}>
+                                {item.statusMessage}
+                              </span>
                             </td>
                           </tr>
                         ))}
@@ -1254,11 +1759,13 @@ export default function ScanInReceiving() {
             <div className="modal-footer">
               <button
                 className="btn btn-secondary"
-                onClick={() => setIsImportModalOpen(false)}
+                onClick={() => {
+                  setParsedBatch(null);
+                  setIsImportModalOpen(false);
+                }}
               >
                 Cancel
               </button>
-
               {parsedBatch && (
                 <button
                   className="btn btn-primary"
@@ -1267,7 +1774,7 @@ export default function ScanInReceiving() {
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <CheckCircle2 size={16} />
-                  <span>Import & Receive {parsedBatch.summary.valid} Valid Parts</span>
+                  <span>Receive & Save {parsedBatch.summary.valid} Parts ({modalAssignment})</span>
                 </button>
               )}
             </div>
@@ -1275,39 +1782,30 @@ export default function ScanInReceiving() {
         </div>
       )}
 
-      {/* Save Intake Record Modal Dialog */}
+      {/* Save Intake Record Modal */}
       <SaveIntakeRecordModal
         isOpen={isSaveIntakeModalOpen}
         onClose={() => setIsSaveIntakeModalOpen(false)}
         initialUnits={sessionScans.length > 0 ? sessionScans : availableInStockUnits}
-        defaultPoId={selectedPoId}
         onSaved={(newRec) => {
-          // Clear active session intake history from station view and localStorage
           setSessionScans([]);
-          setActiveTableView('SESSION_SCANS');
-          try {
-            localStorage.removeItem('mdc_recent_scans');
-          } catch (e) {
-            console.warn('LocalStorage clear error:', e);
-          }
-          setPartNumberInput('');
-          setSerialInput('');
+          localStorage.removeItem('mdc_recent_scans');
           setScanResult({
             type: 'success',
-            message: `[BATCH SAVED & ARCHIVED] Successfully saved batch "${newRec.id}" (${newRec.total_units || newRec.items?.length || 0} parts) to Database. Intake History is cleared and ready for new parts!`
+            message: `[INTAKE RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
           });
-          showToast(`Saved Batch "${newRec.id}". Intake History cleared & station ready!`, 'success');
+          setActiveTab('intake-records');
         }}
       />
 
-      {/* Delete Unit Confirmation Modal */}
+      {/* Delete Single Unit Confirmation Dialog */}
       {unitToDelete && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setUnitToDelete(null); }}>
-          <div className="modal-content" style={{ maxWidth: '460px' }}>
+          <div className="modal-content" style={{ maxWidth: '450px' }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <AlertCircle size={20} color="#ef4444" />
-                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Part from Inventory?</h3>
+                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Unit from DC Stock?</h3>
               </div>
               <button
                 onClick={() => setUnitToDelete(null)}
@@ -1317,27 +1815,16 @@ export default function ScanInReceiving() {
               </button>
             </div>
             <div className="modal-body">
-              <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 12px 0' }}>
-                Are you sure you want to remove this received part from DC inventory and database?
+              <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
+                Are you sure you want to delete unit <strong>#{unitToDelete.part_number}</strong> with Serial <strong>{unitToDelete.serial_number}</strong>?
               </p>
-
-              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)', padding: '12px 14px', fontSize: '12.5px', marginBottom: '12px' }}>
-                <div style={{ marginBottom: '6px' }}><strong>Part Number:</strong> <span className="font-mono">{unitToDelete.part_number}</span></div>
-                <div style={{ marginBottom: '6px' }}><strong>Description:</strong> {unitToDelete.description}</div>
-                <div style={{ marginBottom: '6px' }}><strong>Serial Number:</strong> <span className="font-mono" style={{ color: '#0284c7' }}>{unitToDelete.serial_number}</span></div>
-                <div><strong>Scanned At:</strong> {unitToDelete.received_at ? new Date(unitToDelete.received_at).toLocaleString() : 'Recent'}</div>
-              </div>
-
-              <p style={{ fontSize: '12px', color: '#ef4444', margin: 0 }}>
-                This will permanently delete the unit from DC in-stock inventory and database records.
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                This will remove the item from active DC In-Stock inventory and delete its registration in the central database.
               </p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleConfirmDeletePart} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Trash2 size={15} />
-                <span>Delete Part</span>
-              </button>
+              <button className="btn btn-danger" onClick={handleConfirmDeletePart}>Delete Unit</button>
             </div>
           </div>
         </div>

@@ -83,11 +83,17 @@ export default function SaveIntakeRecordModal({
     setIsSaving(true);
     try {
       const res = await saveIntakeRecord({
+        id: activeRecordId.trim().toUpperCase(),
         recordId: activeRecordId.trim().toUpperCase(),
+        record_name: (activeRecordName || activeRecordId).trim(),
         recordName: (activeRecordName || activeRecordId).trim(),
+        intake_date: intakeDate,
         intakeDate: intakeDate,
+        po_id: selectedPoId || null,
         poId: selectedPoId || null,
+        po_number: selectedPo?.po_number || null,
         poNumber: selectedPo?.po_number || null,
+        supplier_name: selectedPo?.supplier || 'Direct Intake',
         supplier: selectedPo?.supplier || 'Direct Intake',
         notes: notes.trim(),
         items: initialUnits
@@ -206,11 +212,31 @@ export default function SaveIntakeRecordModal({
 
             {/* Notes / Remarks */}
             <div style={{ marginBottom: '18px' }}>
-              <label className="form-label">Intake Notes / Batch Remarks</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label className="form-label" style={{ margin: 0 }}>Intake Notes / Batch Remarks</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setNotes(prev => prev ? `${prev} | MDC - Forecasting` : 'MDC - Forecasting')}
+                    className="badge"
+                    style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', cursor: 'pointer', padding: '2px 8px' }}
+                  >
+                    + Tag "MDC - Forecasting"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNotes(prev => prev ? `${prev} | DC - CRBR` : 'DC - CRBR')}
+                    className="badge"
+                    style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', cursor: 'pointer', padding: '2px 8px' }}
+                  >
+                    + Tag "DC - CRBR"
+                  </button>
+                </div>
+              </div>
               <textarea
                 className="form-input"
                 rows={2}
-                placeholder="e.g. Received via Lite Express KGB air freight. Verified complete with barcode scan."
+                placeholder="e.g. MDC - Forecasting | Received via Lite Express KGB air freight. Verified complete with barcode scan."
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 style={{ resize: 'vertical', minHeight: '56px', fontSize: '13px' }}

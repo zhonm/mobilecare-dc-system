@@ -29,6 +29,7 @@ import {
   Filter,
   ArrowUpRight
 } from 'lucide-react';
+import { normalizeInventoryUnits } from '../utils/partResolver';
 
 export default function IntakeRecords() {
   const {
@@ -36,6 +37,8 @@ export default function IntakeRecords() {
     deleteIntakeRecord,
     inventoryUnits,
     deleteScanInUnit,
+    updateUnitAssignment,
+    deleteAllStockUnits,
     parts,
     setActiveTab,
     isAutoRefreshing,
@@ -48,13 +51,14 @@ export default function IntakeRecords() {
   // Active View Tab: 'stock_by_date' | 'batch_records'
   const [activeView, setActiveView] = useState('stock_by_date');
 
-  // Search & Filter States
+  // Search & Filtering State
   const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [dateFilter, setDateFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR'
   const [yearFilter, setYearFilter] = useState('ALL');
 
-  // Modals & Inspection States
+  // Modals & Inspectors
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [modalInitialUnits, setModalInitialUnits] = useState([]);
   const [selectedRecordToInspect, setSelectedRecordToInspect] = useState(null);
@@ -93,9 +97,10 @@ export default function IntakeRecords() {
     return map;
   }, [parts]);
 
-  // Enriched in-stock units with category, pricing, and normalized receipt date
+  // Enriched in-stock units with category, pricing, assignment, and normalized receipt date
   const enrichedStockUnits = useMemo(() => {
-    return (inventoryUnits || []).map((u, idx) => {
+    const normalizedUnits = normalizeInventoryUnits(inventoryUnits || [], parts || []);
+    return normalizedUnits.map((u, idx) => {
       const pn = (u.part_number || '').toUpperCase();
       const desc = u.description || 'Apple Genuine Service Part';
       const isDisplay = desc.toLowerCase().includes('display') || desc.toLowerCase().includes('screen');
@@ -114,6 +119,10 @@ export default function IntakeRecords() {
         : 'Other Parts';
 
       const price = u.stocking_price || partPriceMap.get(pn) || (isDisplay ? 329 : isBattery ? 99 : 50);
+
+      const rawAssignment = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const isCrbr = rawAssignment.includes('CRBR');
+      const assignment = isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
 
       // Parse date key (YYYY-MM-DD)
       let dateKey = todayDateStr;
@@ -135,12 +144,15 @@ export default function IntakeRecords() {
         description: desc,
         category,
         price,
+        intake_assignment: assignment,
+        notes: u.notes || assignment,
+        isCrbr,
         dateKey,
         timeStr,
         received_at: u.received_at || new Date().toISOString()
       };
     });
-  }, [inventoryUnits, partPriceMap, todayDateStr]);
+  }, [inventoryUnits, partPriceMap, todayDateStr, parts]);
 
   // Overall metric calculations
   const totalStockUnitsCount = enrichedStockUnits.length;
@@ -177,6 +189,13 @@ export default function IntakeRecords() {
       if (categoryFilter !== 'ALL' && u.category !== categoryFilter) {
         return false;
       }
+      // Assignment filter
+      if (assignmentFilter === 'MDC - Forecasting' && u.isCrbr) {
+        return false;
+      }
+      if (assignmentFilter === 'DC - CRBR' && !u.isCrbr) {
+        return false;
+      }
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -184,14 +203,15 @@ export default function IntakeRecords() {
         const matchSn = u.serial_number?.toLowerCase().includes(q);
         const matchDesc = u.description?.toLowerCase().includes(q);
         const matchPo = u.po_number?.toLowerCase().includes(q) || u.po_id?.toLowerCase().includes(q);
+        const matchAssign = u.intake_assignment?.toLowerCase().includes(q) || u.notes?.toLowerCase().includes(q);
         const matchSource = u.intake_source?.toLowerCase().includes(q);
-        if (!matchPn && !matchSn && !matchDesc && !matchPo && !matchSource) {
+        if (!matchPn && !matchSn && !matchDesc && !matchPo && !matchAssign && !matchSource) {
           return false;
         }
       }
       return true;
     });
-  }, [enrichedStockUnits, dateFilter, categoryFilter, searchQuery]);
+  }, [enrichedStockUnits, dateFilter, categoryFilter, assignmentFilter, searchQuery]);
 
   // Group filtered in-stock units by Date
   const stockByDateGroups = useMemo(() => {
@@ -221,6 +241,8 @@ export default function IntakeRecords() {
 
         const displaysCount = items.filter(i => i.category === 'Display').length;
         const batteriesCount = items.filter(i => i.category === 'Battery').length;
+        const crbrCount = items.filter(i => i.isCrbr).length;
+        const forecastingCount = items.length - crbrCount;
         const otherCount = items.length - displaysCount - batteriesCount;
         const groupValuation = items.reduce((acc, i) => acc + (i.price || 0), 0);
 
@@ -231,6 +253,8 @@ export default function IntakeRecords() {
           count: items.length,
           displaysCount,
           batteriesCount,
+          crbrCount,
+          forecastingCount,
           otherCount,
           valuation: groupValuation
         };
@@ -293,6 +317,7 @@ export default function IntakeRecords() {
       'Description': it.description,
       'Category': it.category,
       'Serial Number': it.serial_number,
+      'Assignment / Destination': it.intake_assignment || 'MDC - Forecasting',
       'Stocking Value ($)': it.price,
       'Linked PO': it.po_number || it.po_id || 'Direct Intake',
       'Intake Source': it.intake_source || 'Barcode Scan',
@@ -321,6 +346,7 @@ export default function IntakeRecords() {
       'Description': it.description,
       'Category': it.category,
       'Serial Number': it.serial_number,
+      'Assignment / Destination': it.intake_assignment || 'MDC - Forecasting',
       'Stocking Value ($)': it.price,
       'Linked PO': it.po_number || it.po_id || 'Direct Intake',
       'Intake Source': it.intake_source || 'Barcode Scan',
@@ -349,7 +375,7 @@ export default function IntakeRecords() {
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold;">${it.part_number}</td>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.description}</td>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${it.serial_number}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.category}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.intake_assignment || 'MDC - Forecasting'}</td>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${it.timeStr}</td>
       </tr>
     `).join('');
@@ -382,7 +408,7 @@ export default function IntakeRecords() {
 
           <div class="meta-grid">
             <div><strong>Receipt Date:</strong><br>${dateGroup.dateKey}</div>
-            <div><strong>Breakdown:</strong><br>${dateGroup.displaysCount} Displays • ${dateGroup.batteriesCount} Batteries • ${dateGroup.otherCount} Other</div>
+            <div><strong>Breakdown:</strong><br>${dateGroup.forecastingCount} Forecasting • ${dateGroup.crbrCount} CRBR • ${dateGroup.displaysCount} Displays • ${dateGroup.batteriesCount} Batteries</div>
             <div><strong>Total Stock Valuation:</strong><br><span style="font-size: 15px; font-weight: bold; color: #0284c7;">$${dateGroup.valuation.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
           </div>
 
@@ -393,7 +419,7 @@ export default function IntakeRecords() {
                 <th>Part Number</th>
                 <th>Description</th>
                 <th>Serial Number</th>
-                <th>Category</th>
+                <th>Destination</th>
                 <th>Time Received</th>
               </tr>
             </thead>
@@ -450,50 +476,39 @@ export default function IntakeRecords() {
       it =>
         it.part_number?.toLowerCase().includes(q) ||
         it.serial_number?.toLowerCase().includes(q) ||
-        it.description?.toLowerCase().includes(q)
+        it.description?.toLowerCase().includes(q) ||
+        it.intake_assignment?.toLowerCase().includes(q) ||
+        it.notes?.toLowerCase().includes(q)
     );
   }, [selectedRecordToInspect, inspectSearch]);
 
   return (
-    <div className="intake-records-container" style={{ maxWidth: '1280px', margin: '0 auto' }}>
-      {/* Top Banner / Hero Header */}
-      <div style={{
-        background: '#0f172a',
-        borderRadius: 'var(--radius-lg)',
-        padding: '24px 30px',
-        color: '#fff',
-        marginBottom: '24px',
-        boxShadow: 'var(--shadow-md)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px'
-      }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-            <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '6px', borderRadius: '8px' }}>
-              <Boxes size={24} color="#38bdf8" />
-            </div>
-            <h2 style={{ color: '#fff', margin: 0, fontSize: '22px' }}>DC Intake & Stock Inventory Management</h2>
+    <div className="intake-records-container">
+      {/* Top Hero Banner */}
+      <div className="scanner-hero" style={{ marginBottom: '24px' }}>
+        <div className="scanner-hero-header" style={{ marginBottom: '12px' }}>
+          <div>
+            <h2 style={{ color: '#fff', fontSize: '22px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+              <BookmarkPlus size={24} color="#38bdf8" />
+              <span>DC Stock Intake Records & Manifests</span>
+            </h2>
             <span
               className="badge"
               style={{
-                background: isAutoRefreshing ? 'rgba(56, 189, 248, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                color: isAutoRefreshing ? '#38bdf8' : '#34d399',
-                border: `1px solid ${isAutoRefreshing ? 'rgba(56, 189, 248, 0.4)' : 'rgba(52, 211, 153, 0.4)'}`,
+                background: 'rgba(16, 185, 129, 0.15)',
+                color: '#34d399',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                fontSize: '11px',
+                marginTop: '4px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '4px',
-                fontSize: '11.5px',
-                padding: '3px 8px'
+                gap: '4px'
               }}
-              title="Real-time multi-user synchronization active across all accounts"
             >
               {isAutoRefreshing ? (
                 <>
                   <RefreshCw size={11} className="spin" />
-                  <span>Syncing...</span>
+                  <span>Syncing with Cloud...</span>
                 </>
               ) : (
                 <>
@@ -504,7 +519,7 @@ export default function IntakeRecords() {
             </span>
           </div>
           <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-            Live Stock Parts Tracking • Date-Grouped Receipts • Standardized Manifest Archives (<code>MDC[YYYY][00000]</code>)
+            Live Stock Parts Tracking • Destination Tracking (<code>MDC - Forecasting</code> vs <code>DC - CRBR</code>)
             {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
           </p>
         </div>
@@ -727,11 +742,11 @@ export default function IntakeRecords() {
         }}>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', flex: 1 }}>
             {/* Search Input */}
-            <div style={{ position: 'relative', width: '280px' }}>
+            <div style={{ position: 'relative', width: '260px' }}>
               <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
-                placeholder={activeView === 'stock_by_date' ? "Search P/N, S/N, model, PO..." : "Search batch ID, P/N, S/N, operator..."}
+                placeholder={activeView === 'stock_by_date' ? "Search P/N, S/N, destination..." : "Search batch ID, P/N, S/N..."}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="form-input"
@@ -746,6 +761,23 @@ export default function IntakeRecords() {
                 </button>
               )}
             </div>
+
+            {/* Destination / Assignment Filter */}
+            {activeView === 'stock_by_date' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Layers size={14} color="var(--text-muted)" />
+                <select
+                  className="form-select"
+                  style={{ width: 'auto', height: '34px', fontSize: '12.5px', background: '#fff' }}
+                  value={assignmentFilter}
+                  onChange={(e) => setAssignmentFilter(e.target.value)}
+                >
+                  <option value="ALL">All Destinations</option>
+                  <option value="MDC - Forecasting">MDC - Forecasting Only</option>
+                  <option value="DC - CRBR">DC - CRBR Only</option>
+                </select>
+              </div>
+            )}
 
             {/* Date Filter (for stock view) */}
             {activeView === 'stock_by_date' && availableStockDates.length > 0 && (
@@ -820,7 +852,7 @@ export default function IntakeRecords() {
                 <Boxes size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
                 <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Stock Parts Found</h4>
                 <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
-                  {searchQuery || categoryFilter !== 'ALL' || dateFilter !== 'ALL'
+                  {searchQuery || categoryFilter !== 'ALL' || dateFilter !== 'ALL' || assignmentFilter !== 'ALL'
                     ? 'No stock parts match your active filters. Try clearing your search or filters.'
                     : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In (F1) to receive inventory.'}
                 </p>
@@ -912,18 +944,21 @@ export default function IntakeRecords() {
                         {/* Subtotals & Actions */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                           {/* Unit Counts Badge */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', flexWrap: 'wrap' }}>
                             <span style={{ fontWeight: 700, color: '#0f172a' }}>{group.count} parts</span>
+                            <span style={{ color: 'var(--text-subtle)' }}>•</span>
+                            <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 6px' }}>
+                              {group.forecastingCount} Forecasting
+                            </span>
+                            {group.crbrCount > 0 && (
+                              <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '11px', padding: '2px 6px' }}>
+                                {group.crbrCount} CRBR
+                              </span>
+                            )}
                             <span style={{ color: 'var(--text-subtle)' }}>•</span>
                             <span style={{ color: '#0369a1', fontWeight: 600 }}>{group.displaysCount} Displays</span>
                             <span style={{ color: 'var(--text-subtle)' }}>•</span>
                             <span style={{ color: '#047857', fontWeight: 600 }}>{group.batteriesCount} Batteries</span>
-                            {group.otherCount > 0 && (
-                              <>
-                                <span style={{ color: 'var(--text-subtle)' }}>•</span>
-                                <span style={{ color: '#6d28d9', fontWeight: 600 }}>{group.otherCount} Other</span>
-                              </>
-                            )}
                             <span style={{ color: 'var(--text-subtle)' }}>•</span>
                             <span style={{ fontWeight: 700, color: '#047857' }}>
                               ${group.valuation.toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -975,6 +1010,7 @@ export default function IntakeRecords() {
                                 <th>Part Number</th>
                                 <th>Description / Model</th>
                                 <th>Serial Number</th>
+                                <th>Assignment / Destination</th>
                                 <th>Category</th>
                                 <th>Time Received</th>
                                 <th>Linked PO / Source</th>
@@ -1015,6 +1051,33 @@ export default function IntakeRecords() {
                                         {copiedSerial === u.serial_number ? <Check size={12} color="#16a34a" /> : <Copy size={12} />}
                                       </button>
                                     </div>
+                                  </td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextDest = u.isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
+                                        if (updateUnitAssignment) updateUnitAssignment(u.serial_number, nextDest);
+                                      }}
+                                      className="badge"
+                                      style={{
+                                        background: u.isCrbr ? '#fef3c7' : '#e0f2fe',
+                                        color: u.isCrbr ? '#92400e' : '#0369a1',
+                                        border: u.isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                                        fontWeight: 700,
+                                        fontSize: '11px',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        cursor: 'pointer',
+                                        padding: '3px 8px',
+                                        borderRadius: '4px'
+                                      }}
+                                      title={`Click to switch assignment to ${u.isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
+                                    >
+                                      {u.isCrbr ? <Tag size={10} /> : <Layers size={10} />}
+                                      <span>{u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                                    </button>
                                   </td>
                                   <td>
                                     <span
@@ -1096,45 +1159,40 @@ export default function IntakeRecords() {
                 )}
               </div>
             ) : (
-              <div className="table-container">
-                <table className="data-table">
+              <div className="table-container" style={{ maxHeight: '560px', overflowY: 'auto' }}>
+                <table className="data-table" style={{ fontSize: '12.5px' }}>
                   <thead>
                     <tr>
-                      <th>#</th>
-                      <th>Record ID / Batch</th>
+                      <th>Batch ID</th>
+                      <th>Batch Name / Manifest</th>
                       <th>Intake Date</th>
-                      <th>Operator (Saved By)</th>
                       <th>Total Units</th>
-                      <th>Parts Breakdown</th>
+                      <th>Recorded By</th>
                       <th>Linked PO</th>
-                      <th>Notes</th>
+                      <th>Status</th>
                       <th style={{ textAlign: 'right' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredBatchRecords.map((rec, idx) => (
+                    {filteredBatchRecords.map(rec => (
                       <tr key={rec.id}>
-                        <td className="font-mono">{idx + 1}</td>
+                        <td className="font-mono">
+                          <strong style={{ color: '#0284c7' }}>{rec.id}</strong>
+                        </td>
                         <td>
-                          <span
-                            className="badge"
-                            style={{
-                              background: '#e0f2fe',
-                              color: '#0369a1',
-                              border: '1px solid #bae6fd',
-                              fontFamily: 'var(--font-mono)',
-                              fontWeight: 700,
-                              fontSize: '12px'
-                            }}
-                          >
-                            {rec.id}
-                          </span>
+                          <strong>{rec.record_name || 'DC Intake Batch'}</strong>
+                          {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <Calendar size={13} color="var(--text-muted)" />
-                            <span>{rec.intake_date || 'N/A'}</span>
+                            <span>{rec.intake_date || 'Recent'}</span>
                           </div>
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                            {rec.total_units || (rec.items ? rec.items.length : 0)} units
+                          </span>
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -1142,103 +1200,27 @@ export default function IntakeRecords() {
                             <span>{rec.saved_by_name || 'Warehouse Staff'}</span>
                           </div>
                         </td>
+                        <td>{rec.po_number || 'Direct Intake'}</td>
                         <td>
-                          <span className="badge badge-success" style={{ fontWeight: 700 }}>
-                            {rec.total_units || (rec.items ? rec.items.length : 0)} units
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '12px', maxWidth: '240px' }}>
-                          {rec.items && rec.items.length > 0 ? (
-                            <span style={{ color: 'var(--text-subtle)' }}>
-                              {Array.from(new Set(rec.items.map(it => it.description || it.part_number))).slice(0, 3).join(', ')}
-                              {new Set(rec.items.map(it => it.description || it.part_number)).size > 3 ? '...' : ''}
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)' }}>Serialized parts</span>
-                          )}
-                        </td>
-                        <td>
-                          <span className="badge font-mono" style={{ background: '#f1f5f9', color: '#475569' }}>
-                            {rec.po_number || 'Direct Intake'}
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '12px', color: 'var(--text-muted)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {rec.notes || '—'}
+                          <span className="badge badge-success">Archived</span>
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                             <button
                               className="btn btn-secondary btn-sm"
                               onClick={() => setSelectedRecordToInspect(rec)}
-                              style={{ padding: '4px 8px', fontSize: '11.5px' }}
-                              title="Inspect full serialized units"
+                              style={{ padding: '3px 8px', fontSize: '11.5px' }}
+                              title="Inspect serialized parts manifest in this batch"
                             >
-                              <Eye size={13} />
+                              <Eye size={13} color="#0284c7" />
                               <span>Inspect</span>
                             </button>
 
                             <button
                               className="btn btn-secondary btn-sm"
-                              onClick={() => {
-                                const rows = (rec.items || []).map((it, iIdx) => ({
-                                  '#': iIdx + 1,
-                                  'Batch ID': rec.id,
-                                  'Intake Date': rec.intake_date,
-                                  'Part Number': it.part_number,
-                                  'Description': it.description,
-                                  'Serial Number': it.serial_number,
-                                  'Linked PO': rec.po_number || 'Direct Intake',
-                                  'Operator': rec.saved_by_name
-                                }));
-                                const ws = XLSX.utils.json_to_sheet(rows);
-                                const wb = XLSX.utils.book_new();
-                                XLSX.utils.book_append_sheet(wb, ws, 'Batch Manifest');
-                                XLSX.writeFile(wb, `${rec.id}_Intake_Manifest.xlsx`);
-                                showToast(`Exported ${rec.id} to Excel`, 'success');
-                              }}
-                              style={{ padding: '4px 8px', fontSize: '11.5px' }}
-                              title="Export to Excel (.xlsx)"
-                            >
-                              <FileSpreadsheet size={13} color="#16a34a" />
-                            </button>
-
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => {
-                                const printWindow = window.open('', '_blank', 'width=800,height=900');
-                                if (!printWindow) return;
-                                const itemsHtml = (rec.items || []).map((it, iIdx) => `
-                                  <tr>
-                                    <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${iIdx + 1}</td>
-                                    <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold;">${it.part_number}</td>
-                                    <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.description || ''}</td>
-                                    <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${it.serial_number}</td>
-                                  </tr>
-                                `).join('');
-                                printWindow.document.write(`
-                                  <html>
-                                    <head><title>DC Intake Slip - ${rec.id}</title><style>body { font-family: sans-serif; padding: 30px; } table { width: 100%; border-collapse: collapse; text-align: left; } th { background: #f1f5f9; padding: 8px 10px; } td { padding: 6px 10px; }</style></head>
-                                    <body>
-                                      <h2>MOBILE CARE SERVICES PHILS. INC. - DC Intake Slip</h2>
-                                      <p><strong>Batch ID:</strong> ${rec.id} • <strong>Date:</strong> ${rec.intake_date} • <strong>Operator:</strong> ${rec.saved_by_name}</p>
-                                      <table><thead><tr><th>#</th><th>Part Number</th><th>Description</th><th>Serial Number</th></tr></thead><tbody>${itemsHtml}</tbody></table>
-                                      <script>window.onload = function() { window.print(); };</script>
-                                    </body>
-                                  </html>
-                                `);
-                                printWindow.document.close();
-                              }}
-                              style={{ padding: '4px 8px', fontSize: '11.5px' }}
-                              title="Print Intake Slip"
-                            >
-                              <Printer size={13} color="#0284c7" />
-                            </button>
-
-                            <button
-                              className="btn btn-secondary btn-sm"
                               onClick={() => setRecordToDelete(rec)}
-                              style={{ padding: '4px 8px', color: '#ef4444', borderColor: '#fca5a5' }}
-                              title="Delete Record"
+                              style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
+                              title="Delete intake batch record"
                             >
                               <Trash2 size={13} />
                             </button>
@@ -1254,37 +1236,21 @@ export default function IntakeRecords() {
         )}
       </div>
 
-      {/* Save Intake Record Modal */}
-      <SaveIntakeRecordModal
-        isOpen={isSaveModalOpen}
-        onClose={() => setIsSaveModalOpen(false)}
-        initialUnits={modalInitialUnits.length > 0 ? modalInitialUnits : todayScannedUnits}
-        onSaved={(newRec) => {
-          setSelectedRecordToInspect(newRec);
-          setActiveView('batch_records');
-        }}
-      />
-
-      {/* Serialized Batch Inspector Modal */}
+      {/* --- Batch Manifest Inspector Modal --- */}
       {selectedRecordToInspect && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setSelectedRecordToInspect(null); }}>
-          <div className="modal-content" style={{ maxWidth: '800px' }}>
+          <div className="modal-content" style={{ maxWidth: '850px' }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '8px', borderRadius: '8px' }}>
-                  <Tag size={22} color="#38bdf8" />
+                  <BookmarkPlus size={22} color="#38bdf8" />
                 </div>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ color: '#fff', fontSize: '18px', margin: 0, fontFamily: 'var(--font-mono)' }}>
-                      {selectedRecordToInspect.id}
-                    </h3>
-                    <span className="badge badge-success" style={{ fontSize: '11px' }}>
-                      {selectedRecordToInspect.total_units} Parts
-                    </span>
-                  </div>
+                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>
+                    Batch Manifest Inspector: {selectedRecordToInspect.id}
+                  </h3>
                   <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Intake Date: {selectedRecordToInspect.intake_date} • Recorded by: {selectedRecordToInspect.saved_by_name}
+                    {selectedRecordToInspect.record_name} • {selectedRecordToInspect.intake_date} • {selectedRecordToInspect.saved_by_name}
                   </p>
                 </div>
               </div>
@@ -1296,101 +1262,106 @@ export default function IntakeRecords() {
               </button>
             </div>
 
-            <div className="modal-body" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
-              {/* Batch Metadata Row */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '12px',
-                background: '#f8fafc',
-                padding: '12px 16px',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: '16px',
-                border: '1px solid #e2e8f0',
-                fontSize: '12.5px'
-              }}>
-                <div>
-                  <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px', textTransform: 'uppercase' }}>Purchase Order</span>
-                  <strong>{selectedRecordToInspect.po_number || 'Direct Intake'}</strong>
+            <div className="modal-body">
+              {/* Filter bar inside modal */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <div style={{ position: 'relative', width: '280px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search serial or part number..."
+                    value={inspectSearch}
+                    onChange={(e) => setInspectSearch(e.target.value)}
+                    className="form-input"
+                    style={{ paddingLeft: '32px', height: '32px', fontSize: '12px', width: '100%' }}
+                  />
                 </div>
-                <div>
-                  <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px', textTransform: 'uppercase' }}>Supplier / Source</span>
-                  <strong>{selectedRecordToInspect.supplier || 'Apple Direct'}</strong>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px', textTransform: 'uppercase' }}>Record Created</span>
-                  <strong>{new Date(selectedRecordToInspect.created_at || Date.now()).toLocaleString()}</strong>
+
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Total: <strong>{selectedRecordToInspect.items?.length || 0} serialized units</strong>
                 </div>
               </div>
 
-              {selectedRecordToInspect.notes && (
-                <div style={{ background: '#f1f5f9', padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '12.5px' }}>
-                  <strong>Notes:</strong> {selectedRecordToInspect.notes}
-                </div>
-              )}
-
-              {/* Items Search */}
-              <div style={{ position: 'relative', width: '260px', marginBottom: '12px' }}>
-                <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                <input
-                  type="text"
-                  placeholder="Search serial / part in batch..."
-                  value={inspectSearch}
-                  onChange={(e) => setInspectSearch(e.target.value)}
-                  className="form-input"
-                  style={{ paddingLeft: '28px', height: '32px', fontSize: '12px', width: '100%' }}
-                />
-              </div>
-
-              {/* Serialized Table */}
-              <div className="table-container" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                <table className="data-table" style={{ fontSize: '12.5px' }}>
+              {/* Items Table */}
+              <div className="table-container" style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                <table className="data-table" style={{ fontSize: '12px' }}>
                   <thead>
                     <tr>
                       <th>#</th>
                       <th>Part Number</th>
                       <th>Description</th>
                       <th>Serial Number</th>
-                      <th>Timestamp</th>
+                      <th>Destination</th>
+                      <th>Time Received</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredInspectItems.map((it, idx) => (
-                      <tr key={it.id || `${it.serial_number}-${idx}`}>
-                        <td className="font-mono">{idx + 1}</td>
-                        <td className="font-mono"><strong>{it.part_number}</strong></td>
-                        <td>{it.description || 'Replacement Part'}</td>
-                        <td className="font-mono">{it.serial_number}</td>
-                        <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                          {it.received_at ? new Date(it.received_at).toLocaleTimeString() : 'Recent'}
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredInspectItems.map((it, idx) => {
+                      const isCrbr = it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR');
+                      return (
+                        <tr key={it.id || idx}>
+                          <td className="font-mono">{idx + 1}</td>
+                          <td className="font-mono"><strong>{it.part_number}</strong></td>
+                          <td>{it.description}</td>
+                          <td className="font-mono">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>{it.serial_number}</span>
+                              <button
+                                onClick={() => handleCopySerial(it.serial_number)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--text-muted)' }}
+                              >
+                                {copiedSerial === it.serial_number ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                          </td>
+                          <td>
+                            {isCrbr ? (
+                              <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10.5px' }}>
+                                DC - CRBR
+                              </span>
+                            ) : (
+                              <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '10.5px' }}>
+                                MDC - Forecasting
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {it.received_at ? new Date(it.received_at).toLocaleTimeString() : 'Recorded'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </div>
 
             <div className="modal-footer">
-              <button
-                className="btn btn-secondary"
-                onClick={() => setSelectedRecordToInspect(null)}
-              >
-                Close
-              </button>
+              <button className="btn btn-secondary" onClick={() => setSelectedRecordToInspect(null)}>Close</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Delete Unit Confirmation Modal */}
+      {/* Save Intake Record Modal */}
+      <SaveIntakeRecordModal
+        isOpen={isSaveModalOpen}
+        onClose={() => setIsSaveModalOpen(false)}
+        initialUnits={modalInitialUnits}
+        onSaved={(newRec) => {
+          showToast(`Created Intake Record ${newRec.id}`, 'success');
+          setActiveView('batch_records');
+        }}
+      />
+
+      {/* Delete Unit Confirmation Dialog */}
       {unitToDelete && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setUnitToDelete(null); }}>
-          <div className="modal-content" style={{ maxWidth: '440px' }}>
+          <div className="modal-content" style={{ maxWidth: '450px' }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <AlertCircle size={20} color="#ef4444" />
-                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Remove Part from Stock?</h3>
+                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Part from Warehouse Stock?</h3>
               </div>
               <button
                 onClick={() => setUnitToDelete(null)}
@@ -1401,28 +1372,28 @@ export default function IntakeRecords() {
             </div>
             <div className="modal-body">
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
-                Are you sure you want to remove serial <strong>{unitToDelete.serial_number}</strong> ({unitToDelete.description}) from warehouse stock?
+                Are you sure you want to remove unit <strong>#{unitToDelete.part_number}</strong> with Serial <strong>{unitToDelete.serial_number}</strong>?
               </p>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                This will deduct this unit from DC In-Stock inventory across all connected accounts.
+                This will delete the item from active DC In-Stock inventory in the database.
               </p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleConfirmDeleteUnit}>Remove from Stock</button>
+              <button className="btn btn-danger" onClick={handleConfirmDeleteUnit}>Delete Unit</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Delete Batch Confirmation Modal */}
+      {/* Delete Batch Confirmation Dialog */}
       {recordToDelete && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setRecordToDelete(null); }}>
-          <div className="modal-content" style={{ maxWidth: '440px' }}>
+          <div className="modal-content" style={{ maxWidth: '450px' }}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <AlertCircle size={20} color="#ef4444" />
-                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Intake Record?</h3>
+                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Intake Batch Record?</h3>
               </div>
               <button
                 onClick={() => setRecordToDelete(null)}
@@ -1433,15 +1404,15 @@ export default function IntakeRecords() {
             </div>
             <div className="modal-body">
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
-                Are you sure you want to delete record <strong>{recordToDelete.id}</strong>?
+                Are you sure you want to delete batch <strong>{recordToDelete.id}</strong> ({recordToDelete.record_name})?
               </p>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                This will remove the saved intake batch from the database archive. Actual in-stock inventory units will remain intact in DC.
+                This action cannot be undone.
               </p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setRecordToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleConfirmDeleteBatch}>Delete Record</button>
+              <button className="btn btn-danger" onClick={handleConfirmDeleteBatch}>Delete Batch Record</button>
             </div>
           </div>
         </div>

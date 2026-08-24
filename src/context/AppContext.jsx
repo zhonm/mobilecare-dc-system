@@ -18,6 +18,7 @@ import {
 } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { matchUserByEmail, isAllowedCompanyEmail } from '../utils/userMatcher';
+import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 
 // Re-export constants for backward compatibility
 export {
@@ -1135,6 +1136,83 @@ export function AppProvider({ children }) {
     return { success: true };
   };
 
+  // 1.25 Update Part Assignment / Destination ('DC - CRBR' vs 'MDC - Forecasting')
+  const updateUnitAssignment = async (serialNumber, newAssignment) => {
+    if (!serialNumber) return;
+    const cleanSerial = String(serialNumber).trim().toUpperCase();
+    const effectiveAssignment = String(newAssignment).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
+
+    let targetUnit = null;
+
+    setInventoryUnits(prev => {
+      const updated = (prev || []).map(u => {
+        if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
+          targetUnit = {
+            ...u,
+            intake_assignment: effectiveAssignment,
+            notes: effectiveAssignment
+          };
+          return targetUnit;
+        }
+        return u;
+      });
+      const normalized = normalizeInventoryUnits(updated, parts);
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
+        const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
+        const updatedRecent = recent.map(u => {
+          if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
+            return { ...u, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
+          }
+          return u;
+        });
+        localStorage.setItem('mdc_recent_scans', JSON.stringify(updatedRecent));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', normalized);
+      return normalized;
+    });
+
+    // Also update in dcIntakeRecords
+    setDcIntakeRecords(prev => {
+      let modified = false;
+      const updatedRecords = (prev || []).map(rec => {
+        if (Array.isArray(rec.items) && rec.items.some(it => String(it.serial_number || '').toUpperCase() === cleanSerial)) {
+          modified = true;
+          const updatedItems = rec.items.map(it => {
+            if (String(it.serial_number || '').toUpperCase() === cleanSerial) {
+              return { ...it, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
+            }
+            return it;
+          });
+          const updatedRec = { ...rec, items: updatedItems, updated_at: new Date().toISOString() };
+          if (supabase) {
+            supabase.from('dc_intake_records').upsert(updatedRec, { onConflict: 'id' }).then(() => {}).catch(() => {});
+            supabase.from('saved_records').upsert({
+              id: updatedRec.id,
+              record_type: 'intake_batch',
+              period_label: updatedRec.record_name,
+              snapshot_data: updatedRec,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+          }
+          return updatedRec;
+        }
+        return rec;
+      });
+      if (modified) {
+        try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updatedRecords)); } catch (e) {}
+        dbStorage.setItem('mdc_dc_intake_records', updatedRecords);
+      }
+      return updatedRecords;
+    });
+
+    if (targetUnit) {
+      saveUnitsToSupabase([targetUnit]);
+    }
+    showToast(`Updated ${cleanSerial} assignment to "${effectiveAssignment}"`, 'success');
+    return { success: true, assignment: effectiveAssignment };
+  };
+
   // --- DATA STORES (Dynamic & Editable with Persistent IndexedDB & LocalStorage Sync) ---
   const [categories, setCategories] = useState(() => {
     try {
@@ -1175,13 +1253,6 @@ export function AppProvider({ children }) {
     }
   });
 
-  const isExplicitlyCleared = () => {
-    try {
-      return localStorage.getItem('mdc_is_cleared') === 'true' || localStorage.getItem('mdc_forecast') === '[]';
-    } catch {
-      return false;
-    }
-  };
 
   const [forecastItems, setForecastItems] = useState(() => {
     try {
@@ -1468,17 +1539,25 @@ export function AppProvider({ children }) {
     }
   });
 
+  const isExplicitlyCleared = () => {
+    try {
+      const isClearedFlag = localStorage.getItem('mdc_is_cleared') === 'true';
+      if (!isClearedFlag) return false;
+      const savedIntakes = localStorage.getItem('mdc_dc_intake_records');
+      if (savedIntakes && JSON.parse(savedIntakes).length > 0) return false;
+      const savedInv = localStorage.getItem('mdc_inventory');
+      if (savedInv && JSON.parse(savedInv).length > 0) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // Asynchronous IndexedDB Hydration on initial app mount
   useEffect(() => {
     let isMounted = true;
     const hydrateFromIndexedDb = async () => {
       try {
-        const isCleared = await dbStorage.getItem('mdc_is_cleared', false);
-        if (isCleared) {
-          // Explicitly cleared empty state: retain empty arrays
-          return;
-        }
-
         const [
           savedForecast,
           savedAllocs,
@@ -1491,6 +1570,7 @@ export function AppProvider({ children }) {
           savedLogs,
           savedRepairs,
           savedRecs,
+          savedIntakes,
           savedTransfers,
           savedTransferMeta,
           savedUploadLogs,
@@ -1507,6 +1587,7 @@ export function AppProvider({ children }) {
           dbStorage.getItem('mdc_scan_logs'),
           dbStorage.getItem('mdc_repair_usage'),
           dbStorage.getAllSavedRecords(),
+          dbStorage.getItem('mdc_dc_intake_records'),
           dbStorage.getItem('mdc_stock_transfer_reports'),
           dbStorage.getItem('mdc_stock_transfer_metadata'),
           dbStorage.getItem('mdc_upload_audit_logs'),
@@ -1514,6 +1595,16 @@ export function AppProvider({ children }) {
         ]);
 
         if (!isMounted) return;
+
+        if (Array.isArray(savedIntakes) && savedIntakes.length > 0) {
+          setDcIntakeRecords(prev => {
+            const map = new Map();
+            [...savedIntakes, ...(prev || [])].forEach(r => {
+              if (r && r.id) map.set(r.id, r);
+            });
+            return Array.from(map.values());
+          });
+        }
 
         if (Array.isArray(savedForecast) && savedForecast.length > 0) setForecastItems(savedForecast);
         if (Array.isArray(savedAllocs) && savedAllocs.length > 0) setAllocations(savedAllocs);
@@ -2011,44 +2102,90 @@ export function AppProvider({ children }) {
         }
       }
 
-      // 7. Hydrate DC Intake Records from Supabase
+      // 7. Hydrate DC Intake Records from Supabase (Multi-source resilient: dc_intake_records table + saved_records batches + master registry + local storage & memory)
       const deletedIntakeIdsLocal = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
       const deletedRegistry = (dbRecords || []).find(r => r.id === 'deleted_intake_ids_registry');
       const deletedFromCloud = deletedRegistry?.snapshot_data?.deletedIds || [];
       const deletedIntakesSet = new Set([...deletedIntakeIdsLocal, ...deletedFromCloud]);
 
       let fetchedIntakes = [];
-      if (dbIntakes !== undefined && dbIntakes !== null) {
-        const validIntakes = (dbIntakes || []).filter(dbI => {
-          if (!dbI || !dbI.id) return false;
-          if (deletedIntakesSet.has(dbI.id)) return false;
-          if (dbI.notes && dbI.notes.includes('__DELETED__')) return false;
-          if (dbI.is_deleted === true) return false;
-          return true;
+      setDcIntakeRecords(prev => {
+        const intakesMap = new Map();
+
+        // 1. Seed with localStorage and current fresh in-memory state
+        let localSaved = [];
+        try {
+          localSaved = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
+        } catch (e) {}
+
+        [...(localSaved || []), ...(prev || [])].forEach(r => {
+          if (r && r.id && !deletedIntakesSet.has(r.id) && !r.notes?.includes('__DELETED__')) {
+            intakesMap.set(r.id, r);
+          }
         });
 
-        fetchedIntakes = validIntakes;
-        const mappedIntakes = validIntakes.map(dbI => ({
-          id: dbI.id,
-          record_name: dbI.record_name || dbI.id,
-          intake_date: dbI.intake_date,
-          po_id: dbI.po_id,
-          po_number: dbI.po_number,
-          supplier: dbI.supplier,
-          total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
-          saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
-          saved_by_user_id: dbI.saved_by_user_id,
-          notes: dbI.notes || '',
-          category_breakdown: dbI.category_breakdown || {},
-          items: Array.isArray(dbI.items) ? dbI.items : [],
-          created_at: dbI.created_at,
-          updated_at: dbI.updated_at
-        })).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        // 2. Load from master_dc_intakes_registry in saved_records
+        const masterIntakesRecord = (dbRecords || []).find(r => r.id === 'master_dc_intakes_registry' && !r.is_deleted);
+        if (masterIntakesRecord?.snapshot_data?.records && Array.isArray(masterIntakesRecord.snapshot_data.records)) {
+          masterIntakesRecord.snapshot_data.records.forEach(r => {
+            if (r && r.id && !deletedIntakesSet.has(r.id) && !r.notes?.includes('__DELETED__')) {
+              const existing = intakesMap.get(r.id);
+              intakesMap.set(r.id, { ...existing, ...r });
+            }
+          });
+        }
 
-        setDcIntakeRecords(mappedIntakes);
-        try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(mappedIntakes.slice(0, 100))); } catch (e) {}
-        dbStorage.setItem('mdc_dc_intake_records', mappedIntakes);
-      }
+        // 3. Load from individual intake_batch entries in saved_records
+        (dbRecords || []).forEach(r => {
+          if ((r.record_type === 'intake_batch' || r.record_type === 'intake_record' || (r.id && r.id.startsWith('MDC'))) && r.snapshot_data && !r.is_deleted && !deletedIntakesSet.has(r.id)) {
+            const intakeObj = r.snapshot_data;
+            if (intakeObj && intakeObj.id && !deletedIntakesSet.has(intakeObj.id)) {
+              const existing = intakesMap.get(intakeObj.id);
+              intakesMap.set(intakeObj.id, {
+                ...existing,
+                ...intakeObj,
+                id: intakeObj.id || r.id,
+                record_name: intakeObj.record_name || r.period_label || intakeObj.id,
+                notes: intakeObj.notes || r.notes || '',
+                saved_by_name: intakeObj.saved_by_name || r.saved_by_name || 'Warehouse Staff',
+                created_at: intakeObj.created_at || r.created_at || r.updated_at
+              });
+            }
+          }
+        });
+
+        // 4. Load from dc_intake_records direct table if present
+        if (dbIntakes && Array.isArray(dbIntakes) && dbIntakes.length > 0) {
+          dbIntakes.forEach(dbI => {
+            if (!dbI || !dbI.id || deletedIntakesSet.has(dbI.id) || dbI.is_deleted === true || (dbI.notes && dbI.notes.includes('__DELETED__'))) {
+              return;
+            }
+            const existing = intakesMap.get(dbI.id);
+            intakesMap.set(dbI.id, {
+              id: dbI.id,
+              record_name: dbI.record_name || dbI.id,
+              intake_date: dbI.intake_date || existing?.intake_date,
+              po_id: dbI.po_id || existing?.po_id,
+              po_number: dbI.po_number || existing?.po_number,
+              supplier_name: dbI.supplier_name || dbI.supplier || existing?.supplier_name || 'Apple Authorized Logistics',
+              total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : existing?.total_units || 0),
+              saved_by_name: dbI.saved_by_name || existing?.saved_by_name || 'Warehouse Staff',
+              saved_by_user_id: dbI.saved_by_user_id || existing?.saved_by_user_id,
+              notes: dbI.notes || existing?.notes || '',
+              category_breakdown: dbI.category_breakdown || existing?.category_breakdown || {},
+              items: Array.isArray(dbI.items) && dbI.items.length > 0 ? dbI.items : (existing?.items || []),
+              created_at: dbI.created_at || existing?.created_at || new Date().toISOString(),
+              updated_at: dbI.updated_at || existing?.updated_at || new Date().toISOString()
+            });
+          });
+        }
+
+        const mergedIntakes = Array.from(intakesMap.values()).sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
+        fetchedIntakes = mergedIntakes;
+        try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(mergedIntakes.slice(0, 100))); } catch (e) {}
+        dbStorage.setItem('mdc_dc_intake_records', mergedIntakes);
+        return mergedIntakes;
+      });
 
       // 7b. Hydrate Shipments & Packing Lists from Supabase
       const deletedShipmentIdsLocal = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
@@ -2118,41 +2255,61 @@ export function AppProvider({ children }) {
       setActivePackDraft(effectiveDraft);
       if (effectiveDraft) {
         try { localStorage.setItem('mdc_active_pack_draft', JSON.stringify(effectiveDraft)); } catch (e) {}
-      } else {
+} else {
         try { localStorage.removeItem('mdc_active_pack_draft'); } catch (e) {}
       }
 
       // 8. Hydrate Serialized Inventory Units from Supabase
+      const deletedSerialsLocal = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const deletedSerialRegistry = (dbRecords || []).find(r => r.id === 'deleted_unit_serials_registry');
+      const deletedSerialsCloud = deletedSerialRegistry?.snapshot_data?.deletedSerials || [];
+      const deletedSerialsSet = new Set([...deletedSerialsLocal, ...deletedSerialsCloud].map(s => String(s).toUpperCase()));
+
       if (dbUnits !== undefined && dbUnits !== null || shouldFetch('inventory_units') || shouldFetch('dc_intake_records')) {
         setInventoryUnits(prev => {
           const map = new Map();
 
-          // Add units from live_master_dc_inventory in saved_records
+          // 1. Seed with current memory/local state so any recent user action (like CRBR toggle or new scan) is prioritized
+          (prev || []).forEach(u => {
+            const cleanSerial = String(u.serial_number || '').toUpperCase();
+            if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) map.set(cleanSerial, u);
+          });
+
+          // 2. Add units from live_master_dc_inventory in saved_records
           const masterInvRecord = (dbRecords || []).find(r => r.id === 'live_master_dc_inventory' && !r.is_deleted);
           if (masterInvRecord?.snapshot_data?.units && Array.isArray(masterInvRecord.snapshot_data.units)) {
             masterInvRecord.snapshot_data.units.forEach(u => {
               const cleanSerial = String(u.serial_number || '').toUpperCase();
-              if (cleanSerial) {
+              if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
                 const existing = map.get(cleanSerial);
-                map.set(cleanSerial, { ...existing, ...u });
+                const assign = existing?.intake_assignment || u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                map.set(cleanSerial, {
+                  ...existing,
+                  ...u,
+                  intake_assignment: assign,
+                  notes: assign
+                });
               }
             });
           }
 
-          // Add units from all saved intake records in dc_intake_records
+          // 3. Add units from all saved intake records in dc_intake_records
           const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
           allIntakeSources.forEach(rec => {
             if (Array.isArray(rec.items)) {
               rec.items.forEach(it => {
                 const cleanSerial = String(it.serial_number || '').toUpperCase();
-                if (cleanSerial) {
+                if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
                   const existing = map.get(cleanSerial);
+                  const assign = existing?.intake_assignment || it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
                   map.set(cleanSerial, {
                     id: it.id || existing?.id || `unit-${cleanSerial}`,
                     part_id: it.part_id || existing?.part_id || `part-${it.part_number}`,
                     part_number: it.part_number || existing?.part_number,
                     description: it.description || existing?.description || 'Service Replacement Part',
                     serial_number: it.serial_number || cleanSerial,
+                    intake_assignment: assign,
+                    notes: assign,
                     current_site_id: 'site-dc',
                     site_code: 'DC-MDC',
                     po_id: it.po_id || rec.po_id || existing?.po_id || null,
@@ -2168,18 +2325,21 @@ export function AppProvider({ children }) {
             }
           });
 
-          // Add units from inventory_units table if present
+          // 4. Add units from inventory_units table if present
           if (dbUnits && dbUnits.length > 0) {
             dbUnits.filter(u => !u.is_deleted).forEach(dbU => {
               const cleanSerial = String(dbU.serial_number || '').toUpperCase();
-              if (cleanSerial) {
+              if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
                 const existing = map.get(cleanSerial);
+                const assign = existing?.intake_assignment || dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
                 map.set(cleanSerial, {
                   id: dbU.id || existing?.id || `unit-${cleanSerial}`,
                   part_id: dbU.part_id || existing?.part_id,
-                  part_number: dbU.part_number || dbU.notes || existing?.part_number || 'PART',
-                  description: dbU.description || dbU.notes || existing?.description || 'Service Replacement Part',
+                  part_number: dbU.part_number || (dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? dbU.notes : existing?.part_number) || 'PART',
+                  description: dbU.description || existing?.description || 'Service Replacement Part',
                   serial_number: dbU.serial_number || cleanSerial,
+                  intake_assignment: assign,
+                  notes: dbU.notes || assign,
                   current_site_id: dbU.current_site_id || 'site-dc',
                   site_code: dbU.site_code || 'DC-MDC',
                   po_id: dbU.po_id || existing?.po_id,
@@ -2188,8 +2348,8 @@ export function AppProvider({ children }) {
                   received_at: dbU.received_at || existing?.received_at || new Date().toISOString(),
                   received_by: dbU.received_by_name || existing?.received_by || 'Warehouse Staff',
                   allocated_at: dbU.allocated_at,
-                  shipped_at: dbU.shipped_at,
-                  notes: dbU.notes
+                  shipped_at: dbU.shipped_at || existing?.shipped_at || null,
+                  intake_record_id: dbU.intake_record_id || existing?.intake_record_id
                 });
               }
             });
@@ -2203,7 +2363,8 @@ export function AppProvider({ children }) {
           });
 
           const mergedRaw = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-          const merged = reconcileUnitsWithPackedDrafts(mergedRaw, effectiveShipments, effectiveDraft);
+          const normalized = normalizeInventoryUnits(mergedRaw, parts);
+          const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft);
           try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
           dbStorage.setItem('mdc_inventory', merged);
           return merged;
@@ -2798,7 +2959,105 @@ export function AppProvider({ children }) {
     showToast('Loaded verified September 2026 dataset (591 units, $91,199.00) matching Google Sheets', 'success');
   };
 
+  // TESTING ONLY: Delete all stock parts & intake records
+  const deleteAllStockUnits = async () => {
+    // Collect all serial numbers to purge
+    const allSerialsToDelete = new Set();
+    (inventoryUnits || []).forEach(u => { if (u.serial_number) allSerialsToDelete.add(String(u.serial_number).toUpperCase()); });
+    (dcIntakeRecords || []).forEach(r => {
+      if (Array.isArray(r.items)) {
+        r.items.forEach(it => { if (it.serial_number) allSerialsToDelete.add(String(it.serial_number).toUpperCase()); });
+      }
+    });
+
+    const deletedSerialsArray = Array.from(allSerialsToDelete);
+
+    try {
+      const existingDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const updatedDeleted = Array.from(new Set([...existingDeleted, ...deletedSerialsArray]));
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
+      localStorage.setItem('mdc_inventory', '[]');
+      localStorage.setItem('mdc_dc_intake_records', '[]');
+      localStorage.removeItem('mdc_recent_scans');
+      localStorage.removeItem('mdc_is_cleared');
+      localStorage.removeItem('mdc_deleted_intake_ids');
+    } catch (e) {}
+
+    setInventoryUnits([]);
+    setDcIntakeRecords([]);
+    dbStorage.setItem('mdc_inventory', []);
+    dbStorage.setItem('mdc_dc_intake_records', []);
+
+    if (supabase) {
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        // 1. Save deleted serials registry in saved_records
+        await supabase.from('saved_records').upsert({
+          id: 'deleted_unit_serials_registry',
+          record_type: 'deletion_registry',
+          period_label: 'Deleted Unit Serials Registry',
+          notes: 'Global registry of purged stock unit serial numbers',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { deletedSerials: deletedSerialsArray },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        // 2. Clear snapshots in saved_records
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'both',
+          period_label: 'Live Master DC Inventory',
+          notes: 'Cleared stock parts for testing',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { units: [] },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        await supabase.from('saved_records').upsert({
+          id: 'master_dc_intakes_registry',
+          record_type: 'intake_registry',
+          period_label: 'Master DC Intakes Registry',
+          notes: 'Cleared intake records for testing',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { records: [] },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        // 3. Delete all intake_batch and intake_record rows from saved_records table
+        try { await supabase.from('saved_records').delete().eq('record_type', 'intake_batch'); } catch (e) {}
+        try { await supabase.from('saved_records').delete().eq('record_type', 'intake_record'); } catch (e) {}
+
+        // 4. Delete all MDC- prefixed records from saved_records table
+        try {
+          const { data: mdcRecs } = await supabase.from('saved_records').select('id');
+          if (Array.isArray(mdcRecs)) {
+            const mdcIds = mdcRecs.filter(r => r.id && (r.id.startsWith('MDC') || r.id.startsWith('intake-'))).map(r => r.id);
+            if (mdcIds.length > 0) {
+              await supabase.from('saved_records').delete().in('id', mdcIds);
+            }
+          }
+        } catch (e) {}
+
+        // 5. Delete direct table rows
+        try { await supabase.from('inventory_units').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
+        try { await supabase.from('dc_intake_records').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
+
+        setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        broadcastCloudEvent('STOCK_UNITS_CLEARED', { timestamp: new Date().toISOString() });
+      } catch (err) {
+        console.error('deleteAllStockUnits error:', err);
+      }
+    } else {
+      broadcastCloudEvent('STOCK_UNITS_CLEARED', { timestamp: new Date().toISOString() });
+    }
+
+    showToast('Deleted all stock parts & intake records for testing!', 'success');
+    return { success: true };
+  };
+
+
   const clearAllData = async () => {
+
     // 1. Set local cleared flags
     dbStorage.setItem('mdc_is_cleared', true);
     dbStorage.setItem('mdc_forecast', []);
@@ -2910,18 +3169,20 @@ export function AppProvider({ children }) {
   // --- ACTIONS ---
 
   // 1. Scan-In Unit (Receiving into DC)
-  const addScanInUnit = ({ partNumber, serialNumber, poId }) => {
-    const cleanPN = partNumber.trim().toUpperCase();
-    const cleanSerial = serialNumber.trim().toUpperCase();
+  const addScanInUnit = ({ partNumber, serialNumber, poId, intakeAssignment = 'MDC - Forecasting', notes = null }) => {
+    const rawPN = String(partNumber || '').trim();
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
 
-    if (!cleanPN || !cleanSerial) {
+    if (!rawPN || !cleanSerial) {
       barcodeAudio.playError();
       showToast('Scan error: Missing part number or serial number', 'error');
       return { success: false, error: 'Missing part number or serial number' };
     }
 
-    let part = parts.find(p => p.part_number.toUpperCase() === cleanPN);
+    // Intelligently resolve exact Apple Part Number (661-xxxxx) and description
+    let part = resolvePartInfo(rawPN, parts);
     if (!part) {
+      const cleanPN = rawPN.toUpperCase();
       const newPart = {
         id: `part-${cleanPN}`,
         part_number: cleanPN,
@@ -2935,33 +3196,58 @@ export function AppProvider({ children }) {
       part = newPart;
     }
 
-    const existingUnit = inventoryUnits.find(u => u.serial_number.toUpperCase() === cleanSerial);
+    const cleanPN = part.part_number;
+
+    // Security Verification: Validate that entered serial number is genuine and NOT a Part Number
+    const serialValidation = validateAppleSerialNumber(cleanSerial, cleanPN, parts);
+    if (!serialValidation.isValid) {
+      barcodeAudio.playError();
+      showToast(serialValidation.error, 'error');
+      logScan('RECEIVE_IN', cleanPN, cleanSerial, false, serialValidation.error);
+      return { success: false, error: serialValidation.error, isInvalidSerial: true };
+    }
+
+    const validatedSerial = serialValidation.cleanSerial;
+
+    const existingUnit = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === validatedSerial);
     if (existingUnit) {
       barcodeAudio.playError();
-      showToast(`Duplicate Serial: ${cleanSerial} already exists in DC stock!`, 'error');
-      logScan('RECEIVE_IN', cleanPN, cleanSerial, false, 'Duplicate serial number');
-      return { success: false, error: `Duplicate serial number: ${cleanSerial}` };
+      showToast(`Duplicate Serial: ${validatedSerial} already exists in DC stock!`, 'error');
+      logScan('RECEIVE_IN', cleanPN, validatedSerial, false, 'Duplicate serial number');
+      return { success: false, error: `Duplicate serial number: ${validatedSerial}` };
     }
+
+    const effectiveAssignment = intakeAssignment === 'DC - CRBR' ? 'DC - CRBR' : 'MDC - Forecasting';
+    const effectiveNotes = notes || effectiveAssignment;
 
     const newUnit = {
       id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      part_id: part.id,
+      part_id: part.id || `part-${part.part_number}`,
       part_number: part.part_number,
       description: part.description,
-      serial_number: cleanSerial,
+      category_id: part.category_id,
+      serial_number: validatedSerial,
+      intake_assignment: effectiveAssignment,
+      notes: effectiveNotes,
       current_site_id: 'site-dc',
+      site_code: 'DC-MDC',
       po_id: poId || null,
       status: 'in_stock',
       box_number: 1,
       received_at: new Date().toISOString(),
-      received_by: currentUser?.fullName || 'Warehouse Staff'
+      received_by: currentUser?.fullName || 'Warehouse Staff',
+      stocking_price: part.stocking_price || 99
     };
+
+    // Remove this serial from deleted registry so it persists and hydrates cleanly
+    unmarkDeletedSerials([validatedSerial]);
 
     setInventoryUnits(prev => {
       const updated = [newUnit, ...(prev || []).filter(u => u.serial_number !== newUnit.serial_number)];
+      const normalized = normalizeInventoryUnits(updated, parts);
       try {
         localStorage.removeItem('mdc_is_cleared');
-        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
         localStorage.setItem('mdc_parts', JSON.stringify(parts));
         const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
         const updatedRecent = [newUnit, ...currentRecent.filter(u => u.serial_number !== newUnit.serial_number)].slice(0, 300);
@@ -2969,8 +3255,8 @@ export function AppProvider({ children }) {
       } catch (e) {
         console.warn('LocalStorage save error:', e);
       }
-      dbStorage.setItem('mdc_inventory', updated);
-      return updated;
+      dbStorage.setItem('mdc_inventory', normalized);
+      return normalized;
     });
 
     // Direct Cloud Database Auto-Save (Multi-account & Real-time persisted)
@@ -2980,7 +3266,7 @@ export function AppProvider({ children }) {
       setPurchaseOrders(prev => prev.map(po => {
         if (po.id === poId) {
           const updatedItems = po.items.map(item => {
-            if (item.part_number.toUpperCase() === cleanPN) {
+            if (item.part_number.toUpperCase() === cleanPN || item.part_number.toUpperCase() === rawPN.toUpperCase()) {
               return { ...item, quantity_received: item.quantity_received + 1 };
             }
             return item;
@@ -2998,13 +3284,41 @@ export function AppProvider({ children }) {
 
     barcodeAudio.playSuccess();
     logScan('RECEIVE_IN', cleanPN, cleanSerial, true);
-    showToast(`Received ${part.description} (${cleanSerial})`, 'success');
+    showToast(`Received ${part.part_number} — ${part.description} (${cleanSerial})`, 'success');
     return { success: true, unit: newUnit };
+  };
+
+
+  const unmarkDeletedSerials = async (serialsToKeep) => {
+    if (!serialsToKeep || serialsToKeep.length === 0) return;
+    const serialSetToKeep = new Set(serialsToKeep.map(s => String(s).trim().toUpperCase()));
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const filtered = localDeleted.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filtered));
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
+        if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
+          const updatedCloud = reg.snapshot_data.deletedSerials.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
+          await supabase.from('saved_records').upsert({
+            id: 'deleted_unit_serials_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Deleted Unit Serials Registry',
+            snapshot_data: { deletedSerials: updatedCloud },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        }
+      } catch (e) {}
+    }
   };
 
   // Dedicated Robust Cloud Unit Persistence (Ensures foreign keys, table rows, and multi-user sync)
   const saveUnitsToSupabase = async (units) => {
     if (!supabase || !units || units.length === 0) return;
+    unmarkDeletedSerials(units.map(u => u.serial_number));
     setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
     try {
       // 1. Get or create part_category
@@ -3062,13 +3376,14 @@ export function AppProvider({ children }) {
         }
 
         if (pId && dcSiteId) {
+          const assign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
           unitRows.push({
             part_id: pId,
             current_site_id: dcSiteId,
             serial_number: cleanSerial,
             status: u.status || 'in_stock',
             box_number: u.box_number || 1,
-            notes: u.description || null,
+            notes: assign,
             received_at: u.received_at || new Date().toISOString()
           });
         }
@@ -3092,12 +3407,15 @@ export function AppProvider({ children }) {
         units.forEach(u => {
           const s = String(u.serial_number || '').toUpperCase();
           if (s) {
+            const assign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
             mergedMap.set(s, {
               id: u.id || `unit-${u.serial_number}`,
               part_id: u.part_id || `part-${u.part_number}`,
               part_number: u.part_number,
               description: u.description || 'Service Replacement Part',
               serial_number: u.serial_number,
+              intake_assignment: assign,
+              notes: assign,
               current_site_id: 'site-dc',
               site_code: 'DC-MDC',
               status: u.status || 'in_stock',
@@ -3135,7 +3453,7 @@ export function AppProvider({ children }) {
   };
 
   // 1.1 Batch Scan-In Units (from XLSX/CSV file upload)
-  const batchAddScanInUnits = (itemsList = [], defaultPoId = null) => {
+  const batchAddScanInUnits = (itemsList = [], defaultPoId = null, defaultAssignment = 'MDC - Forecasting') => {
     if (!itemsList || itemsList.length === 0) {
       return { success: false, error: 'No units provided to import' };
     }
@@ -3150,20 +3468,22 @@ export function AppProvider({ children }) {
     const existingInventoryMap = new Map((inventoryUnits || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
 
     for (const item of itemsList) {
-      const cleanPN = String(item.part_number || item.partNumber || '').trim().toUpperCase();
+      const rawPN = String(item.part_number || item.partNumber || '').trim();
+      const rawDesc = String(item.description || '').trim();
       const cleanSerial = String(item.serial_number || item.serialNumber || '').trim().toUpperCase();
 
-      if (!cleanPN || !cleanSerial) continue;
+      if ((!rawPN && !rawDesc) || !cleanSerial) continue;
       // Prevent internal duplicate within the same batch file
       if (seenSerials.has(cleanSerial)) continue;
       seenSerials.add(cleanSerial);
 
-      let part = currentParts.find(p => p.part_number.toUpperCase() === cleanPN);
+      let part = resolvePartInfo(rawPN, currentParts) || resolvePartInfo(rawDesc, currentParts);
       if (!part) {
+        const cleanPN = (rawPN || rawDesc).toUpperCase();
         const newPart = {
           id: `part-${cleanPN}`,
           part_number: cleanPN,
-          description: item.description || `Replacement Part (${cleanPN})`,
+          description: rawDesc || `Replacement Part (${cleanPN})`,
           category_id: 'cat-battery',
           iphone_model: 'iPhone Model',
           stocking_price: 100,
@@ -3174,21 +3494,37 @@ export function AppProvider({ children }) {
         part = newPart;
       }
 
+      const cleanPN = part.part_number;
+
+      // Security Verification: Validate Apple Serial Number
+      const serialValidation = validateAppleSerialNumber(cleanSerial, cleanPN, currentParts);
+      if (!serialValidation.isValid) continue;
+      const validatedSerial = serialValidation.cleanSerial;
+
       const assignedPoId = item.poId || defaultPoId || null;
-      const existingUnit = existingInventoryMap.get(cleanSerial);
+      const existingUnit = existingInventoryMap.get(validatedSerial);
+
+      const assignedType = item.intake_assignment || item.intakeAssignment || item.notes || defaultAssignment || 'MDC - Forecasting';
+      const effectiveAssignment = String(assignedType).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
+      const effectiveNotes = item.notes || effectiveAssignment;
 
       const processedUnit = {
         id: existingUnit?.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        part_id: part.id,
+        part_id: part.id || `part-${part.part_number}`,
         part_number: part.part_number,
-        description: item.description || part.description,
-        serial_number: cleanSerial,
+        description: part.description || rawDesc,
+        category_id: part.category_id,
+        serial_number: validatedSerial,
+        intake_assignment: effectiveAssignment,
+        notes: effectiveNotes,
         current_site_id: 'site-dc',
+        site_code: 'DC-MDC',
         po_id: assignedPoId || existingUnit?.po_id || null,
         status: 'in_stock',
         box_number: item.boxNumber || existingUnit?.box_number || 1,
         received_at: existingUnit?.received_at || new Date().toISOString(),
-        received_by: currentUser?.fullName || 'Warehouse Staff (Import)'
+        received_by: currentUser?.fullName || 'Warehouse Staff (Import)',
+        stocking_price: part.stocking_price || 99
       };
 
       newUnits.push(processedUnit);
@@ -3220,6 +3556,7 @@ export function AppProvider({ children }) {
     if (newlyCreatedParts.length > 0) {
       setParts(currentParts);
     }
+
 
     setInventoryUnits(prev => {
       const existingSerialsMap = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
@@ -3290,22 +3627,32 @@ export function AppProvider({ children }) {
     }
 
     const nowIso = new Date().toISOString();
-    const finalUnits = targetUnits.map(u => ({
-      ...u,
-      id: u.id || `unit-${u.serial_number}`,
-      part_id: u.part_id || `part-${u.part_number}`,
-      part_number: u.part_number,
-      description: u.description || 'Service Replacement Part',
-      serial_number: String(u.serial_number || '').trim().toUpperCase(),
-      current_site_id: 'site-dc',
-      site_code: 'DC-MDC',
-      status: 'in_stock',
-      box_number: 1,
-      received_at: nowIso,
-      received_by: currentUser?.fullName || 'Warehouse Staff',
-      shipped_at: null,
-      shipped_by: null
-    }));
+    const resolvedUnits = targetUnits.map(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      const rawPN = String(u.part_number || '').trim();
+      const rawDesc = String(u.description || '').trim();
+      const part = resolvePartInfo(rawPN, parts) || resolvePartInfo(rawDesc, parts);
+
+      return {
+        ...u,
+        id: u.id || `unit-${cleanSerial}`,
+        part_id: part?.id || u.part_id || `part-${part?.part_number || rawPN}`,
+        part_number: part?.part_number || rawPN,
+        description: part?.description || rawDesc || 'Service Replacement Part',
+        category_id: part?.category_id || u.category_id,
+        serial_number: cleanSerial,
+        current_site_id: 'site-dc',
+        site_code: 'DC-MDC',
+        status: 'in_stock',
+        box_number: 1,
+        received_at: u.received_at || nowIso,
+        received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff',
+        stocking_price: part?.stocking_price || u.stocking_price || 99,
+        shipped_at: null,
+        shipped_by: null
+      };
+    });
+    const finalUnits = normalizeInventoryUnits(resolvedUnits, parts);
 
     // Update inventory units state immediately
     let allUpdatedUnits = [];
@@ -3333,24 +3680,37 @@ export function AppProvider({ children }) {
     return { success: true, count: finalUnits.length, units: finalUnits };
   };
 
-  // 1.2 Delete / Remove a Received Unit from Inventory & Database (if wrong details scanned)
+  // 1.2 Delete / Remove a Received Unit from Inventory & Database
   const deleteScanInUnit = async (serialNumber) => {
+    if (!serialNumber) return { success: false };
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
-    const existing = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
 
-    if (!existing) {
-      showToast(`Unit #${cleanSerial} not found in inventory`, 'error');
-      return { success: false, error: 'Unit not found' };
-    }
+    // 1. Register serial number in deleted set so background hydration never restores it
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const updatedDeleted = Array.from(new Set([...localDeleted, cleanSerial]));
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
+    } catch (e) {}
 
-    // 1. Remove from inventoryUnits state
-    const nextUnits = inventoryUnits.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
-    setInventoryUnits(nextUnits);
+    // 2. Remove from inventoryUnits state & storage
+    let nextUnits = [];
+    setInventoryUnits(prev => {
+      nextUnits = (prev || []).filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
+        const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
+        const filteredRecent = recent.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
+        localStorage.setItem('mdc_recent_scans', JSON.stringify(filteredRecent));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', nextUnits);
+      return nextUnits;
+    });
 
-    // 2. Remove from dcIntakeRecords state & prepare records to sync in DB
+    // 3. Remove from dcIntakeRecords state & storage
+    let updatedRecords = [];
     const recordsToUpdateInDb = [];
     setDcIntakeRecords(prev => {
-      const nextRecords = (prev || []).map(rec => {
+      updatedRecords = (prev || []).map(rec => {
         if (Array.isArray(rec.items) && rec.items.some(it => String(it.serial_number || '').toUpperCase() === cleanSerial)) {
           const filteredItems = rec.items.filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial);
           const updatedRec = {
@@ -3365,70 +3725,66 @@ export function AppProvider({ children }) {
         return rec;
       });
       try {
-        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords.slice(0, 100)));
+        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updatedRecords));
       } catch (e) {}
-      return nextRecords;
+      dbStorage.setItem('mdc_dc_intake_records', updatedRecords);
+      return updatedRecords;
     });
 
-    // 3. Remove from LocalStorage and IndexedDB
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
-      dbStorage.setItem('mdc_inventory', nextUnits);
-      const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-      const filteredRecent = recent.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
-      localStorage.setItem('mdc_recent_scans', JSON.stringify(filteredRecent));
-    } catch (e) {
-      console.warn('LocalStorage delete error:', e);
-    }
-
-    // 4. Remove from Supabase Cloud Database tables (inventory_units & saved_records)
+    // 4. Update Supabase Cloud Database tables (inventory_units, saved_records, dc_intake_records)
     if (supabase) {
       (async () => {
         setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
         try {
-          // Delete from inventory_units
-          await supabase.from('inventory_units').delete().eq('serial_number', existing.serial_number);
+          // Register in cloud deleted registry
+          const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
+          const cloudDeleted = reg?.snapshot_data?.deletedSerials || [];
+          const updatedCloudDeleted = Array.from(new Set([...cloudDeleted, cleanSerial]));
 
-          // Update live_master_dc_inventory in saved_records
+          await supabase.from('saved_records').upsert({
+            id: 'deleted_unit_serials_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Deleted Unit Serials Registry',
+            snapshot_data: { deletedSerials: updatedCloudDeleted },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+
+          // Soft-delete & hard-delete from inventory_units table
+          try { await supabase.from('inventory_units').update({ is_deleted: true }).eq('serial_number', cleanSerial); } catch (e) {}
+          try { await supabase.from('inventory_units').delete().eq('serial_number', cleanSerial); } catch (e) {}
+
+          // Update live master inventory snapshot
           await supabase.from('saved_records').upsert({
             id: 'live_master_dc_inventory',
             record_type: 'inventory_master',
             period_label: 'Live Master DC Inventory',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            period_week: 1,
-            notes: 'Master DC In-Stock inventory pool across all accounts',
-            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-            snapshot_data: {
-              units: nextUnits
-            },
+            snapshot_data: { units: nextUnits },
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
 
           // Update affected intake records in Supabase
           for (const rec of recordsToUpdateInDb) {
-            await supabase.from('dc_intake_records').upsert({
-              id: rec.id,
-              record_name: rec.record_name,
-              intake_date: rec.intake_date,
-              po_id: rec.po_id && !String(rec.po_id).startsWith('po-') ? rec.po_id : null,
-              po_number: rec.po_number,
-              supplier: rec.supplier,
-              total_units: rec.total_units,
-              saved_by_name: rec.saved_by_name,
-              saved_by_user_id: rec.saved_by_user_id,
-              notes: rec.notes,
-              category_breakdown: rec.category_breakdown,
-              items: rec.items,
-              updated_at: rec.updated_at
-            });
+            try {
+              await supabase.from('dc_intake_records').upsert(rec, { onConflict: 'id' });
+              await supabase.from('saved_records').upsert({
+                id: rec.id,
+                record_type: 'intake_batch',
+                period_label: rec.record_name,
+                snapshot_data: rec,
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' });
+            } catch (e) {}
           }
+
           setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+          broadcastCloudEvent('UNIT_DELETED', { serialNumber: cleanSerial });
         } catch (dbErr) {
           console.warn('Supabase delete inventory_unit notice:', dbErr.message);
           setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
         }
       })();
+    } else {
+      broadcastCloudEvent('UNIT_DELETED', { serialNumber: cleanSerial });
     }
 
     // 5. If linked to a PO, decrement received quantity on that PO
@@ -5158,66 +5514,115 @@ export function AppProvider({ children }) {
 
   // Save a completed scan-in batch as an intake record
   const saveIntakeRecord = async (recordData) => {
-    const nextId = recordData.id || generateNextIntakeRecordId(recordData.intake_date);
+    const cleanDate = recordData.intake_date || recordData.intakeDate || new Date().toISOString().split('T')[0];
+    const nextId = (recordData.id || recordData.recordId || recordData.record_id || generateNextIntakeRecordId(cleanDate)).trim().toUpperCase();
+    const nextName = (recordData.record_name || recordData.recordName || `Intake Batch ${nextId}`).trim();
+    const rawItems = recordData.items || [];
+    const totalUnits = recordData.total_units || recordData.totalUnits || (rawItems.length > 0 ? rawItems.length : 0);
+    const totalValue = recordData.total_value || recordData.totalValue || rawItems.reduce((acc, it) => acc + Number(it.stocking_price || it.price || 99), 0);
+
     const newRecord = {
       id: nextId,
-      record_name: recordData.record_name || `Intake Batch ${nextId}`,
-      intake_date: recordData.intake_date || new Date().toISOString().split('T')[0],
-      po_id: recordData.po_id || null,
-      po_number: recordData.po_number || 'Direct Receiving',
-      supplier_name: recordData.supplier_name || 'Apple Authorized Logistics',
+      record_name: nextName,
+      intake_date: cleanDate,
+      po_id: recordData.po_id || recordData.poId || null,
+      po_number: recordData.po_number || recordData.poNumber || 'Direct Receiving',
+      supplier_name: recordData.supplier_name || recordData.supplierName || recordData.supplier || 'Apple Authorized Logistics',
       notes: recordData.notes || '',
-      items: recordData.items || [],
-      total_units: recordData.total_units || (recordData.items ? recordData.items.reduce((s, it) => s + (it.quantity || 1), 0) : 0),
-      total_value: recordData.total_value || 0,
+      items: rawItems,
+      total_units: totalUnits,
+      total_value: totalValue,
       saved_by_id: currentUser?.id || 'usr-system',
       saved_by_name: currentUser?.fullName || 'Warehouse Staff',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
 
-    const nextList = [newRecord, ...(dcIntakeRecords || [])];
-    setDcIntakeRecords(nextList);
-    dbStorage.setItem('mdc_dc_intake_records', nextList);
+    // Clear any previous isCleared flag & remove id from local deletion set
     try {
-      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
-    } catch (e) {
-      console.warn('LocalStorage save notice for dc_intake_records:', e);
-    }
+      localStorage.removeItem('mdc_is_cleared');
+      dbStorage.removeItem('mdc_is_cleared');
+      const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
+      const filteredDeleted = deletedList.filter(dId => dId !== nextId);
+      localStorage.setItem('mdc_deleted_intake_ids', JSON.stringify(filteredDeleted));
+    } catch (e) {}
 
-    // Direct Cloud Sync to Supabase
+    let nextList = [];
+    setDcIntakeRecords(prev => {
+      const existingFiltered = (prev || []).filter(r => r.id !== nextId);
+      nextList = [newRecord, ...existingFiltered];
+      try {
+        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
+      } catch (e) {
+        console.warn('LocalStorage save notice for dc_intake_records:', e);
+      }
+      dbStorage.setItem('mdc_dc_intake_records', nextList);
+      return nextList;
+    });
+
+    // Multi-channel Realtime Cloud Sync to Supabase
     if (supabase) {
       setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { error } = await supabase.from('dc_intake_records').upsert({
-          id: newRecord.id,
-          record_name: newRecord.record_name,
-          intake_date: newRecord.intake_date,
-          po_id: newRecord.po_id,
-          po_number: newRecord.po_number,
-          supplier_name: newRecord.supplier_name,
-          notes: newRecord.notes,
-          items: newRecord.items,
-          total_units: newRecord.total_units,
-          total_value: newRecord.total_value,
-          saved_by_id: newRecord.saved_by_id,
-          saved_by_name: newRecord.saved_by_name,
-          created_at: newRecord.created_at,
-          updated_at: newRecord.updated_at
-        }, { onConflict: 'id' });
-
-        if (error) {
-          console.error('Supabase dc_intake_records upsert error:', error.message);
+        // Reset cloud master cleared state
+        try {
           await supabase.from('saved_records').upsert({
-            id: newRecord.id,
-            record_type: 'intake_batch',
-            period_label: newRecord.record_name,
-            notes: newRecord.notes,
-            saved_by_name: newRecord.saved_by_name,
-            snapshot_data: newRecord,
+            id: LIVE_MASTER_RECORD_ID,
+            record_type: 'both',
+            period_label: 'Master Operational Data',
+            notes: 'Active live warehouse operational state',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              isCleared: false
+            },
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
+        } catch (e) {}
+        // Channel 1: Upsert to direct dc_intake_records table
+        try {
+          await supabase.from('dc_intake_records').upsert({
+            id: newRecord.id,
+            record_name: newRecord.record_name,
+            intake_date: newRecord.intake_date,
+            po_id: newRecord.po_id,
+            po_number: newRecord.po_number,
+            supplier_name: newRecord.supplier_name,
+            notes: newRecord.notes,
+            items: newRecord.items,
+            total_units: newRecord.total_units,
+            total_value: newRecord.total_value,
+            saved_by_id: safeUUID(newRecord.saved_by_id),
+            saved_by_name: newRecord.saved_by_name,
+            created_at: newRecord.created_at,
+            updated_at: newRecord.updated_at
+          }, { onConflict: 'id' });
+        } catch (tableErr) {
+          console.warn('Direct dc_intake_records table notice:', tableErr.message);
         }
+
+        // Channel 2: Upsert individual batch document in saved_records
+        await supabase.from('saved_records').upsert({
+          id: newRecord.id,
+          record_type: 'intake_batch',
+          period_label: newRecord.record_name,
+          notes: newRecord.notes,
+          saved_by_name: newRecord.saved_by_name,
+          snapshot_data: newRecord,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        // Channel 3: Upsert complete master intake registry in saved_records (synced to all users in realtime)
+        await supabase.from('saved_records').upsert({
+          id: 'master_dc_intakes_registry',
+          record_type: 'intake_registry',
+          period_label: 'Master DC Intakes Registry',
+          notes: 'Master operational intake batches synchronized across all users',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            records: nextList
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
 
         setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
@@ -5237,16 +5642,38 @@ export function AppProvider({ children }) {
 
   // Delete a saved intake record
   const deleteIntakeRecord = async (recordId) => {
-    const target = dcIntakeRecords.find(r => r.id === recordId);
+    const target = (dcIntakeRecords || []).find(r => r.id === recordId);
+    let nextRecords = [];
+
+    // Collect serial numbers of items in this intake batch to delete them from inventory as well
+    const serialsInBatch = (target?.items || []).map(it => String(it.serial_number || '').trim().toUpperCase()).filter(Boolean);
+
+    if (serialsInBatch.length > 0) {
+      try {
+        const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+        const updatedDeleted = Array.from(new Set([...localDeleted, ...serialsInBatch]));
+        localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
+      } catch (e) {}
+
+      setInventoryUnits(prev => {
+        const filtered = (prev || []).filter(u => !serialsInBatch.includes(String(u.serial_number || '').toUpperCase()));
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(filtered)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', filtered);
+        return filtered;
+      });
+    }
 
     // 1. Remove from dcIntakeRecords state & local storage
-    setDcIntakeRecords(prev => (prev || []).filter(r => r.id !== recordId));
-    try {
-      const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
-      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(existing.filter(r => r.id !== recordId)));
-      const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
-      localStorage.setItem('mdc_deleted_intake_ids', JSON.stringify([...new Set([...deletedList, recordId])]));
-    } catch (e) {}
+    setDcIntakeRecords(prev => {
+      nextRecords = (prev || []).filter(r => r.id !== recordId);
+      try {
+        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+        const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_intake_ids') || '[]');
+        localStorage.setItem('mdc_deleted_intake_ids', JSON.stringify([...new Set([...deletedList, recordId])]));
+      } catch (e) {}
+      dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+      return nextRecords;
+    });
 
     // 2. Log deletion audit with user accountability
     await logDeletionAudit({
@@ -5266,13 +5693,31 @@ export function AppProvider({ children }) {
     if (supabase) {
       setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
-        if (delErr) {
-          await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
+        if (serialsInBatch.length > 0) {
+          try { await supabase.from('inventory_units').update({ is_deleted: true }).in('serial_number', serialsInBatch); } catch (e) {}
+          try { await supabase.from('inventory_units').delete().in('serial_number', serialsInBatch); } catch (e) {}
         }
+
+        try {
+          const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
+          if (delErr) {
+            await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
+          }
+        } catch (e) {}
         await supabase.from('saved_records').delete().eq('id', recordId);
-        // Ensure any legacy deleted_intake_ids_registry in saved_records is also deleted
-        await supabase.from('saved_records').delete().eq('id', 'deleted_intake_ids_registry');
+
+        // Update master registry in saved_records
+        await supabase.from('saved_records').upsert({
+          id: 'master_dc_intakes_registry',
+          record_type: 'intake_registry',
+          period_label: 'Master DC Intakes Registry',
+          notes: 'Master operational intake batches synchronized across all users',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            records: nextRecords
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
 
         setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         broadcastCloudEvent('INTAKE_DELETED', { recordId });
@@ -5286,7 +5731,7 @@ export function AppProvider({ children }) {
       broadcastCloudEvent('INTAKE_DELETED', { recordId });
     }
 
-    showToast(`Deleted Intake Record ${recordId} & logged to Serialized Audit Trail`, 'info');
+    showToast(`Deleted Intake Record "${target?.record_name || recordId}"`, 'info');
     return { success: true };
   };
 
@@ -5379,6 +5824,7 @@ export function AppProvider({ children }) {
         deletePeriodRecord,
         addScanInUnit,
         deleteScanInUnit,
+        updateUnitAssignment,
         batchAddScanInUnits,
         commitUnitsToStock,
         addScanOutUnit,
@@ -5412,6 +5858,7 @@ export function AppProvider({ children }) {
         processOfflineSyncQueue,
         resetToDefaultData,
         clearAllData,
+        deleteAllStockUnits,
         isCommandPaletteOpen,
         setIsCommandPaletteOpen
       }}
