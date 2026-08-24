@@ -54,7 +54,8 @@ export default function ScanOutPacking() {
     currentUser,
     showToast,
     autoRefreshData,
-    isAutoRefreshing
+    isAutoRefreshing,
+    canUserDeleteRecord
   } = useApp();
 
   const serviceSites = useMemo(() => {
@@ -199,7 +200,7 @@ export default function ScanOutPacking() {
         };
       });
     }
-  }, [activePackDraft, shipments, selectedSiteId, selectedWeek, selectedSite?.code, currentUser?.fullName, currentShipment?.id, currentShipment?.items?.length]);
+  }, [activePackDraft, shipments, selectedSiteId, selectedWeek, selectedSite?.code, currentUser?.fullName, currentShipment?.id, currentShipment?.items, currentShipment?.items?.length]);
 
   // Keep active draft synced to LocalStorage and Supabase Cloud
   useEffect(() => {
@@ -1872,18 +1873,29 @@ export default function ScanOutPacking() {
                             >
                               <Printer size={12} />
                             </button>
-                            <button
-                              className="btn btn-danger btn-sm"
-                              onClick={() => {
-                                if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
-                                  deleteShipment(s.id);
-                                }
-                              }}
-                              title="Permanently Delete Manifest from Database"
-                              style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                            {canUserDeleteRecord(s, currentUser) ? (
+                              <button
+                                className="btn btn-danger btn-sm"
+                                onClick={() => {
+                                  if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
+                                    deleteShipment(s.id);
+                                  }
+                                }}
+                                title="Permanently Delete Manifest from Database"
+                                style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            ) : (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled
+                                style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.4, cursor: 'not-allowed' }}
+                                title={`Only ${s.prepared_by_name || s.saved_by_name || 'the creator'} can delete this manifest`}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

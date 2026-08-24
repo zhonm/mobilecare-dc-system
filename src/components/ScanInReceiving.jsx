@@ -41,12 +41,8 @@ export default function ScanInReceiving() {
     inventoryUnits,
     dcIntakeRecords,
     cloudSyncStatus,
-    isAutoRefreshing,
-    lastSyncedAt,
-    autoRefreshData,
     showToast,
     commitUnitsToStock,
-    deleteAllStockUnits,
     setActiveTab
   } = useApp();
 

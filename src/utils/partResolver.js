@@ -23,7 +23,8 @@ export function validateAppleSerialNumber(rawSerial, currentPn = '', partsCatalo
   }
 
   // Strip GS1 control characters
-  str = str.replace(/[\x1d\x1e\x06\r\n]/g, '').trim();
+  // eslint-disable-next-line no-control-regex
+  str = str.replace(/[\u001d\u001e\u0006\r\n]/g, '').trim();
 
   const cleanSerial = str.toUpperCase();
   const cleanPn = String(currentPn || '').trim().toUpperCase();
@@ -110,7 +111,7 @@ export function resolvePartInfo(rawInput, partsCatalog = []) {
   if (!str) return null;
 
   // 1. Clean GS1 Datamatrix / QR code control characters & prefixes
-  if (str.startsWith('[)>') || str.includes('06\x1d') || str.includes('\x1d') || str.includes('\x1e')) {
+  if (str.startsWith('[)>') || str.includes('06\u001d') || str.includes('\u001d') || str.includes('\u001e')) {
     const pMatch = str.match(/P([0-9]{3}-?[0-9]{4,6})/i);
     if (pMatch) str = pMatch[1];
   }

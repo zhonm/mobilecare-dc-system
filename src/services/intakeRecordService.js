@@ -1,0 +1,274 @@
+import { supabase } from '../supabase/client';
+import dbStorage from '../utils/dbStorage';
+import { safeUUID } from '../utils/appHelpers';
+import { unmarkDeletedIntakeIds, unmarkDeletedSerials, registerDeletedIntakeId } from './deletionRegistryService';
+import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+
+export const generateNextIntakeRecordId = (targetDate = new Date(), dcIntakeRecords = []) => {
+  let year = 2026;
+  if (targetDate instanceof Date && !isNaN(targetDate)) {
+    year = targetDate.getFullYear();
+  } else if (typeof targetDate === 'string') {
+    const parsed = new Date(targetDate);
+    if (!isNaN(parsed)) year = parsed.getFullYear();
+  }
+
+  const yearPrefix = `MDC${year}`;
+  const matchingRecords = (dcIntakeRecords || []).filter(r => r.id && r.id.startsWith(yearPrefix));
+
+  let maxSeq = 0;
+  matchingRecords.forEach(r => {
+    const numPart = r.id.replace(yearPrefix, '').split('-')[0];
+    const seq = parseInt(numPart, 10);
+    if (!isNaN(seq) && seq > maxSeq) {
+      maxSeq = seq;
+    }
+  });
+
+  const nextSeq = maxSeq + 1;
+  const candidate = `${yearPrefix}${String(nextSeq).padStart(5, '0')}`;
+  
+  const existingIds = new Set((dcIntakeRecords || []).map(r => r.id));
+  if (existingIds.has(candidate)) {
+    return `${candidate}-${Date.now().toString().slice(-4)}`;
+  }
+  return candidate;
+};
+
+export const executeSaveIntakeRecord = async ({
+  recordData,
+  dcIntakeRecords,
+  setDcIntakeRecords,
+  currentUser,
+  setCloudSyncStatus,
+  broadcastCloudEvent,
+  enqueueOfflineAction,
+  showToast
+}) => {
+  const cleanDate = recordData.intake_date || recordData.intakeDate || new Date().toISOString().split('T')[0];
+  const nextId = (recordData.id || recordData.recordId || recordData.record_id || generateNextIntakeRecordId(cleanDate, dcIntakeRecords)).trim().toUpperCase();
+  const nextName = (recordData.record_name || recordData.recordName || `Intake Batch ${nextId}`).trim();
+  const rawItems = recordData.items || [];
+  const totalUnits = recordData.total_units || recordData.totalUnits || (rawItems.length > 0 ? rawItems.length : 0);
+  const totalValue = recordData.total_value || recordData.totalValue || rawItems.reduce((acc, it) => acc + Number(it.stocking_price || it.price || 99), 0);
+
+  const newRecord = {
+    id: nextId,
+    record_name: nextName,
+    intake_date: cleanDate,
+    po_id: recordData.po_id || recordData.poId || null,
+    po_number: recordData.po_number || recordData.poNumber || 'Direct Receiving',
+    supplier_name: recordData.supplier_name || recordData.supplierName || recordData.supplier || 'Apple Authorized Logistics',
+    notes: recordData.notes || '',
+    items: rawItems,
+    total_units: totalUnits,
+    total_value: totalValue,
+    saved_by_id: currentUser?.id || 'usr-system',
+    saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  // Clear any previous isCleared flag & unmark ID & item serials from local and cloud deletion sets
+  try {
+    localStorage.removeItem('mdc_is_cleared');
+    dbStorage.removeItem('mdc_is_cleared');
+  } catch (e) {}
+  await unmarkDeletedIntakeIds([newRecord.id]);
+  if (Array.isArray(newRecord.items) && newRecord.items.length > 0) {
+    await unmarkDeletedSerials(newRecord.items.map(it => it.serial_number));
+  }
+
+  // Calculate nextList synchronously upfront so cloud sync never receives an empty array
+  const existingFiltered = (dcIntakeRecords || []).filter(r => r.id !== nextId);
+  const nextList = [newRecord, ...existingFiltered];
+
+  setDcIntakeRecords(nextList);
+  try {
+    localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
+  } catch (e) {
+    console.warn('LocalStorage save notice for dc_intake_records:', e);
+  }
+  dbStorage.setItem('mdc_dc_intake_records', nextList);
+
+  // Multi-channel Realtime Cloud Sync to Supabase
+  if (supabase) {
+    setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+    try {
+      try {
+        await supabase.from('saved_records').upsert({
+          id: LIVE_MASTER_RECORD_ID,
+          record_type: 'both',
+          period_label: 'Master Operational Data',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Active live warehouse operational state',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { isCleared: false },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (e) {}
+
+      // Channel 1: Upsert to direct dc_intake_records table
+      try {
+        await supabase.from('dc_intake_records').upsert({
+          id: newRecord.id,
+          record_name: newRecord.record_name,
+          intake_date: newRecord.intake_date,
+          po_id: newRecord.po_id,
+          po_number: newRecord.po_number,
+          supplier_name: newRecord.supplier_name,
+          notes: newRecord.notes,
+          items: newRecord.items,
+          total_units: newRecord.total_units,
+          total_value: newRecord.total_value,
+          saved_by_id: safeUUID(newRecord.saved_by_id),
+          saved_by_name: newRecord.saved_by_name,
+          created_at: newRecord.created_at,
+          updated_at: newRecord.updated_at
+        }, { onConflict: 'id' });
+      } catch (tableErr) {
+        console.warn('Direct dc_intake_records table notice:', tableErr.message);
+      }
+
+      const intakeYear = new Date(newRecord.intake_date || new Date()).getFullYear() || new Date().getFullYear();
+      const intakeMonth = (new Date(newRecord.intake_date || new Date()).getMonth() + 1) || (new Date().getMonth() + 1);
+
+      // Channel 2: Upsert individual batch document in saved_records
+      await supabase.from('saved_records').upsert({
+        id: newRecord.id,
+        record_type: 'intake_batch',
+        period_label: newRecord.record_name,
+        period_year: intakeYear,
+        period_month: intakeMonth,
+        notes: newRecord.notes,
+        saved_by_name: newRecord.saved_by_name,
+        snapshot_data: newRecord,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      // Channel 3: Upsert complete master intake registry in saved_records (synced to all users in realtime)
+      await supabase.from('saved_records').upsert({
+        id: 'master_dc_intakes_registry',
+        record_type: 'intake_registry',
+        period_label: 'Master DC Intakes Registry',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        notes: 'Master operational intake batches synchronized across all users',
+        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+        snapshot_data: { records: nextList },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
+    } catch (dbErr) {
+      console.error('Supabase dc_intake_records sync error:', dbErr.message);
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+      enqueueOfflineAction('INTAKE_UPSERT', newRecord);
+      broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
+    }
+  } else {
+    broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
+  }
+
+  showToast(`Saved DC Intake Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+  return { success: true, record: newRecord };
+};
+
+export const executeDeleteIntakeRecord = async ({
+  recordId,
+  dcIntakeRecords,
+  setDcIntakeRecords,
+  setInventoryUnits,
+  logDeletionAudit,
+  currentUser,
+  setCloudSyncStatus,
+  broadcastCloudEvent,
+  showToast
+}) => {
+  const target = (dcIntakeRecords || []).find(r => r.id === recordId);
+  const nextRecords = (dcIntakeRecords || []).filter(r => r.id !== recordId);
+
+  const serialsInBatch = (target?.items || []).map(it => String(it.serial_number || '').trim().toUpperCase()).filter(Boolean);
+
+  if (serialsInBatch.length > 0) {
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const updatedDeleted = Array.from(new Set([...localDeleted, ...serialsInBatch]));
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
+    } catch (e) {}
+
+    setInventoryUnits(prev => {
+      const filtered = (prev || []).filter(u => !serialsInBatch.includes(String(u.serial_number || '').toUpperCase()));
+      try { localStorage.setItem('mdc_inventory', JSON.stringify(filtered)); } catch (e) {}
+      dbStorage.setItem('mdc_inventory', filtered);
+      return filtered;
+    });
+  }
+
+  // 1. Register intake ID in deleted registry and remove from state
+  await registerDeletedIntakeId(recordId);
+  setDcIntakeRecords(nextRecords);
+  try {
+    localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+  } catch (e) {}
+  dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+
+  // 2. Log deletion audit with user accountability
+  await logDeletionAudit({
+    entityType: 'DC Intake Record',
+    entityId: recordId,
+    entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Intake Record ${recordId}`),
+    summary: {
+      itemsCount: target?.items?.length || target?.total_units || 0,
+      poNumber: target?.po_number || target?.poNumber || 'N/A',
+      intakeDate: target?.intake_date,
+      originalSavedBy: target?.saved_by_name || 'Warehouse Staff'
+    },
+    reason: 'Deleted by warehouse staff / administrator'
+  });
+
+  // 3. Delete / Soft-Delete from Supabase cloud database
+  if (supabase) {
+    setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+    try {
+      if (serialsInBatch.length > 0) {
+        try { await supabase.from('inventory_units').update({ is_deleted: true }).in('serial_number', serialsInBatch); } catch (e) {}
+        try { await supabase.from('inventory_units').delete().in('serial_number', serialsInBatch); } catch (e) {}
+      }
+
+      try {
+        const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
+        if (delErr) {
+          await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
+        }
+      } catch (e) {}
+      await supabase.from('saved_records').delete().eq('id', recordId);
+
+      await supabase.from('saved_records').upsert({
+        id: 'master_dc_intakes_registry',
+        record_type: 'intake_registry',
+        period_label: 'Master DC Intakes Registry',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        notes: 'Master operational intake batches synchronized across all users',
+        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+        snapshot_data: { records: nextRecords },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      broadcastCloudEvent('INTAKE_DELETED', { recordId });
+    } catch (e) {
+      console.warn('Delete intake cloud notice:', e.message);
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+      broadcastCloudEvent('INTAKE_DELETED', { recordId });
+    }
+  } else {
+    broadcastCloudEvent('INTAKE_DELETED', { recordId });
+  }
+
+  showToast(`Deleted DC Intake Record ${recordId}`, 'info');
+  return { success: true };
+};

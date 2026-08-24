@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   parseUniversalExcel,
@@ -10,8 +10,7 @@ import {
   printForecastingReportDirect
 } from '../utils/pdfGenerator';
 import {
-  calculateLinearRegressionForecast,
-  calculateForecastTrendMetrics
+  calculateLinearRegressionForecast
 } from '../utils/forecastEngine';
 import {
   BarChart,
@@ -42,22 +41,13 @@ import {
   Building2,
   DollarSign,
   Package,
-  ShieldCheck,
   Activity,
-  CheckCircle2,
   RotateCcw,
-  HelpCircle,
-  Filter,
   ArrowUpRight,
-  ArrowDownRight,
   Sparkles,
-  Calendar,
   ChevronLeft,
   ChevronRight,
-  Zap,
-  Boxes,
-  Sliders,
-  Check
+  Boxes
 } from 'lucide-react';
 
 // ── Commodity Color Palette ───────────────────────────────────────────────────
@@ -147,7 +137,6 @@ export default function ForecastingReports() {
     allocations,
     sites,
     parts,
-    categories,
     activePeriod,
     showToast,
     clearAllData
@@ -175,7 +164,7 @@ export default function ForecastingReports() {
   const ALL_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   // ── Intelligent Stock Price Resolver ───────────────────────────────────────
-  const getPartStockPrice = (item) => {
+  const getPartStockPrice = useCallback((item) => {
     if (!item) return 100;
     if (typeof item.stocking_price === 'number' && item.stocking_price > 0) {
       return item.stocking_price;
@@ -196,7 +185,7 @@ export default function ForecastingReports() {
     if (desc.includes('glass') || desc.includes('back')) return 99;
     if (desc.includes('rear') || desc.includes('mid')) return 119;
     return 100;
-  };
+  }, [parts]);
 
   // ── Sourced Data Resolution ────────────────────────────────────────────────
   const activeDatasetItems = useMemo(() => {
@@ -496,7 +485,7 @@ export default function ForecastingReports() {
       modelFamilyData,
       siteAllocationsList
     };
-  }, [filteredItems, historyMonths, currentPeriodLabel, activeAllocations, serviceBranches, parts]);
+  }, [filteredItems, historyMonths, currentPeriodLabel, activeAllocations, serviceBranches, getPartStockPrice]);
 
   // ── Pagination Calculation for Ledger ───────────────────────────────────────
   const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;

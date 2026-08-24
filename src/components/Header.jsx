@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Barcode, PackageCheck, RefreshCw, Command, Sparkles, Calendar } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar } from 'lucide-react';
 
 export default function Header() {
   const {

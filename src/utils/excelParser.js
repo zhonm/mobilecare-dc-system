@@ -1,8 +1,6 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import canonicalShares from '../data/canonicalShares.js';
-import canonicalAugustAllocations from '../data/canonicalAllocations.js';
-import canonicalSeptemberAllocations from '../data/canonicalSeptemberAllocations.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import { calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';

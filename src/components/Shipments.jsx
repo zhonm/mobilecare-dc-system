@@ -27,7 +27,9 @@ export default function Shipments() {
     deleteShipment,
     batchImportShipments,
     clearAllShipmentsData,
-    showToast
+    showToast,
+    currentUser,
+    canUserDeleteRecord
   } = useApp();
 
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -323,18 +325,29 @@ export default function Shipments() {
                             </button>
                           )}
 
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => {
-                              if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will return its parts to DC stock.`)) {
-                                deleteShipment(sh.id);
-                              }
-                            }}
-                            title="Delete Shipment"
-                            style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          {canUserDeleteRecord(sh, currentUser) ? (
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() => {
+                                if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will return its parts to DC stock.`)) {
+                                  deleteShipment(sh.id);
+                                }
+                              }}
+                              title="Delete Shipment"
+                              style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              disabled
+                              style={{ opacity: 0.4, cursor: 'not-allowed' }}
+                              title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

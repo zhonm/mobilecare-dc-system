@@ -32,7 +32,9 @@ export default function SavedRecords() {
     allocations,
     isAutoRefreshing,
     lastSyncedAt,
-    autoRefreshData
+    autoRefreshData,
+    currentUser,
+    canUserDeleteRecord
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -539,14 +541,25 @@ export default function SavedRecords() {
                           </button>
 
                           {/* Delete Record */}
-                          <button
-                            className="btn btn-sm btn-danger"
-                            onClick={() => setRecordToDelete(record)}
-                            title="Delete this historical record"
-                            style={{ fontSize: '11px', padding: '4px 8px' }}
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          {canUserDeleteRecord(record, currentUser) ? (
+                            <button
+                              className="btn btn-sm btn-danger"
+                              onClick={() => setRecordToDelete(record)}
+                              title="Delete this historical record"
+                              style={{ fontSize: '11px', padding: '4px 8px' }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          ) : (
+                            <button
+                              className="btn btn-sm btn-secondary"
+                              disabled
+                              style={{ fontSize: '11px', padding: '4px 8px', opacity: 0.4, cursor: 'not-allowed' }}
+                              title={`Only ${record.saved_by_name || 'the creator'} can delete this record`}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

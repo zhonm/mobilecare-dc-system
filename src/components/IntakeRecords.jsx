@@ -26,8 +26,7 @@ import {
   Boxes,
   Copy,
   Check,
-  Filter,
-  ArrowUpRight
+  Filter
 } from 'lucide-react';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 
@@ -38,14 +37,15 @@ export default function IntakeRecords() {
     inventoryUnits,
     deleteScanInUnit,
     updateUnitAssignment,
-    deleteAllStockUnits,
     parts,
     setActiveTab,
     isAutoRefreshing,
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    processOfflineSyncQueue
+    processOfflineSyncQueue,
+    currentUser,
+    canUserDeleteRecord
   } = useApp();
 
   // Active View Tab: 'stock_by_date' | 'batch_records'
@@ -1108,14 +1108,25 @@ export default function IntakeRecords() {
                                     </span>
                                   </td>
                                   <td style={{ textAlign: 'right' }}>
-                                    <button
-                                      className="btn btn-secondary btn-sm"
-                                      onClick={() => setUnitToDelete(u)}
-                                      style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
-                                      title="Delete serialized part from warehouse stock"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
+                                    {canUserDeleteRecord(u, currentUser) ? (
+                                      <button
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => setUnitToDelete(u)}
+                                        style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
+                                        title="Delete serialized part from warehouse stock"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        className="btn btn-secondary btn-sm"
+                                        disabled
+                                        style={{ padding: '3px 6px', opacity: 0.4, cursor: 'not-allowed', color: '#94a3b8' }}
+                                        title={`Only ${u.received_by_name || u.received_by || u.saved_by_name || 'the user who received this part'} can delete it`}
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    )}
                                   </td>
                                 </tr>
                               ))}
@@ -1216,14 +1227,25 @@ export default function IntakeRecords() {
                               <span>Inspect</span>
                             </button>
 
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => setRecordToDelete(rec)}
-                              style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
-                              title="Delete intake batch record"
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            {canUserDeleteRecord(rec, currentUser) ? (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setRecordToDelete(rec)}
+                                style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
+                                title="Delete intake batch record"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            ) : (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled
+                                style={{ padding: '3px 6px', opacity: 0.4, cursor: 'not-allowed', color: '#94a3b8' }}
+                                title={`Only ${rec.saved_by_name || 'the creator'} has permission to delete this batch record`}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

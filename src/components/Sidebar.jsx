@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import {
@@ -17,7 +18,9 @@ import {
   Settings,
   ShieldCheck,
   Users,
-  LogOut
+  LogOut,
+  Search,
+  X
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -31,6 +34,8 @@ export default function Sidebar() {
     shipments,
     sites
   } = useApp();
+
+  const [navSearch, setNavSearch] = useState('');
 
   const openPOsCount = purchaseOrders.filter(p => p.status !== 'closed' && p.status !== 'received').length;
   const pendingShipmentsCount = shipments.filter(s => s.status === 'draft' || s.status === 'packing').length;
@@ -55,12 +60,19 @@ export default function Sidebar() {
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Admin' }
   ];
 
-  // Filter items by permitted access
-  const visibleItems = navItems.filter(item => canAccess(item.id));
+  // Filter items by permitted access & search query
+  const visibleItems = navItems.filter(item => {
+    if (!canAccess(item.id)) return false;
+    if (!navSearch.trim()) return true;
+    const q = navSearch.toLowerCase().trim();
+    return item.label.toLowerCase().includes(q) || item.section.toLowerCase().includes(q);
+  });
+
   const sections = ['Core', 'Planning', 'Warehouse Operations', 'Distribution', 'Reports & Analytics', 'Traceability', 'Admin'];
 
   return (
     <aside className="sidebar">
+      {/* Brand Header */}
       <div className="sidebar-header">
         <div className="sidebar-logo-img-wrapper">
           <img
@@ -70,63 +82,104 @@ export default function Sidebar() {
           />
         </div>
         <div className="sidebar-brand">
-          <h2>DC System</h2>
-          <p>Mobile Care Services Phils.</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <h2>DC System</h2>
+            <span className="sidebar-pro-pill">PRO</span>
+          </div>
+          <p className="sidebar-subtitle">
+            <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
+            Mobile Care Services Phils.
+          </p>
         </div>
       </div>
 
-      <div className="sidebar-nav">
-        {sections.map(secName => {
-          const items = visibleItems.filter(item => item.section === secName);
-          if (items.length === 0) return null;
-
-          return (
-            <div key={secName}>
-              <div className="nav-section-title">{secName}</div>
-              {items.map(item => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <div
-                    key={item.id}
-                    className={`nav-item ${isActive ? 'active' : ''}`}
-                    onClick={() => setActiveTab(item.id)}
-                  >
-                    <div className="nav-item-left">
-                      <Icon size={17} />
-                      <span>{item.label}</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {item.hotkey && <span className="nav-hotkey">{item.hotkey}</span>}
-                      {item.badge > 0 && <span className="nav-badge">{item.badge}</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+      {/* Quick Search Bar */}
+      <div className="sidebar-search-container">
+        <div className="sidebar-search-input-wrapper">
+          <Search size={13} className="sidebar-search-icon" />
+          <input
+            type="text"
+            placeholder="Search menu..."
+            value={navSearch}
+            onChange={(e) => setNavSearch(e.target.value)}
+            className="sidebar-search-input"
+          />
+          {navSearch && (
+            <button
+              type="button"
+              onClick={() => setNavSearch('')}
+              className="sidebar-search-clear-btn"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="sidebar-footer">
-        <div className="user-profile-badge" style={{ marginBottom: '10px' }}>
-          <div className="user-avatar">
-            <ShieldCheck size={16} />
+      {/* Navigation Menu */}
+      <div className="sidebar-nav custom-scrollbar">
+        {visibleItems.length === 0 ? (
+          <div className="sidebar-no-results">
+            No matching navigation items
           </div>
-          <div className="user-info-text" style={{ flex: 1, minWidth: 0 }}>
-            <h4 style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        ) : (
+          sections.map(secName => {
+            const items = visibleItems.filter(item => item.section === secName);
+            if (items.length === 0) return null;
+
+            return (
+              <div key={secName} className="nav-section-group">
+                <div className="nav-section-title">{secName}</div>
+                {items.map(item => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`nav-item ${isActive ? 'active' : ''}`}
+                      onClick={() => setActiveTab(item.id)}
+                    >
+                      <div className="nav-item-left">
+                        <Icon size={17} className={`nav-icon ${isActive ? 'active-icon' : ''}`} />
+                        <span className="nav-label">{item.label}</span>
+                      </div>
+                      <div className="nav-item-right">
+                        {item.hotkey && <span className="nav-hotkey">{item.hotkey}</span>}
+                        {item.badge > 0 && <span className="nav-badge">{item.badge}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Modernized User Profile Footer */}
+      <div className="sidebar-footer">
+        <div className="user-profile-card">
+          <div className="user-avatar-wrapper">
+            <div className="user-avatar">
+              <ShieldCheck size={16} color="#38bdf8" />
+            </div>
+            <span className="user-online-ring"></span>
+          </div>
+
+          <div className="user-info-text">
+            <h4 title={currentUser?.fullName || 'User'}>
               {currentUser?.fullName || 'User'}
             </h4>
-            <div style={{ fontSize: '11px', color: '#38bdf8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '1px' }} title={currentUser?.rolePosition || 'DC Operations'}>
+            <div className="user-role-position" title={currentUser?.rolePosition || 'DC Operations'}>
               {currentUser?.rolePosition || (currentUser?.role === 'superadmin' ? 'Superadmin' : currentUser?.role === 'admin' ? 'Operations Lead' : 'DC Specialist')}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
-              <span className="badge badge-primary" style={{ fontSize: '9.5px', padding: '1px 5px', textTransform: 'uppercase' }}>
+            <div className="user-tags-row">
+              <span className="user-role-badge">
                 {currentUser?.role?.replace('_', ' ')}
               </span>
               {userSite && (
-                <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>
-                  {userSite.code}
+                <span className="user-site-code">
+                  • {userSite.code}
                 </span>
               )}
             </div>
@@ -136,26 +189,9 @@ export default function Sidebar() {
         <button
           type="button"
           onClick={signOut}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            background: '#1e293b',
-            border: '1px solid #334155',
-            color: '#cbd5e1',
-            padding: '7px',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '12px',
-            cursor: 'pointer',
-            fontWeight: 500,
-            transition: 'all 0.15s ease'
-          }}
-          onMouseOver={(e) => { e.currentTarget.style.background = '#334155'; e.currentTarget.style.color = '#fff'; }}
-          onMouseOut={(e) => { e.currentTarget.style.background = '#1e293b'; e.currentTarget.style.color = '#cbd5e1'; }}
+          className="sidebar-signout-btn"
         >
-          <LogOut size={13} />
+          <LogOut size={14} />
           <span>Sign Out</span>
         </button>
       </div>

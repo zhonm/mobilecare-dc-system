@@ -11,10 +11,7 @@ import {
   FileSpreadsheet,
   Calendar,
   Trash2,
-  Download,
-  AlertTriangle,
-  UserCheck,
-  FileText
+  Download
 } from 'lucide-react';
 
 export default function AuditTrail() {
