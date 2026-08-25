@@ -145,7 +145,7 @@ export default function IntakeRecords() {
         category,
         price,
         intake_assignment: assignment,
-        notes: u.notes || assignment,
+        notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('Forecasting') ? `${assignment} | ${u.notes}` : assignment,
         isCrbr,
         dateKey,
         timeStr,
@@ -569,7 +569,7 @@ export default function IntakeRecords() {
           <button
             className="btn btn-primary btn-sm"
             onClick={() => {
-              setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits.slice(0, 50));
+              setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
               setIsSaveModalOpen(true);
             }}
             disabled={enrichedStockUnits.length === 0}
@@ -1160,7 +1160,7 @@ export default function IntakeRecords() {
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => {
-                      setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits.slice(0, 50));
+                      setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
                       setIsSaveModalOpen(true);
                     }}
                   >

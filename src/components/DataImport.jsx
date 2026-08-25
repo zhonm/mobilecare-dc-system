@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
+import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   UploadCloud,
   TrendingUp,
@@ -21,6 +22,7 @@ import {
 export default function DataImport() {
   const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [fileName, setFileName] = useState('');
   const [lastFileObj, setLastFileObj] = useState(null);
@@ -29,6 +31,14 @@ export default function DataImport() {
       return localStorage.getItem('mdc_filter_scope') || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
     } catch {
       return 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+    }
+  });
+
+  const [allocationMode, setAllocationMode] = useState(() => {
+    try {
+      return localStorage.getItem('mdc_allocation_mode') || 'OPTION_A';
+    } catch {
+      return 'OPTION_A';
     }
   });
 
@@ -72,18 +82,22 @@ export default function DataImport() {
 
     setLastFileObj(file);
     setFileName(file.name);
-    await processFile(file, filterScope, selectedMonth);
+    await processFile(file, filterScope, selectedMonth, allocationMode);
   };
 
-  const processFile = async (file, scope, month) => {
+  const processFile = async (file, scope, month, mode = allocationMode) => {
     setIsProcessing(true);
     try {
-      const result = await parseUniversalExcel(file, sites, parts, { filterScope: scope, selectedMonth: month });
+      const result = await parseUniversalExcel(file, sites, parts, {
+        filterScope: scope,
+        selectedMonth: month,
+        allocationMode: mode
+      });
       if (result.success) {
         setParsedData(result);
         if (result.type === 'RAW_USAGE_PIPELINE') {
           setPreviewTab('forecast');
-          showToast(`Filtered to ${result.summary.partsCount} iPhone 13+ genuine parts (${result.summary.recordsCount} repairs matched)!`, 'success');
+          showToast(`Filtered to ${result.summary.partsCount} iPhone parts (${result.summary.recordsCount} repairs matched)!`, 'success');
         } else {
           showToast(`Successfully analyzed "${file.name}" as ${result.type.replace('_', ' ')}!`, 'success');
         }
@@ -103,7 +117,17 @@ export default function DataImport() {
       localStorage.setItem('mdc_filter_scope', newScope);
     } catch (e) {}
     if (lastFileObj) {
-      await processFile(lastFileObj, newScope, selectedMonth);
+      await processFile(lastFileObj, newScope, selectedMonth, allocationMode);
+    }
+  };
+
+  const handleAllocationModeChange = async (newMode) => {
+    setAllocationMode(newMode);
+    try {
+      localStorage.setItem('mdc_allocation_mode', newMode);
+    } catch (e) {}
+    if (lastFileObj) {
+      await processFile(lastFileObj, filterScope, selectedMonth, newMode);
     }
   };
 
@@ -222,7 +246,7 @@ export default function DataImport() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={clearAllData}
+              onClick={() => setShowClearModal(true)}
               title="Reset to fresh empty state with zero forecasts or allocations"
             >
               <RotateCcw size={14} />
@@ -327,7 +351,7 @@ export default function DataImport() {
                 disabled={!isSuperAdmin}
                 style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
               >
-                iPhone 13+ (Battery & Display)
+                iPhone (Battery & Display)
               </button>
               <button
                 type="button"
@@ -336,7 +360,39 @@ export default function DataImport() {
                 disabled={!isSuperAdmin}
                 style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
               >
-                All Parts (Unfiltered)
+                All Parts
+              </button>
+            </div>
+          </div>
+
+          {/* Allocation Engine Mode Selector */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+              <Split size={15} color="var(--primary)" />
+              <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
+                Allocation Mode:
+              </strong>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${allocationMode === 'OPTION_A' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleAllocationModeChange('OPTION_A')}
+                disabled={!isSuperAdmin}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+                title="Option A: Bit-for-bit Excel workbook formula parity"
+              >
+                Option A (Excel Parity)
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${allocationMode === 'OPTION_B' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleAllocationModeChange('OPTION_B')}
+                disabled={!isSuperAdmin}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+                title="Option B: Corrected self-consistent 2D quota allocation"
+              >
+                Option B (Corrected)
               </button>
             </div>
           </div>
@@ -630,6 +686,15 @@ export default function DataImport() {
             </div>
           )}
         </div>
+      )}
+
+      {/* High-Security Clear Data Confirmation Modal */}
+      {showClearModal && (
+        <ClearDataConfirmationModal
+          isOpen={showClearModal}
+          onClose={() => setShowClearModal(false)}
+          title="Reset System to Fresh Empty State"
+        />
       )}
     </div>
   );

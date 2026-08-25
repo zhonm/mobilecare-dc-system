@@ -393,17 +393,27 @@ export function useInventory({
     const cleanSerial = String(serialNumber).trim().toUpperCase();
     const effectiveAssignment = String(newAssignment).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
 
-    let targetUnit = null;
+    // Retrieve target unit synchronously from state or local cache to guarantee Supabase persistence
+    let currentUnit = (inventoryUnits || []).find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
+    if (!currentUnit) {
+      try {
+        const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        currentUnit = localInv.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
+      } catch (e) {}
+    }
+
+    const targetUnit = currentUnit
+      ? { ...currentUnit, intake_assignment: effectiveAssignment, notes: effectiveAssignment }
+      : { serial_number: cleanSerial, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
 
     setInventoryUnits(prev => {
       const updated = (prev || []).map(u => {
         if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
-          targetUnit = {
+          return {
             ...u,
             intake_assignment: effectiveAssignment,
             notes: effectiveAssignment
           };
-          return targetUnit;
         }
         return u;
       });
@@ -463,8 +473,25 @@ export function useInventory({
     }
 
     if (targetUnit) {
-      saveUnitsToSupabase([targetUnit]);
+      await saveUnitsToSupabase([targetUnit]);
+      if (supabase) {
+        try {
+          await supabase
+            .from('inventory_units')
+            .update({ notes: effectiveAssignment })
+            .eq('serial_number', cleanSerial);
+        } catch (e) {}
+      }
     }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('STOCK_UPDATED', {
+        serialNumber: cleanSerial,
+        assignment: effectiveAssignment,
+        table: 'inventory_units'
+      });
+    }
+
     showToast(`Updated ${cleanSerial} assignment to "${effectiveAssignment}"`, 'success');
     return { success: true, assignment: effectiveAssignment };
   };

@@ -2,7 +2,14 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import canonicalShares from '../data/canonicalShares.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
-import { calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
+import {
+  calculateOptionAAllocation,
+  calculateOptionBAllocation,
+  calculate2DCumulativeAllocation,
+  calculateWeeklySplit,
+  getOrderRemark,
+  calculateAllocationTotalsAndRemarks
+} from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber } from './partResolver.js';
 
@@ -71,6 +78,7 @@ export const CANONICAL_SITE_LIST = [
   { code: 'ASP NAG', name: 'MOBILECARE - NAGA' },
   { code: 'ASP LAU', name: 'MOBILECARE - LA UNION' },
   { code: 'ASP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' },
+  { code: 'APP ILO', name: 'MOBILECARE - APP SM ILOILO' },
   { code: 'ASP CEB', name: 'MOBILECARE - CEBU' },
   { code: 'ASP ZAM', name: 'MOBILECARE - ZAMBOANGA' },
   { code: 'ASP ABR', name: 'MOBILECARE - DAVAO' },
@@ -324,38 +332,60 @@ export function lookupPartPrice(pn, desc = '', existingParts = []) {
   };
 }
 
+export const EXCLUDED_BATTERY_DISPLAY_DESCS = new Set([
+  // Battery Exclusions (13 models)
+  'battery, iphone 11',
+  'battery, iphone 8',
+  'battery, iphone 11 pro',
+  'battery, iphone 11 pro max',
+  'battery, iphone 12 and 12 pro',
+  'battery, iphone 12 mini',
+  'battery, iphone 12 pro max',
+  'battery, iphone 13 mini',
+  'battery, iphone 8 plus',
+  'battery, iphone se 2nd gen',
+  'battery, iphone se 3rd generation',
+  'battery, iphone x',
+  'battery, iphone xr',
+  // Display Exclusions (7 models)
+  'display, iphone 11',
+  'display, iphone 12',
+  'display, iphone 12 mini',
+  'display, iphone 12 pro',
+  'display, iphone 12 pro max',
+  'display, iphone 13 mini',
+  'display, iphone xr'
+].map(s => s.toLowerCase().trim()));
+
 export const LEGACY_EXCLUDE_REGEX = /^((Battery, iPhone (11|8|11 Pro|11 Pro Max|12 and 12 Pro|12 mini|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR))|(Display, iPhone (11|12|12 mini|12 Pro|12 Pro Max|13 mini|XR)))$/i;
 
-export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
+/**
+ * Single source of truth predicate for in-scope genuine iPhone Battery & Display repair universe.
+ * Exact Step 2 Rules:
+ *   a. part_description ILIKE '%iphone%'
+ *   b. part_description ILIKE '%battery%' OR part_description ILIKE '%display%'
+ *   c. TRIM(part_description) does NOT case-insensitively equal any of the 20 legacy exclusions
+ */
+export function isTargetIPhonePart(desc, _pn = '', filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
   if (filterScope === 'ALL_PARTS') return true;
 
   const d = String(desc || '').trim();
-  const p = String(pn || '').trim();
   const dLower = d.toLowerCase();
-  const combined = `${d} ${p}`.toLowerCase();
 
-  // 1. Exclude non-iPhone hardware, other commodities (camera, back glass, systems), & consumables
-  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera|truedepth|\bglass\b|rear\s*system|mid\s*system|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(dLower)) {
+  // Rule a: Must contain 'iphone'
+  if (!dLower.includes('iphone')) {
     return false;
   }
 
-  // 2. Must be iPhone
-  if (!/iphone/i.test(combined)) return false;
-
-  // 3. Strictly Battery or Display only
-  const isBattery = /battery|batt\b/i.test(dLower);
-  const isDisplay = /display|screen|oled|lcd/i.test(dLower);
+  // Rule b: Must be Battery or Display
+  const isBattery = dLower.includes('battery');
+  const isDisplay = dLower.includes('display');
   if (!isBattery && !isDisplay) {
     return false;
   }
 
-  // 4. Exclude older iPhones and 13 mini matching exact Google Sheets regex
-  if (LEGACY_EXCLUDE_REGEX.test(d)) {
-    return false;
-  }
-
-  const is13OrNewer = /\biphone\s*(13|14|15|16|16e|17|17e|18|19|20|air)\b/i.test(dLower);
-  if (!is13OrNewer) {
+  // Rule c: Must not match any of the 20 excluded models
+  if (EXCLUDED_BATTERY_DISPLAY_DESCS.has(dLower)) {
     return false;
   }
 
@@ -403,6 +433,10 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         };
 
         // Check for Multi-Tab Comprehensive Workbook (.xlsx)
+        const rawSheetName = !isCsv ? sheetNames.find(s =>
+          (/master.*list|iphones|iphone|repairs|raw/i.test(s))
+        ) : null;
+
         const allocSheetName = !isCsv ? sheetNames.find(s =>
           (/master.*alloc|allocation|_alloc/i.test(s) || /july.*alloc|august.*alloc|september.*alloc/i.test(s)) && !/forecasting|forecast/i.test(s)
         ) : null;
@@ -411,11 +445,37 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           /forecasting|forecast/i.test(s) && !/allocation|_alloc/i.test(s)
         ) : null;
 
-        const rawSheetName = !isCsv ? sheetNames.find(s =>
-          (/master.*list|iphones|iphone|repairs|raw/i.test(s)) && s !== allocSheetName && s !== forecastSheetName
-        ) : null;
+        // A. Primary / Authoritative: Raw Masterlist Ingestion Pipeline
+        if (rawSheetName) {
+          const wsRaw = wb.Sheets[rawSheetName];
+          const rawMasterRows = XLSX.utils.sheet_to_json(wsRaw, { header: 1, defval: '' });
+          const usageResult = processRawUsageSheet(rawMasterRows, currentSites, currentParts, {
+            filterScope,
+            selectedMonth,
+            fileName: file.name,
+            allocationMode: options.allocationMode || 'OPTION_A'
+          });
 
-        // A. Multi-Tab Workbook with Explicit Master Allocation Sheet
+          resolve({
+            success: true,
+            type: 'RAW_USAGE_PIPELINE',
+            sheetName: rawSheetName,
+            detectedPeriod: usageResult.detectedPeriod || detectedPeriod,
+            summary: {
+              recordsCount: usageResult.records.length,
+              partsCount: usageResult.forecastItems.length,
+              sitesCount: usageResult.sites.length,
+              totalForecastedUnits: usageResult.forecastItems.reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0),
+              totalAllocatedUnits: usageResult.allocations.reduce((acc, a) => acc + (a.total_allocated_qty || 0), 0),
+              totalValuation: usageResult.allocations.reduce((acc, a) => acc + (a.total_stock_cost || 0), 0),
+              description: `Ingested ${usageResult.records.length} in-scope repair logs from "${rawSheetName}", dynamically recomputed ${usageResult.forecastItems.length} demand forecasts and allocations across ${usageResult.sites.length} branches.`
+            },
+            payload: usageResult
+          });
+          return;
+        }
+
+        // B. Multi-Tab Workbook with Pre-Aggregated Allocation Sheet (fallback if no Masterlist tab)
         if (allocSheetName) {
           const wsAlloc = wb.Sheets[allocSheetName];
           const rawAllocRows = XLSX.utils.sheet_to_json(wsAlloc, { header: 1, defval: '' });
@@ -1231,15 +1291,43 @@ export function parseAllocationSheet(rawRows, existingSites = [], existingPartsO
 }
 
 /**
- * Sub-parser: Raw Fixably / GSX repair logs
+ * Sub-parser: Raw Fixably / GSX repair logs & Masterlist Ingestion Pipeline
+ * Step 1: Parses raw repair records (Location Name, GSX Repair Number, Repair Closed Date, Product Code, Product Description).
+ * Step 2: Applies exact in-scope filter predicate (Rules a, b, c).
+ * Step 3: Derives monthly usage counts across all trailing months & linear regression forecasts.
+ * Step 4: Calculates all-time per-site historical shares for every part across 27 canonical sites.
+ * Step 5: Computes multi-site allocation using Option A (Excel bit-for-bit parity) or Option B (self-consistent).
+ * Step 6: Generates alternating row-parity 4-week split, order remarks, and summary totals.
  */
-export function processRawUsageSheet(rawRows, existingSites = [], existingParts = [], filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY', selectedMonth = 'auto', fileName = '') {
+export function processRawUsageSheet(
+  rawRows,
+  existingSites = [],
+  existingParts = [],
+  optionsOrFilterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+  maybeSelectedMonth = 'auto',
+  maybeFileName = ''
+) {
+  const options = typeof optionsOrFilterScope === 'object' && optionsOrFilterScope !== null
+    ? optionsOrFilterScope
+    : {
+        filterScope: optionsOrFilterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+        selectedMonth: maybeSelectedMonth || 'auto',
+        fileName: maybeFileName || '',
+        allocationMode: 'OPTION_A'
+      };
+
+  const filterScope = options.filterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+  const selectedMonth = options.selectedMonth !== undefined ? options.selectedMonth : 'auto';
+  const fileName = options.fileName || '';
+  const allocationMode = options.allocationMode || 'OPTION_A';
+
+  // 1. Identify header row
   let headerIndex = 0;
   for (let i = 0; i < Math.min(12, rawRows.length); i++) {
     const str = (rawRows[i] || []).map(c => String(c).toLowerCase()).join(' ');
     if (
-      (str.includes('part') || str.includes('p/n') || str.includes('code') || str.includes('item') || str.includes('desc')) &&
-      (str.includes('site') || str.includes('branch') || str.includes('location') || str.includes('asp') || str.includes('store') || str.includes('repair') || str.includes('date') || str.includes('month'))
+      (str.includes('product') || str.includes('part') || str.includes('p/n') || str.includes('code') || str.includes('desc')) &&
+      (str.includes('location') || str.includes('site') || str.includes('branch') || str.includes('repair') || str.includes('date') || str.includes('closed'))
     ) {
       headerIndex = i;
       break;
@@ -1248,49 +1336,28 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
 
   const headers = (rawRows[headerIndex] || []).map(h => String(h).trim().toLowerCase());
   const colIndices = {
-    month: headers.findIndex(h => /month|date|closed|created|period|time/i.test(h)),
-    site: headers.findIndex(h => /site|branch|location|asp|store|office|company/i.test(h)),
-    partNumber: headers.findIndex(h => /part\s*number|p\/n|part\s*#|part_code|item\s*code|sku|product\s*code|part\b/i.test(h)),
-    partDesc: headers.findIndex(h => /description|part\s*name|item\s*name|item\b|product\s*name|title|desc/i.test(h)),
-    qty: headers.findIndex(h => /qty|quantity|count|amount/i.test(h)),
-    repairId: headers.findIndex(h => /repair|order|case|invoice|ticket|number/i.test(h)),
-    serial: headers.findIndex(h => /serial|imei|kgb|kbb/i.test(h))
+    site: headers.findIndex(h => /location\s*name|site|branch|location|asp|store/i.test(h)),
+    repairId: headers.findIndex(h => /gsx\s*repair\s*number|repair\s*number|repair|order|case|ticket/i.test(h)),
+    date: headers.findIndex(h => /repair\s*closed\s*date|closed\s*date|date|month|period/i.test(h)),
+    partNumber: headers.findIndex(h => /product\s*code|part\s*number|p\/n|part\s*#|part_code|sku|item\s*code/i.test(h)),
+    partDesc: headers.findIndex(h => /product\s*description|description|part\s*name|item\s*name|desc/i.test(h)),
+    orderId: headers.findIndex(h => /order\s*id|order_id|order/i.test(h)),
+    kgb: headers.findIndex(h => /product\s*kgb|kgb/i.test(h)),
+    kbb: headers.findIndex(h => /product\s*kbb|kbb/i.test(h)),
+    qty: headers.findIndex(h => /quantity|qty|count/i.test(h))
   };
 
-  if (colIndices.partNumber === -1) colIndices.partNumber = 0;
-  if (colIndices.partDesc === -1) colIndices.partDesc = 1;
-  if (colIndices.site === -1) colIndices.site = 2;
-  if (colIndices.month === -1) colIndices.month = 3;
+  if (colIndices.site === -1) colIndices.site = 0;
+  if (colIndices.repairId === -1) colIndices.repairId = 1;
+  if (colIndices.date === -1) colIndices.date = 2;
+  if (colIndices.partNumber === -1) colIndices.partNumber = 3;
+  if (colIndices.partDesc === -1) colIndices.partDesc = 4;
 
-  const records = [];
-  const partMap = new Map();
-  const discoveredSites = new Map();
-  let totalRawRowsRead = 0;
-  let filteredOutCount = 0;
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const MONTH_ABBRS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // Build canonical site index
-  const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
-    const existing = (existingSites || []).find(s => s.code === cs.code || cs.name.includes(s.name) || s.name.includes(cs.name));
-    return existing || {
-      id: `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-      code: cs.code,
-      name: cs.name,
-      region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila',
-      address: `${cs.name} Service Branch, Philippines`,
-      is_dc: false,
-      is_active: true
-    };
-  });
-
-  activeServiceSites.forEach(s => {
-    discoveredSites.set(s.id, s);
-    discoveredSites.set(s.code.toUpperCase(), s);
-    discoveredSites.set(s.name.toUpperCase(), s);
-  });
-
-  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-  function parseExcelOrDateString(val) {
+  // Helper: parse date to UTC Date object
+  function parseRepairDate(val) {
     if (val === null || val === undefined || val === '') return null;
     if (typeof val === 'number' && val > 20000 && val < 60000) {
       return new Date((val - 25569) * 86400 * 1000);
@@ -1307,186 +1374,177 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     return null;
   }
 
-  let targetMonthIdx = 8; // Default to September (9th month, index 8)
-  if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
-    const parsedM = parseInt(selectedMonth, 10);
-    targetMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? 8 : parsedM));
-  } else if (fileName) {
-    const fLower = fileName.toLowerCase();
-    const foundIdx = MONTH_NAMES.findIndex(m => fLower.includes(m.toLowerCase()));
-    if (foundIdx >= 0) targetMonthIdx = foundIdx;
-  }
-  let defaultFileMonthIdx = targetMonthIdx;
+  // Build canonical site index for all 27 sites
+  const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
+    const existing = (existingSites || []).find(s => s.code === cs.code || (s.name && cs.name.includes(s.name)) || (s.name && s.name.includes(cs.name)));
+    const siteId = existing?.id || `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    return {
+      id: siteId,
+      code: cs.code,
+      name: cs.name,
+      region: existing?.region || (/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila'),
+      address: existing?.address || `${cs.name} Service Branch, Philippines`,
+      is_dc: false,
+      is_active: true
+    };
+  });
 
-  const validRepairs = [];
   const rawRepairRows = [];
+  let totalRawRowsRead = 0;
+  let filteredOutCount = 0;
 
   for (let r = headerIndex + 1; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || row.length === 0) continue;
 
+    const rawSite = String(row[colIndices.site] || '').trim();
+    const rawRepairNo = colIndices.repairId >= 0 ? String(row[colIndices.repairId] || '').trim() : `RPR-${r}`;
+    const rawDateVal = colIndices.date >= 0 ? row[colIndices.date] : null;
     const rawPn = String(row[colIndices.partNumber] || '').trim();
     const rawDesc = String(row[colIndices.partDesc] || '').trim();
-    const rawSite = String(row[colIndices.site] || '').trim();
-    const rawMonth = row[colIndices.month];
-    const rawQty = Math.max(1, parseInt(row[colIndices.qty]) || 1);
-    const repairNo = colIndices.repairId >= 0 ? String(row[colIndices.repairId] || '').trim() : `RPR-${r}`;
-    const serial = colIndices.serial >= 0 ? String(row[colIndices.serial] || '').trim() : '';
+    const rawOrderId = colIndices.orderId >= 0 ? String(row[colIndices.orderId] || '').trim() : '';
+    const rawKgb = colIndices.kgb >= 0 ? String(row[colIndices.kgb] || '').trim() : '';
+    const rawKbb = colIndices.kbb >= 0 ? String(row[colIndices.kbb] || '').trim() : '';
+    const rawQty = colIndices.qty >= 0 ? Math.max(1, parseInt(row[colIndices.qty]) || 1) : 1;
 
-    if (!rawPn && !rawDesc) continue;
+    if (!rawPn && !rawDesc && !rawSite) continue;
     totalRawRowsRead++;
 
+    // Step 2: Exact Filter Predicate
     if (!isTargetIPhonePart(rawDesc, rawPn, filterScope)) {
       filteredOutCount++;
       continue;
     }
 
     const cleanPn = rawPn ? rawPn.toUpperCase() : `PART-${r}`;
-    const cleanDesc = rawDesc || `Apple Genuine Part (${cleanPn})`;
+    const cleanDesc = rawDesc.trim();
 
-    let matchedSite = activeServiceSites.find(s => 
+    // Site matching
+    const matchedSite = activeServiceSites.find(s =>
       rawSite.toUpperCase().includes(s.code.toUpperCase()) ||
       rawSite.toUpperCase().includes(s.name.toUpperCase()) ||
       s.name.toUpperCase().includes(rawSite.toUpperCase()) ||
       s.code.toUpperCase().includes(rawSite.toUpperCase())
     ) || activeServiceSites[0];
 
-    let monthIdx = defaultFileMonthIdx;
-    if (rawMonth !== undefined && rawMonth !== null && rawMonth !== '') {
-      const parsedDate = parseExcelOrDateString(rawMonth);
-      if (parsedDate) {
-        monthIdx = parsedDate.getMonth();
-      } else {
-        const rawMonthStr = String(rawMonth).toLowerCase();
-        const mMatch = MONTH_NAMES.findIndex(m => rawMonthStr.includes(m.toLowerCase()));
-        if (mMatch >= 0) monthIdx = mMatch;
-      }
+    // Date & Month Bucketing
+    const parsedDate = parseRepairDate(rawDateVal);
+    let monthIdx = -1;
+    let isoDate = null;
+    if (parsedDate) {
+      monthIdx = parsedDate.getUTCMonth();
+      isoDate = parsedDate.toISOString().split('T')[0];
+    } else if (rawDateVal) {
+      const dateStr = String(rawDateVal).toLowerCase();
+      const mIdx = MONTH_NAMES.findIndex(m => dateStr.includes(m.toLowerCase())) !== -1
+        ? MONTH_NAMES.findIndex(m => dateStr.includes(m.toLowerCase()))
+        : MONTH_ABBRS.findIndex(m => dateStr.includes(m.toLowerCase()));
+      if (mIdx >= 0) monthIdx = mIdx;
     }
-
-    if (monthIdx < 0) monthIdx = 0;
-    if (monthIdx > 11) monthIdx = 11;
 
     const isDisplay = cleanDesc.toLowerCase().includes('display') || cleanDesc.toLowerCase().includes('screen');
     const catId = isDisplay ? 'cat-display' : 'cat-battery';
 
     rawRepairRows.push({
-      repairNumber: repairNo,
-      closedDate: typeof rawMonth === 'number' ? MONTH_NAMES[monthIdx] : (String(rawMonth) || MONTH_NAMES[monthIdx]),
+      rawRowRef: r,
+      repairNumber: rawRepairNo,
+      orderId: rawOrderId,
+      kgbKbb: rawKgb || rawKbb,
+      repairClosedDate: isoDate,
       monthIndex: monthIdx,
+      monthName: monthIdx >= 0 && monthIdx < 12 ? MONTH_NAMES[monthIdx] : 'Unknown',
       partNumber: cleanPn,
       description: cleanDesc,
       siteId: matchedSite.id,
+      siteCode: matchedSite.code,
       rawSiteName: rawSite,
+      siteName: matchedSite.name,
       quantity: rawQty,
-      serialNumber: serial,
       category_id: catId,
       matchedSite
     });
   }
 
-  // If auto-detecting and file has multi-month repairs, target month is max month + 1
-  if (selectedMonth === 'auto' && rawRepairRows.length > 0 && (!fileName || !MONTH_NAMES.some(m => fileName.toLowerCase().includes(m.toLowerCase())))) {
-    const maxM = Math.max(...rawRepairRows.map(r => r.monthIndex));
-    if (maxM >= 0) {
-      targetMonthIdx = Math.min(11, maxM + 1);
-    }
+  // Determine trailing months present in the dataset
+  const validMonthIndices = rawRepairRows.filter(r => r.monthIndex >= 0).map(r => r.monthIndex);
+  let maxMonthIdx = validMonthIndices.length > 0 ? Math.max(...validMonthIndices) : 7;
+  let targetMonthIdx = Math.min(11, maxMonthIdx + 1);
+
+  if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
+    const parsedM = parseInt(selectedMonth, 10);
+    if (!isNaN(parsedM)) targetMonthIdx = Math.max(0, Math.min(11, parsedM));
   }
 
-  const historyLength = Math.max(1, targetMonthIdx);
+  // Trailing window length N (e.g. 8 for Jan-Aug -> historyLength = 8, regressionTargetX = 9)
+  const historyLength = maxMonthIdx + 1;
+  const regressionTargetX = historyLength + 1;
 
-  rawRepairRows.forEach(item => {
-    records.push({
-      repairNumber: item.repairNumber,
-      closedDate: item.closedDate,
-      monthIndex: item.monthIndex,
-      partNumber: item.partNumber,
-      description: item.description,
-      siteId: item.siteId,
-      rawSiteName: item.rawSiteName,
-      quantity: item.quantity,
-      serialNumber: item.serialNumber,
-      category_id: item.category_id
-    });
+  // Accumulate monthly counts and all-time site usage per part description
+  const partDataMap = new Map();
 
-    validRepairs.push({
-      pn: item.partNumber,
-      desc: item.description,
-      catId: item.category_id,
-      siteId: item.siteId,
-      siteName: item.matchedSite.name,
-      monthIdx: item.monthIndex,
-      qty: item.quantity
-    });
-
-    if (!partMap.has(item.description)) {
-      partMap.set(item.description, {
-        partNumber: item.partNumber,
-        description: item.description,
-        category_id: item.category_id,
+  rawRepairRows.forEach(r => {
+    if (!partDataMap.has(r.description)) {
+      partDataMap.set(r.description, {
+        partNumber: r.partNumber,
+        description: r.description,
+        category_id: r.category_id,
         months: new Array(historyLength).fill(0),
         siteCounts: {}
       });
     }
-
-    const pData = partMap.get(item.description);
-    if (item.monthIndex >= 0 && item.monthIndex < historyLength) {
-      pData.months[item.monthIndex] = (pData.months[item.monthIndex] || 0) + item.quantity;
+    const pEntry = partDataMap.get(r.description);
+    if (r.monthIndex >= 0 && r.monthIndex < historyLength) {
+      pEntry.months[r.monthIndex] = (pEntry.months[r.monthIndex] || 0) + r.quantity;
     }
-    pData.siteCounts[item.matchedSite.id] = (pData.siteCounts[item.matchedSite.id] || 0) + item.quantity;
-    pData.siteCounts[item.matchedSite.name] = (pData.siteCounts[item.matchedSite.name] || 0) + item.quantity;
+    pEntry.siteCounts[r.siteId] = (pEntry.siteCounts[r.siteId] || 0) + r.quantity;
   });
 
-  // Dynamic empirical category share builder from actual raw repairs in this dataset
-  function buildDynamicShareMatrix(descList, catId) {
-    // 1. Calculate overall commodity-level site distribution across all repairs in this category
+  // Helper: Build all-time per-site empirical share matrix for a list of part descriptions
+  function buildEmpiricalShareMatrix(descList, catId) {
+    // 1. Calculate overall commodity-level site distribution fallback
     const catSiteCounts = new Array(activeServiceSites.length).fill(0);
     let catTotal = 0;
-    validRepairs.filter(r => r.catId === catId).forEach(r => {
-      const sIdx = activeServiceSites.findIndex(s => s.id === r.siteId || s.code === r.siteId || s.name === r.siteName);
+    rawRepairRows.filter(r => r.category_id === catId).forEach(r => {
+      const sIdx = activeServiceSites.findIndex(s => s.id === r.siteId);
       if (sIdx >= 0) {
-        catSiteCounts[sIdx] += r.qty;
-        catTotal += r.qty;
+        catSiteCounts[sIdx] += r.quantity;
+        catTotal += r.quantity;
       }
     });
 
-    const fallbackCatShares = catTotal > 0
+    const fallbackShares = catTotal > 0
       ? catSiteCounts.map(c => c / catTotal)
       : activeServiceSites.map(() => 1 / activeServiceSites.length);
 
-    // 2. Build model-level share vector for each model
+    // 2. Model-level share vector: (filtered repairs for this part at site) / (filtered repairs for this part, all sites)
     return descList.map(desc => {
+      const pEntry = partDataMap.get(desc);
       let modelTotal = 0;
-      const countsPerSite = activeServiceSites.map(s => {
-        let count = 0;
-        validRepairs.forEach(r => {
-          if (r.desc.toLowerCase() === desc.toLowerCase() && (r.siteId === s.id || r.siteName === s.name || s.code.includes(r.siteId))) {
-            count += r.qty;
-          }
-        });
-        modelTotal += count;
-        return count;
+      const counts = activeServiceSites.map(s => {
+        const c = pEntry?.siteCounts[s.id] || 0;
+        modelTotal += c;
+        return c;
       });
 
       if (modelTotal > 0) {
-        return countsPerSite.map(count => count / modelTotal);
+        return counts.map(c => c / modelTotal);
       }
-      return [...fallbackCatShares];
+      return [...fallbackShares];
     });
   }
 
-  const displayShareMatrix = buildDynamicShareMatrix(CANONICAL_DISPLAY_DESCS, 'cat-display');
-  const batteryShareMatrix = buildDynamicShareMatrix(CANONICAL_BATTERY_DESCS, 'cat-battery');
+  const displayShareMatrix = buildEmpiricalShareMatrix(CANONICAL_DISPLAY_DESCS, 'cat-display');
+  const batteryShareMatrix = buildEmpiricalShareMatrix(CANONICAL_BATTERY_DESCS, 'cat-battery');
 
   const forecastItems = [];
   const allocations = [];
   const parts = [];
 
-  let currentRowNumber = 3; // Excel row 3 starts for Displays
-  const regressionTargetX = targetMonthIdx + 1;
+  let currentRowNumber = 3; // Displays start at Excel Row 3
 
   // 1. Process Displays
   CANONICAL_DISPLAY_DESCS.forEach((desc, matrixRowIdx) => {
-    const pData = partMap.get(desc) || {
+    const pEntry = partDataMap.get(desc) || {
       partNumber: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-display',
@@ -1494,8 +1552,8 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       siteCounts: {}
     };
 
-    const pn = pData.partNumber;
-    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
+    const pn = pEntry.partNumber;
+    const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
@@ -1503,7 +1561,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_number: pn,
       description: desc,
       category_id: 'cat-display',
-      ytd_monthly_counts: pData.months,
+      ytd_monthly_counts: pEntry.months,
       computed_forecast: computedForecast,
       admin_override: null,
       final_forecast: computedForecast,
@@ -1512,7 +1570,10 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     });
 
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
+    const allocatedBranchQuantities = allocationMode === 'OPTION_B'
+      ? calculateOptionBAllocation(computedForecast, displayShareMatrix, matrixRowIdx)
+      : calculateOptionAAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
+
     const siteQuantities = {};
     let totalAlloc = 0;
     activeServiceSites.forEach((s, sIdx) => {
@@ -1543,7 +1604,8 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       w2_cost: split.w2_cost,
       w3_cost: split.w3_cost,
       w4_cost: split.w4_cost,
-      site_quantities: siteQuantities
+      site_quantities: siteQuantities,
+      remarks: getOrderRemark(totalAlloc)
     });
 
     parts.push({
@@ -1551,7 +1613,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_number: pn,
       description: desc,
       category_id: 'cat-display',
-      iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
+      iphone_model: desc.replace(/^(Display),?\s*/i, ''),
       stocking_price: pricing.stockingPrice,
       exchange_price: pricing.exchangePrice,
       safety_stock_pct: 0.05,
@@ -1561,11 +1623,11 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     currentRowNumber++;
   });
 
-  currentRowNumber++; // Skip subtotal row to match Excel parity for Batteries (row 25)
+  currentRowNumber++; // Row parity: skip subtotal row to match Excel Batteries at Row 25
 
   // 2. Process Batteries
   CANONICAL_BATTERY_DESCS.forEach((desc, matrixRowIdx) => {
-    const pData = partMap.get(desc) || {
+    const pEntry = partDataMap.get(desc) || {
       partNumber: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-battery',
@@ -1573,8 +1635,8 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       siteCounts: {}
     };
 
-    const pn = pData.partNumber;
-    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
+    const pn = pEntry.partNumber;
+    const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
@@ -1582,7 +1644,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_number: pn,
       description: desc,
       category_id: 'cat-battery',
-      ytd_monthly_counts: pData.months,
+      ytd_monthly_counts: pEntry.months,
       computed_forecast: computedForecast,
       admin_override: null,
       final_forecast: computedForecast,
@@ -1591,7 +1653,10 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     });
 
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+    const allocatedBranchQuantities = allocationMode === 'OPTION_B'
+      ? calculateOptionBAllocation(computedForecast, batteryShareMatrix, matrixRowIdx)
+      : calculateOptionAAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+
     const siteQuantities = {};
     let totalAlloc = 0;
     activeServiceSites.forEach((s, sIdx) => {
@@ -1622,7 +1687,8 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       w2_cost: split.w2_cost,
       w3_cost: split.w3_cost,
       w4_cost: split.w4_cost,
-      site_quantities: siteQuantities
+      site_quantities: siteQuantities,
+      remarks: getOrderRemark(totalAlloc)
     });
 
     parts.push({
@@ -1630,80 +1696,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_number: pn,
       description: desc,
       category_id: 'cat-battery',
-      iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
-      stocking_price: pricing.stockingPrice,
-      exchange_price: pricing.exchangePrice,
-      safety_stock_pct: 0.05,
-      is_active: true
-    });
-
-    currentRowNumber++;
-  });
-
-  // 3. Process Any Additional Parts Discovered in the Raw Dataset
-  partMap.forEach((pData, desc) => {
-    if (CANONICAL_DISPLAY_DESCS.includes(desc) || CANONICAL_BATTERY_DESCS.includes(desc)) {
-      return;
-    }
-    const pn = pData.partNumber;
-    const computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
-    const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
-
-    forecastItems.push({
-      part_id: `part-${pn}`,
-      part_number: pn,
-      description: desc,
-      category_id: pData.category_id || 'cat-other',
-      ytd_monthly_counts: pData.months,
-      computed_forecast: computedForecast,
-      admin_override: null,
-      final_forecast: computedForecast,
-      safety_stock_units: recOrder.safetyUnits,
-      recommended_order: recOrder.recommendedOrder
-    });
-
-    const pricing = lookupPartPrice(pn, desc, existingParts);
-    const customShareMatrix = buildDynamicShareMatrix([desc], pData.category_id || 'cat-other');
-    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, customShareMatrix, 0);
-    const siteQuantities = {};
-    let totalAlloc = 0;
-    activeServiceSites.forEach((s, sIdx) => {
-      const q = allocatedBranchQuantities[sIdx] || 0;
-      siteQuantities[s.id] = q;
-      siteQuantities[s.code] = q;
-      totalAlloc += q;
-    });
-
-    const totalCost = totalAlloc * pricing.stockingPrice;
-    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
-
-    allocations.push({
-      part_id: `part-${pn}`,
-      part_number: pn,
-      description: desc,
-      category_id: pData.category_id || 'cat-other',
-      forecasted_qty: computedForecast,
-      stocking_price: pricing.stockingPrice,
-      exchange_price: pricing.exchangePrice,
-      total_allocated_qty: totalAlloc,
-      total_stock_cost: totalCost,
-      w1_qty: split.w1_qty,
-      w2_qty: split.w2_qty,
-      w3_qty: split.w3_qty,
-      w4_qty: split.w4_qty,
-      w1_cost: split.w1_cost,
-      w2_cost: split.w2_cost,
-      w3_cost: split.w3_cost,
-      w4_cost: split.w4_cost,
-      site_quantities: siteQuantities
-    });
-
-    parts.push({
-      id: `part-${pn}`,
-      part_number: pn,
-      description: desc,
-      category_id: pData.category_id || 'cat-other',
-      iphone_model: desc.replace(/^(Battery|Display|Camera|Back Glass),?\s*/i, ''),
+      iphone_model: desc.replace(/^(Battery),?\s*/i, ''),
       stocking_price: pricing.stockingPrice,
       exchange_price: pricing.exchangePrice,
       safety_stock_pct: 0.05,
@@ -1720,15 +1713,18 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   };
 
   return {
-    records,
+    records: rawRepairRows,
     forecastItems,
     allocations,
     parts,
     sites: activeServiceSites,
+    displayShares: displayShareMatrix,
+    batteryShares: batteryShareMatrix,
+    allocationMode,
     detectedMonth: targetMonthIdx,
     detectedPeriod,
     summary: {
-      totalRecords: records.length,
+      totalRecords: rawRepairRows.length,
       filteredOut: filteredOutCount,
       partsCount: parts.length,
       sitesCount: activeServiceSites.length,

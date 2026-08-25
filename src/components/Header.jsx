@@ -79,19 +79,30 @@ export default function Header() {
           <div className="header-section-breadcrumb">
             <span>{currentMeta.section}</span>
           </div>
-          <h1 className="header-page-title">
+          <h1 className="header-page-title" title={currentMeta.title}>
             <span>{currentMeta.title}</span>
           </h1>
         </div>
 
-        {/* Global Part Category Filter Pills (cleanly shown on relevant overview & catalog tabs) */}
-        {currentMeta.showCategories && categories && categories.length > 0 && (
-          <div className="category-pills">
-            {categories.map(cat => (
+        {/* Global Part Category Filter Pills (Dynamic scrollable / auto-adapting track) */}
+        {currentMeta.showCategories && (
+          <div className="category-pills" role="tablist" aria-label="Hardware Category Filters">
+            <button
+              type="button"
+              className={`category-pill ${selectedCategory === 'ALL' ? 'active' : ''}`}
+              onClick={() => setSelectedCategory('ALL')}
+              title="Show Both Battery and Display parts"
+            >
+              <span className="pill-long-text">Both (Battery & Display)</span>
+              <span className="pill-short-text">Both</span>
+            </button>
+            {categories && categories.length > 0 && categories.map(cat => (
               <button
                 key={cat.id}
+                type="button"
                 className={`category-pill ${selectedCategory === cat.code ? 'active' : ''}`}
                 onClick={() => setSelectedCategory(cat.code)}
+                title={`Filter by ${cat.name}`}
               >
                 {cat.name}
               </button>
@@ -149,27 +160,30 @@ export default function Header() {
           ) : !navigator.onLine ? (
             <>
               <RefreshCw size={12} className="spin" color="#d97706" />
-              <span>Offline {offlineQueue && offlineQueue.length > 0 ? `(${offlineQueue.length} queued)` : ''}</span>
+              <span>Offline {offlineQueue && offlineQueue.length > 0 ? `(${offlineQueue.length})` : ''}</span>
             </>
           ) : isAutoRefreshing ? (
             <>
               <RefreshCw size={12} className="spin" color="#0284c7" />
-              <span>Syncing...</span>
+              <span className="sync-text-full">Syncing...</span>
+              <span className="sync-text-short">Sync</span>
             </>
           ) : cloudSyncStatus?.isSaving ? (
             <>
               <RefreshCw size={12} className="spin" color="#d97706" />
-              <span>Saving...</span>
+              <span className="sync-text-full">Saving...</span>
+              <span className="sync-text-short">Save</span>
             </>
           ) : offlineQueue && offlineQueue.length > 0 ? (
             <>
               <RefreshCw size={12} className="spin" color="#0284c7" />
-              <span>Syncing ({offlineQueue.length} pending)...</span>
+              <span>{offlineQueue.length} pending</span>
             </>
           ) : (
             <>
               <span className="status-dot dot-green" />
-              <span>{realtimeConnected ? 'Live Realtime Synced' : 'Cloud Synced'}</span>
+              <span className="sync-text-full">{realtimeConnected ? 'Live Realtime Synced' : 'Cloud Synced'}</span>
+              <span className="sync-text-short">Synced</span>
             </>
           )}
         </div>
@@ -201,7 +215,7 @@ export default function Header() {
           title="Force refresh data from Cloud Database"
         >
           <RefreshCw size={13} className={isSyncing || isAutoRefreshing ? 'spin' : ''} />
-          <span>Sync DB</span>
+          <span className="btn-label-responsive">Sync DB</span>
         </button>
 
         {/* Quick F1 / F2 Switcher Group */}
@@ -212,7 +226,8 @@ export default function Header() {
             title="Receive Scan-In (Shortcut: F1)"
           >
             <Barcode size={13} />
-            <span>Scan-In (F1)</span>
+            <span className="scan-text-full">Scan-In (F1)</span>
+            <span className="scan-text-short">In (F1)</span>
           </button>
           <button
             className={`header-scan-btn ${activeTab === 'scan-out' ? 'active' : ''}`}
@@ -220,7 +235,8 @@ export default function Header() {
             title="Pack Scan-Out (Shortcut: F2)"
           >
             <PackageCheck size={13} />
-            <span>Scan-Out (F2)</span>
+            <span className="scan-text-full">Scan-Out (F2)</span>
+            <span className="scan-text-short">Out (F2)</span>
           </button>
         </div>
       </div>

@@ -1,10 +1,11 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
-import { calculateWeeklySplit } from '../utils/allocationEngine';
+import { calculateWeeklySplit, calculateProportionalAllocation } from '../utils/allocationEngine';
 import { CANONICAL_SITE_CODES } from '../constants/config';
 import SaveRecordModal from './SaveRecordModal';
+import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Split,
   Download,
@@ -27,6 +28,8 @@ import {
 export default function AllocationMatrix() {
   const {
     allocations,
+    setAllocations,
+    forecastItems,
     sites,
     parts,
     selectedCategory,
@@ -40,16 +43,69 @@ export default function AllocationMatrix() {
     clearAllData
   } = useApp();
 
+  // Auto-sync / generate initial allocations from forecastItems if allocations array is empty
+  useEffect(() => {
+    if ((!allocations || allocations.length === 0) && forecastItems && forecastItems.length > 0 && setAllocations) {
+      const activeServiceSites = (sites || []).filter(s =>
+        !s.is_dc &&
+        !s.code?.toUpperCase().includes('DC') &&
+        s.code !== 'DC-MDC'
+      );
+      if (activeServiceSites.length === 0) return;
+
+      const generated = forecastItems.map((fi, rIdx) => {
+        const fiQty = fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0);
+        const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
+        const fiDemands = activeServiceSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
+        const fiResults = calculateProportionalAllocation(fiQty, fiDemands);
+        const sq = {};
+        let tAlloc = 0;
+        fiResults.forEach(res => {
+          sq[res.siteId] = res.allocatedQty;
+          const siteObj = activeServiceSites.find(s => s.id === res.siteId);
+          if (siteObj?.code) sq[siteObj.code] = res.allocatedQty;
+          tAlloc += res.allocatedQty;
+        });
+        const tCost = tAlloc * fiPrice;
+        const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + 3);
+        return {
+          part_id: fi.part_id,
+          part_number: fi.part_number,
+          description: fi.description,
+          category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
+          forecasted_qty: fiQty,
+          stocking_price: fiPrice,
+          exchange_price: fi.exchange_price || 0,
+          total_allocated_qty: tAlloc,
+          total_stock_cost: tCost,
+          w1_qty: fiSplit.w1_qty,
+          w2_qty: fiSplit.w2_qty,
+          w3_qty: fiSplit.w3_qty,
+          w4_qty: fiSplit.w4_qty,
+          w1_cost: fiSplit.w1_cost,
+          w2_cost: fiSplit.w2_cost,
+          w3_cost: fiSplit.w3_cost,
+          w4_cost: fiSplit.w4_cost,
+          site_quantities: sq
+        };
+      });
+
+      setAllocations(generated);
+      try { localStorage.setItem('mdc_allocations', JSON.stringify(generated)); } catch (e) {}
+    }
+  }, [allocations, forecastItems, sites, setAllocations]);
+
   // View Mode: 'sheet' (Master) | 'week-1' | 'week-2' | 'week-3' | 'week-4' | 'shares'
   const [activeViewMode, setActiveViewMode] = useState('sheet');
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
 
   const isWeeklyView = activeViewMode.startsWith('week-');
   const selectedWeekNum = isWeeklyView ? parseInt(activeViewMode.replace('week-', ''), 10) : 1;
 
   // Sort and filter service sites to match canonical Google Sheet order
   const nonDcSites = useMemo(() => {
-    return sites.filter(s =>
+    return (sites || []).filter(s =>
       !s.is_dc &&
       !s.code.toUpperCase().includes('DC') &&
       !s.code.toUpperCase().includes('MOBILEC') &&
@@ -71,14 +127,16 @@ export default function AllocationMatrix() {
 
   // Filter items by category
   const filteredAllocations = useMemo(() => {
-    return allocations.filter(item => {
+    return (allocations || []).filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      if (!part) return true;
+      const catId = (item.category_id || part?.category_id || '').toLowerCase();
+      const desc = (item.description || part?.description || '').toLowerCase();
+
       if (selectedCategory === 'ALL') return true;
-      if (selectedCategory === 'BATTERY') return part.category_id === 'cat-battery';
-      if (selectedCategory === 'DISPLAY') return part.category_id === 'cat-display';
-      if (selectedCategory === 'CAMERA') return part.category_id === 'cat-camera';
-      if (selectedCategory === 'BACK_GLASS') return part.category_id === 'cat-backglass';
+      if (selectedCategory === 'BATTERY') return catId.includes('battery') || desc.includes('battery') || desc.includes('batt');
+      if (selectedCategory === 'DISPLAY') return catId.includes('display') || desc.includes('display') || desc.includes('screen');
+      if (selectedCategory === 'CAMERA') return catId.includes('camera') || desc.includes('camera') || desc.includes('cam');
+      if (selectedCategory === 'BACK_GLASS') return catId.includes('backglass') || desc.includes('back') || desc.includes('rear glass');
       return true;
     });
   }, [allocations, parts, selectedCategory]);
@@ -87,14 +145,18 @@ export default function AllocationMatrix() {
   const displayItems = useMemo(() => {
     return filteredAllocations.filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      return (part?.category_id === 'cat-display') || item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display') || item.description?.toLowerCase().includes('screen');
+      const catId = (item.category_id || part?.category_id || '').toLowerCase();
+      const desc = (item.description || part?.description || '').toLowerCase();
+      return catId.includes('display') || desc.includes('display') || desc.includes('screen');
     });
   }, [filteredAllocations, parts]);
 
   const batteryItems = useMemo(() => {
     return filteredAllocations.filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      return (part?.category_id === 'cat-battery') || item.category_id === 'cat-battery' || (!displayItems.includes(item) && (item.description?.toLowerCase().includes('battery') || item.description?.toLowerCase().includes('batt')));
+      const catId = (item.category_id || part?.category_id || '').toLowerCase();
+      const desc = (item.description || part?.description || '').toLowerCase();
+      return !displayItems.includes(item) && (catId.includes('battery') || desc.includes('battery') || desc.includes('batt'));
     });
   }, [filteredAllocations, parts, displayItems]);
 
@@ -569,7 +631,7 @@ export default function AllocationMatrix() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={clearAllData}
+              onClick={() => setShowClearModal(true)}
               title="Clear all allocation and forecasting records to empty state"
               style={{ fontWeight: 600, padding: '6px 14px', color: '#b91c1c' }}
             >
@@ -1064,6 +1126,24 @@ export default function AllocationMatrix() {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Save Record Modal Dialog */}
+      {showSaveModal && (
+        <SaveRecordModal
+          isOpen={showSaveModal}
+          onClose={() => setShowSaveModal(false)}
+          defaultType="allocation"
+        />
+      )}
+
+      {/* High-Security Clear Data Confirmation Modal */}
+      {showClearModal && (
+        <ClearDataConfirmationModal
+          isOpen={showClearModal}
+          onClose={() => setShowClearModal(false)}
+          title="Clear Master Allocation Matrix & Operational Data"
+        />
       )}
     </div>
   );

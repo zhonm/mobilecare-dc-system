@@ -44,8 +44,8 @@ export function useCloudSync({
   setDcIntakeRecords,
   uploadAuditLogs,
   setUploadAuditLogs,
-  _deletionAuditLogs,
-  _setDeletionAuditLogs,
+  deletionAuditLogs,
+  setDeletionAuditLogs,
   logDeletionAudit
 }) {
   const [cloudSyncStatus, setCloudSyncStatus] = useState({
@@ -367,22 +367,93 @@ export function useCloudSync({
             localStorage.removeItem('mdc_is_cleared');
             dbStorage.removeItem('mdc_is_cleared');
 
-            if (snap.forecastItems && snap.forecastItems.length > 0) {
-              setForecastItems(snap.forecastItems);
-              try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
-              dbStorage.setItem('mdc_forecast', snap.forecastItems);
-            }
-            if (snap.allocations && snap.allocations.length > 0) {
-              setAllocations(snap.allocations);
-              try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
-              dbStorage.setItem('mdc_allocations', snap.allocations);
-            }
-            if (snap.uploadAuditLogs && snap.uploadAuditLogs.length > 0) {
-              setUploadAuditLogs(snap.uploadAuditLogs);
-              try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(snap.uploadAuditLogs)); } catch (e) {}
-              dbStorage.setItem('mdc_upload_audit_logs', snap.uploadAuditLogs);
+            const lastLocalOverrideTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
+            const isRecentlyModifiedLocally = (Date.now() - lastLocalOverrideTime) < 2500;
+
+            if (!isRecentlyModifiedLocally) {
+              if (snap.forecastItems && snap.forecastItems.length > 0) {
+                setForecastItems(snap.forecastItems);
+                try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
+                dbStorage.setItem('mdc_forecast', snap.forecastItems);
+              }
+              if (snap.allocations && snap.allocations.length > 0) {
+                setAllocations(snap.allocations);
+                try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
+                dbStorage.setItem('mdc_allocations', snap.allocations);
+              }
             }
           }
+        }
+
+        // Hydrate & Merge Upload Audit Logs
+        const uploadRegistryDoc = dbSavedRecords.find(r => r.id === 'master_upload_audit_logs_registry');
+        const liveSnapshotDoc = dbSavedRecords.find(r => r.id === LIVE_MASTER_RECORD_ID);
+        const cloudUploadLogs = [
+          ...(Array.isArray(uploadRegistryDoc?.snapshot_data?.logs) ? uploadRegistryDoc.snapshot_data.logs : []),
+          ...(Array.isArray(liveSnapshotDoc?.snapshot_data?.uploadAuditLogs) ? liveSnapshotDoc.snapshot_data.uploadAuditLogs : [])
+        ];
+        let localUploadLogs = [];
+        try {
+          const saved = localStorage.getItem('mdc_upload_audit_logs');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) localUploadLogs = parsed;
+          }
+        } catch (e) {}
+
+        const uploadMap = new Map();
+        cloudUploadLogs.forEach(l => {
+          const k = l?.id || `${l?.timestamp}_${l?.file_name}`;
+          if (k) uploadMap.set(k, l);
+        });
+        localUploadLogs.forEach(l => {
+          const k = l?.id || `${l?.timestamp}_${l?.file_name}`;
+          if (k && !uploadMap.has(k)) uploadMap.set(k, l);
+        });
+
+        const mergedUploads = Array.from(uploadMap.values())
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, 300);
+
+        if (mergedUploads.length > 0) {
+          setUploadAuditLogs(mergedUploads);
+          try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(mergedUploads)); } catch (e) {}
+          dbStorage.setItem('mdc_upload_audit_logs', mergedUploads);
+        }
+
+        // Hydrate & Merge Deletion Audit Logs
+        const deletionRegistryDoc = dbSavedRecords.find(r => r.id === 'master_deletion_audit_logs_registry');
+        const cloudDeletionLogs = [
+          ...(Array.isArray(deletionRegistryDoc?.snapshot_data?.logs) ? deletionRegistryDoc.snapshot_data.logs : []),
+          ...(Array.isArray(liveSnapshotDoc?.snapshot_data?.deletionAuditLogs) ? liveSnapshotDoc.snapshot_data.deletionAuditLogs : [])
+        ];
+        let localDeletionLogs = [];
+        try {
+          const saved = localStorage.getItem('mdc_deletion_audit_logs');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) localDeletionLogs = parsed;
+          }
+        } catch (e) {}
+
+        const delMap = new Map();
+        cloudDeletionLogs.forEach(l => {
+          const k = l?.id || `${l?.timestamp}_${l?.entity_id}`;
+          if (k) delMap.set(k, l);
+        });
+        localDeletionLogs.forEach(l => {
+          const k = l?.id || `${l?.timestamp}_${l?.entity_id}`;
+          if (k && !delMap.has(k)) delMap.set(k, l);
+        });
+
+        const mergedDeletions = Array.from(delMap.values())
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, 300);
+
+        if (mergedDeletions.length > 0) {
+          setDeletionAuditLogs(mergedDeletions);
+          try { localStorage.setItem('mdc_deletion_audit_logs', JSON.stringify(mergedDeletions)); } catch (e) {}
+          dbStorage.setItem('mdc_deletion_audit_logs', mergedDeletions);
         }
 
         const validSavedRecords = dbSavedRecords.filter(r =>
@@ -393,6 +464,10 @@ export function useCloudSync({
           r.id !== 'deleted_unit_serials_registry' &&
           r.id !== 'deleted_intake_ids_registry' &&
           r.id !== 'deleted_shipment_ids_registry' &&
+          r.id !== 'master_upload_audit_logs_registry' &&
+          r.id !== 'master_deletion_audit_logs_registry' &&
+          r.record_type !== 'upload_audit_registry' &&
+          r.record_type !== 'deletion_audit_registry' &&
           r.record_type !== 'shipment' &&
           r.record_type !== 'intake_batch' &&
           r.record_type !== 'intake_record' &&
@@ -624,7 +699,8 @@ export function useCloudSync({
             const s = String(u.serial_number || '').toUpperCase();
             if (s && !deletedSerialsSet.has(s)) {
               const existing = map.get(s);
-              const assign = existing?.intake_assignment || u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+              const cloudAssign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : u.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
+              const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
               map.set(s, { ...(existing || {}), ...u, intake_assignment: assign, notes: assign });
             }
           });
@@ -635,7 +711,8 @@ export function useCloudSync({
                 const cleanSerial = String(it.serial_number || '').toUpperCase();
                 if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
                   const existing = map.get(cleanSerial);
-                  const assign = existing?.intake_assignment || it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                  const cloudAssign = it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : it.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
+                  const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
                   map.set(cleanSerial, {
                     id: it.id || existing?.id || `unit-${cleanSerial}`,
                     part_id: it.part_id || existing?.part_id || `part-${it.part_number}`,
@@ -664,7 +741,8 @@ export function useCloudSync({
               const cleanSerial = String(dbU.serial_number || '').toUpperCase();
               if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
                 const existing = map.get(cleanSerial);
-                const assign = existing?.intake_assignment || dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
+                const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
                 map.set(cleanSerial, {
                   id: dbU.id || existing?.id || `unit-${cleanSerial}`,
                   part_id: dbU.part_id || existing?.part_id,
@@ -672,7 +750,7 @@ export function useCloudSync({
                   description: dbU.description || existing?.description || 'Service Replacement Part',
                   serial_number: dbU.serial_number || cleanSerial,
                   intake_assignment: assign,
-                  notes: dbU.notes || assign,
+                  notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
                   current_site_id: dbU.current_site_id || 'site-dc',
                   site_code: dbU.site_code || 'DC-MDC',
                   po_id: dbU.po_id || existing?.po_id,
@@ -714,8 +792,8 @@ export function useCloudSync({
     }
   };
 
-  // Centralized Auto-Refresh Controller (with Part 1 Fix: Separate local rate-limiting from remote realtime event hydration)
-  const autoRefreshData = async ({ silent = true, force = false, reason = 'auto', tables = null } = {}) => {
+  // Centralized Auto-Refresh Controller with strict runaway loop prevention
+  const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
     const now = Date.now();
 
     // If a cloud save is actively in progress, queue a pending refresh so it fires immediately upon save completion
@@ -727,8 +805,8 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'save_in_progress' };
     }
 
-    // Local noise throttled at 1000ms. Remote realtime events pass force: true to bypass this throttle.
-    if (!force && now - lastRefreshTimeRef.current < 1000) {
+    // Runaway protection: enforce at least 1200ms throttle unless explicit user manual button click
+    if (!isManual && now - lastRefreshTimeRef.current < 1200) {
       return { success: true, throttled: true };
     }
 
@@ -762,7 +840,7 @@ export function useCloudSync({
         setIsAutoRefreshing(false);
       }, 300);
     }
-  };
+  }, [hydrateFromSupabase, showToast]);
 
   // Watch cloudSyncStatus.isSaving: when saving finishes, trigger any pending realtime sync that arrived during the save
   useEffect(() => {
@@ -956,6 +1034,7 @@ export function useCloudSync({
     const currentParts = overrideData?.parts || parts;
     const currentSites = overrideData?.sites || sites;
     const currentUploadLogs = overrideData?.uploadAuditLogs || uploadAuditLogs;
+    const currentDeletionLogs = overrideData?.deletionAuditLogs || deletionAuditLogs;
 
     try {
       showToast('Syncing master data to Supabase cloud...', 'info');
@@ -975,12 +1054,47 @@ export function useCloudSync({
             allocations: currentAllocs || [],
             parts: currentParts || [],
             sites: currentSites || [],
-            uploadAuditLogs: currentUploadLogs || []
+            uploadAuditLogs: currentUploadLogs || [],
+            deletionAuditLogs: currentDeletionLogs || []
           },
           updated_at: new Date().toISOString()
         };
 
         await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
+
+        if (currentUploadLogs && currentUploadLogs.length > 0) {
+          await supabase.from('saved_records').upsert({
+            id: 'master_upload_audit_logs_registry',
+            record_type: 'upload_audit_registry',
+            period_label: 'Master Upload Audit Registry',
+            period_year: activePeriod?.year || 2026,
+            period_month: activePeriod?.month || 9,
+            notes: `Master upload audit records (${currentUploadLogs.length} entries)`,
+            saved_by_name: currentUser?.fullName || 'Superadmin User',
+            snapshot_data: {
+              logs: currentUploadLogs,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        }
+
+        if (currentDeletionLogs && currentDeletionLogs.length > 0) {
+          await supabase.from('saved_records').upsert({
+            id: 'master_deletion_audit_logs_registry',
+            record_type: 'deletion_audit_registry',
+            period_label: 'Master Deletion Audit Registry',
+            period_year: activePeriod?.year || 2026,
+            period_month: activePeriod?.month || 9,
+            notes: `Master deletion audit records (${currentDeletionLogs.length} entries)`,
+            saved_by_name: currentUser?.fullName || 'Superadmin User',
+            snapshot_data: {
+              logs: currentDeletionLogs,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        }
       } catch (err) {
         console.warn('Live master snapshot sync notice:', err);
       }
@@ -1132,7 +1246,7 @@ export function useCloudSync({
   };
 
   // Clear All Operational Data
-  const clearAllData = async () => {
+  const clearAllData = async ({ reason = 'User initialized clean slate for new forecasting & allocation ingestion', securityPhraseVerified = true } = {}) => {
     dbStorage.setItem('mdc_is_cleared', true);
     dbStorage.setItem('mdc_forecast', []);
     dbStorage.setItem('mdc_allocations', []);
@@ -1175,11 +1289,17 @@ export function useCloudSync({
         entityLabel: 'Clear System to Fresh Empty State',
         summary: {
           action: 'CLEARED_ALL_DATA',
+          securityPhrase: 'Delete Data',
+          securityPhraseVerified: Boolean(securityPhraseVerified),
           previousForecastCount: forecastItems?.length || 0,
           previousAllocCount: allocations?.length || 0,
-          previousInventoryCount: inventoryUnits?.length || 0
+          previousInventoryCount: inventoryUnits?.length || 0,
+          clearedBy: currentUser?.fullName || 'Superadmin User',
+          clearedByEmail: currentUser?.email || '',
+          clearedByRole: currentUser?.role || 'admin',
+          clearedAt: new Date().toISOString()
         },
-        reason: 'User initialized clean slate for new forecasting & allocation ingestion'
+        reason
       });
     }
 
@@ -1198,7 +1318,8 @@ export function useCloudSync({
             isCleared: true,
             forecastItems: [],
             allocations: [],
-            uploadAuditLogs: uploadAuditLogs || []
+            uploadAuditLogs: uploadAuditLogs || [],
+            deletionAuditLogs: deletionAuditLogs || []
           },
           updated_at: new Date().toISOString()
         }, { onConflict: 'id' });
@@ -1421,23 +1542,73 @@ export function useCloudSync({
           });
         }
         if (payload.records && payload.records.length > 0) {
-          setRepairUsageRecords(prev => {
-            const next = [...payload.records, ...(prev || [])];
-            dbStorage.setItem('mdc_repair_usage', next);
-            return next;
-          });
+          setRepairUsageRecords(payload.records);
+          dbStorage.setItem('mdc_repair_usage', payload.records);
+
+          // Non-blocking background sync to Supabase repair_usage_records
+          (async () => {
+            try {
+              const importBatchId = crypto?.randomUUID ? crypto.randomUUID() : `batch-${Date.now()}`;
+              const dbRecords = payload.records.slice(0, 5000).map(r => ({
+                import_batch_id: importBatchId,
+                raw_site_name: r.rawSiteName || r.siteName,
+                raw_part_number: r.partNumber,
+                raw_part_description: r.description,
+                repair_closed_date: r.repairClosedDate,
+                month_name: r.monthName || 'Unknown',
+                repair_number: r.repairNumber,
+                order_id: r.orderId,
+                kgb_kbb_number: r.kgbKbb,
+                quantity: r.quantity || 1,
+                raw_row_ref: r.rawRowRef,
+                is_in_scope: true
+              }));
+              const chunkSize = 250;
+              for (let i = 0; i < dbRecords.length; i += chunkSize) {
+                const chunk = dbRecords.slice(i, i + chunkSize);
+                await supabase.from('repair_usage_records').insert(chunk);
+              }
+            } catch (dbErr) {
+              console.warn('Background repair_usage_records sync info:', dbErr?.message || dbErr);
+            }
+          })();
         }
-        if (payload.forecastItems && payload.forecastItems.length > 0) {
-          setForecastItems(payload.forecastItems);
-          dbStorage.setItem('mdc_forecast', payload.forecastItems);
-          try { localStorage.setItem('mdc_forecast', JSON.stringify(payload.forecastItems)); } catch (e) {}
+
+        // Preserve existing manual admin overrides if configured
+        let finalForecastItems = payload.forecastItems || [];
+        if (forecastItems && forecastItems.length > 0) {
+          const overrideMap = new Map();
+          forecastItems.forEach(fi => {
+            if (fi.admin_override !== null && fi.admin_override !== undefined && fi.admin_override !== '') {
+              overrideMap.set(fi.part_number, Number(fi.admin_override));
+            }
+          });
+          if (overrideMap.size > 0) {
+            finalForecastItems = finalForecastItems.map(item => {
+              if (overrideMap.has(item.part_number)) {
+                const ov = overrideMap.get(item.part_number);
+                return {
+                  ...item,
+                  admin_override: ov,
+                  final_forecast: ov
+                };
+              }
+              return item;
+            });
+          }
+        }
+
+        if (finalForecastItems.length > 0) {
+          setForecastItems(finalForecastItems);
+          dbStorage.setItem('mdc_forecast', finalForecastItems);
+          try { localStorage.setItem('mdc_forecast', JSON.stringify(finalForecastItems)); } catch (e) {}
         }
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
           dbStorage.setItem('mdc_allocations', payload.allocations);
           try { localStorage.setItem('mdc_allocations', JSON.stringify(payload.allocations)); } catch (e) {}
         }
-        showToast(`Applied Forecasting & Master Allocation for ${payload.forecastItems?.length || 0} iPhone parts across all sites!`, 'success');
+        showToast(`Masterlist ingested! Recomputed ${finalForecastItems.length} forecasts and ${payload.allocations?.length || 0} allocations across all ${payload.sites?.length || 27} branches!`, 'success');
         if (setActiveTab) setActiveTab('allocation');
       } else if (type === 'USAGE_RECORDS') {
         setRepairUsageRecords(prev => {
@@ -1453,9 +1624,12 @@ export function useCloudSync({
         allocations: payload.allocations || allocations,
         parts: payload.parts || parts,
         sites: payload.sites || sites,
-        uploadAuditLogs: updatedAuditLogs
+        uploadAuditLogs: updatedAuditLogs,
+        deletionAuditLogs: deletionAuditLogs || []
       };
       await syncAllDataToCloud(fullSyncSnapshot);
+      broadcastCloudEvent('AUDIT_UPLOAD_LOGGED', { log: uploadLogEntry });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records' });
     } catch (err) {
       console.error('Error applying parsed dataset:', err);
       showToast(`Error applying data: ${err.message}`, 'error');

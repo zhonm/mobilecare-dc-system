@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { calculateLinearRegressionForecast, calculateForecastTrendMetrics } from '../utils/forecastEngine';
 import { exportForecastToExcel } from '../utils/excelParser';
 import SaveRecordModal from './SaveRecordModal';
+import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Download,
   TrendingUp,
@@ -34,6 +35,7 @@ export default function Forecasting() {
   } = useApp();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
 
   const ALL_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   
@@ -167,7 +169,7 @@ export default function Forecasting() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={clearAllData}
+              onClick={() => setShowClearModal(true)}
               title="Clear all forecasting and allocation data to empty state"
               style={{ color: '#b91c1c' }}
             >
@@ -229,6 +231,15 @@ export default function Forecasting() {
           isOpen={showSaveModal}
           onClose={() => setShowSaveModal(false)}
           defaultType="forecast"
+        />
+      )}
+
+      {/* High-Security Clear Data Confirmation Modal */}
+      {showClearModal && (
+        <ClearDataConfirmationModal
+          isOpen={showClearModal}
+          onClose={() => setShowClearModal(false)}
+          title="Clear Forecasting & Allocation Operational Data"
         />
       )}
 

@@ -43,21 +43,28 @@ export default function Sidebar() {
   const userSite = sites.find(s => s.id === currentUser?.siteId);
 
   const navItems = [
-    { id: 'dashboard', label: 'DC Overview', icon: LayoutDashboard, section: 'Core' },
-    { id: 'import', label: 'Fixably / GSX Data Import', icon: UploadCloud, section: 'Planning' },
-    { id: 'forecast', label: 'Demand Forecasting', icon: TrendingUp, section: 'Planning' },
-    { id: 'records', label: 'Saved Period Records', icon: BookmarkCheck, section: 'Planning' },
-    { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning' },
-    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Warehouse Operations' },
-    { id: 'intake-records', label: 'DC Intake Records', icon: BookmarkPlus, section: 'Warehouse Operations' },
-    { id: 'allocation', label: 'Allocation Matrix', icon: Split, section: 'Warehouse Operations' },
-    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Warehouse Operations' },
-    { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Distribution' },
-    { id: 'reports', label: 'Stock Transfer Reports', icon: FileSpreadsheet, section: 'Reports & Analytics' },
-    { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Analytics' },
-    { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Traceability' },
-    { id: 'settings', label: 'Parts & Site Catalog', icon: Settings, section: 'Admin' },
-    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Admin' }
+    // 1. Planning & Allocation (Placed prominently at top)
+    { id: 'dashboard', label: 'DC Overview', icon: LayoutDashboard, section: 'Planning & Allocation' },
+    { id: 'forecast', label: 'Demand Forecasting', icon: TrendingUp, section: 'Planning & Allocation' },
+    { id: 'allocation', label: 'Allocation Matrix', icon: Split, section: 'Planning & Allocation' },
+    { id: 'import', label: 'Fixably / GSX Data Import', icon: UploadCloud, section: 'Planning & Allocation' },
+    { id: 'records', label: 'Saved Period Records', icon: BookmarkCheck, section: 'Planning & Allocation' },
+    { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning & Allocation' },
+
+    // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)
+    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Operations & Logistics' },
+    { id: 'intake-records', label: 'DC Intake Records', icon: BookmarkPlus, section: 'Operations & Logistics' },
+    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Operations & Logistics' },
+    { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Operations & Logistics' },
+
+    // 3. Reports & Traceability
+    { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
+    { id: 'reports', label: 'Stock Transfer Reports', icon: FileSpreadsheet, section: 'Reports & Traceability' },
+    { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
+
+    // 4. Administration
+    { id: 'settings', label: 'Parts & Site Catalog', icon: Settings, section: 'Administration' },
+    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
   ];
 
   // Filter items by permitted access & search query
@@ -68,7 +75,12 @@ export default function Sidebar() {
     return item.label.toLowerCase().includes(q) || item.section.toLowerCase().includes(q);
   });
 
-  const sections = ['Core', 'Planning', 'Warehouse Operations', 'Distribution', 'Reports & Analytics', 'Traceability', 'Admin'];
+  const sections = [
+    'Planning & Allocation',
+    'Operations & Logistics',
+    'Reports & Traceability',
+    'Administration'
+  ];
 
   return (
     <aside className="sidebar">
@@ -82,10 +94,7 @@ export default function Sidebar() {
           />
         </div>
         <div className="sidebar-brand">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <h2>DC System</h2>
-            <span className="sidebar-pro-pill">PRO</span>
-          </div>
+          <h2>DC System</h2>
           <p className="sidebar-subtitle">
             <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
             Mobile Care Services Phils.

@@ -119,10 +119,37 @@ export function useAuditLogs({
           metadata: newLog,
           created_at: newLog.timestamp
         }]).catch(() => {});
+
+        // Also persist to guaranteed saved_records deletion registry
+        try {
+          const { data: regDoc } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'master_deletion_audit_logs_registry').maybeSingle();
+          const existingCloudLogs = Array.isArray(regDoc?.snapshot_data?.logs) ? regDoc.snapshot_data.logs : [];
+          const mergedLogs = [newLog, ...existingCloudLogs.filter(l => l.id !== newLog.id)].slice(0, 300);
+
+          await supabase.from('saved_records').upsert({
+            id: 'master_deletion_audit_logs_registry',
+            record_type: 'deletion_audit_registry',
+            period_label: 'Master Deletion Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: `Master deletion audit records (${mergedLogs.length} entries)`,
+            saved_by_name: currentUser?.fullName || 'Parts Management Specialist',
+            snapshot_data: {
+              logs: mergedLogs,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (regErr) {
+          console.warn('Could not upsert master_deletion_audit_logs_registry:', regErr);
+        }
       } catch (err) {}
     }
 
-    if (broadcastCloudEvent) broadcastCloudEvent('AUDIT_DELETION_LOGGED', { log: newLog });
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('AUDIT_DELETION_LOGGED', { log: newLog });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records' });
+    }
     return newLog;
   };
 

@@ -270,7 +270,9 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       const rawNotes = u.notes || '';
       const rawAssignment = u.intake_assignment || (rawNotes.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
       const intakeAssignment = String(rawAssignment).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
-      const notes = rawNotes || intakeAssignment;
+      const notes = u.intake_assignment
+        ? (rawNotes && !rawNotes.includes('CRBR') && !rawNotes.includes('Forecasting') ? `${intakeAssignment} | ${rawNotes}` : intakeAssignment)
+        : (rawNotes || intakeAssignment);
 
       // 1. Resolve canonical Apple Genuine Part info (handles 660-xxxxx, 668-xxxxx, 661-xxxxx, 5-digit suffixes, barcodes, descriptions)
       const resolved = resolvePartInfo(rawPn, fullCatalog) || resolvePartInfo(rawDesc, fullCatalog);

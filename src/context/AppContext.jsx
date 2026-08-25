@@ -154,7 +154,9 @@ export function AppProvider({ children }) {
   const forecastingAndAllocation = useForecastingAndAllocation({
     parts: catalogAndSites.parts,
     sites: catalogAndSites.sites,
-    showToast
+    showToast,
+    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
 
   // 6. Period Records & Historical Snapshots Domain

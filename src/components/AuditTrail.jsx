@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   History,
@@ -11,11 +11,22 @@ import {
   FileSpreadsheet,
   Calendar,
   Trash2,
-  Download
+  Download,
+  RefreshCw
 } from 'lucide-react';
 
 export default function AuditTrail() {
-  const { inventoryUnits, scanLogs, sites, uploadAuditLogs, deletionAuditLogs, searchQuery } = useApp();
+  const {
+    inventoryUnits,
+    scanLogs,
+    sites,
+    uploadAuditLogs,
+    deletionAuditLogs,
+    searchQuery,
+    autoRefreshData,
+    isAutoRefreshing,
+    lastSyncedAt
+  } = useApp();
   const [selectedSerial, setSelectedSerial] = useState('');
   const [auditTab, setAuditTab] = useState('uploads'); // 'uploads' | 'serial_tracer' | 'scan_logs' | 'deletions'
   const [deletionEntityTypeFilter, setDeletionEntityTypeFilter] = useState('ALL');
@@ -114,7 +125,7 @@ export default function AuditTrail() {
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="badge badge-primary" style={{ padding: '6px 12px', fontSize: '12px' }}>
               {uploadAuditLogs?.length || 0} File Upload Audits
             </span>
@@ -124,6 +135,17 @@ export default function AuditTrail() {
             <span className="badge badge-danger" style={{ padding: '6px 12px', fontSize: '12px' }}>
               {deletionAuditLogs?.length || 0} Deletion Audits
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AuditTrail manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload latest audit logs from Supabase cloud database"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '5px 12px' }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin-animation' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud Audits'}</span>
+            </button>
           </div>
         </div>
 
