@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   History,
@@ -24,8 +24,7 @@ export default function AuditTrail() {
     deletionAuditLogs,
     searchQuery,
     autoRefreshData,
-    isAutoRefreshing,
-    lastSyncedAt
+    isAutoRefreshing
   } = useApp();
   const [selectedSerial, setSelectedSerial] = useState('');
   const [auditTab, setAuditTab] = useState('uploads'); // 'uploads' | 'serial_tracer' | 'scan_logs' | 'deletions'

@@ -9,6 +9,7 @@ import {
   exportStockTransfersToPDF,
   printStockTransfersDirect
 } from '../utils/pdfGenerator';
+import { resolvePartInfo } from '../utils/partResolver';
 import {
   BarChart,
   Bar,
@@ -44,7 +45,8 @@ import {
   HelpCircle,
   BarChart2,
   PieChart as PieIcon,
-  Activity
+  Activity,
+  RefreshCw
 } from 'lucide-react';
 
 // ── Colour palette ──────────────────────────────────────────────────────────
@@ -61,23 +63,74 @@ const COMMODITY_COLORS = {
   OTHER: '#64748b'
 };
 
+// ── Formatting Helpers ───────────────────────────────────────────────────────
+function getRecordValuation(r, partsCatalog = []) {
+  let v = Number(r.transfer_value);
+  if (!isNaN(v) && v > 0) return v;
+  const q = Number(r.transfer_quantity) || 1;
+  const desc = (r.product_name || '').toLowerCase();
+  const isDisplay = desc.includes('display') || desc.includes('screen');
+  const isBattery = desc.includes('battery');
+  const isCamera = desc.includes('camera');
+  const isBackGlass = desc.includes('back glass') || desc.includes('rear system') || desc.includes('mid');
+
+  const resolved = resolvePartInfo(r.product_code, partsCatalog);
+  if (resolved && Number(resolved.stocking_price) > 0) {
+    return Number(resolved.stocking_price) * q;
+  }
+  if (isDisplay) return 279 * q;
+  if (isBattery) return 99 * q;
+  if (isCamera) return 149 * q;
+  if (isBackGlass) return 129 * q;
+  return 89 * q;
+}
+
+function formatCurrencyTick(v) {
+  if (v === 0) return '$0';
+  if (Math.abs(v) >= 1000000) return `$${(v / 1000000).toFixed(1)}M`;
+  if (Math.abs(v) >= 1000) return `$${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`;
+  return `$${v}`;
+}
+
+function formatRouteDisplayName(from = '', to = '') {
+  const clean = (str) => {
+    return String(str || '')
+      .replace(/_MSPI-Owned/gi, ' (MSPI)')
+      .replace(/\(APP\)-MSPI-Owned/gi, 'APP')
+      .replace(/SERVICE_HUB/gi, 'Service Hub')
+      .replace(/DC_MSPI/gi, 'DC')
+      .trim();
+  };
+  const fromClean = clean(from);
+  const toClean = clean(to);
+  const combined = `${fromClean} → ${toClean}`;
+  return combined.length > 28 ? `${combined.substring(0, 26)}…` : combined;
+}
+
 // ── Custom Tooltip ───────────────────────────────────────────────────────────
 const CustomBarTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
+  const fullName = payload[0]?.payload?.fullName || payload[0]?.payload?.label || label;
   return (
     <div style={{
       background: '#0f172a', color: '#fff', padding: '10px 14px',
-      borderRadius: '6px', fontSize: '12px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)'
+      borderRadius: '8px', fontSize: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+      border: '1px solid #334155'
     }}>
-      <p style={{ fontWeight: 700, marginBottom: '4px', color: '#38bdf8' }}>{label}</p>
-      {payload.map((p, i) => (
-        <p key={i} style={{ margin: '2px 0' }}>
-          <span style={{ color: p.color, fontWeight: 700 }}>{p.name}: </span>
-          {typeof p.value === 'number' && p.name?.toLowerCase().includes('val')
-            ? `$${p.value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-            : p.value.toLocaleString()}
-        </p>
-      ))}
+      <p style={{ fontWeight: 700, marginBottom: '6px', color: '#38bdf8', fontSize: '13px' }}>{fullName}</p>
+      {payload.map((p, i) => {
+        const isVal = p.dataKey === 'val' || p.name?.toLowerCase().includes('val') || p.name?.toLowerCase().includes('price') || p.name?.toLowerCase().includes('cost');
+        return (
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', margin: '4px 0' }}>
+            <span style={{ color: p.color || (isVal ? '#34d399' : '#38bdf8'), fontWeight: 600 }}>{p.name}:</span>
+            <strong style={{ fontFamily: 'var(--font-mono, monospace)', color: '#fff' }}>
+              {isVal
+                ? `$${Number(p.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : Number(p.value || 0).toLocaleString()}
+            </strong>
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -117,9 +170,12 @@ export default function StockTransferReports() {
   const {
     stockTransferReports,
     stockTransferMetadata,
+    parts,
     importStockTransfersReport,
     clearStockTransfersReport,
-    showToast
+    showToast,
+    isAutoRefreshing,
+    autoRefreshData
   } = useApp();
 
   const fileInputRef = useRef(null);
@@ -211,25 +267,30 @@ export default function StockTransferReports() {
     const monthMap = {};
 
     filteredRecords.forEach(r => {
-      const q = r.transfer_quantity || 1;
-      const v = r.transfer_value || 0;
+      const q = Number(r.transfer_quantity) || 1;
+      const v = getRecordValuation(r, parts);
       const desc = (r.product_name || '').toLowerCase();
-      totalUnits += q; totalVal += v;
+      totalUnits += q;
+      totalVal += v;
 
       if (desc.includes('battery')) battery += q;
-      else if (desc.includes('display')) display += q;
+      else if (desc.includes('display') || desc.includes('screen')) display += q;
       else if (desc.includes('camera')) camera += q;
       else other += q;
 
       // Route aggregation
-      const rk = `${r.from_stock} → ${r.to_stock}`;
-      if (!routeMap[rk]) routeMap[rk] = { from: r.from_stock, to: r.to_stock, count: 0, qty: 0, val: 0 };
-      routeMap[rk].count++; routeMap[rk].qty += q; routeMap[rk].val += v;
+      const rk = `${r.from_stock || 'DC'} → ${r.to_stock || 'Branch'}`;
+      if (!routeMap[rk]) routeMap[rk] = { from: r.from_stock || 'DC', to: r.to_stock || 'Branch', count: 0, qty: 0, val: 0 };
+      routeMap[rk].count++;
+      routeMap[rk].qty += q;
+      routeMap[rk].val += v;
 
       // Part aggregation
       const pk = r.product_code || 'UNKNOWN';
       if (!partMap[pk]) partMap[pk] = { code: pk, name: r.product_name || '', count: 0, qty: 0, val: 0 };
-      partMap[pk].count++; partMap[pk].qty += q; partMap[pk].val += v;
+      partMap[pk].count++;
+      partMap[pk].qty += q;
+      partMap[pk].val += v;
 
       // Origin aggregation
       if (r.from_stock) {
@@ -244,7 +305,9 @@ export default function StockTransferReports() {
       if (r.transfer_received_date) {
         const mo = r.transfer_received_date.substring(0, 7); // YYYY-MM
         if (!monthMap[mo]) monthMap[mo] = { month: mo, qty: 0, val: 0, count: 0 };
-        monthMap[mo].qty += q; monthMap[mo].val += v; monthMap[mo].count++;
+        monthMap[mo].qty += q;
+        monthMap[mo].val += v;
+        monthMap[mo].count++;
       }
     });
 
@@ -253,16 +316,20 @@ export default function StockTransferReports() {
 
     // Top N charts data
     const topRoutesChart = allRoutes.slice(0, 10).map(rt => ({
-      name: `${rt.from} → ${rt.to}`.length > 30
-        ? `...→ ${rt.to}` : `${rt.from} → ${rt.to}`,
+      name: formatRouteDisplayName(rt.from, rt.to),
       fullName: `${rt.from} → ${rt.to}`,
-      qty: rt.qty, val: rt.val, count: rt.count
+      from: rt.from,
+      to: rt.to,
+      qty: rt.qty,
+      val: rt.val,
+      count: rt.count
     }));
 
     const topPartsChart = allParts.slice(0, 10).map(p => ({
       name: p.code,
       label: p.name.length > 28 ? p.name.substring(0, 28) + '…' : p.name,
-      qty: p.qty, val: p.val
+      qty: p.qty,
+      val: p.val
     }));
 
     const topOriginsChart = Object.entries(originMap)
@@ -296,7 +363,7 @@ export default function StockTransferReports() {
       topOriginsChart, topDestsChart,
       monthlyTrend, commodityPie
     };
-  }, [filteredRecords]);
+  }, [filteredRecords, parts]);
 
   // ── Pagination ─────────────────────────────────────────────────────────────
   const totalPages = pageSize === 'ALL' ? 1 : Math.ceil(filteredRecords.length / pageSize) || 1;
@@ -329,15 +396,14 @@ export default function StockTransferReports() {
       <div className="stock-transfers-view">
         <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} />
         <HeaderBar {...{ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
-          stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef }} />
+          stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData }} />
         <div
           onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
           style={{
             textAlign: 'center', padding: '70px 20px',
             border: isDragging ? '2px dashed #0284c7' : '2px dashed #cbd5e1',
             background: isDragging ? '#f0f9ff' : '#ffffff',
-            borderRadius: '10px', cursor: 'pointer', transition: 'all 0.2s'
+            borderRadius: '10px', transition: 'all 0.2s'
           }}
         >
           <div style={{ width: '68px', height: '68px', borderRadius: '50%', background: '#e0f2fe', color: '#0284c7',
@@ -350,9 +416,24 @@ export default function StockTransferReports() {
           <p style={{ fontSize: '13.5px', color: '#64748b', maxWidth: '500px', margin: '0 auto 22px', lineHeight: 1.6 }}>
             Drag &amp; drop <strong>"Reports – Stock Transfers.xlsx"</strong> or click to select. The report parses automatically and saves to the database.
           </p>
-          <button className="btn btn-primary" style={{ padding: '9px 24px', fontSize: '13px' }}>
-            <UploadCloud size={16} /><span>Choose File to Import</span>
-          </button>
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => fileInputRef.current?.click()}
+              style={{ padding: '9px 24px', fontSize: '13px' }}
+            >
+              <UploadCloud size={16} /><span>Choose File to Import</span>
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Reports empty state sync' })}
+              disabled={isAutoRefreshing}
+              style={{ padding: '9px 20px', fontSize: '13px' }}
+            >
+              <RefreshCw size={15} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing…' : 'Sync from Cloud'}</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -364,7 +445,7 @@ export default function StockTransferReports() {
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} />
 
       <HeaderBar {...{ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
-        stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef }} />
+        stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData }} />
 
       {/* Clear Confirm Modal */}
       {showClearConfirm && (
@@ -422,6 +503,7 @@ export default function StockTransferReports() {
           paginatedRecords={paginatedRecords}
           filteredRecords={filteredRecords}
           analytics={analytics}
+          parts={parts}
           pageSize={pageSize}
           currentPage={currentPage}
           totalPages={totalPages}
@@ -540,7 +622,7 @@ function FilterBar({
 
 // ── Header Bar ────────────────────────────────────────────────────────────────
 function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
-  stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef }) {
+  stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData }) {
   return (
     <div className="card" style={{ marginBottom: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
@@ -557,6 +639,18 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {autoRefreshData && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Reports manual sync' })}
+              disabled={isAutoRefreshing}
+              title="Sync latest stock transfers from cloud database"
+              style={{ fontWeight: 600 }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing…' : 'Sync DB'}</span>
+            </button>
+          )}
           <button className="btn btn-primary btn-sm" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} style={{ fontWeight: 700 }}>
             <UploadCloud size={14} /><span>{isProcessing ? 'Processing…' : 'Upload File (XLSX/CSV)'}</span>
           </button>
@@ -642,29 +736,29 @@ function ChartsView({ analytics }) {
         <ChartSectionHeading icon={Activity} title="Monthly Transfer Volume & Valuation Trend"
           subtitle="How stock movement frequency and value has changed over time" color="#0284c7" />
         {monthlyTrend.length >= 2 ? (
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={monthlyTrend} margin={{ top: 10, right: 20, left: 10, bottom: 0 }}>
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={monthlyTrend} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
               <defs>
                 <linearGradient id="gradQty" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#0284c7" stopOpacity={0.25} />
                   <stop offset="95%" stopColor="#0284c7" stopOpacity={0.02} />
                 </linearGradient>
                 <linearGradient id="gradVal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#15803d" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#15803d" stopOpacity={0.02} />
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#64748b' }} />
-              <YAxis yAxisId="qty" tick={{ fontSize: 11, fill: '#64748b' }} />
-              <YAxis yAxisId="val" orientation="right" tick={{ fontSize: 11, fill: '#64748b' }}
-                tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+              <YAxis yAxisId="qty" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#0284c7', fontWeight: 600 }} tickFormatter={v => v.toLocaleString()} />
+              <YAxis yAxisId="val" orientation="right" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#10b981', fontWeight: 600 }}
+                tickFormatter={formatCurrencyTick} />
               <Tooltip content={<CustomBarTooltip />} />
-              <Legend wrapperStyle={{ fontSize: '12px' }} />
+              <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '12px', paddingBottom: '12px' }} />
               <Area yAxisId="qty" type="monotone" dataKey="qty" name="Units Transferred"
                 stroke="#0284c7" fill="url(#gradQty)" strokeWidth={2.5} dot={{ r: 4, fill: '#0284c7' }} />
               <Area yAxisId="val" type="monotone" dataKey="val" name="Valuation ($)"
-                stroke="#15803d" fill="url(#gradVal)" strokeWidth={2} dot={{ r: 3, fill: '#15803d' }} />
+                stroke="#10b981" fill="url(#gradVal)" strokeWidth={2} dot={{ r: 3, fill: '#10b981' }} />
             </AreaChart>
           </ResponsiveContainer>
         ) : (
@@ -739,7 +833,7 @@ function ChartsView({ analytics }) {
               <BarChart data={topRoutesChart.slice(0, 8)} layout="vertical" margin={{ top: 0, right: 50, left: 10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: '#0369a1', fontWeight: 700 }} width={130} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 9.5, fill: '#0369a1', fontWeight: 700 }} width={130} />
                 <Tooltip content={<CustomBarTooltip />} />
                 <Bar dataKey="qty" name="Units Moved" radius={[0, 4, 4, 0]}>
                   {topRoutesChart.slice(0, 8).map((_, i) => (
@@ -783,17 +877,17 @@ function ChartsView({ analytics }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#0f172a', fontWeight: 700 }}
                 angle={-30} textAnchor="end" interval={0} />
-              <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
+              <YAxis domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={v => v.toLocaleString()} />
               <Tooltip
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const d = topPartsChart.find(p => p.name === label);
                   return (
-                    <div style={{ background: '#0f172a', color: '#fff', padding: '10px 14px', borderRadius: '6px', fontSize: '12px' }}>
+                    <div style={{ background: '#0f172a', color: '#fff', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', border: '1px solid #334155' }}>
                       <p style={{ fontWeight: 700, color: '#38bdf8', marginBottom: '4px' }}>{label}</p>
                       {d && <p style={{ color: '#94a3b8', fontSize: '11px', margin: '0 0 6px' }}>{d.label}</p>}
                       <p style={{ margin: '2px 0' }}>Units: <strong>{payload[0]?.value?.toLocaleString()}</strong></p>
-                      {d && <p style={{ margin: '2px 0' }}>Value: <strong>${d.val.toLocaleString()}</strong></p>}
+                      {d && <p style={{ margin: '2px 0', color: '#34d399' }}>Value: <strong>${d.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></p>}
                     </div>
                   );
                 }}
@@ -813,18 +907,38 @@ function ChartsView({ analytics }) {
         <ChartSectionHeading icon={BarChart2} title="Top Routes — Quantity vs. Valuation Comparison"
           subtitle="Side-by-side view of units moved versus the dollar value transferred per route" color="#7c3aed" />
         {topRoutesChart.length > 0 ? (
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={topRoutesChart.slice(0, 8)} margin={{ top: 5, right: 20, left: 10, bottom: 55 }}>
+          <ResponsiveContainer width="100%" height={340}>
+            <BarChart data={topRoutesChart.slice(0, 8)} margin={{ top: 15, right: 35, left: 15, bottom: 70 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#334155', fontWeight: 600 }}
-                angle={-25} textAnchor="end" interval={0} />
-              <YAxis yAxisId="qty" tick={{ fontSize: 11, fill: '#0284c7' }} />
-              <YAxis yAxisId="val" orientation="right" tick={{ fontSize: 11, fill: '#15803d' }}
-                tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+              <XAxis
+                dataKey="name"
+                tick={{ fontSize: 10, fill: '#334155', fontWeight: 600 }}
+                angle={-25}
+                textAnchor="end"
+                interval={0}
+                height={65}
+              />
+              <YAxis
+                yAxisId="qty"
+                domain={[0, 'auto']}
+                tick={{ fontSize: 11, fill: '#0284c7', fontWeight: 600 }}
+                tickFormatter={v => v.toLocaleString()}
+              />
+              <YAxis
+                yAxisId="val"
+                orientation="right"
+                domain={[0, 'auto']}
+                tick={{ fontSize: 11, fill: '#10b981', fontWeight: 600 }}
+                tickFormatter={formatCurrencyTick}
+              />
               <Tooltip content={<CustomBarTooltip />} />
-              <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
-              <Bar yAxisId="qty" dataKey="qty" name="Units Moved" fill="#0284c7" radius={[3, 3, 0, 0]} opacity={0.9} />
-              <Bar yAxisId="val" dataKey="val" name="Valuation ($)" fill="#15803d" radius={[3, 3, 0, 0]} opacity={0.85} />
+              <Legend
+                verticalAlign="top"
+                align="right"
+                wrapperStyle={{ fontSize: '12px', paddingBottom: '16px' }}
+              />
+              <Bar yAxisId="qty" dataKey="qty" name="Units Moved" fill="#0284c7" radius={[4, 4, 0, 0]} barSize={22} />
+              <Bar yAxisId="val" dataKey="val" name="Valuation ($)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={22} />
             </BarChart>
           </ResponsiveContainer>
         ) : <NoDataPlaceholder message="No route data." />}
@@ -844,7 +958,7 @@ function NoDataPlaceholder({ message }) {
 }
 
 // ── Ledger View ───────────────────────────────────────────────────────────────
-function LedgerView({ paginatedRecords, filteredRecords, analytics, pageSize, currentPage, totalPages, setCurrentPage }) {
+function LedgerView({ paginatedRecords, filteredRecords, analytics, parts, pageSize, currentPage, totalPages, setCurrentPage }) {
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
       <div style={{ overflowX: 'auto' }}>
@@ -866,6 +980,7 @@ function LedgerView({ paginatedRecords, filteredRecords, analytics, pageSize, cu
               const absIdx = pageSize === 'ALL' ? idx + 1 : (currentPage - 1) * pageSize + idx + 1;
               const isDisplay = (r.product_name || '').toLowerCase().includes('display');
               const isBattery = (r.product_name || '').toLowerCase().includes('battery');
+              const rowVal = getRecordValuation(r, parts);
               return (
                 <tr key={r.id || idx} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{absIdx}</td>
@@ -889,8 +1004,8 @@ function LedgerView({ paginatedRecords, filteredRecords, analytics, pageSize, cu
                   </td>
                   <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{r.transfer_quantity || 1}</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#334155' }}>{r.serial_number || '—'}</td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '11.5px', paddingRight: '10px' }}>
-                    ${(r.transfer_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '11.5px', paddingRight: '10px', color: '#15803d' }}>
+                    ${rowVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                 </tr>
               );

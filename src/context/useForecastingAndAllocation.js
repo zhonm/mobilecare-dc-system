@@ -2,7 +2,6 @@ import { useState, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
-import { calculateRecommendedOrder } from '../utils/forecastEngine';
 import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/allocationEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';
 
@@ -10,8 +9,7 @@ export function useForecastingAndAllocation({
   parts = [],
   sites = [],
   showToast,
-  broadcastCloudEvent,
-  setCloudSyncStatus
+  broadcastCloudEvent
 }) {
   const syncTimeoutRef = useRef(null);
 
@@ -59,11 +57,11 @@ export function useForecastingAndAllocation({
     );
 
     // 1. Synchronously compute next forecast items
-    let currentForecasts = [];
+    let currentForecasts;
     try {
       const localSaved = JSON.parse(localStorage.getItem('mdc_forecast') || '[]');
       currentForecasts = (forecastItems && forecastItems.length > 0) ? forecastItems : (Array.isArray(localSaved) ? localSaved : []);
-    } catch (e) {
+    } catch {
       currentForecasts = forecastItems || [];
     }
 
@@ -104,11 +102,11 @@ export function useForecastingAndAllocation({
     const stockingPrice = targetItem?.stocking_price || targetPart?.stocking_price || (desc.toLowerCase().includes('display') ? 279 : 99);
     const categoryId = targetItem?.category_id || targetPart?.category_id || (desc.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery');
 
-    let currentAllocations = [];
+    let currentAllocations;
     try {
       const localAllocSaved = JSON.parse(localStorage.getItem('mdc_allocations') || '[]');
       currentAllocations = (allocations && allocations.length > 0) ? allocations : (Array.isArray(localAllocSaved) ? localAllocSaved : []);
-    } catch (e) {
+    } catch {
       currentAllocations = allocations || [];
     }
 

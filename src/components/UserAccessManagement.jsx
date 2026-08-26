@@ -60,7 +60,9 @@ export default function UserAccessManagement() {
     applyRolePresetToUser,
     toggleUserActiveStatus,
     currentUser,
-    showToast
+    showToast,
+    isAutoRefreshing,
+    autoRefreshData
   } = useApp();
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -302,23 +304,38 @@ export default function UserAccessManagement() {
             </p>
           </div>
 
-          {isSuperadmin && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {autoRefreshData && (
               <button
                 className="btn btn-secondary"
                 style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.2)' }}
-                onClick={() => openPasswordResetModal(currentUser)}
+                onClick={() => autoRefreshData({ force: true, silent: false, reason: 'User Access manual sync' })}
+                disabled={isAutoRefreshing}
+                title="Sync users and permissions from cloud database"
               >
-                <KeyRound size={15} />
-                <span>Reset My Password</span>
+                <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
+                <span>{isAutoRefreshing ? 'Syncing…' : 'Sync DB'}</span>
               </button>
+            )}
 
-              <button className="btn btn-primary" onClick={openAddModal} style={{ background: '#0284c7' }}>
-                <UserPlus size={16} />
-                <span>Add New User</span>
-              </button>
-            </div>
-          )}
+            {isSuperadmin && (
+              <>
+                <button
+                  className="btn btn-secondary"
+                  style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                  onClick={() => openPasswordResetModal(currentUser)}
+                >
+                  <KeyRound size={15} />
+                  <span>Reset My Password</span>
+                </button>
+
+                <button className="btn btn-primary" onClick={openAddModal} style={{ background: '#0284c7' }}>
+                  <UserPlus size={16} />
+                  <span>Add New User</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

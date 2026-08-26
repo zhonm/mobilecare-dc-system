@@ -330,20 +330,84 @@ export function usePeriodRecordsAndReports({
   const importStockTransfersReport = async (records, metadata) => {
     setStockTransferReports(records);
     setStockTransferMetadata(metadata);
+    try {
+      localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(records));
+      localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(metadata));
+    } catch (e) {}
     await Promise.all([
       dbStorage.setItem('mdc_stock_transfer_reports', records),
       dbStorage.setItem('mdc_stock_transfer_metadata', metadata)
     ]);
+
+    if (supabase) {
+      try {
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        await supabase.from('saved_records').upsert({
+          id: 'master_stock_transfers_report_registry',
+          record_type: 'stock_transfer_report',
+          period_label: metadata?.fileName || 'Reports - Stock Transfers',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master Fixably stock transfer movement dataset',
+          snapshot_data: {
+            records,
+            metadata
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      } catch (err) {
+        console.warn('Sync stock transfers to Supabase error:', err);
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('STOCK_TRANSFERS_UPDATED', { count: records.length, metadata, table: 'saved_records' });
+    }
+
     showToast(`Successfully imported ${records.length.toLocaleString()} stock transfer records`, 'success');
   };
 
   const clearStockTransfersReport = async () => {
     setStockTransferReports([]);
     setStockTransferMetadata(null);
+    try {
+      localStorage.removeItem('mdc_stock_transfer_reports');
+      localStorage.removeItem('mdc_stock_transfer_metadata');
+    } catch (e) {}
     await Promise.all([
       dbStorage.setItem('mdc_stock_transfer_reports', []),
       dbStorage.setItem('mdc_stock_transfer_metadata', null)
     ]);
+
+    if (supabase) {
+      try {
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        await supabase.from('saved_records').upsert({
+          id: 'master_stock_transfers_report_registry',
+          record_type: 'stock_transfer_report',
+          period_label: 'Cleared Stock Transfers',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: '__CLEARED__',
+          snapshot_data: {
+            records: [],
+            metadata: null
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      } catch (err) {
+        console.warn('Clear stock transfers from Supabase error:', err);
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('STOCK_TRANSFERS_CLEARED', { table: 'saved_records' });
+    }
+
     showToast('Cleared stock transfer reports data', 'info');
   };
 

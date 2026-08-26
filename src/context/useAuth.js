@@ -51,15 +51,48 @@ export function useAuth({
     }
   }, [currentUser]);
 
-  // Permission Check Helper
+  // Keep currentUser in sync with latest usersList updates from cloud/peers
+  useEffect(() => {
+    if (currentUser && Array.isArray(usersList)) {
+      const match = usersList.find(u =>
+        u.id === currentUser.id ||
+        (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+      );
+      if (match) {
+        const hasDiff =
+          match.fullName !== currentUser.fullName ||
+          match.role !== currentUser.role ||
+          match.rolePosition !== currentUser.rolePosition ||
+          match.siteId !== currentUser.siteId ||
+          match.isActive !== currentUser.isActive ||
+          JSON.stringify(match.permittedPages) !== JSON.stringify(currentUser.permittedPages);
+        if (hasDiff) {
+          setCurrentUser(prev => ({ ...prev, ...match }));
+        }
+      }
+    }
+  }, [usersList, currentUser]);
+
+  // Strict Permission Check Helper
   const canAccess = (pageId) => {
     if (!currentUser) return false;
+    // 1. Superadmin has full unrestricted access to all modules
     if (currentUser.role === 'superadmin') return true;
+
+    // 2. User Access Management is strictly restricted to Superadmin
+    if (pageId === 'user-access') return false;
+
+    // 3. Deactivated accounts have zero access
+    if (currentUser.isActive === false) return false;
+
+    // 4. Check explicit permitted pages assigned by Superadmin
     if (Array.isArray(currentUser.permittedPages)) {
       return currentUser.permittedPages.includes(pageId);
     }
+
+    // 5. Fallback preset if permittedPages is not set on legacy user
     const fallbackPreset = ROLE_PRESETS[currentUser.role] || ROLE_PRESETS.user;
-    return fallbackPreset.includes(pageId);
+    return fallbackPreset.includes(pageId) && pageId !== 'user-access';
   };
 
   // 1. Verify Company Email during Login
@@ -101,9 +134,9 @@ export function useAuth({
 
             const resolvedRole = matchedDb.role || 'user';
             const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
-            const perms = dbPerms && dbPerms.length > 0
+            const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
               ? dbPerms.map(p => p.page_id)
-              : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
 
             user = {
               id: matchedDb.id,
@@ -178,9 +211,9 @@ export function useAuth({
 
             const resolvedRole = matchedDb.role || 'user';
             const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
-            const perms = dbPerms && dbPerms.length > 0
+            const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
               ? dbPerms.map(p => p.page_id)
-              : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
 
             user = {
               id: matchedDb.id,

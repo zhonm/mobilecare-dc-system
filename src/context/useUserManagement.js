@@ -44,6 +44,30 @@ export function useUserManagement({
     return INITIAL_USERS;
   });
 
+  // Helper to persist authoritative users registry to cloud
+  const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
+    if (!supabase) return;
+    try {
+      const deleted = deletedIdsToSync || JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      await supabase.from('saved_records').upsert({
+        id: 'master_users_registry',
+        record_type: 'users_registry',
+        period_label: 'Master Users Registry',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        notes: 'Master Provisioned Accounts & Permissions Registry',
+        snapshot_data: {
+          users: usersListToSync,
+          deletedUserIds: deleted,
+          updatedAt: new Date().toISOString()
+        },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+    } catch (err) {
+      console.warn('Sync master_users_registry notice:', err);
+    }
+  };
+
   // 1. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
@@ -87,6 +111,8 @@ export function useUserManagement({
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
+    await syncMasterUsersRegistry(nextList);
+
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
@@ -117,7 +143,7 @@ export function useUserManagement({
         }
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_PROVISIONED', { email: cleanEmail, userId: effectiveUserId });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: effectiveUserId, table: 'saved_records' });
       } catch (dbErr) {
         console.error('Could not sync provisioned user to Supabase:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
@@ -132,10 +158,10 @@ export function useUserManagement({
             updated_at: new Date().toISOString()
           });
         }
-        showToast(`Warning: Cloud sync error (${dbErr.message}). Provisioned locally.`, 'warning');
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: newUser.id, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_PROVISIONED', { email: cleanEmail, userId: newUser.id });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: newUser.id, table: 'saved_records' });
     }
 
     showToast(`Provisioned user ${fullName} (${cleanEmail}) as ${finalRolePosition}.`, 'success');
@@ -157,7 +183,7 @@ export function useUserManagement({
       ? targetUser.permittedPages.filter(p => p !== pageId)
       : [...(targetUser.permittedPages || []), pageId];
 
-    setUsersList(prev => prev.map(user => {
+    const nextUsersList = usersList.map(user => {
       if (user.id === userId) {
         return {
           ...user,
@@ -165,7 +191,15 @@ export function useUserManagement({
         };
       }
       return user;
-    }));
+    });
+
+    setUsersList(nextUsersList);
+    try {
+      localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      dbStorage.setItem('mdc_users', nextUsersList);
+    } catch (e) {}
+
+    await syncMasterUsersRegistry(nextUsersList);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -194,13 +228,14 @@ export function useUserManagement({
           }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_PERMISSIONS_UPDATED', { userId: prof?.id || userId, pageId, hasPage: !hasPage });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: prof?.id || userId, pageId, hasPage: !hasPage, table: 'saved_records' });
       } catch (e) {
         console.error('Supabase permission sync error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, pageId, hasPage: !hasPage, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_PERMISSIONS_UPDATED', { userId, pageId, hasPage: !hasPage });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, pageId, hasPage: !hasPage, table: 'saved_records' });
     }
   };
 
@@ -210,7 +245,7 @@ export function useUserManagement({
     if (!targetUser) return;
 
     const pages = ROLE_PRESETS[presetRole] || [];
-    setUsersList(prev => prev.map(user => {
+    const nextUsersList = usersList.map(user => {
       if (user.id === userId) {
         return {
           ...user,
@@ -219,7 +254,15 @@ export function useUserManagement({
         };
       }
       return user;
-    }));
+    });
+
+    setUsersList(nextUsersList);
+    try {
+      localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      dbStorage.setItem('mdc_users', nextUsersList);
+    } catch (e) {}
+
+    await syncMasterUsersRegistry(nextUsersList);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -251,13 +294,14 @@ export function useUserManagement({
           }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_ROLE_UPDATED', { userId: prof?.id || userId, role: presetRole });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: prof?.id || userId, role: presetRole, table: 'saved_records' });
       } catch (e) {
         console.error('Supabase role preset sync error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, role: presetRole, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_ROLE_UPDATED', { userId, role: presetRole });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, role: presetRole, table: 'saved_records' });
     }
 
     showToast(`Applied ${presetRole} default permissions`, 'success');
@@ -272,12 +316,20 @@ export function useUserManagement({
     }
 
     const nextState = !target.isActive;
-    setUsersList(prev => prev.map(user => {
+    const nextUsersList = usersList.map(user => {
       if (user.id === userId) {
         return { ...user, isActive: nextState };
       }
       return user;
-    }));
+    });
+
+    setUsersList(nextUsersList);
+    try {
+      localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      dbStorage.setItem('mdc_users', nextUsersList);
+    } catch (e) {}
+
+    await syncMasterUsersRegistry(nextUsersList);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -288,13 +340,14 @@ export function useUserManagement({
           .or(`id.eq.${userId},email.ilike.${target.email}`);
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_STATUS_UPDATED', { userId, isActive: nextState });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
       } catch (e) {
         console.error('Supabase status sync error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_STATUS_UPDATED', { userId, isActive: nextState });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
     }
 
     showToast(`Account for ${target.fullName} is now ${nextState ? 'Active' : 'Deactivated'}`, 'info');
@@ -335,12 +388,14 @@ export function useUserManagement({
       permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : finalPermittedPages
     };
 
-    setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+    const nextList = usersList.map(u => (u.id === userId ? updatedUser : u));
+    setUsersList(nextList);
     try {
-      const nextList = usersList.map(u => u.id === userId ? updatedUser : u);
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
+
+    await syncMasterUsersRegistry(nextList);
 
     if (currentUser?.id === userId || currentUser?.email?.toLowerCase() === previousEmail.toLowerCase()) {
       if (setCurrentUser) setCurrentUser(updatedUser);
@@ -399,7 +454,7 @@ export function useUserManagement({
         }
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_UPDATED', { userId, email: cleanEmail });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: cleanEmail, table: 'saved_records' });
       } catch (dbErr) {
         console.error('Supabase profile update error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
@@ -412,10 +467,10 @@ export function useUserManagement({
             updated_at: new Date().toISOString()
           });
         }
-        showToast(`Warning: Cloud sync failed (${dbErr.message}). Profile updated locally.`, 'warning');
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: cleanEmail, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_UPDATED', { userId, email: cleanEmail });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: cleanEmail, table: 'saved_records' });
     }
 
     showToast(`Updated profile for ${fullName} (${resolvedPosition})`, 'success');
@@ -430,16 +485,18 @@ export function useUserManagement({
     const pos = String(newRolePosition || '').trim() || getDefaultRolePosition(target.role);
     const updatedUser = { ...target, rolePosition: pos };
 
-    setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+    const nextList = usersList.map(u => u.id === userId ? updatedUser : u);
+    setUsersList(nextList);
     if (currentUser?.id === userId && setCurrentUser) {
       setCurrentUser(updatedUser);
     }
 
     try {
-      const nextList = usersList.map(u => u.id === userId ? updatedUser : u);
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
+
+    await syncMasterUsersRegistry(nextList);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -450,13 +507,14 @@ export function useUserManagement({
           .or(`id.eq.${userId},email.ilike.${target.email}`);
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_UPDATED', { userId, rolePosition: pos });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
       } catch (e) {
         console.error('Supabase role position sync error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_UPDATED', { userId, rolePosition: pos });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
     }
 
     showToast(`Updated role position for ${target.fullName} to "${pos}"`, 'success');
@@ -483,17 +541,19 @@ export function useUserManagement({
       hasSetPassword: hasSet
     };
 
-    setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+    const nextList = usersList.map(u => (u.id === userId ? updatedUser : u));
+    setUsersList(nextList);
 
     if (currentUser?.id === userId || currentUser?.email?.toLowerCase() === target.email?.toLowerCase()) {
       if (setCurrentUser) setCurrentUser(updatedUser);
     }
 
     try {
-      const nextList = usersList.map(u => (u.id === userId ? updatedUser : u));
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
+
+    await syncMasterUsersRegistry(nextList);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -512,13 +572,14 @@ export function useUserManagement({
           .or(`id.eq.${userId},email.ilike.${target.email}`);
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_PASSWORD_RESET', { userId });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
       } catch (dbErr) {
         console.error('Supabase password reset sync error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_PASSWORD_RESET', { userId });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
     }
 
     if (requireNextLoginReset) {
@@ -550,12 +611,12 @@ export function useUserManagement({
       }
     }
 
+    const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+    if (!deletedIds.includes(userId)) deletedIds.push(userId);
+    if (target.email && !deletedIds.includes(target.email.toLowerCase())) {
+      deletedIds.push(target.email.toLowerCase());
+    }
     try {
-      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-      if (!deletedIds.includes(userId)) deletedIds.push(userId);
-      if (target.email && !deletedIds.includes(target.email.toLowerCase())) {
-        deletedIds.push(target.email.toLowerCase());
-      }
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
     } catch (e) {
       console.warn('Error saving deleted user id:', e);
@@ -567,6 +628,8 @@ export function useUserManagement({
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
+
+    await syncMasterUsersRegistry(nextList, deletedIds);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -580,15 +643,15 @@ export function useUserManagement({
           }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_DELETED', { userId, email: target.email });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
       } catch (e) {
         console.error('Supabase delete user error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) enqueueOfflineAction('PROFILE_DELETE', { id: userId, email: target.email });
-        showToast(`Warning: Cloud sync error (${e.message}). User removed locally.`, 'warning');
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_DELETED', { userId, email: target.email });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
     }
 
     showToast(`Deleted user ${target.fullName}`, 'success');

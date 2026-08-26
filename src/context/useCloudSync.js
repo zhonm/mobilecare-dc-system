@@ -40,6 +40,10 @@ export function useCloudSync({
   setRepairUsageRecords,
   _savedRecords,
   setSavedRecords,
+  _stockTransferReports,
+  setStockTransferReports,
+  _stockTransferMetadata,
+  setStockTransferMetadata,
   _dcIntakeRecords,
   setDcIntakeRecords,
   uploadAuditLogs,
@@ -165,7 +169,7 @@ export function useCloudSync({
   }, []);
 
   // Main Database Hydration
-  const hydrateFromSupabase = async (selectiveTables = null) => {
+  const hydrateFromSupabase = useCallback(async (selectiveTables = null) => {
     if (!supabase) return false;
 
     try {
@@ -203,8 +207,28 @@ export function useCloudSync({
       const dbCats = resCats.data;
       const dbShipments = resShipments.data;
 
-      // 1. Process Profiles & User Page Permissions
-      if (shouldFetch('profiles') && dbProfiles && dbProfiles.length > 0) {
+      // 1. Process Profiles & User Page Permissions & Master Users Registry
+      if (shouldFetch('profiles') || shouldFetch('saved_records') || shouldFetch('user_page_permissions')) {
+        const cloudUsersRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_users_registry');
+        const cloudUsersList = (cloudUsersRegistryDoc?.snapshot_data?.users && Array.isArray(cloudUsersRegistryDoc.snapshot_data.users))
+          ? cloudUsersRegistryDoc.snapshot_data.users
+          : [];
+        const cloudDeletedUserIds = (cloudUsersRegistryDoc?.snapshot_data?.deletedUserIds && Array.isArray(cloudUsersRegistryDoc.snapshot_data.deletedUserIds))
+          ? cloudUsersRegistryDoc.snapshot_data.deletedUserIds
+          : [];
+
+        let mergedDeletedUserIds = [];
+        try {
+          const localDeletedUserIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+          mergedDeletedUserIds = Array.from(new Set([
+            ...localDeletedUserIds,
+            ...cloudDeletedUserIds
+          ].map(s => String(s).trim().toLowerCase())));
+          localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
+        } catch (e) {
+          mergedDeletedUserIds = cloudDeletedUserIds.map(s => String(s).trim().toLowerCase());
+        }
+
         const permsMap = new Map();
         if (dbPerms && dbPerms.length > 0) {
           dbPerms.forEach(p => {
@@ -213,61 +237,89 @@ export function useCloudSync({
           });
         }
 
-        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-
         setUsersList(prev => {
           const profileMap = new Map();
+
+          // 1. Base seed
           INITIAL_USERS.forEach(u => {
-            if (
-              !deletedIds.includes(u.id) &&
-              !deletedIds.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            ) {
-              profileMap.set(u.email.toLowerCase(), u);
-            }
-          });
-
-          (prev || []).forEach(u => {
-            if (
-              !deletedIds.includes(u.id) &&
-              !deletedIds.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            ) {
-              profileMap.set(u.email.toLowerCase(), u);
-            }
-          });
-
-          dbProfiles.forEach(p => {
-            const cleanEmail = p.email?.toLowerCase();
+            const cleanEmail = u.email?.toLowerCase();
             if (
               cleanEmail &&
-              !deletedIds.includes(p.id) &&
-              !deletedIds.includes(cleanEmail) &&
+              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(cleanEmail) &&
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
-              !LEGACY_MOCK_IDS.includes(p.id)
+              !LEGACY_MOCK_IDS.includes(u.id)
             ) {
-              const existing = profileMap.get(cleanEmail);
-              const customPerms = permsMap.get(p.id);
-              const role = p.role || existing?.role || 'user';
-              const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(role);
-
-              profileMap.set(cleanEmail, {
-                id: p.id || existing?.id || `usr-${Date.now()}`,
-                email: p.email,
-                fullName: p.full_name || existing?.fullName || p.email.split('@')[0],
-                role: role,
-                rolePosition: resolvedPosition,
-                siteId: p.site_id || existing?.siteId || 'site-dc',
-                hasSetPassword: p.has_set_password ?? existing?.hasSetPassword ?? true,
-                passwordHash: p.password_hash || existing?.passwordHash || 'Password123',
-                isActive: p.is_active ?? existing?.isActive ?? true,
-                permittedPages: role === 'superadmin'
-                  ? ROLE_PRESETS.superadmin
-                  : (customPerms && customPerms.length > 0 ? customPerms : (existing?.permittedPages || ROLE_PRESETS[role] || ROLE_PRESETS.user))
-              });
+              profileMap.set(cleanEmail, u);
             }
+          });
+
+          // 2. Overlay previous local state
+          (prev || []).forEach(u => {
+            const cleanEmail = u.email?.toLowerCase();
+            if (
+              cleanEmail &&
+              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(cleanEmail) &&
+              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            ) {
+              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
+            }
+          });
+
+          // 3. Overlay authoritative master_users_registry from cloud
+          cloudUsersList.forEach(u => {
+            const cleanEmail = u.email?.toLowerCase();
+            if (
+              cleanEmail &&
+              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(cleanEmail) &&
+              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            ) {
+              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
+            }
+          });
+
+          // 4. Overlay dbProfiles if available
+          if (dbProfiles && dbProfiles.length > 0) {
+            dbProfiles.forEach(p => {
+              const cleanEmail = p.email?.toLowerCase();
+              if (
+                cleanEmail &&
+                !p.is_deleted &&
+                !mergedDeletedUserIds.includes(p.id?.toLowerCase()) &&
+                !mergedDeletedUserIds.includes(cleanEmail) &&
+                !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+                !LEGACY_MOCK_IDS.includes(p.id)
+              ) {
+                const existing = profileMap.get(cleanEmail);
+                const customPerms = permsMap.get(p.id);
+                const role = p.role || existing?.role || 'user';
+                const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(role);
+
+                profileMap.set(cleanEmail, {
+                  id: p.id || existing?.id || `usr-${Date.now()}`,
+                  email: p.email,
+                  fullName: p.full_name || existing?.fullName || p.email.split('@')[0],
+                  role: role,
+                  rolePosition: resolvedPosition,
+                  siteId: p.site_id || existing?.siteId || 'site-dc',
+                  hasSetPassword: p.has_set_password ?? existing?.hasSetPassword ?? true,
+                  passwordHash: p.password_hash || existing?.passwordHash || 'Password123',
+                  isActive: p.is_active ?? existing?.isActive ?? true,
+                  permittedPages: role === 'superadmin'
+                    ? ROLE_PRESETS.superadmin
+                    : (customPerms && customPerms.length > 0 ? customPerms : (existing?.permittedPages || ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                });
+              }
+            });
+          }
+
+          // Clean up any deleted users
+          mergedDeletedUserIds.forEach(delId => {
+            profileMap.delete(delId);
           });
 
           const merged = Array.from(profileMap.values());
@@ -275,6 +327,31 @@ export function useCloudSync({
             localStorage.setItem('mdc_users', JSON.stringify(merged));
             dbStorage.setItem('mdc_users', merged);
           } catch (e) {}
+
+          // Self-heal: If cloud registry is missing or has fewer users, auto-seed it
+          if (merged.length > 0 && supabase) {
+            if (!cloudUsersRegistryDoc || cloudUsersList.length < merged.length) {
+              supabase.from('saved_records').upsert({
+                id: 'master_users_registry',
+                record_type: 'users_registry',
+                period_label: 'Master Users Registry',
+                period_year: new Date().getFullYear(),
+                period_month: new Date().getMonth() + 1,
+                notes: 'Master Provisioned Accounts & Permissions Registry',
+                snapshot_data: {
+                  users: merged,
+                  deletedUserIds: mergedDeletedUserIds,
+                  updatedAt: new Date().toISOString()
+                },
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' }).then(() => {
+                if (broadcastCloudEvent) {
+                  broadcastCloudEvent('USER_REGISTRY_UPDATED', { users: merged, table: 'saved_records' });
+                }
+              }).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
+            }
+          }
+
           return merged;
         });
       }
@@ -466,6 +543,10 @@ export function useCloudSync({
           r.id !== 'deleted_shipment_ids_registry' &&
           r.id !== 'master_upload_audit_logs_registry' &&
           r.id !== 'master_deletion_audit_logs_registry' &&
+          r.id !== 'master_stock_transfers_report_registry' &&
+          r.id !== 'master_users_registry' &&
+          r.record_type !== 'users_registry' &&
+          r.record_type !== 'stock_transfer_report' &&
           r.record_type !== 'upload_audit_registry' &&
           r.record_type !== 'deletion_audit_registry' &&
           r.record_type !== 'shipment' &&
@@ -484,6 +565,59 @@ export function useCloudSync({
           setSavedRecords(validSavedRecords);
           try { localStorage.setItem('mdc_saved_records', JSON.stringify(validSavedRecords)); } catch (e) {}
           dbStorage.setItem('mdc_saved_records', validSavedRecords);
+        }
+
+        // Hydrate Stock Transfer Reports & Metadata
+        const stockTransferDoc = dbSavedRecords.find(r => r.id === 'master_stock_transfers_report_registry');
+        if (stockTransferDoc && stockTransferDoc.snapshot_data) {
+          const cloudReports = Array.isArray(stockTransferDoc.snapshot_data.records)
+            ? stockTransferDoc.snapshot_data.records
+            : [];
+          const cloudMetadata = stockTransferDoc.snapshot_data.metadata || null;
+          if (cloudReports.length > 0) {
+            if (setStockTransferReports) setStockTransferReports(cloudReports);
+            if (setStockTransferMetadata) setStockTransferMetadata(cloudMetadata);
+            try {
+              localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(cloudReports));
+              localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(cloudMetadata));
+            } catch (e) {}
+            dbStorage.setItem('mdc_stock_transfer_reports', cloudReports);
+            dbStorage.setItem('mdc_stock_transfer_metadata', cloudMetadata);
+          } else if (stockTransferDoc.notes === '__CLEARED__') {
+            if (setStockTransferReports) setStockTransferReports([]);
+            if (setStockTransferMetadata) setStockTransferMetadata(null);
+            try {
+              localStorage.removeItem('mdc_stock_transfer_reports');
+              localStorage.removeItem('mdc_stock_transfer_metadata');
+            } catch (e) {}
+            dbStorage.setItem('mdc_stock_transfer_reports', []);
+            dbStorage.setItem('mdc_stock_transfer_metadata', null);
+          }
+        } else {
+          // Self-heal: If cloud registry is missing, but this client already has local records, upload them to cloud
+          try {
+            const localSavedReports = JSON.parse(localStorage.getItem('mdc_stock_transfer_reports') || '[]');
+            const localSavedMeta = JSON.parse(localStorage.getItem('mdc_stock_transfer_metadata') || 'null');
+            if (Array.isArray(localSavedReports) && localSavedReports.length > 0 && supabase) {
+              supabase.from('saved_records').upsert({
+                id: 'master_stock_transfers_report_registry',
+                record_type: 'stock_transfer_report',
+                period_label: localSavedMeta?.fileName || 'Reports - Stock Transfers',
+                period_year: new Date().getFullYear(),
+                period_month: new Date().getMonth() + 1,
+                notes: 'Master Fixably stock transfer movement dataset',
+                snapshot_data: {
+                  records: localSavedReports,
+                  metadata: localSavedMeta
+                },
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' }).then(() => {
+                if (broadcastCloudEvent) {
+                  broadcastCloudEvent('STOCK_TRANSFERS_UPDATED', { count: localSavedReports.length, metadata: localSavedMeta, table: 'saved_records' });
+                }
+              }).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
+            }
+          } catch (e) {}
         }
 
         const draftRecord = dbSavedRecords.find(r => r.id === 'active_packing_manifest_draft');
@@ -790,7 +924,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  };
+  }, [broadcastCloudEvent, parts, setActivePackDraft, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setInventoryUnits, setParts, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -805,8 +939,8 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'save_in_progress' };
     }
 
-    // Runaway protection: enforce at least 1200ms throttle unless explicit user manual button click
-    if (!isManual && now - lastRefreshTimeRef.current < 1200) {
+    // Runaway protection: enforce at least 1200ms throttle unless explicit user manual button click or forced
+    if (!isManual && !force && now - lastRefreshTimeRef.current < 1200) {
       return { success: true, throttled: true };
     }
 

@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab } = useApp();
+  const { applyParsedDataset, resetToDefaultData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [parsedData, setParsedData] = useState(null);

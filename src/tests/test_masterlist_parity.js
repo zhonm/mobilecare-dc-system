@@ -15,9 +15,8 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
 
-import { processRawUsageSheet, CANONICAL_DISPLAY_DESCS, CANONICAL_BATTERY_DESCS, CANONICAL_SITE_LIST } from '../utils/excelParser.js';
-import { calculateLinearRegressionForecast } from '../utils/forecastEngine.js';
-import { calculateOptionAAllocation, calculateOptionBAllocation, calculateWeeklySplit, getOrderRemark } from '../utils/allocationEngine.js';
+import { processRawUsageSheet, CANONICAL_SITE_LIST } from '../utils/excelParser.js';
+import { calculateWeeklySplit } from '../utils/allocationEngine.js';
 
 let totalTests = 0;
 let passedTests = 0;

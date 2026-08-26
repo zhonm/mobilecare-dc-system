@@ -378,7 +378,7 @@ export default function Dashboard() {
             borderLeft: '4px solid #10b981',
             cursor: 'pointer'
           }}
-          onClick={() => setActiveTab('demand')}
+          onClick={() => setActiveTab('forecast')}
           title="Click to open Demand Forecasting"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -530,7 +530,7 @@ export default function Dashboard() {
                 Inventory readiness versus forecasted consumption
               </p>
             </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('matrix')}>
+            <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('allocation')}>
               <span>Allocation Matrix</span>
               <ArrowUpRight size={13} />
             </button>
@@ -636,7 +636,7 @@ export default function Dashboard() {
 
           {/* Tile 4: Allocation Matrix */}
           <div
-            onClick={() => setActiveTab('matrix')}
+            onClick={() => setActiveTab('allocation')}
             className="card"
             style={{
               padding: '16px',

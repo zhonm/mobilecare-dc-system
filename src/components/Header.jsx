@@ -21,7 +21,8 @@ export default function Header() {
     realtimeConnected,
     offlineQueue,
     processOfflineSyncQueue,
-    activePeriod
+    activePeriod,
+    canAccess
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -219,26 +220,32 @@ export default function Header() {
         </button>
 
         {/* Quick F1 / F2 Switcher Group */}
-        <div className="header-scan-switcher">
-          <button
-            className={`header-scan-btn ${activeTab === 'scan-in' ? 'active' : ''}`}
-            onClick={() => setActiveTab('scan-in')}
-            title="Receive Scan-In (Shortcut: F1)"
-          >
-            <Barcode size={13} />
-            <span className="scan-text-full">Scan-In (F1)</span>
-            <span className="scan-text-short">In (F1)</span>
-          </button>
-          <button
-            className={`header-scan-btn ${activeTab === 'scan-out' ? 'active' : ''}`}
-            onClick={() => setActiveTab('scan-out')}
-            title="Pack Scan-Out (Shortcut: F2)"
-          >
-            <PackageCheck size={13} />
-            <span className="scan-text-full">Scan-Out (F2)</span>
-            <span className="scan-text-short">Out (F2)</span>
-          </button>
-        </div>
+        {(canAccess('scan-in') || canAccess('scan-out')) && (
+          <div className="header-scan-switcher">
+            {canAccess('scan-in') && (
+              <button
+                className={`header-scan-btn ${activeTab === 'scan-in' ? 'active' : ''}`}
+                onClick={() => setActiveTab('scan-in')}
+                title="Receive Scan-In (Shortcut: F1)"
+              >
+                <Barcode size={13} />
+                <span className="scan-text-full">Scan-In (F1)</span>
+                <span className="scan-text-short">In (F1)</span>
+              </button>
+            )}
+            {canAccess('scan-out') && (
+              <button
+                className={`header-scan-btn ${activeTab === 'scan-out' ? 'active' : ''}`}
+                onClick={() => setActiveTab('scan-out')}
+                title="Pack Scan-Out (Shortcut: F2)"
+              >
+                <PackageCheck size={13} />
+                <span className="scan-text-full">Scan-Out (F2)</span>
+                <span className="scan-text-short">Out (F2)</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

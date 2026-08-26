@@ -39,8 +39,7 @@ export default function AllocationMatrix() {
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    activePeriod,
-    clearAllData
+    activePeriod
   } = useApp();
 
   // Auto-sync / generate initial allocations from forecastItems if allocations array is empty

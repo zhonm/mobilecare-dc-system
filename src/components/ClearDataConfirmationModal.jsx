@@ -22,7 +22,6 @@ export default function ClearDataConfirmationModal({
   const {
     forecastItems,
     allocations,
-    sites,
     activePeriod,
     currentUser,
     clearAllData,

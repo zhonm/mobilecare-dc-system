@@ -7,8 +7,7 @@ import {
   calculateOptionBAllocation,
   calculate2DCumulativeAllocation,
   calculateWeeklySplit,
-  getOrderRemark,
-  calculateAllocationTotalsAndRemarks
+  getOrderRemark
 } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber } from './partResolver.js';
@@ -1469,6 +1468,15 @@ export function processRawUsageSheet(
   const validMonthIndices = rawRepairRows.filter(r => r.monthIndex >= 0).map(r => r.monthIndex);
   let maxMonthIdx = validMonthIndices.length > 0 ? Math.max(...validMonthIndices) : 7;
   let targetMonthIdx = Math.min(11, maxMonthIdx + 1);
+
+  if (validMonthIndices.length === 0 && fileName) {
+    const fnLower = fileName.toLowerCase();
+    const fnMonthIdx = MONTH_NAMES.findIndex(m => fnLower.includes(m.toLowerCase()));
+    if (fnMonthIdx >= 0) {
+      targetMonthIdx = fnMonthIdx;
+      maxMonthIdx = Math.max(0, fnMonthIdx - 1);
+    }
+  }
 
   if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
     const parsedM = parseInt(selectedMonth, 10);
@@ -3397,7 +3405,32 @@ export async function parseStockTransfersReportFile(file) {
       }
 
       const qty = Number(row[qtyCol]) || 1;
-      const val = Number(row[valCol]) || 0;
+      let val = 0;
+      if (valCol >= 0 && row[valCol] !== undefined && row[valCol] !== null && row[valCol] !== '') {
+        const cleanVal = String(row[valCol]).replace(/[^0-9.-]/g, '');
+        val = parseFloat(cleanVal) || 0;
+      }
+      if (!val || val <= 0) {
+        const desc = (nameVal || '').toLowerCase();
+        const isDisplay = desc.includes('display') || desc.includes('screen');
+        const isBattery = desc.includes('battery');
+        const isCamera = desc.includes('camera');
+        const isBackGlass = desc.includes('back glass') || desc.includes('rear system') || desc.includes('mid');
+        const resolved = resolvePartInfo(codeVal);
+        if (resolved && Number(resolved.stocking_price) > 0) {
+          val = Number(resolved.stocking_price) * qty;
+        } else if (isDisplay) {
+          val = 279 * qty;
+        } else if (isBattery) {
+          val = 99 * qty;
+        } else if (isCamera) {
+          val = 149 * qty;
+        } else if (isBackGlass) {
+          val = 129 * qty;
+        } else {
+          val = 89 * qty;
+        }
+      }
 
       if (fromVal) fromSet.add(fromVal);
       if (toVal) toSet.add(toVal);
