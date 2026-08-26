@@ -47,7 +47,8 @@ export default function Dashboard() {
     isAutoRefreshing,
     lastSyncedAt,
     autoRefreshData,
-    selectedCategory
+    selectedCategory,
+    activePackDraft
   } = useApp();
 
   const [tableSearch, setTableSearch] = useState('');
@@ -71,20 +72,46 @@ export default function Dashboard() {
   const filteredPartNumbers = useMemo(() => new Set(filteredParts.map(p => p.part_number?.trim().toUpperCase())), [filteredParts]);
   const filteredPartIds = useMemo(() => new Set(filteredParts.map(p => p.id)), [filteredParts]);
 
+  // Serials that are currently in an active packing list draft or saved/dispatched shipments
+  const packedSerialsSet = useMemo(() => {
+    const set = new Set();
+    if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+      activePackDraft.items.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        if (s) set.add(s);
+      });
+    }
+    (shipments || []).forEach(sh => {
+      if (sh.items && Array.isArray(sh.items)) {
+        sh.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          if (s) set.add(s);
+        });
+      }
+    });
+    return set;
+  }, [activePackDraft, shipments]);
+
   // Active in-stock units
   const availableInStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
+      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
       const isStock = u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
       if (!isStock) return false;
       if (isUnfiltered) return true;
       const cleanPN = String(u.part_number || '').trim().toUpperCase();
       return filteredPartNumbers.has(cleanPN) || filteredPartIds.has(u.part_id);
     });
-  }, [inventoryUnits, isUnfiltered, filteredPartNumbers, filteredPartIds]);
+  }, [inventoryUnits, packedSerialsSet, isUnfiltered, filteredPartNumbers, filteredPartIds]);
 
   const packedUnits = useMemo(() => {
-    return (inventoryUnits || []).filter(u => u.status === 'packed' || u.status === 'allocated');
-  }, [inventoryUnits]);
+    return (inventoryUnits || []).filter(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      return u.status === 'packed' || u.status === 'shipped' || u.status === 'allocated' || (cleanSerial && packedSerialsSet.has(cleanSerial));
+    });
+  }, [inventoryUnits, packedSerialsSet]);
 
   // Total forecast
   const totalForecast = useMemo(() => {

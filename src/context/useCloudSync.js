@@ -3,6 +3,7 @@ import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits } from '../utils/partResolver';
+import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { reconcileUnitsWithPackedDrafts } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
@@ -799,17 +800,54 @@ export function useCloudSync({
           deletedSerialsSet = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
         }
 
+        // Extract all saved units from all intake registry snapshots and saved batches in cloud database
+        const allSavedIntakeUnits = [];
+        (dbSavedRecords || []).forEach(r => {
+          if (r.id === 'live_master_dc_inventory' || r.id === 'master_dc_intakes_registry' || r.record_type === 'intake_batch' || r.record_type === 'inventory_master' || r.record_type === 'intake_registry') {
+            if (Array.isArray(r.snapshot_data?.units)) {
+              allSavedIntakeUnits.push(...r.snapshot_data.units);
+            }
+            if (Array.isArray(r.snapshot_data?.records)) {
+              r.snapshot_data.records.forEach(rec => {
+                if (Array.isArray(rec.items)) allSavedIntakeUnits.push(...rec.items);
+              });
+            }
+          }
+        });
+        (dbIntakes || []).forEach(r => {
+          if (Array.isArray(r.items)) allSavedIntakeUnits.push(...r.items);
+        });
+
         const liveMasterPoolDoc = dbSavedRecords?.find(r => r.id === 'live_master_dc_inventory');
         const poolUnits = (liveMasterPoolDoc?.snapshot_data?.units && Array.isArray(liveMasterPoolDoc.snapshot_data.units))
           ? liveMasterPoolDoc.snapshot_data.units
           : [];
 
-        // Self-heal local deletion set for active cloud units
-        if (poolUnits.length > 0 && deletedSerialsSet.size > 0) {
+        // Self-heal local deletion set: if serials exist in active database records (dbUnits, intake records, saved batches, or pool), they are active in stock!
+        const activeCloudSerials = new Set();
+        (dbUnits || []).filter(u => !u.is_deleted).forEach(u => {
+          const s = String(u.serial_number || '').trim().toUpperCase();
+          if (s) activeCloudSerials.add(s);
+        });
+        (effectiveIntakeRecords || []).forEach(r => {
+          (r.items || []).forEach(it => {
+            const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+            if (s) activeCloudSerials.add(s);
+          });
+        });
+        allSavedIntakeUnits.forEach(u => {
+          const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
+          if (s) activeCloudSerials.add(s);
+        });
+        poolUnits.forEach(u => {
+          const s = String(u.serial_number || '').trim().toUpperCase();
+          if (s) activeCloudSerials.add(s);
+        });
+
+        if (activeCloudSerials.size > 0 && deletedSerialsSet.size > 0) {
           let modifiedDeletedSerials = false;
-          poolUnits.forEach(u => {
-            const s = String(u.serial_number || '').trim().toUpperCase();
-            if (s && deletedSerialsSet.has(s)) {
+          activeCloudSerials.forEach(s => {
+            if (deletedSerialsSet.has(s)) {
               deletedSerialsSet.delete(s);
               modifiedDeletedSerials = true;
             }
@@ -829,6 +867,34 @@ export function useCloudSync({
             if (s && !deletedSerialsSet.has(s)) map.set(s, u);
           });
 
+          try {
+            const localSavedUnits = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+            if (Array.isArray(localSavedUnits)) {
+              localSavedUnits.forEach(u => {
+                const s = String(u.serial_number || '').toUpperCase();
+                if (s && !deletedSerialsSet.has(s) && !map.has(s)) {
+                  map.set(s, u);
+                }
+              });
+            }
+          } catch (e) {}
+
+          allSavedIntakeUnits.forEach(u => {
+            const s = String(u.serial_number || u.serialNumber || '').toUpperCase();
+            if (s && !deletedSerialsSet.has(s)) {
+              const existing = map.get(s);
+              const cloudAssign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : u.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
+              const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+              map.set(s, {
+                ...(existing || {}),
+                ...u,
+                serial_number: s,
+                intake_assignment: assign,
+                notes: assign
+              });
+            }
+          });
+
           poolUnits.forEach(u => {
             const s = String(u.serial_number || '').toUpperCase();
             if (s && !deletedSerialsSet.has(s)) {
@@ -839,6 +905,18 @@ export function useCloudSync({
             }
           });
 
+          const allAvailableParts = [
+            ...(dbParts || []),
+            ...(parts || []),
+            ...(defaultPartsCatalog || [])
+          ];
+          const partsByIdMap = new Map();
+          const partsByPnMap = new Map();
+          allAvailableParts.forEach(p => {
+            if (p.id && !partsByIdMap.has(p.id)) partsByIdMap.set(p.id, p);
+            if (p.part_number && !partsByPnMap.has(p.part_number.toUpperCase())) partsByPnMap.set(p.part_number.toUpperCase(), p);
+          });
+
           effectiveIntakeRecords.forEach(rec => {
             if (Array.isArray(rec.items)) {
               rec.items.forEach(it => {
@@ -847,11 +925,26 @@ export function useCloudSync({
                   const existing = map.get(cleanSerial);
                   const cloudAssign = it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : it.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                   const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+
+                  const partObj = (it.part_id ? partsByIdMap.get(it.part_id) : null) ||
+                    (it.part_number && it.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(it.part_number.toUpperCase()) : null) ||
+                    (existing?.part_id ? partsByIdMap.get(existing.part_id) : null) ||
+                    (existing?.part_number && existing.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(existing.part_number.toUpperCase()) : null);
+
+                  const resolvedPn = (it.part_number && it.part_number.toUpperCase() !== 'PART')
+                    ? it.part_number
+                    : (partObj?.part_number || (existing?.part_number && existing.part_number.toUpperCase() !== 'PART' ? existing.part_number : null));
+                  const resolvedDesc = (it.description && it.description !== 'Service Replacement Part')
+                    ? it.description
+                    : (partObj?.description || (existing?.description && existing.description !== 'Service Replacement Part' ? existing.description : 'Apple Genuine Service Part'));
+
                   map.set(cleanSerial, {
                     id: it.id || existing?.id || `unit-${cleanSerial}`,
-                    part_id: it.part_id || existing?.part_id || `part-${it.part_number}`,
-                    part_number: it.part_number || existing?.part_number,
-                    description: it.description || existing?.description || 'Service Replacement Part',
+                    part_id: partObj?.id || it.part_id || existing?.part_id,
+                    part_number: resolvedPn,
+                    description: resolvedDesc,
+                    category_id: partObj?.category_id || it.category_id || existing?.category_id,
+                    stocking_price: partObj?.stocking_price || it.stocking_price || existing?.stocking_price || 99,
                     serial_number: it.serial_number || cleanSerial,
                     intake_assignment: assign,
                     notes: assign,
@@ -877,11 +970,26 @@ export function useCloudSync({
                 const existing = map.get(cleanSerial);
                 const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                 const assign = cloudAssign || existing?.intake_assignment || (existing?.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+
+                const partObj = (dbU.part_id ? partsByIdMap.get(dbU.part_id) : null) ||
+                  (dbU.part_number && dbU.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(dbU.part_number.toUpperCase()) : null) ||
+                  (existing?.part_id ? partsByIdMap.get(existing.part_id) : null) ||
+                  (existing?.part_number && existing.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(existing.part_number.toUpperCase()) : null);
+
+                const rawPn = (dbU.part_number && dbU.part_number.toUpperCase() !== 'PART')
+                  ? dbU.part_number
+                  : (dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') && /66[0-9]-/i.test(dbU.notes) ? dbU.notes : null);
+
+                const resolvedPn = partObj?.part_number || rawPn || (existing?.part_number && existing.part_number.toUpperCase() !== 'PART' ? existing.part_number : null);
+                const resolvedDesc = partObj?.description || dbU.description || (existing?.description && existing.description !== 'Service Replacement Part' ? existing.description : 'Apple Genuine Service Part');
+
                 map.set(cleanSerial, {
                   id: dbU.id || existing?.id || `unit-${cleanSerial}`,
-                  part_id: dbU.part_id || existing?.part_id,
-                  part_number: dbU.part_number || (dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? dbU.notes : existing?.part_number) || 'PART',
-                  description: dbU.description || existing?.description || 'Service Replacement Part',
+                  part_id: partObj?.id || dbU.part_id || existing?.part_id,
+                  part_number: resolvedPn,
+                  description: resolvedDesc,
+                  category_id: partObj?.category_id || dbU.category_id || existing?.category_id,
+                  stocking_price: partObj?.stocking_price || dbU.stocking_price || existing?.stocking_price || 99,
                   serial_number: dbU.serial_number || cleanSerial,
                   intake_assignment: assign,
                   notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
@@ -907,7 +1015,7 @@ export function useCloudSync({
           });
 
           const mergedRaw = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-          const normalized = normalizeInventoryUnits(mergedRaw, parts);
+          const normalized = normalizeInventoryUnits(mergedRaw, allAvailableParts);
           const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft);
           try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
           dbStorage.setItem('mdc_inventory', merged);
@@ -939,8 +1047,8 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'save_in_progress' };
     }
 
-    // Runaway protection: enforce at least 1200ms throttle unless explicit user manual button click or forced
-    if (!isManual && !force && now - lastRefreshTimeRef.current < 1200) {
+    // Runaway protection: enforce at least 6000ms throttle unless explicit user manual button click or forced
+    if (!isManual && !force && now - lastRefreshTimeRef.current < 6000) {
       return { success: true, throttled: true };
     }
 
@@ -1117,7 +1225,7 @@ export function useCloudSync({
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible' && currentUser) {
         const now = Date.now();
-        if (now - lastRefreshTimeRef.current >= 1500) {
+        if (now - lastRefreshTimeRef.current >= 15000) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
         }
       }
@@ -1145,7 +1253,7 @@ export function useCloudSync({
   // 4. Periodic background safety-net heartbeat revalidation
   useEffect(() => {
     if (!currentUser) return;
-    const intervalMs = realtimeConnected ? 60000 : 15000;
+    const intervalMs = realtimeConnected ? 120000 : 45000;
     const heartbeatInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         processOfflineSyncQueue();

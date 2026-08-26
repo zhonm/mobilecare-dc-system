@@ -9,7 +9,7 @@ export function useIntakeRecords({
   showToast,
   broadcastCloudEvent,
   logDeletionAudit,
-  setInventoryUnits,
+  _setInventoryUnits,
   unmarkDeletedSerials,
   enqueueOfflineAction,
   setCloudSyncStatus
@@ -264,25 +264,7 @@ export function useIntakeRecords({
       return { success: false, error: `Permission Denied: Only ${creatorName} can delete this record.` };
     }
 
-    const serialsInBatch = (target?.items || []).map(it => String(it.serial_number || '').trim().toUpperCase()).filter(Boolean);
-
-    if (serialsInBatch.length > 0) {
-      try {
-        const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-        const updatedDeleted = Array.from(new Set([...localDeleted, ...serialsInBatch]));
-        localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
-      } catch (e) {}
-
-      if (setInventoryUnits) {
-        setInventoryUnits(prev => {
-          const filtered = (prev || []).filter(u => !serialsInBatch.includes(String(u.serial_number || '').toUpperCase()));
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(filtered)); } catch (e) {}
-          dbStorage.setItem('mdc_inventory', filtered);
-          return filtered;
-        });
-      }
-    }
-
+    // 1. Register intake ID in deleted registry and remove from batch records
     await registerDeletedIntakeId(recordId);
 
     let currentRecords = dcIntakeRecords;
@@ -318,11 +300,6 @@ export function useIntakeRecords({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        if (serialsInBatch.length > 0) {
-          try { await supabase.from('inventory_units').update({ is_deleted: true }).in('serial_number', serialsInBatch); } catch (e) {}
-          try { await supabase.from('inventory_units').delete().in('serial_number', serialsInBatch); } catch (e) {}
-        }
-
         try {
           const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
           if (delErr) {
@@ -357,7 +334,7 @@ export function useIntakeRecords({
       if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_DELETED', { recordId });
     }
 
-    showToast(`Deleted Intake Record "${target?.record_name || recordId}"`, 'info');
+    showToast(`Deleted Batch Record "${target?.record_name || recordId}". In-stock parts remain available in DC inventory.`, 'info');
     return { success: true };
   };
 

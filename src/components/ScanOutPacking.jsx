@@ -34,6 +34,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
+import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function ScanOutPacking() {
   const {
@@ -118,7 +119,7 @@ export default function ScanOutPacking() {
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Zhon Manaois',
+      verified_by_name: 'Anjo Alcazar',
       receiving_signature: serviceSites[0]?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -166,7 +167,7 @@ export default function ScanOutPacking() {
         total_boxes: 1,
         status: 'draft',
         prepared_by_name: currentUser?.fullName || '',
-        verified_by_name: 'Zhon Manaois',
+        verified_by_name: 'Anjo Alcazar',
         receiving_signature: selectedSite?.code || 'ASP NPM',
         remarks: 'KGB PARTS',
         items: []
@@ -632,7 +633,7 @@ export default function ScanOutPacking() {
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Zhon Manaois',
+      verified_by_name: 'Anjo Alcazar',
       receiving_signature: selectedSite?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -698,7 +699,7 @@ export default function ScanOutPacking() {
         total_boxes: 1,
         status: 'draft',
         prepared_by_name: currentUser?.fullName || '',
-        verified_by_name: 'Zhon Manaois',
+        verified_by_name: 'Anjo Alcazar',
         receiving_signature: selectedSite?.code || 'ASP NPM',
         remarks: 'KGB PARTS',
         items: []
@@ -1009,8 +1010,8 @@ export default function ScanOutPacking() {
               type="text"
               className="form-input"
               style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.verified_by_name ?? 'Zhon Manaois'}
-              placeholder="e.g. Zhon Manaois"
+              value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
+              placeholder="e.g. Anjo Alcazar"
               onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
             />
           </div>
@@ -1543,7 +1544,7 @@ export default function ScanOutPacking() {
           <div className="packing-company-meta">
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
               <img
-                src="/mobilecare_logo.png"
+                src={mobileCareLogo}
                 alt="Mobile Care Logo"
                 style={{
                   width: '56px',
@@ -1830,7 +1831,7 @@ export default function ScanOutPacking() {
                         </td>
                         <td style={{ fontSize: '11.5px', color: '#475569' }}>
                           <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>
-                          <div>Ver: {s.verified_by_name || 'Zhon Manaois'}</div>
+                          <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
                         </td>
                         <td>
                           <span

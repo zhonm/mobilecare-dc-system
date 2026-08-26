@@ -24,10 +24,16 @@ import {
   ShieldCheck,
   Layers,
   Tag,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronRight,
+  AlertTriangle
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
+import { barcodeAudio } from '../utils/barcodeAudio';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 
 export default function ScanInReceiving() {
@@ -43,7 +49,9 @@ export default function ScanInReceiving() {
     cloudSyncStatus,
     showToast,
     commitUnitsToStock,
-    setActiveTab
+    setActiveTab,
+    activePackDraft,
+    shipments
   } = useApp();
 
   const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
@@ -53,6 +61,25 @@ export default function ScanInReceiving() {
   const [isSaveIntakeModalOpen, setIsSaveIntakeModalOpen] = useState(false);
   const [unitToDelete, setUnitToDelete] = useState(null);
   const [showPnDropdown, setShowPnDropdown] = useState(false);
+
+  // Option to hide or show Scanner Simulator & Quick Tools bar
+  const [showSimulator, setShowSimulator] = useState(() => {
+    try {
+      return localStorage.getItem('mdc_show_scanner_simulator') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const toggleShowSimulator = () => {
+    setShowSimulator(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('mdc_show_scanner_simulator', String(next));
+      } catch (e) {}
+      return next;
+    });
+  };
 
   // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR'
   const [intakeAssignment, setIntakeAssignment] = useState(() => {
@@ -191,12 +218,99 @@ export default function ScanInReceiving() {
     }).slice(0, 6);
   }, [partNumberInput, parts]);
 
+  // Fast lookup map for any serial number already present in the system (Session, Inventory, Batch Archives, Shipments)
+  const systemSerialsMap = useMemo(() => {
+    const map = new Map();
+
+    // 1. Current Session Scans (highest priority / most immediate)
+    (sessionScans || []).forEach((u, idx) => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s && !map.has(s)) {
+        map.set(s, {
+          serial_number: s,
+          part_number: u.part_number,
+          description: u.description || 'Genuine Apple Part',
+          assignment: u.intake_assignment || u.notes || 'MDC - Forecasting',
+          received_at: u.received_at || new Date().toISOString(),
+          location: `Current Session (Item #${idx + 1})`
+        });
+      }
+    });
+
+    // 2. DC Inventory Units
+    (inventoryUnits || []).forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s && !map.has(s)) {
+        map.set(s, {
+          serial_number: s,
+          part_number: u.part_number,
+          description: u.description || 'Genuine Apple Part',
+          assignment: u.intake_assignment || u.notes || 'DC Warehouse Stock',
+          received_at: u.received_at || u.created_at,
+          location: u.status === 'packed' || u.status === 'shipped' ? 'Packed in Outbound Shipment' : 'DC Inventory Stock'
+        });
+      }
+    });
+
+    // 3. DC Intake Batch Records (Historical Batches)
+    (dcIntakeRecords || []).forEach(rec => {
+      if (Array.isArray(rec.items)) {
+        rec.items.forEach(u => {
+          const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
+          if (s && !map.has(s)) {
+            map.set(s, {
+              serial_number: s,
+              part_number: u.part_number || u.partNumber,
+              description: u.description || 'Genuine Apple Part',
+              assignment: u.intake_assignment || rec.record_name || 'Historical Intake Batch',
+              received_at: u.received_at || rec.intake_date,
+              location: `Intake Batch "${rec.record_name || rec.id}"`
+            });
+          }
+        });
+      }
+    });
+
+    // 4. Shipments / Packing Lists
+    (shipments || []).forEach(sh => {
+      if (Array.isArray(sh.items)) {
+        sh.items.forEach(u => {
+          const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
+          if (s && !map.has(s)) {
+            map.set(s, {
+              serial_number: s,
+              part_number: u.part_number || u.partNumber,
+              description: u.description || 'Genuine Apple Part',
+              assignment: sh.invoice_ref || 'Outbound Packing List',
+              received_at: sh.shipment_date || sh.created_at,
+              location: `Packing List "${sh.invoice_ref || sh.shipment_number}"`
+            });
+          }
+        });
+      }
+    });
+
+    return map;
+  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments]);
+
+  // Check if current serial input is already scanned / present in the system
+  const duplicateSerialMatch = useMemo(() => {
+    const clean = String(serialInput || '').trim().toUpperCase();
+    if (!clean || clean.length < 4) return null;
+    return systemSerialsMap.get(clean) || null;
+  }, [serialInput, systemSerialsMap]);
+
   // Real-time Serial Number Security Validation
   const serialValidation = useMemo(() => {
     if (!serialInput.trim()) return null;
     const currentPn = matchedPart ? matchedPart.part_number : partNumberInput;
-    return validateAppleSerialNumber(serialInput, currentPn, parts);
-  }, [serialInput, matchedPart, partNumberInput, parts]);
+    const base = validateAppleSerialNumber(serialInput, currentPn, parts);
+    return {
+      ...base,
+      isDuplicate: !!duplicateSerialMatch,
+      duplicateInfo: duplicateSerialMatch
+    };
+  }, [serialInput, matchedPart, partNumberInput, parts, duplicateSerialMatch]);
 
   // Select part from autocomplete dropdown
   const handleSelectSuggestedPart = (p) => {
@@ -230,6 +344,7 @@ export default function ScanInReceiving() {
       let sn = match[2].trim();
       if (/^1?P[0-9]{3}-?[0-9]{4,6}$/i.test(pn)) pn = pn.replace(/^1?P/i, '');
       if (/^1?S[A-Za-z0-9]{8,24}$/i.test(sn) && sn.length > 10) sn = sn.replace(/^1?S/i, '');
+      if (pn.toUpperCase() === 'PART' || pn.toUpperCase() === 'PART-UNKNOWN') return null;
       return { pn, sn };
     }
 
@@ -238,6 +353,7 @@ export default function ScanInReceiving() {
     if (spaceMatch) {
       let pn = spaceMatch[1].trim();
       let sn = spaceMatch[2].trim();
+      if (pn.toUpperCase() === 'PART' || pn.toUpperCase() === 'PART-UNKNOWN') return null;
       return { pn, sn };
     }
 
@@ -253,11 +369,36 @@ export default function ScanInReceiving() {
     const rawPn = (overridePn !== null ? overridePn : partNumberInput).trim();
     const rawSn = (overrideSn !== null ? overrideSn : serialInput).trim();
 
-    if (!rawPn || !rawSn) {
+    if (!rawSn) {
       setScanResult({
         type: 'error',
-        message: 'Please provide both Part Number and Serial Number'
+        message: 'Please scan or enter a Serial Number'
       });
+      serialInputRef.current?.focus();
+      return false;
+    }
+
+    // 1. Immediate Duplicate Detection: Check if serial is already in the system (Session, Inventory, Batches, Shipments)
+    const cleanSN = rawSn.toUpperCase();
+    const dup = systemSerialsMap.get(cleanSN);
+    if (dup) {
+      barcodeAudio.playError();
+      const dupMsg = `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
+      setScanResult({
+        type: 'error',
+        message: dupMsg
+      });
+      showToast(`Duplicate S/N: ${cleanSN} is already scanned in the system!`, 'error');
+      serialInputRef.current?.select();
+      return false;
+    }
+
+    if (!rawPn) {
+      setScanResult({
+        type: 'error',
+        message: `Please scan or select a Part Number for S/N ${rawSn}`
+      });
+      pnInputRef.current?.focus();
       return false;
     }
 
@@ -351,7 +492,7 @@ export default function ScanInReceiving() {
     }
   };
 
-  // Handle Serial change with security verification
+  // Handle Serial change with security verification and real-time duplicate alerting
   const handleSerialChange = (e) => {
     const val = e.target.value;
     setSerialInput(val);
@@ -378,6 +519,18 @@ export default function ScanInReceiving() {
         serialInputRef.current?.focus();
       }
       return;
+    }
+
+    // Immediate Duplicate Alert: If entered value matches an existing serial in the system (even if Part Number is empty!), warn user immediately
+    const cleanSN = cleanSerial.toUpperCase();
+    const dup = systemSerialsMap.get(cleanSN);
+    if (dup) {
+      barcodeAudio.playError();
+      setScanResult({
+        type: 'error',
+        message: `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`
+      });
+      return; // Do NOT auto-receive duplicate serial numbers!
     }
 
     // Security Verification: If entered value is an Apple Part Number, block auto-receive and alert user!
@@ -591,11 +744,36 @@ export default function ScanInReceiving() {
     return true;
   });
 
-  // Filter for currently available IN-STOCK units in DC (normalized to ensure Apple P/N and exclude mislabeled units)
+  // Serials that are currently in an active packing list draft or saved/dispatched shipments
+  const packedSerialsSet = useMemo(() => {
+    const set = new Set();
+    if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+      activePackDraft.items.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        if (s) set.add(s);
+      });
+    }
+    (shipments || []).forEach(sh => {
+      if (sh.items && Array.isArray(sh.items)) {
+        sh.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          if (s) set.add(s);
+        });
+      }
+    });
+    return set;
+  }, [activePackDraft, shipments]);
+
+  // Filter for currently available IN-STOCK units in DC (normalized to ensure Apple P/N and exclude mislabeled/packed units)
   const availableInStockUnits = useMemo(() => {
-    const raw = (inventoryUnits || []).filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc'));
+    const raw = (inventoryUnits || []).filter(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
+      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
+      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+    });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, parts]);
+  }, [inventoryUnits, packedSerialsSet, parts]);
 
   // Normalized session scans
   const normalizedSessionScans = useMemo(() => {
@@ -1076,20 +1254,23 @@ export default function ScanInReceiving() {
             )}
           </div>
 
-          {/* Serial Number Input Column with Security Validation */}
+          {/* Serial Number Input Column with Security Validation & Duplicate Alert */}
           <div style={{ position: 'relative' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <label className="scanner-field-label">2. Serial Number (S/N)</label>
-              {serialValidation && serialValidation.isValid && (
-                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
-                  ✓ Valid S/N
+              {duplicateSerialMatch ? (
+                <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 8px', background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                  <AlertCircle size={11} /> DUPLICATE S/N (ALREADY RECEIVED)
                 </span>
-              )}
-              {serialValidation && serialValidation.isPartNumber && (
+              ) : serialValidation && serialValidation.isPartNumber ? (
                 <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 6px', background: '#dc2626' }}>
                   ⚠️ Part Number Detected
                 </span>
-              )}
+              ) : serialValidation && serialValidation.isValid ? (
+                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
+                  ✓ Valid S/N
+                </span>
+              ) : null}
             </div>
 
             <div style={{ position: 'relative' }}>
@@ -1102,8 +1283,9 @@ export default function ScanInReceiving() {
                 onChange={handleSerialChange}
                 onKeyDown={handleSerialKeyDown}
                 style={{
-                  borderColor: serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
-                  boxShadow: serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined
+                  borderColor: duplicateSerialMatch ? '#ef4444' : serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
+                  boxShadow: duplicateSerialMatch ? '0 0 0 1.5px rgba(239, 68, 68, 0.5)' : serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined,
+                  background: duplicateSerialMatch ? '#241419' : undefined
                 }}
               />
 
@@ -1131,8 +1313,34 @@ export default function ScanInReceiving() {
               )}
             </div>
 
+            {/* Serial Number Duplicate Alert Banner */}
+            {duplicateSerialMatch && (
+              <div style={{
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.45)',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                marginTop: '6px',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '8px',
+                fontSize: '12px',
+                color: '#fca5a5'
+              }}>
+                <AlertTriangle size={16} color="#ef4444" style={{ marginTop: '1px', flexShrink: 0 }} />
+                <div>
+                  <div style={{ color: '#f87171', fontWeight: 700 }}>
+                    Duplicate Serial Detected: "{serialInput.trim()}" has already been received in the system!
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '2px' }}>
+                    <strong>Recorded Unit:</strong> {duplicateSerialMatch.part_number} — {duplicateSerialMatch.description} ({duplicateSerialMatch.assignment}) • <strong>Location:</strong> {duplicateSerialMatch.location}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Serial Number Security Warning Banner */}
-            {serialValidation?.isPartNumber && (
+            {!duplicateSerialMatch && serialValidation?.isPartNumber && (
               <div style={{
                 background: 'rgba(239, 68, 68, 0.15)',
                 border: '1px solid rgba(239, 68, 68, 0.4)',
@@ -1151,7 +1359,7 @@ export default function ScanInReceiving() {
             )}
 
             {/* Serial Number Verified Banner */}
-            {serialValidation?.isValid && (
+            {!duplicateSerialMatch && serialValidation?.isValid && (
               <div style={{
                 background: 'rgba(16, 185, 129, 0.12)',
                 border: '1px solid rgba(16, 185, 129, 0.35)',
@@ -1208,37 +1416,119 @@ export default function ScanInReceiving() {
         )}
       </div>
 
-      {/* Simulator Tools for Rapid Paired Testing */}
-      <div className="card" style={{ marginBottom: '24px', background: '#f8fafc' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Zap size={16} color="var(--primary)" />
-            <strong style={{ fontSize: '13px' }}>Scanner Simulator & Quick Tools</strong>
-          </div>
-          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Click any sample part to simulate hardware scan into <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#d97706' : '#0284c7' }}>{intakeAssignment}</strong></span>
-        </div>
-
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-          {testSampleParts.map((sample, idx) => (
-            <button
-              key={idx}
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleSimulateScan(sample.pn, sample.prefix, sample.suffix)}
+      {/* Simulator Tools for Rapid Paired Testing (Collapsible / Hideable) */}
+      <div
+        className="card"
+        style={{
+          marginBottom: '20px',
+          background: showSimulator ? '#f8fafc' : '#ffffff',
+          border: '1px solid var(--border-light)',
+          padding: showSimulator ? '16px 20px' : '10px 16px',
+          transition: 'all 0.2s ease'
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+            userSelect: 'none'
+          }}
+          onClick={toggleShowSimulator}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              width: '24px',
+              height: '24px',
+              borderRadius: '6px',
+              background: showSimulator ? '#e0f2fe' : '#f1f5f9',
+              color: showSimulator ? 'var(--primary)' : '#64748b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <Zap size={14} />
+            </div>
+            <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>Scanner Simulator & Quick Tools</strong>
+            <span
+              className="badge"
               style={{
-                background: '#fff',
+                fontSize: '11px',
+                background: showSimulator ? '#e0f2fe' : '#f1f5f9',
+                color: showSimulator ? '#0369a1' : '#64748b',
+                padding: '2px 8px'
+              }}
+            >
+              {showSimulator ? 'Visible' : 'Hidden'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {showSimulator && (
+              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                Click any sample part to simulate hardware scan into <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#d97706' : '#0284c7' }}>{intakeAssignment}</strong>
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{
                 fontSize: '12px',
+                color: 'var(--text-muted)',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: '6px 12px'
+                gap: '4px',
+                padding: '3px 8px'
               }}
-              title={`Simulate scanning ${sample.pn} (${sample.desc}) into ${intakeAssignment}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleShowSimulator();
+              }}
+              title={showSimulator ? "Hide Simulator Bar" : "Show Simulator Bar"}
             >
-              <Barcode size={13} color="var(--primary)" />
-              <span><strong>{sample.pn}</strong> — {sample.desc}</span>
+              {showSimulator ? (
+                <>
+                  <EyeOff size={13} />
+                  <span>Hide Simulator</span>
+                  <ChevronDown size={14} />
+                </>
+              ) : (
+                <>
+                  <Eye size={13} />
+                  <span>Show Simulator Tools</span>
+                  <ChevronRight size={14} />
+                </>
+              )}
             </button>
-          ))}
+          </div>
         </div>
+
+        {showSimulator && (
+          <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {testSampleParts.map((sample, idx) => (
+                <button
+                  key={idx}
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleSimulateScan(sample.pn, sample.prefix, sample.suffix)}
+                  style={{
+                    background: '#fff',
+                    fontSize: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px'
+                  }}
+                  title={`Simulate scanning ${sample.pn} (${sample.desc}) into ${intakeAssignment}`}
+                >
+                  <Barcode size={13} color="var(--primary)" />
+                  <span><strong>{sample.pn}</strong> — {sample.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Scanned DC Inventory Units Table */}
@@ -1376,7 +1666,7 @@ export default function ScanInReceiving() {
             ) : activeTableView === 'ALL_DC_STOCK' ? (
               <span>No parts currently in DC inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
             ) : (
-              <span>No units in recent session view. Switch to "All DC Stock ({inventoryUnits.length})" above to see all inventory.</span>
+              <span>No units in recent session view. Switch to "All DC Stock ({availableInStockUnits.length})" above to see all inventory.</span>
             )}
           </div>
         ) : (

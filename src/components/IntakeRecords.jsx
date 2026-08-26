@@ -45,7 +45,9 @@ export default function IntakeRecords() {
     showToast,
     processOfflineSyncQueue,
     currentUser,
-    canUserDeleteRecord
+    canUserDeleteRecord,
+    activePackDraft,
+    shipments
   } = useApp();
 
   // Active View Tab: 'stock_by_date' | 'batch_records'
@@ -97,9 +99,42 @@ export default function IntakeRecords() {
     return map;
   }, [parts]);
 
+  // Serials that are currently in an active packing list draft or saved/dispatched shipments
+  const packedSerialsSet = useMemo(() => {
+    const set = new Set();
+    // 1. Serials in active packing draft
+    if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+      activePackDraft.items.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        if (s) set.add(s);
+      });
+    }
+    // 2. Serials in finalized/saved shipments & packing lists
+    (shipments || []).forEach(sh => {
+      if (sh.items && Array.isArray(sh.items)) {
+        sh.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          if (s) set.add(s);
+        });
+      }
+    });
+    return set;
+  }, [activePackDraft, shipments]);
+
   // Enriched in-stock units with category, pricing, assignment, and normalized receipt date
+  // Filters ONLY for live, available in-stock parts currently in DC warehouse (excluding packed/shipped/dispatched parts)
   const enrichedStockUnits = useMemo(() => {
-    const normalizedUnits = normalizeInventoryUnits(inventoryUnits || [], parts || []);
+    const rawInStock = (inventoryUnits || []).filter(u => {
+      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      // Exclude items in active packing draft or shipments
+      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
+      // Exclude items marked with status packed, shipped, dispatched, or allocated
+      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
+      // Must be in_stock in DC warehouse
+      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+    });
+
+    const normalizedUnits = normalizeInventoryUnits(rawInStock, parts || []);
     return normalizedUnits.map((u, idx) => {
       const pn = (u.part_number || '').toUpperCase();
       const desc = u.description || 'Apple Genuine Service Part';
@@ -152,7 +187,7 @@ export default function IntakeRecords() {
         received_at: u.received_at || new Date().toISOString()
       };
     });
-  }, [inventoryUnits, partPriceMap, todayDateStr, parts]);
+  }, [inventoryUnits, packedSerialsSet, partPriceMap, todayDateStr, parts]);
 
   // Overall metric calculations
   const totalStockUnitsCount = enrichedStockUnits.length;
@@ -849,20 +884,60 @@ export default function IntakeRecords() {
           <div>
             {stockByDateGroups.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
-                <Boxes size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
-                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Stock Parts Found</h4>
-                <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
-                  {searchQuery || categoryFilter !== 'ALL' || dateFilter !== 'ALL' || assignmentFilter !== 'ALL'
-                    ? 'No stock parts match your active filters. Try clearing your search or filters.'
-                    : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In (F1) to receive inventory.'}
-                </p>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => setActiveTab('scan-in')}
-                >
-                  <Barcode size={14} />
-                  <span>Go to Receive Scan-In (F1)</span>
-                </button>
+                {packedSerialsSet.size > 0 && totalStockUnitsCount === 0 && !searchQuery && categoryFilter === 'ALL' && dateFilter === 'ALL' && assignmentFilter === 'ALL' ? (
+                  <>
+                    <div style={{ width: '56px', height: '56px', background: '#dcfce7', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', color: '#16a34a' }}>
+                      <CheckCircle2 size={32} />
+                    </div>
+                    <h4 style={{ fontSize: '17px', color: 'var(--text-main)', fontWeight: 700, marginBottom: '6px' }}>All DC Stock Parts Packed & Ready for Dispatch</h4>
+                    <p style={{ fontSize: '13px', maxWidth: '520px', margin: '0 auto 20px auto', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                      All received parts have been packed into Outbound Packing Lists and marked for branch dispatch. Their permanent historical batch records and manifests remain permanently archived in the <strong>DC Intake Batch Records</strong> tab.
+                    </p>
+                    <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setActiveView('batch_records')}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <BookmarkPlus size={15} />
+                        <span>View Saved Batch Records ({totalBatchesCount})</span>
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setActiveTab('scan-out')}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <Package size={15} />
+                        <span>Open Packing Lists (F2)</span>
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setActiveTab('scan-in')}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <Barcode size={15} />
+                        <span>Scan New Stock (F1)</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Boxes size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
+                    <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Stock Parts Found</h4>
+                    <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
+                      {searchQuery || categoryFilter !== 'ALL' || dateFilter !== 'ALL' || assignmentFilter !== 'ALL'
+                        ? 'No stock parts match your active filters. Try clearing your search or filters.'
+                        : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In (F1) to receive inventory.'}
+                    </p>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => setActiveTab('scan-in')}
+                    >
+                      <Barcode size={14} />
+                      <span>Go to Receive Scan-In (F1)</span>
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

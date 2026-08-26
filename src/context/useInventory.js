@@ -288,10 +288,16 @@ export function useInventory({
     let part = resolvePartInfo(rawPN, parts);
     if (!part) {
       const cleanPN = rawPN.toUpperCase();
+      // Block generic dummy placeholders from being treated as part numbers
+      if (cleanPN === 'PART' || cleanPN === 'PART-UNKNOWN' || cleanPN === 'UNKNOWN' || !/^[0-9]{3}-?[0-9]{4,6}$/i.test(cleanPN)) {
+        barcodeAudio.playError();
+        showToast(`Invalid Part Number "${rawPN}". Please scan or enter a valid Apple Part Number (661-xxxxx).`, 'error');
+        return { success: false, error: `Invalid Part Number "${rawPN}". Please scan a valid Apple Part Number (661-xxxxx).` };
+      }
       const newPart = {
         id: `part-${cleanPN}`,
         part_number: cleanPN,
-        description: `Replacement Part (${cleanPN})`,
+        description: `Apple Genuine Part (${cleanPN})`,
         category_id: 'cat-battery',
         iphone_model: 'iPhone Model',
         stocking_price: 100,

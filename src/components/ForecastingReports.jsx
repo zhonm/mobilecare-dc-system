@@ -640,7 +640,7 @@ export default function ForecastingReports() {
               </div>
               <div>
                 <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                  Fixably Forecasting Reports & Analytics
+                  Forecasting Reports & Analytics
                 </h2>
                 <p style={{ fontSize: '12.5px', color: '#64748b', margin: '2px 0 0 0' }}>
                   Enterprise demand forecasting analytics & regression intelligence — powered by Fixably Masterlist raw repair data
