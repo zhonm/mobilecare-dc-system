@@ -44,7 +44,9 @@ export default function AllocationMatrix() {
     showToast,
     activePeriod,
     forecastingModel,
-    changeForecastingModel
+    changeForecastingModel,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   // Dynamic fallback: if allocations state is empty but forecastItems exist, generate immediately
@@ -622,41 +624,45 @@ export default function AllocationMatrix() {
             </button>
 
             {/* Reset All to Calculation Model */}
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                if (window.confirm('Reset all branch allocations and clear overrides back to the active mathematical calculation?')) {
-                  resetAllAllocationsToCalculation && resetAllAllocationsToCalculation();
-                }
-              }}
-              disabled={filteredAllocations.length === 0}
-              title="Reset all branch quotas and clear all manual overrides back to mathematical calculation"
-              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px', color: '#0369a1' }}
-            >
-              <RotateCcw size={13} />
-              <span>Reset to Calculation</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  if (window.confirm('Reset all branch allocations and clear overrides back to the active mathematical calculation?')) {
+                    resetAllAllocationsToCalculation && resetAllAllocationsToCalculation();
+                  }
+                }}
+                disabled={filteredAllocations.length === 0}
+                title="Reset all branch quotas and clear all manual overrides back to mathematical calculation"
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px', color: '#0369a1' }}
+              >
+                <RotateCcw size={13} />
+                <span>Reset to Calculation</span>
+              </button>
+            )}
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowSaveModal(true)}
-              disabled={filteredAllocations.length === 0}
-              title="Save current allocation matrix as a dated historical record"
-              style={{ fontWeight: 600, padding: '6px 14px' }}
-            >
-              <BookmarkPlus size={14} />
-              <span>Save as Record</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowSaveModal(true)}
+                disabled={filteredAllocations.length === 0}
+                title="Save current allocation matrix as a dated historical record"
+                style={{ fontWeight: 600, padding: '6px 14px' }}
+              >
+                <BookmarkPlus size={14} />
+                <span>Save as Record</span>
+              </button>
+            )}
 
             <button
               className="btn btn-secondary btn-sm"
               onClick={handleExport}
               disabled={filteredAllocations.length === 0}
               title="Download formatted Master Allocation Excel Spreadsheet (.xlsx)"
-              style={{ fontWeight: 600, padding: '6px 14px' }}
+              style={{ fontWeight: 700, padding: '6px 14px', color: '#15803d', borderColor: '#86efac' }}
             >
               <Download size={14} />
-              <span>Export Excel (Multi-Sheet)</span>
+              <span>Export Excel (Multi-Sheet XLSX)</span>
             </button>
 
             <button
@@ -664,7 +670,7 @@ export default function AllocationMatrix() {
               onClick={handleDownloadPDF}
               disabled={filteredAllocations.length === 0}
               title="Download landscape corporate PDF of Allocation Matrix"
-              style={{ fontWeight: 600, padding: '6px 14px' }}
+              style={{ fontWeight: 600, padding: '6px 14px', color: '#0284c7', borderColor: '#bae6fd' }}
             >
               <FileText size={14} />
               <span>Download PDF</span>
@@ -681,15 +687,33 @@ export default function AllocationMatrix() {
               <span>Print Matrix</span>
             </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowClearModal(true)}
-              title="Clear all allocation and forecasting records to empty state"
-              style={{ fontWeight: 600, padding: '6px 14px', color: '#b91c1c' }}
-            >
-              <RotateCcw size={14} />
-              <span>Clear Data</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowClearModal(true)}
+                title="Clear all allocation and forecasting records to empty state"
+                style={{ fontWeight: 600, padding: '6px 14px', color: '#b91c1c' }}
+              >
+                <RotateCcw size={14} />
+                <span>Clear Data</span>
+              </button>
+            )}
+
+            {isReadOnly && (
+              <span
+                className="badge"
+                style={{
+                  background: '#f0fdf4',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                  fontSize: '11px',
+                  padding: '4px 8px',
+                  fontWeight: 600
+                }}
+              >
+                View &amp; Export Mode
+              </span>
+            )}
           </div>
         </div>
 

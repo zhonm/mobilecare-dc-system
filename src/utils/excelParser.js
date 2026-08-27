@@ -1,11 +1,8 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
-import canonicalShares from '../data/canonicalShares.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import {
   calculateOptionAAllocation,
-  calculateOptionBAllocation,
-  calculate2DCumulativeAllocation,
   allocatePartToSites,
   calculateWeeklySplit,
   getOrderRemark
@@ -605,27 +602,11 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             };
           });
 
-          function buildCatShares(descList) {
-            return descList.map(desc => {
-              let totalCount = 0;
-              const countsPerSite = activeServiceSites.map(s => {
-                const sCounts = siteCountsPerDesc.get(desc) || {};
-                const count = sCounts[s.name] || 0;
-                totalCount += count;
-                return count;
-              });
-              return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : (1 / activeServiceSites.length));
-            });
-          }
-
-          const dispShares = siteCountsPerDesc.size > 0 ? buildCatShares(CANONICAL_DISPLAY_DESCS) : (canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length)));
-          const battShares = siteCountsPerDesc.size > 0 ? buildCatShares(CANONICAL_BATTERY_SHARE_DESCS) : (canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length)));
-
           const generatedAllocations = [];
           let curRow = 3;
 
           // Displays
-          CANONICAL_DISPLAY_DESCS.forEach((desc, mIdx) => {
+          CANONICAL_DISPLAY_DESCS.forEach((desc) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
               part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
@@ -674,7 +655,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           curRow++; // Row parity for Batteries
 
           // Batteries
-          CANONICAL_BATTERY_DESCS.forEach((desc, mIdx) => {
+          CANONICAL_BATTERY_DESCS.forEach((desc) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
               part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
@@ -798,15 +779,10 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             };
           });
 
-          // Build canonical share baseline
-          const uniformShares = activeServiceSites.map(() => 1 / activeServiceSites.length);
-          const dispShareMatrix = canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => uniformShares);
-          const battShareMatrix = canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => uniformShares);
-
           const generatedAllocations = [];
           let curRow = 3;
 
-          CANONICAL_DISPLAY_DESCS.forEach((desc, mIdx) => {
+          CANONICAL_DISPLAY_DESCS.forEach((desc) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
               part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
@@ -854,7 +830,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
 
           curRow++;
 
-          CANONICAL_BATTERY_DESCS.forEach((desc, mIdx) => {
+          CANONICAL_BATTERY_DESCS.forEach((desc) => {
             const f = parsedForecast.forecastItems.find(item => item.description === desc) || {
               part_id: `part-${desc}`,
               part_number: Object.entries(MASTER_PART_PRICING).find(([, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
@@ -3272,11 +3248,13 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
     const shipmentsMap = new Map();
 
     rawRows.forEach((row, idx) => {
-      const invoiceRef = row['Invoice Ref'] || row['invoice_ref'] || row['Invoice'] || row['Reference'] || `MANUAL-${Date.now()}`;
+      const invoiceRef = row['Invoice Ref'] || row['invoice_ref'] || row['Invoice'] || row['Reference'] || `DCOWNED#-${Date.now()}`;
       const shipmentNum = row['Shipment Number'] || row['shipment_number'] || row['Shipment #'] || `SHIP-${Date.now()}-${idx}`;
       const siteStr = row['Destination Site'] || row['Destination'] || row['Site'] || row['Branch'] || '';
-      const carrier = row['Carrier'] || 'Lite Express';
+      const carrier = row['Courier'] || row['Carrier'] || 'Lite Express';
       const tracking = row['Tracking Number'] || row['Tracking'] || 'N/A';
+      const transferSlip = row['Transfer Slip #'] || row['Transfer Slip'] || row['Transfer Slip Number'] || row['transfer_slip_number'] || '';
+      const pickupBy = row['Pickup By'] || row['pickup_by_name'] || (carrier === 'Utility' ? 'Utility' : '');
       const status = (row['Status'] || 'shipped').toLowerCase();
       const prepBy = row['Prepared By'] || 'Warehouse Staff';
       const verBy = row['Verified By'] || 'Admin Staff';
@@ -3301,7 +3279,10 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
           site_name: destSite?.name,
           shipment_date: shipDate,
           carrier,
+          courier: carrier,
           tracking_number: tracking,
+          transfer_slip_number: transferSlip,
+          pickup_by_name: pickupBy,
           total_boxes: box,
           status,
           prepared_by_name: prepBy,

@@ -13,19 +13,21 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     format: 'a4'
   });
 
+  const totalItemsCount = items?.length || 0;
   const pageWidth = doc.internal.pageSize.getWidth();
-  const totalItemsCount = items.length;
-  const margin = totalItemsCount > 45 ? 8 : totalItemsCount > 25 ? 10 : 12;
+  const isDense = totalItemsCount > 45;
+  const isMedium = totalItemsCount > 25;
+  const margin = isDense ? 9 : isMedium ? 11 : 14;
   const tableWidth = pageWidth - (margin * 2);
 
-  // Title: "Packing List" Centered (Font Size 14)
+  // Title: "Packing List" Centered
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
+  doc.setFontSize(isDense ? 13 : 15);
   doc.setTextColor(0, 0, 0);
-  doc.text('Packing List', pageWidth / 2, totalItemsCount > 45 ? 9 : 11, { align: 'center' });
+  doc.text('Packing List', pageWidth / 2, isDense ? 10 : 13, { align: 'center' });
 
   // Top Left: Mobile Care Logo + Company Info
-  const headerTopY = totalItemsCount > 45 ? 13 : 16;
+  const headerTopY = isDense ? 14 : 18;
   try {
     if (MOBILECARE_LOGO_BASE64) {
       doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', margin, headerTopY - 1, 13, 13);
@@ -34,62 +36,76 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     console.warn('Could not render logo in PDF:', e);
   }
 
-  const compX = margin + 15;
-  doc.setFontSize(totalItemsCount > 45 ? 8.5 : 9.5);
+  const compX = margin + 16;
+  doc.setFontSize(isDense ? 8.5 : 9.5);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, headerTopY + 2);
   
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(totalItemsCount > 45 ? 6.8 : 7.5);
+  doc.setFontSize(isDense ? 6.8 : 7.5);
   doc.setTextColor(51, 65, 85);
-  const lineGap = totalItemsCount > 45 ? 2.8 : 3.4;
+  const lineGap = isDense ? 2.7 : 3.3;
   doc.text('Business and Distribution Center', compX, headerTopY + 2 + lineGap);
   doc.text('2/L Northeast Square, #47', compX, headerTopY + 2 + lineGap * 2);
   doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 2 + lineGap * 3);
   doc.text('San Juan City, Metro Manila', compX, headerTopY + 2 + lineGap * 4);
 
   // Top Right: Invoice / Shipment Metadata Box
-  const rightBoxWidth = 82;
+  const rightBoxWidth = 84;
   const rightColX = pageWidth - margin - rightBoxWidth;
   const rightValX = pageWidth - margin;
 
+  // Calculate Total Declared Value in PHP (part price × 85 PHP)
+  const totalDeclaredValuePHP = items.reduce((sum, it) => {
+    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
+    return sum + (priceUSD * 85);
+  }, 0);
+
+  const boxDisplay = shipment.box_number_label || (shipment.box_number ? `${shipment.box_number}/${shipment.total_boxes || 1}` : `1/${shipment.total_boxes || 1}`);
+
   const metaRows = [
-    { label: 'INVOICE REF:', val: shipment.invoice_ref || `DCMSPIOWNED#20260818N` },
+    { label: 'INVOICE REF:', val: shipment.invoice_ref || `DCOWNED#082726A` },
     { label: 'SHIPMENT DATE:', val: shipment.shipment_date || new Date().toLocaleDateString('en-US') },
-    { label: 'BOX/S #:', val: String(shipment.total_boxes || 1) },
-    { label: 'CARRIER:', val: shipment.carrier || 'Lite Express' },
-    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || '' }
+    { label: 'BOX/S #:', val: boxDisplay },
+    { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
+    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || 'N/A' },
+    ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
   ];
 
-  let metaY = headerTopY + 1.5;
-  const metaGap = totalItemsCount > 45 ? 2.8 : 3.3;
+  let metaY = headerTopY + 1.2;
+  const metaGap = isDense ? 2.8 : 3.4;
   metaRows.forEach(row => {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(totalItemsCount > 45 ? 6.8 : 7.5);
+    doc.setFontSize(isDense ? 6.8 : 7.5);
     doc.setTextColor(15, 23, 42);
     doc.text(row.label, rightColX, metaY);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(totalItemsCount > 45 ? 6.8 : 7.5);
+    doc.setFontSize(isDense ? 6.8 : 7.5);
     doc.setTextColor(15, 23, 42);
     doc.text(String(row.val), rightValX, metaY, { align: 'right' });
     metaY += metaGap;
   });
 
+  // Calculate safe Ship To Y (ensuring zero overlap with company address or right metadata box)
+  const companyBottomY = headerTopY + 2 + lineGap * 4;
+  const metaBottomY = headerTopY + 1.2 + (metaRows.length * metaGap);
+  const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY);
+  const shipToY = maxHeaderBottomY + (isDense ? 3.5 : 5.5);
+
   // Ship To Section
-  const shipToY = headerTopY + (totalItemsCount > 45 ? 15.5 : 18);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(totalItemsCount > 45 ? 7.8 : 8.5);
+  doc.setFontSize(isDense ? 7.8 : 8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text('Ship To', margin, shipToY);
-  doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 14, shipToY);
+  doc.text('Ship To:', margin, shipToY);
+  doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 16, shipToY);
   
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(totalItemsCount > 45 ? 6.8 : 7.5);
+  doc.setFontSize(isDense ? 6.8 : 7.5);
   doc.setTextColor(71, 85, 105);
   const siteAddr = site.address || `${site.name || 'Branch'}, Philippines`;
-  doc.text(siteAddr, margin + 14, shipToY + 3.2, { maxWidth: pageWidth - margin - 20 });
+  doc.text(siteAddr, margin + 16, shipToY + 3.4, { maxWidth: tableWidth - 16 });
 
   // Items Table Sizing (Adaptive to fit 1 to 75 parts on exactly 1 single page)
   let tableFontSize = 8.2;
@@ -105,20 +121,26 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     cellPaddingY = 0.75;
   }
 
-  const tableData = items.map((item, index) => [
-    index + 1,
-    item.part_number || item.partNumber || '',
-    item.description || item.partDescription || '',
-    item.serial_number || item.serialNumber || '',
-    item.box_number || item.boxNumber || 1
-  ]);
+  const tableData = items.map((item, index) => {
+    const itemBoxStr = item.box_number 
+      ? (String(item.box_number).includes('/') ? item.box_number : `${item.box_number}/${shipment.total_boxes || 1}`)
+      : boxDisplay;
 
-  const tableStartY = shipToY + (totalItemsCount > 45 ? 6.5 : 8);
+    return [
+      index + 1,
+      item.part_number || item.partNumber || '',
+      item.description || item.partDescription || '',
+      item.serial_number || item.serialNumber || '',
+      itemBoxStr
+    ];
+  });
 
-  const col0 = 7;
-  const col1 = 26;
-  const col4 = 14;
-  const col3 = totalItemsCount > 45 ? 58 : 56;
+  const tableStartY = shipToY + (isDense ? 7 : 9);
+
+  const col0 = 8;
+  const col1 = 28;
+  const col4 = 16;
+  const col3 = isDense ? 58 : 56;
   const col2 = tableWidth - col0 - col1 - col3 - col4;
 
   autoTable(doc, {
@@ -154,72 +176,95 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : (tableStartY + 30);
 
   // Remarks & Totals Block
-  const totalsY = finalY + (totalItemsCount > 45 ? 2.5 : 4.5);
-  const totalBoxWidth = 64;
+  const totalsY = finalY + (isDense ? 2.5 : 4.5);
+  const totalBoxWidth = 74;
   const totalBoxX = pageWidth - margin - totalBoxWidth;
   const totalValX = pageWidth - margin - 3;
-  const boxRowHeight = totalItemsCount > 45 ? 3.6 : 4.4;
+  const boxRowHeight = isDense ? 3.6 : 4.4;
 
   // Remarks (Left Aligned)
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(totalItemsCount > 45 ? 7.2 : 8);
+  doc.setFontSize(isDense ? 7.2 : 8);
   doc.setTextColor(15, 23, 42);
   doc.text('Remarks', margin, totalsY + 2.2);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(totalItemsCount > 45 ? 7.2 : 8);
-  doc.text(shipment.remarks || 'KGB PARTS', margin, totalsY + (totalItemsCount > 45 ? 5.2 : 6.5));
+  doc.setFontSize(isDense ? 7.2 : 8);
+  doc.text(shipment.remarks || 'KGB PARTS', margin, totalsY + (isDense ? 5.2 : 6.5));
 
   // Totals Box (Right Aligned)
   doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, totalsY, 36, boxRowHeight, 'F');
+  doc.rect(totalBoxX, totalsY, 40, boxRowHeight, 'F');
   doc.setDrawColor(84, 89, 95);
-  doc.rect(totalBoxX + 36, totalsY, totalBoxWidth - 36, boxRowHeight, 'S');
+  doc.rect(totalBoxX + 40, totalsY, totalBoxWidth - 40, boxRowHeight, 'S');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(totalItemsCount > 45 ? 6.5 : 7.5);
-  doc.text('TOTAL QTY', totalBoxX + 18, totalsY + (boxRowHeight * 0.7), { align: 'center' });
+  doc.setFontSize(isDense ? 6.5 : 7.5);
+  doc.text('TOTAL QTY', totalBoxX + 20, totalsY + (boxRowHeight * 0.7), { align: 'center' });
   doc.setTextColor(15, 23, 42);
   doc.text(String(items.length), totalValX, totalsY + (boxRowHeight * 0.7), { align: 'right' });
 
   // Total Boxes Row
   doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, totalsY + boxRowHeight, 36, boxRowHeight, 'F');
-  doc.rect(totalBoxX + 36, totalsY + boxRowHeight, totalBoxWidth - 36, boxRowHeight, 'S');
+  doc.rect(totalBoxX, totalsY + boxRowHeight, 40, boxRowHeight, 'F');
+  doc.rect(totalBoxX + 40, totalsY + boxRowHeight, totalBoxWidth - 40, boxRowHeight, 'S');
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(255, 255, 255);
-  doc.text('TOTAL BOXES', totalBoxX + 18, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'center' });
+  doc.text('TOTAL BOXES', totalBoxX + 20, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'center' });
   doc.setTextColor(15, 23, 42);
   doc.text(String(shipment.total_boxes || 1), totalValX, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'right' });
 
-  // Signatures Section (Clean divider and crisp inline layout)
-  const sigLineY = totalsY + (boxRowHeight * 2) + (totalItemsCount > 45 ? 3 : 5);
+  // Total Declared Value Row (PHP = part price × 85)
+  doc.setFillColor(84, 89, 95);
+  doc.rect(totalBoxX, totalsY + boxRowHeight * 2, 40, boxRowHeight, 'F');
+  doc.rect(totalBoxX + 40, totalsY + boxRowHeight * 2, totalBoxWidth - 40, boxRowHeight, 'S');
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(isDense ? 5.8 : 6.8);
+  doc.text('DECLARED VALUE', totalBoxX + 20, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'center' });
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(isDense ? 6.2 : 7.2);
+  doc.text(`PHP ${totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalValX, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'right' });
+
+  // Signatures Section (Clean divider and crisp 2-column layout with generous label spacing)
+  const sigLineY = totalsY + (boxRowHeight * 3) + (isDense ? 3.5 : 5.5);
 
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.3);
   doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
 
-  const sigRow1Y = sigLineY + (totalItemsCount > 45 ? 3.5 : 4.5);
-  doc.setFontSize(totalItemsCount > 45 ? 6.5 : 7.5);
+  const sigRow1Y = sigLineY + (isDense ? 4 : 5.5);
+  const sigRow2Y = sigRow1Y + (isDense ? 4 : 5.5);
+  doc.setFontSize(isDense ? 6.8 : 7.8);
   doc.setTextColor(15, 23, 42);
 
-  // Prepared by
+  const colRightX = margin + 92;
+
+  // Row 1 - Left: Prepared and Counted by
   doc.setFont('helvetica', 'bold');
   doc.text('Prepared and Counted by:', margin, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 35, sigRow1Y);
+  doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 42, sigRow1Y);
 
-  // Verified by
+  // Row 1 - Right: Verified by
   doc.setFont('helvetica', 'bold');
-  doc.text('Verified by:', margin + 85, sigRow1Y);
+  doc.text('Verified by:', colRightX, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.verified_by_name || 'Anjo Alcazar', margin + 102, sigRow1Y);
+  doc.text(shipment.verified_by_name || 'Anjo Alcazar', colRightX + 20, sigRow1Y);
 
-  // Receiving Branch Signature
-  const sigRow2Y = sigRow1Y + (totalItemsCount > 45 ? 3.5 : 4.5);
+  // Row 2 - Left: Receiving Branch Signature
   doc.setFont('helvetica', 'bold');
   doc.text('Receiving Branch Signature:', margin, sigRow2Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 35, sigRow2Y);
+  doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 42, sigRow2Y);
+
+  // Row 2 - Right: Pickup By (Always aligned on the right under Verified By)
+  const pickupByName = shipment.pickup_by_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+  if (pickupByName) {
+    doc.setFont('helvetica', 'bold');
+    doc.text('Pickup By:', colRightX, sigRow2Y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(pickupByName, colRightX + 20, sigRow2Y);
+  }
 
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
@@ -275,15 +320,30 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
     logoSize = '44px';
   }
 
-  const tableRowsHtml = items.map((it, idx) => `
+  const totalDeclaredValuePHP = items.reduce((sum, it) => {
+    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
+    return sum + (priceUSD * 85);
+  }, 0);
+
+  const boxDisplay = shipment.box_number_label || (shipment.box_number ? `${shipment.box_number}/${shipment.total_boxes || 1}` : `1/${shipment.total_boxes || 1}`);
+
+  const tableRowsHtml = items.map((it, idx) => {
+    const itemBoxStr = it.box_number 
+      ? (String(it.box_number).includes('/') ? it.box_number : `${it.box_number}/${shipment.total_boxes || 1}`)
+      : boxDisplay;
+
+    return `
     <tr style="${idx % 2 === 1 ? 'background-color: #fbfcfd;' : ''}">
       <td style="text-align: center; color: #64748b; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${idx + 1}</td>
       <td style="text-align: center; font-weight: 700; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${it.part_number || it.partNumber || ''}</td>
       <td style="text-align: left; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${it.description || it.partDescription || ''}</td>
       <td style="text-align: center; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 400; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${it.serial_number || it.serialNumber || ''}</td>
-      <td style="text-align: center; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${it.box_number || it.boxNumber || 1}</td>
+      <td style="text-align: center; padding: ${tablePadding}; border: 1px solid #cbd5e1; font-size: ${tableFontSize}; line-height: 1.15;">${itemBoxStr}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+
+  const pickupByName = shipment.pickup_by_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
 
   const html = `
     <!DOCTYPE html>
@@ -296,23 +356,23 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
         html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; }
         body { padding: 4px 6px; font-size: ${bodyFontSize}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .header-title { text-align: center; font-size: 14pt; font-weight: 800; margin: 0 0 5px 0; letter-spacing: -0.01em; color: #000000; }
-        .top-grid { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: ${topGridMargin}; gap: 12px; }
+        .top-grid { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: ${topGridMargin || '12px'}; gap: 16px; }
         .company-title { font-size: 11.5px; font-weight: 800; color: #0f172a; }
         .meta-table { border-collapse: collapse; font-size: ${metaFontSize}; }
-        .meta-table td { padding: 1px 3px; }
+        .meta-table td { padding: 1.5px 3px; }
         .meta-label { font-weight: 700; color: #0f172a; }
-        .meta-val { font-weight: 700; text-align: right; color: #0f172a; padding-left: 12px; }
-        .shipto-box { margin-bottom: 5px; font-size: ${metaFontSize}; }
-        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; border: 1px solid #334155; }
+        .meta-val { font-weight: 700; text-align: right; color: #0f172a; padding-left: 14px; }
+        .shipto-box { margin-top: 10px; margin-bottom: 8px; font-size: ${metaFontSize}; }
+        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 1px solid #334155; }
         .data-table th { background-color: #54595F !important; color: #ffffff !important; padding: ${headerPadding}; font-size: ${headerFontSize}; text-align: center; border: 1px solid #cbd5e1; font-weight: 700; }
         .data-table td { border: 1px solid #cbd5e1; padding: ${tablePadding}; font-size: ${tableFontSize}; }
         .data-table tr { page-break-inside: avoid; }
-        .totals-wrap { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 3px; margin-bottom: 5px; page-break-inside: avoid; }
-        .totals-table { width: 210px; border-collapse: collapse; border: 1px solid #54595F; }
-        .totals-table td { padding: 2px 6px; font-size: ${metaFontSize}; }
-        .totals-table .label-cell { background-color: #54595F !important; color: #ffffff !important; font-weight: 700; font-size: ${metaFontSize}; width: 55%; text-align: center; }
+        .totals-wrap { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 6px; margin-bottom: 8px; page-break-inside: avoid; }
+        .totals-table { width: 240px; border-collapse: collapse; border: 1px solid #54595F; }
+        .totals-table td { padding: 2.5px 6px; font-size: ${metaFontSize}; }
+        .totals-table .label-cell { background-color: #54595F !important; color: #ffffff !important; font-weight: 700; font-size: ${metaFontSize}; width: 52%; text-align: center; }
         .totals-table .val-cell { text-align: right; font-weight: 800; font-size: ${metaFontSize}; background: #ffffff; border: 1px solid #54595F; }
-        .signatures-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 5px; border-top: 1px solid #cbd5e1; padding-top: 4px; font-size: ${metaFontSize}; page-break-inside: avoid; }
+        .signatures-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px 14px; margin-top: 8px; border-top: 1px solid #cbd5e1; padding-top: 8px; font-size: ${metaFontSize}; page-break-inside: avoid; }
         @media print {
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
@@ -321,33 +381,34 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
     <body>
       <div class="header-title">Packing List</div>
       <div class="top-grid">
-        <div style="display: flex; align-items: flex-start; gap: 10px;">
+        <div style="display: flex; align-items: flex-start; gap: 12px;">
           <img src="${MOBILECARE_LOGO_BASE64}" alt="Mobile Care Logo" style="width: ${logoSize}; height: ${logoSize}; object-fit: contain; flex-shrink: 0;" />
           <div>
             <div class="company-title">MOBILE CARE SERVICES PHILS. INC.</div>
-            <div style="color: #334155; font-size: 9px; margin-top: 1px;">Business and Distribution Center</div>
-            <div style="color: #475569; font-size: 8.5px;">2/L Northeast Square, #47</div>
-            <div style="color: #475569; font-size: 8.5px;">Connecticut St. Northeast Greenhills</div>
-            <div style="color: #475569; font-size: 8.5px;">San Juan City, Metro Manila</div>
+            <div style="color: #334155; font-size: 9px; margin-top: 2px;">Business and Distribution Center</div>
+            <div style="color: #475569; font-size: 8.5px; margin-top: 1px;">2/L Northeast Square, #47</div>
+            <div style="color: #475569; font-size: 8.5px; margin-top: 1px;">Connecticut St. Northeast Greenhills</div>
+            <div style="color: #475569; font-size: 8.5px; margin-top: 1px;">San Juan City, Metro Manila</div>
           </div>
         </div>
         <div>
           <table class="meta-table">
-            <tr><td class="meta-label">INVOICE REF:</td><td class="meta-val">${shipment.invoice_ref || 'DCMSPIOWNED#20260818N'}</td></tr>
+            <tr><td class="meta-label">INVOICE REF:</td><td class="meta-val">${shipment.invoice_ref || 'DCOWNED#082726A'}</td></tr>
             <tr><td class="meta-label">SHIPMENT DATE:</td><td class="meta-val">${shipment.shipment_date || new Date().toLocaleDateString('en-US')}</td></tr>
-            <tr><td class="meta-label">BOX/S #:</td><td class="meta-val">${shipment.total_boxes || 1}</td></tr>
-            <tr><td class="meta-label">CARRIER:</td><td class="meta-val">${shipment.carrier || 'Lite Express'}</td></tr>
-            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || ''}</td></tr>
+            <tr><td class="meta-label">BOX/S #:</td><td class="meta-val">${boxDisplay}</td></tr>
+            <tr><td class="meta-label">COURIER:</td><td class="meta-val">${shipment.carrier || shipment.courier || 'Lite Express'}</td></tr>
+            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || 'N/A'}</td></tr>
+            ${shipment.transfer_slip_number ? `<tr><td class="meta-label">TRANSFER SLIP #:</td><td class="meta-val">${shipment.transfer_slip_number}</td></tr>` : ''}
           </table>
         </div>
       </div>
 
       <div class="shipto-box">
-        <div style="display: flex; gap: 10px;">
-          <strong style="min-width: 45px;">Ship To</strong>
+        <div style="display: flex; gap: 12px; align-items: flex-start;">
+          <strong style="min-width: 50px;">Ship To:</strong>
           <div>
-            <strong style="text-transform: uppercase;">${site.name || shipment.site_name || 'SERVICE HUB'}</strong><br/>
-            <span style="color: #334155; font-size: 8.5px;">${site.address || `${site.name || 'Branch'}, Philippines`}</span>
+            <strong style="text-transform: uppercase; font-size: 11px;">${site.name || shipment.site_name || 'SERVICE HUB'}</strong><br/>
+            <span style="color: #475569; font-size: 9px;">${site.address || `${site.name || 'Branch'}, Philippines`}</span>
           </div>
         </div>
       </div>
@@ -356,10 +417,10 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
         <thead>
           <tr>
             <th style="width: 32px;">#</th>
-            <th style="width: 105px;">PART NUMBER</th>
+            <th style="width: 110px;">PART NUMBER</th>
             <th>DESCRIPTION</th>
-            <th style="width: 165px;">SERIAL NUMBER</th>
-            <th style="width: 45px;">BOX #</th>
+            <th style="width: 170px;">SERIAL NUMBER</th>
+            <th style="width: 50px;">BOX #</th>
           </tr>
         </thead>
         <tbody>
@@ -381,19 +442,27 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
             <td class="label-cell">TOTAL BOXES</td>
             <td class="val-cell">${shipment.total_boxes || 1}</td>
           </tr>
+          <tr>
+            <td class="label-cell">DECLARED VALUE</td>
+            <td class="val-cell">PHP ${totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          </tr>
         </table>
       </div>
 
       <div class="signatures-grid">
         <div>
-          <strong>Prepared and Counted by:</strong> <span>${shipment.prepared_by_name || 'Joshua Juvida'}</span>
+          <strong>Prepared and Counted by:</strong> <span style="margin-left: 8px;">${shipment.prepared_by_name || 'Joshua Juvida'}</span>
         </div>
         <div>
-          <strong>Verified by:</strong> <span>${shipment.verified_by_name || 'Anjo Alcazar'}</span>
+          <strong>Verified by:</strong> <span style="margin-left: 8px;">${shipment.verified_by_name || 'Anjo Alcazar'}</span>
         </div>
-        <div style="grid-column: 1 / -1; margin-top: 2px;">
-          <strong>Receiving Branch Signature:</strong> <span>${shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}</span>
+        <div>
+          <strong>Receiving Branch Signature:</strong> <span style="margin-left: 8px;">${shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}</span>
         </div>
+        ${pickupByName ? `
+        <div>
+          <strong>Pickup By:</strong> <span style="margin-left: 8px;">${pickupByName}</span>
+        </div>` : '<div></div>'}
       </div>
       <script>
         window.onload = function() {

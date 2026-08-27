@@ -47,7 +47,9 @@ export default function IntakeRecords() {
     currentUser,
     canUserDeleteRecord,
     activePackDraft,
-    shipments
+    shipments,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   // Active View Tab: 'stock_by_date' | 'batch_records'
@@ -625,43 +627,63 @@ export default function IntakeRecords() {
             <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud DB'}</span>
           </button>
 
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setActiveTab('scan-in')}
-            style={{
-              background: '#1e293b',
-              color: '#38bdf8',
-              borderColor: '#38bdf8',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              height: '36px'
-            }}
-          >
-            <Barcode size={16} />
-            <span>Scan-In Station (F1)</span>
-          </button>
+          {canEdit && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setActiveTab('scan-in')}
+              style={{
+                background: '#1e293b',
+                color: '#38bdf8',
+                borderColor: '#38bdf8',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                height: '36px'
+              }}
+            >
+              <Barcode size={16} />
+              <span>Scan-In Station (F1)</span>
+            </button>
+          )}
 
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => {
-              setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
-              setIsSaveModalOpen(true);
-            }}
-            disabled={enrichedStockUnits.length === 0}
-            style={{
-              height: '36px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontWeight: 600
-            }}
-            title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent intake batch record" : "Scan parts first in Receive Scan-In"}
-          >
-            <Plus size={16} />
-            <span>Save Intake Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
-          </button>
+          {canEdit && (
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
+                setIsSaveModalOpen(true);
+              }}
+              disabled={enrichedStockUnits.length === 0}
+              style={{
+                height: '36px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: 600
+              }}
+              title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent dispatched batch record" : "Scan parts first in Receive Scan-In"}
+            >
+              <Plus size={16} />
+              <span>Save Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
+            </button>
+          )}
+
+          {isReadOnly && (
+            <span
+              className="badge"
+              style={{
+                background: 'rgba(16, 185, 129, 0.2)',
+                color: '#34d399',
+                border: '1px solid rgba(16, 185, 129, 0.4)',
+                fontSize: '12px',
+                padding: '6px 12px',
+                fontWeight: 600
+              }}
+            >
+              View &amp; Export Mode
+            </span>
+          )}
         </div>
       </div>
 
@@ -704,14 +726,14 @@ export default function IntakeRecords() {
 
         <div className="card" style={{ padding: '16px 20px', borderLeft: '4px solid #f59e0b' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12.5px', color: '#b45309', fontWeight: 600 }}>Saved Batch Records</span>
+            <span style={{ fontSize: '12.5px', color: '#b45309', fontWeight: 600 }}>Dispatched Records (All Sites)</span>
             <BookmarkPlus size={18} color="#f59e0b" />
           </div>
           <h3 style={{ fontSize: '24px', margin: '6px 0 2px 0', fontWeight: 700, color: '#b45309' }}>
             {totalBatchesCount} <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-muted)' }}>batches</span>
           </h3>
           <span style={{ fontSize: '11.5px', color: 'var(--text-subtle)' }}>
-            {totalUnitsAcrossBatches} units permanently archived
+            {totalUnitsAcrossBatches} units dispatched to all sites
           </span>
         </div>
       </div>
@@ -773,7 +795,7 @@ export default function IntakeRecords() {
               }}
             >
               <BookmarkPlus size={16} />
-              <span>DC Intake Batch Records</span>
+              <span>Dispatched Already in All Sites</span>
               <span
                 style={{
                   background: activeView === 'batch_records' ? 'rgba(255,255,255,0.25)' : 'var(--bg-hover)',
@@ -933,7 +955,7 @@ export default function IntakeRecords() {
                     </div>
                     <h4 style={{ fontSize: '17px', color: 'var(--text-main)', fontWeight: 700, marginBottom: '6px' }}>All DC Stock Parts Packed & Ready for Dispatch</h4>
                     <p style={{ fontSize: '13px', maxWidth: '520px', margin: '0 auto 20px auto', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                      All received parts have been packed into Outbound Packing Lists and marked for branch dispatch. Their permanent historical batch records and manifests remain permanently archived in the <strong>DC Intake Batch Records</strong> tab.
+                      All received parts have been packed into Outbound Packing Lists and marked for branch dispatch. Their permanent historical batch records and manifests remain permanently recorded in the <strong>Dispatched Already in All Sites</strong> tab.
                     </p>
                     <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
                       <button
@@ -942,7 +964,7 @@ export default function IntakeRecords() {
                         style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                       >
                         <BookmarkPlus size={15} />
-                        <span>View Saved Batch Records ({totalBatchesCount})</span>
+                        <span>View Dispatched Records ({totalBatchesCount})</span>
                       </button>
                       <button
                         className="btn btn-secondary btn-sm"
@@ -1260,18 +1282,18 @@ export default function IntakeRecords() {
         )}
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            VIEW 2: DC INTAKE BATCH RECORDS (PERMANENT SAVED MANIFESTS)
+            VIEW 2: DISPATCHED ALREADY IN ALL SITES (PERMANENT PO RECORDS)
         ═══════════════════════════════════════════════════════════════════════ */}
         {activeView === 'batch_records' && (
           <div>
             {filteredBatchRecords.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
                 <BookmarkPlus size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
-                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Intake Batch Records Found</h4>
+                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Dispatched Records Found</h4>
                 <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
                   {searchQuery
                     ? `No batch records matching "${searchQuery}". Try clearing search.`
-                    : 'Save currently scanned stock parts into permanent intake batch records (MDC[YYYY][00000]) for auditing.'}
+                    : 'Save currently scanned stock parts into permanent dispatched batch records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
                 </p>
                 {enrichedStockUnits.length > 0 && (
                   <button
@@ -1282,7 +1304,7 @@ export default function IntakeRecords() {
                     }}
                   >
                     <Plus size={14} />
-                    <span>Save New Intake Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
+                    <span>Save New Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
                   </button>
                 )}
               </div>
@@ -1308,7 +1330,7 @@ export default function IntakeRecords() {
                           <strong style={{ color: '#0284c7' }}>{rec.id}</strong>
                         </td>
                         <td>
-                          <strong>{rec.record_name || 'DC Intake Batch'}</strong>
+                          <strong>{rec.record_name || 'Dispatched Batch'}</strong>
                           {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
                         </td>
                         <td>
@@ -1330,7 +1352,7 @@ export default function IntakeRecords() {
                         </td>
                         <td>{rec.po_number || 'Direct Intake'}</td>
                         <td>
-                          <span className="badge badge-success">Archived</span>
+                          <span className="badge badge-success">Dispatched</span>
                         </td>
                         <td style={{ textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
@@ -1349,7 +1371,7 @@ export default function IntakeRecords() {
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => setRecordToDelete(rec)}
                                 style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
-                                title="Delete intake batch record"
+                                title="Delete dispatched batch record"
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -1563,7 +1585,7 @@ export default function IntakeRecords() {
         onClose={() => setIsSaveModalOpen(false)}
         initialUnits={modalInitialUnits}
         onSaved={(newRec) => {
-          showToast(`Created Intake Record ${newRec.id}`, 'success');
+          showToast(`Created Dispatched Record ${newRec.id}`, 'success');
           setActiveView('batch_records');
         }}
       />

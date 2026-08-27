@@ -76,7 +76,7 @@ export default function SaveIntakeRecordModal({
       return;
     }
     if (!initialUnits || initialUnits.length === 0) {
-      showToast('No scanned units to save in this intake record', 'error');
+      showToast('No scanned units to save in this dispatched record', 'error');
       return;
     }
 
@@ -93,8 +93,8 @@ export default function SaveIntakeRecordModal({
         poId: selectedPoId || null,
         po_number: selectedPo?.po_number || null,
         poNumber: selectedPo?.po_number || null,
-        supplier_name: selectedPo?.supplier || 'Direct Intake',
-        supplier: selectedPo?.supplier || 'Direct Intake',
+        supplier_name: selectedPo?.supplier || 'Direct Dispatch',
+        supplier: selectedPo?.supplier || 'Direct Dispatch',
         notes: notes.trim(),
         items: initialUnits
       });
@@ -105,7 +105,7 @@ export default function SaveIntakeRecordModal({
       }
     } catch (err) {
       console.error(err);
-      showToast('Error saving intake record: ' + err.message, 'error');
+      showToast('Error saving dispatched record: ' + err.message, 'error');
     } finally {
       setIsSaving(false);
     }
@@ -121,9 +121,9 @@ export default function SaveIntakeRecordModal({
               <BookmarkPlus size={22} color="#38bdf8" />
             </div>
             <div>
-              <h3 style={{ color: '#fff', fontSize: '18px', margin: 0 }}>Save DC Intake Record</h3>
+              <h3 style={{ color: '#fff', fontSize: '18px', margin: 0 }}>Save Dispatched Batch Record (All Sites)</h3>
               <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                Create a permanent, multi-user accessible receiving batch record in database
+                Create a permanent, multi-user accessible dispatched parts record based on purchase orders
               </p>
             </div>
           </div>
@@ -165,7 +165,7 @@ export default function SaveIntakeRecordModal({
               <div>
                 <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Calendar size={13} color="var(--primary)" />
-                  <span>Intake Date</span>
+                  <span>Date</span>
                 </label>
                 <input
                   type="date"
@@ -186,7 +186,7 @@ export default function SaveIntakeRecordModal({
                   value={selectedPoId}
                   onChange={(e) => setSelectedPoId(e.target.value)}
                 >
-                  <option value="">-- Direct Intake (No PO) --</option>
+                  <option value="">-- Direct Dispatch (No PO) --</option>
                   {purchaseOrders.map(po => (
                     <option key={po.id} value={po.id}>
                       {po.po_number} ({po.status}) - {po.supplier || 'Apple Direct'}
@@ -213,7 +213,7 @@ export default function SaveIntakeRecordModal({
             {/* Notes / Remarks */}
             <div style={{ marginBottom: '18px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <label className="form-label" style={{ margin: 0 }}>Intake Notes / Batch Remarks</label>
+                <label className="form-label" style={{ margin: 0 }}>Dispatched Notes / Batch Remarks</label>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button
                     type="button"

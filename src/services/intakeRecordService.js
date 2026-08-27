@@ -176,7 +176,7 @@ export const executeSaveIntakeRecord = async ({
     broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
   }
 
-  showToast(`Saved DC Intake Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+  showToast(`Saved Dispatched Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
   return { success: true, record: newRecord };
 };
 
@@ -206,7 +206,7 @@ export const executeDeleteIntakeRecord = async ({
   await logDeletionAudit({
     entityType: 'DC Intake Record',
     entityId: recordId,
-    entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Intake Record ${recordId}`),
+    entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Dispatched Record ${recordId}`),
     summary: {
       itemsCount: target?.items?.length || target?.total_units || 0,
       poNumber: target?.po_number || target?.poNumber || 'N/A',
@@ -251,6 +251,6 @@ export const executeDeleteIntakeRecord = async ({
     broadcastCloudEvent('INTAKE_DELETED', { recordId });
   }
 
-  showToast(`Deleted DC Intake Record ${recordId}`, 'info');
+  showToast(`Deleted Dispatched Record ${recordId}`, 'info');
   return { success: true };
 };

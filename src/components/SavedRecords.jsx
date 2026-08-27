@@ -18,6 +18,8 @@ import {
   RefreshCw
 } from 'lucide-react';
 
+import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
@@ -34,7 +36,9 @@ export default function SavedRecords() {
     lastSyncedAt,
     autoRefreshData,
     currentUser,
-    canUserDeleteRecord
+    canUserDeleteRecord,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -50,14 +54,32 @@ export default function SavedRecords() {
   const [restoreAllocation, setRestoreAllocation] = useState(true);
   const [recordToDelete, setRecordToDelete] = useState(null);
 
-  // Filter valid historical period snapshots (exclude system registries and deleted records registries)
+  // Filter valid historical period snapshots (exclude system registries, live master states, and deleted records)
   const validSavedRecords = (savedRecords || []).filter(rec =>
     rec &&
+    rec.id !== LIVE_MASTER_RECORD_ID &&
+    rec.id !== 'live_master_state_v1' &&
+    rec.id !== 'active_packing_manifest_draft' &&
+    rec.id !== 'live_master_dc_inventory' &&
+    rec.id !== 'master_dc_intakes_registry' &&
+    rec.id !== 'master_upload_audit_logs_registry' &&
+    rec.id !== 'master_deletion_audit_logs_registry' &&
+    rec.id !== 'master_stock_transfers_report_registry' &&
+    rec.id !== 'master_users_registry' &&
     !rec.id?.startsWith('deleted_') &&
+    !rec.id?.startsWith('master_') &&
     rec.record_type !== 'system_registry' &&
     rec.record_type !== 'deletion_registry' &&
+    rec.record_type !== 'live_master_state' &&
+    rec.record_type !== 'users_registry' &&
+    rec.record_type !== 'stock_transfer_report' &&
+    rec.record_type !== 'upload_audit_registry' &&
+    rec.record_type !== 'deletion_audit_registry' &&
+    rec.record_type !== 'deleted_snapshot' &&
     rec.period_label !== 'Deleted Records Registry' &&
-    rec.notes !== '__DELETED__'
+    !rec.period_label?.includes('Live Master State') &&
+    rec.notes !== '__DELETED__' &&
+    rec.snapshot_data?.isDeleted !== true
   );
 
   // Derive unique years from saved records for filter dropdown
@@ -208,10 +230,28 @@ export default function SavedRecords() {
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
 
-            <button className="btn btn-primary btn-sm" onClick={() => setShowSaveModal(true)} style={{ height: '36px' }}>
-              <BookmarkPlus size={16} />
-              <span>Save Current Working Data as Record</span>
-            </button>
+            {canEdit && (
+              <button className="btn btn-primary btn-sm" onClick={() => setShowSaveModal(true)} style={{ height: '36px' }}>
+                <BookmarkPlus size={16} />
+                <span>Save Current Working Data as Record</span>
+              </button>
+            )}
+
+            {isReadOnly && (
+              <span
+                className="badge"
+                style={{
+                  background: '#f0fdf4',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                  fontSize: '11px',
+                  padding: '4px 8px',
+                  fontWeight: 600
+                }}
+              >
+                View &amp; Export Mode
+              </span>
+            )}
           </div>
         </div>
 
@@ -529,36 +569,40 @@ export default function SavedRecords() {
                             <span>Inspect</span>
                           </button>
 
-                          {/* Restore Record */}
-                          <button
-                            className="btn btn-sm btn-primary"
-                            onClick={() => handleOpenRestoreModal(record)}
-                            title="Restore into live working tables"
-                            style={{ fontSize: '11px', padding: '4px 8px' }}
-                          >
-                            <RotateCcw size={12} />
-                            <span>Restore</span>
-                          </button>
-
-                          {/* Delete Record */}
-                          {canUserDeleteRecord(record, currentUser) ? (
+                          {/* Restore Record (Admin only) */}
+                          {canEdit && (
                             <button
-                              className="btn btn-sm btn-danger"
-                              onClick={() => setRecordToDelete(record)}
-                              title="Delete this historical record"
+                              className="btn btn-sm btn-primary"
+                              onClick={() => handleOpenRestoreModal(record)}
+                              title="Restore into live working tables"
                               style={{ fontSize: '11px', padding: '4px 8px' }}
                             >
-                              <Trash2 size={12} />
+                              <RotateCcw size={12} />
+                              <span>Restore</span>
                             </button>
-                          ) : (
-                            <button
-                              className="btn btn-sm btn-secondary"
-                              disabled
-                              style={{ fontSize: '11px', padding: '4px 8px', opacity: 0.4, cursor: 'not-allowed' }}
-                              title={`Only ${record.saved_by_name || 'the creator'} can delete this record`}
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                          )}
+
+                          {/* Delete Record (Admin/Creator only) */}
+                          {canEdit && (
+                            canUserDeleteRecord(record, currentUser) ? (
+                              <button
+                                className="btn btn-sm btn-danger"
+                                onClick={() => setRecordToDelete(record)}
+                                title="Delete this historical record"
+                                style={{ fontSize: '11px', padding: '4px 8px' }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            ) : (
+                              <button
+                                className="btn btn-sm btn-secondary"
+                                disabled
+                                style={{ fontSize: '11px', padding: '4px 8px', opacity: 0.4, cursor: 'not-allowed' }}
+                                title={`Only ${record.saved_by_name || 'the creator'} can delete this record`}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )
                           )}
                         </div>
                       </td>

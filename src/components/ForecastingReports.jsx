@@ -192,7 +192,9 @@ export default function ForecastingReports() {
     showToast,
     clearAllData,
     forecastingModel,
-    changeForecastingModel
+    changeForecastingModel,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   const fileInputRef = useRef(null);
@@ -262,11 +264,13 @@ export default function ForecastingReports() {
       maxHistoryLength = Math.max(maxHistoryLength, item.ytd_monthly_counts.length);
     }
   });
-  if (maxHistoryLength === 0) {
-    maxHistoryLength = (activePeriod?.month ? activePeriod.month - 1 : 8) || 8;
-  }
-  const historyMonths = ALL_MONTH_NAMES.slice(0, maxHistoryLength);
-  const currentPeriodLabel = activePeriod?.label || `${ALL_MONTH_NAMES[maxHistoryLength] || 'Sep'} 2026`;
+
+  const historyMonthCount = (activePeriod?.month && activePeriod.month > 1)
+    ? (activePeriod.month - 1)
+    : (maxHistoryLength > 0 ? maxHistoryLength : 8);
+
+  const historyMonths = ALL_MONTH_NAMES.slice(0, historyMonthCount);
+  const currentPeriodLabel = activePeriod?.label || `${ALL_MONTH_NAMES[historyMonthCount] || 'Sep'} 2026`;
 
   // 26 Service Branches list (excluding Central DC)
   const serviceBranches = useMemo(() => {
@@ -373,11 +377,7 @@ export default function ForecastingReports() {
 
     filteredItems.forEach(it => {
       const rawCounts = it.ytd_monthly_counts || [];
-      const offset = historyMonths.length - rawCounts.length;
-      const counts = historyMonths.map((_, idx) => {
-        const dataIdx = idx - offset;
-        return dataIdx >= 0 && dataIdx < rawCounts.length ? (Number(rawCounts[dataIdx]) || 0) : 0;
-      });
+      const counts = historyMonths.map((_, idx) => (idx < rawCounts.length ? (Number(rawCounts[idx]) || 0) : 0));
       counts.forEach((c, idx) => { monthlySum[idx] += c; });
 
       const computed = calculateItemForecast(it, forecastingModel, historyMonths.length);
@@ -839,19 +839,37 @@ export default function ForecastingReports() {
               <span>Print</span>
             </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                setUploadedDataset(null);
-                setDataSourceMode('active');
-                clearAllData();
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b91c1c' }}
-              title="Clear all forecasting and reporting records to clean empty state"
-            >
-              <RotateCcw size={15} />
-              <span>Clear Data</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setUploadedDataset(null);
+                  setDataSourceMode('active');
+                  clearAllData();
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b91c1c' }}
+                title="Clear all forecasting and reporting records to clean empty state"
+              >
+                <RotateCcw size={15} />
+                <span>Clear Data</span>
+              </button>
+            )}
+
+            {isReadOnly && (
+              <span
+                className="badge"
+                style={{
+                  background: '#f0fdf4',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                  fontSize: '11px',
+                  padding: '4px 8px',
+                  fontWeight: 600
+                }}
+              >
+                View &amp; Export Mode
+              </span>
+            )}
           </div>
         </div>
 

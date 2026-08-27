@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
-  calculateForecastByModel,
   calculateItemForecast,
   calculateForecastTrendMetrics,
   filterAnomaliesWinsorized
@@ -40,7 +39,9 @@ export default function Forecasting() {
     showToast,
     activePeriod,
     forecastingModel,
-    changeForecastingModel
+    changeForecastingModel,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -57,12 +58,17 @@ export default function Forecasting() {
       maxHistoryLength = Math.max(maxHistoryLength, item.ytd_monthly_counts.length);
     }
   });
-  if (maxHistoryLength === 0) {
-    maxHistoryLength = (activePeriod?.month ? activePeriod.month - 1 : 8) || 8;
-  }
-  const months = ALL_MONTH_NAMES.slice(0, maxHistoryLength);
-  const targetMonthShort = activePeriod?.label ? activePeriod.label.split(' ')[0].substring(0, 3) : 'Sep';
-  const targetPeriodLabel = activePeriod?.label || 'September 2026';
+
+  // Calculate the correct history month count based on activePeriod
+  const historyMonthCount = (activePeriod?.month && activePeriod.month > 1)
+    ? (activePeriod.month - 1)
+    : (maxHistoryLength > 0 ? maxHistoryLength : 8);
+
+  const months = ALL_MONTH_NAMES.slice(0, historyMonthCount);
+  const targetMonthShort = activePeriod?.label 
+    ? activePeriod.label.split(' ')[0].substring(0, 3) 
+    : (ALL_MONTH_NAMES[historyMonthCount] || 'Sep');
+  const targetPeriodLabel = activePeriod?.label || `${ALL_MONTH_NAMES[historyMonthCount] || 'September'} 2026`;
 
   // Stock price resolver helper
   const getStockPrice = useCallback((item) => {
@@ -105,14 +111,10 @@ export default function Forecasting() {
   const enrichedItems = useMemo(() => {
     const list = filteredItems.map(item => {
       const rawCounts = item.ytd_monthly_counts || [];
-      // Right-align: place actual data at the most recent months, pad leading zeros for parts with shorter history
-      const offset = months.length - rawCounts.length;
-      const counts = months.map((_, idx) => {
-        const dataIdx = idx - offset;
-        return dataIdx >= 0 && dataIdx < rawCounts.length ? (Number(rawCounts[dataIdx]) || 0) : 0;
-      });
+      // Take exact historical monthly usage aligned with months
+      const counts = months.map((_, idx) => (idx < rawCounts.length ? (Number(rawCounts[idx]) || 0) : 0));
       
-      // Calculate dynamic forecast based on active algorithm
+      // Calculate dynamic forecast based on active algorithm and history window
       const computed = calculateItemForecast(item, forecastingModel, months.length);
 
       const parsedOverride = (item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '')
@@ -263,35 +265,56 @@ export default function Forecasting() {
               <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud'}</span>
             </button>
 
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => setShowSaveModal(true)}
-              disabled={filteredItems.length === 0}
-              title="Save current state to permanent period archive"
-            >
-              <BookmarkPlus size={14} />
-              <span>Save Period Record</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => setShowSaveModal(true)}
+                disabled={filteredItems.length === 0}
+                title="Save current state to permanent period archive"
+              >
+                <BookmarkPlus size={14} />
+                <span>Save Period Record</span>
+              </button>
+            )}
 
             <button
               className="btn btn-secondary btn-sm"
               onClick={exportForecastExcelHandler}
               disabled={filteredItems.length === 0}
               title="Export styled Excel spreadsheet (.xlsx)"
+              style={{ fontWeight: 700, color: '#15803d', borderColor: '#86efac' }}
             >
               <Download size={14} />
-              <span>Export Excel</span>
+              <span>Export Excel (XLSX)</span>
             </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setShowClearModal(true)}
-              title="Clear all forecasting and allocation data to empty state"
-              style={{ color: '#b91c1c' }}
-            >
-              <RotateCcw size={14} />
-              <span>Clear Data</span>
-            </button>
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowClearModal(true)}
+                title="Clear all forecasting and allocation data to empty state"
+                style={{ color: '#b91c1c' }}
+              >
+                <RotateCcw size={14} />
+                <span>Clear Data</span>
+              </button>
+            )}
+
+            {isReadOnly && (
+              <span
+                className="badge"
+                style={{
+                  background: '#f0fdf4',
+                  color: '#166534',
+                  border: '1px solid #bbf7d0',
+                  fontSize: '11px',
+                  padding: '4px 8px',
+                  fontWeight: 600
+                }}
+              >
+                View &amp; Export Mode
+              </span>
+            )}
           </div>
         </div>
 
@@ -836,44 +859,67 @@ export default function Forecasting() {
                         {item.computed}
                       </td>
 
-                      {/* Admin Override Input */}
+                      {/* Admin Override Input / Badge */}
                       <td style={{ textAlign: 'center' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <input
-                            type="number"
-                            className="forecast-override-input"
-                            placeholder={String(item.computed)}
-                            value={item.hasOverride ? item.admin_override : ''}
-                            onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
-                            style={{
-                              width: '68px',
-                              textAlign: 'center',
-                              padding: '4px',
-                              borderRadius: '4px',
-                              border: item.hasOverride ? '1.5px solid #ea580c' : '1px solid #cbd5e1',
-                              background: item.hasOverride ? '#fff7ed' : '#ffffff',
-                              fontWeight: item.hasOverride ? 700 : 400,
-                              color: item.hasOverride ? '#c2410c' : '#0f172a'
-                            }}
-                          />
-                          {item.hasOverride && (
-                            <button
-                              type="button"
-                              onClick={() => updateForecastOverride(item.part_id, '')}
-                              title="Reset override to algorithmic calculation"
+                        {canEdit ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              className="forecast-override-input"
+                              placeholder={String(item.computed)}
+                              value={item.hasOverride ? item.admin_override : ''}
+                              onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
                               style={{
-                                background: 'transparent',
-                                border: 'none',
-                                color: '#ef4444',
-                                cursor: 'pointer',
-                                padding: '2px',
-                                display: 'flex'
+                                width: '68px',
+                                textAlign: 'center',
+                                padding: '4px',
+                                borderRadius: '4px',
+                                border: item.hasOverride ? '1.5px solid #ea580c' : '1px solid #cbd5e1',
+                                background: item.hasOverride ? '#fff7ed' : '#ffffff',
+                                fontWeight: item.hasOverride ? 700 : 400,
+                                color: item.hasOverride ? '#c2410c' : '#0f172a'
                               }}
-                            >
-                              <XCircle size={15} />
-                            </button>
-                          )}
-                        </div>
+                            />
+                            {item.hasOverride && (
+                              <button
+                                type="button"
+                                onClick={() => updateForecastOverride(item.part_id, '')}
+                                title="Reset override to algorithmic calculation"
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#ef4444',
+                                  cursor: 'pointer',
+                                  padding: '2px',
+                                  display: 'flex'
+                                }}
+                              >
+                                <RotateCcw size={12} />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                            {item.hasOverride ? (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#fff7ed',
+                                  color: '#c2410c',
+                                  border: '1px solid #fdba74',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  fontSize: '11.5px'
+                                }}
+                                title="Admin override value"
+                              >
+                                {item.admin_override} (Overridden)
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8' }}>—</span>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Recommended Order */}

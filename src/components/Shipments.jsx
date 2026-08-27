@@ -249,7 +249,7 @@ export default function Shipments() {
                 <th>Invoice Ref</th>
                 <th>Destination Site</th>
                 <th>Shipment Date</th>
-                <th>Carrier & Tracking</th>
+                <th>Courier & Tracking</th>
                 <th style={{ textAlign: 'center' }}>Total Units</th>
                 <th style={{ textAlign: 'center' }}>Boxes</th>
                 <th style={{ textAlign: 'center' }}>Status</th>
@@ -270,6 +270,11 @@ export default function Shipments() {
                     <tr key={sh.id}>
                       <td className="font-mono">
                         <strong>{sh.invoice_ref || sh.shipment_number}</strong>
+                        {sh.transfer_slip_number && (
+                          <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '2px' }}>
+                            TS: {sh.transfer_slip_number}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <strong>{destSite.code || 'ASP'}</strong>
@@ -279,16 +284,21 @@ export default function Shipments() {
                       </td>
                       <td>{sh.shipment_date}</td>
                       <td>
-                        <div>{sh.carrier || 'Lite Express'}</div>
+                        <div><strong>{sh.carrier || sh.courier || 'Lite Express'}</strong></div>
                         <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
                           {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
                         </div>
+                        {sh.pickup_by_name && (
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>
+                            Pickup: {sh.pickup_by_name}
+                          </div>
+                        )}
                       </td>
                       <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
                         {sh.items?.length || 0}
                       </td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
-                        {sh.total_boxes || 1}
+                        {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <span className={`badge ${

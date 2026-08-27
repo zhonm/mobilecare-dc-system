@@ -175,7 +175,9 @@ export default function StockTransferReports() {
     clearStockTransfersReport,
     showToast,
     isAutoRefreshing,
-    autoRefreshData
+    autoRefreshData,
+    canEdit,
+    isReadOnly
   } = useApp();
 
   const fileInputRef = useRef(null);
@@ -445,7 +447,7 @@ export default function StockTransferReports() {
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} />
 
       <HeaderBar {...{ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
-        stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData }} />
+        stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData, canEdit, isReadOnly }} />
 
       {/* Clear Confirm Modal */}
       {showClearConfirm && (
@@ -630,7 +632,7 @@ function FilterBar({
 
 // ── Header Bar ────────────────────────────────────────────────────────────────
 function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
-  stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData }) {
+  stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData, canEdit, isReadOnly }) {
   return (
     <div className="card" style={{ marginBottom: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
@@ -659,13 +661,15 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
               <span>{isAutoRefreshing ? 'Syncing…' : 'Sync DB'}</span>
             </button>
           )}
-          <button className="btn btn-primary btn-sm" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} style={{ fontWeight: 700 }}>
-            <UploadCloud size={14} /><span>{isProcessing ? 'Processing…' : 'Upload File (XLSX/CSV)'}</span>
+          {canEdit && (
+            <button className="btn btn-primary btn-sm" onClick={() => fileInputRef.current?.click()} disabled={isProcessing} style={{ fontWeight: 700 }}>
+              <UploadCloud size={14} /><span>{isProcessing ? 'Processing…' : 'Upload File (XLSX/CSV)'}</span>
+            </button>
+          )}
+          <button className="btn btn-secondary btn-sm" onClick={handleExportExcel} disabled={!filteredRecords.length} style={{ fontWeight: 700, color: '#15803d', borderColor: '#86efac' }}>
+            <Download size={13} /><span>Export Excel (XLSX)</span>
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleExportExcel} disabled={!filteredRecords.length}>
-            <Download size={13} /><span>Excel</span>
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleExportPDF} disabled={!filteredRecords.length}>
+          <button className="btn btn-secondary btn-sm" onClick={handleExportPDF} disabled={!filteredRecords.length} style={{ fontWeight: 600, color: '#0284c7', borderColor: '#bae6fd' }}>
             <FileText size={13} /><span>PDF</span>
           </button>
           <button className="btn btn-secondary btn-sm" onClick={handlePrint} disabled={!filteredRecords.length}>
@@ -674,11 +678,26 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
           <button className="btn btn-secondary btn-sm" onClick={() => downloadSampleStockTransfersTemplate('xlsx')}>
             <HelpCircle size={13} /><span>Template</span>
           </button>
-          {stockTransferReports.length > 0 && (
+          {canEdit && stockTransferReports.length > 0 && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowClearConfirm(true)}
               style={{ color: '#ef4444', borderColor: '#fca5a5' }}>
               <Trash2 size={13} /><span>Clear</span>
             </button>
+          )}
+          {isReadOnly && (
+            <span
+              className="badge"
+              style={{
+                background: '#f0fdf4',
+                color: '#166534',
+                border: '1px solid #bbf7d0',
+                fontSize: '11px',
+                padding: '4px 8px',
+                fontWeight: 600
+              }}
+            >
+              View &amp; Export Mode
+            </span>
           )}
         </div>
       </div>

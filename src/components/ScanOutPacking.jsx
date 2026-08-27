@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF, printPackingListDirect } from '../utils/pdfGenerator';
-import { calculateWeeklySplit } from '../utils/allocationEngine';
 import {
   PackageCheck,
   Printer,
@@ -9,7 +8,6 @@ import {
   AlertCircle,
   CheckCircle2,
   ArrowRight,
-  Zap,
   Trash2,
   FileSpreadsheet,
   UploadCloud,
@@ -25,22 +23,19 @@ import {
   History,
   Calendar,
   Boxes,
-  Layers,
   Copy,
-  ListOrdered,
   Plus,
   Building2,
   MapPin,
   ChevronDown,
+  ChevronUp,
   Lock,
   Users,
-  Radio,
-  Activity,
-  Sparkles,
-  ShieldAlert
+  ShieldAlert,
+  SlidersHorizontal
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
-import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
+import { isLockedConfirmedShipment, generateNextInvoiceRef } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function ScanOutPacking() {
@@ -49,7 +44,6 @@ export default function ScanOutPacking() {
     inventoryUnits,
     parts,
     categories,
-    allocations,
     shipments,
     saveShipment,
     deleteShipment,
@@ -81,18 +75,22 @@ export default function ScanOutPacking() {
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
   const [siteRegionFilter, setSiteRegionFilter] = useState('ALL');
 
-  const [selectedWeek, setSelectedWeek] = useState(1);
+  const [totalBoxes, setTotalBoxes] = useState(1);
   const [boxNumber, setBoxNumber] = useState(1);
   const [inspectShipmentModal, setInspectShipmentModal] = useState(null);
+  const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
 
   // User-isolated draft storage key (prevents draft clashing between simultaneous users)
   const userDraftStorageKey = useMemo(() => {
     return currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
-  }, [currentUser?.id]);
+  }, [currentUser]);
 
   // Active Shipment Draft with user-scoped LocalStorage persistence
   const [currentShipment, setCurrentShipment] = useState(() => {
     const userKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
+    const isFirstSiteMM = serviceSites[0]?.region === 'Metro Manila';
+    const initialCourier = isFirstSiteMM ? 'Lalamove' : 'Lite Express';
+
     try {
       const saved = localStorage.getItem(userKey) || localStorage.getItem('mdc_active_pack_draft');
       if (saved) {
@@ -102,6 +100,10 @@ export default function ScanOutPacking() {
           const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
           return {
             ...parsed,
+            carrier: parsed.carrier || parsed.courier || initialCourier,
+            courier: parsed.carrier || parsed.courier || initialCourier,
+            transfer_slip_number: parsed.transfer_slip_number || parsed.transfer_slip || '',
+            pickup_by_name: parsed.pickup_by_name || (parsed.carrier === 'Utility' ? 'Utility' : ''),
             tracking_number: cleanTrk,
             prepared_by_name: currentUser?.fullName || parsed.prepared_by_name || ''
           };
@@ -116,6 +118,10 @@ export default function ScanOutPacking() {
       const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
       return {
         ...existing,
+        carrier: existing.carrier || existing.courier || initialCourier,
+        courier: existing.carrier || existing.courier || initialCourier,
+        transfer_slip_number: existing.transfer_slip_number || existing.transfer_slip || '',
+        pickup_by_name: existing.pickup_by_name || (existing.carrier === 'Utility' ? 'Utility' : ''),
         tracking_number: cleanTrk,
         prepared_by_name: currentUser?.fullName || existing.prepared_by_name || ''
       };
@@ -123,16 +129,19 @@ export default function ScanOutPacking() {
     return {
       id: `ship-${Date.now()}`,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
-      invoice_ref: `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`,
+      invoice_ref: generateNextInvoiceRef(shipments),
       site_id: serviceSites[0]?.id,
       week_number: 1,
       shipment_date: new Date().toLocaleDateString('en-US'),
-      carrier: 'Lite Express',
+      carrier: initialCourier,
+      courier: initialCourier,
       tracking_number: '',
+      transfer_slip_number: '',
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
       verified_by_name: 'Anjo Alcazar',
+      pickup_by_name: '',
       receiving_signature: serviceSites[0]?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -204,7 +213,7 @@ export default function ScanOutPacking() {
       clearInterval(heartbeatInterval);
       sendPresence(false);
     };
-  }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, currentShipment?.items?.length, broadcastPackingPresence]);
+  }, [currentUser, selectedSiteId, selectedSite, currentShipment, broadcastPackingPresence]);
 
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
@@ -225,38 +234,56 @@ export default function ScanOutPacking() {
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const branchAllocationProgress = useMemo(() => {
-    if (!allocations || allocations.length === 0 || !selectedSite?.id) return null;
-    let targetWeekTotal = 0;
-    allocations.forEach(alloc => {
-      const siteQty = alloc.site_quantities?.[selectedSite.id] ?? alloc.site_quantities?.[selectedSite.code] ?? 0;
-      if (siteQty > 0) {
-        const split = calculateWeeklySplit(siteQty, 0, 0);
-        const wQty = split[`w${selectedWeek}_qty`] || 0;
-        targetWeekTotal += wQty;
+  // Part price map for Declared Value calculations
+  const partPriceMap = useMemo(() => {
+    const map = new Map();
+    (parts || []).forEach(p => {
+      if (p.part_number) {
+        map.set(p.part_number.toUpperCase(), p.stocking_price ?? p.price ?? 50);
       }
     });
-    const packedTotal = (currentShipment?.items || []).length;
-    return {
-      targetWeekTotal,
-      packedTotal,
-      pct: targetWeekTotal > 0 ? Math.min(100, Math.round((packedTotal / targetWeekTotal) * 100)) : 0
-    };
-  }, [allocations, selectedSite, selectedWeek, currentShipment]);
+    return map;
+  }, [parts]);
+
+  // Total Declared Value = sum of (part price × 85 PHP)
+  const totalDeclaredValuePHP = useMemo(() => {
+    const items = currentShipment?.items;
+    if (!items || items.length === 0) return 0;
+    return items.reduce((sum, it) => {
+      const priceUSD = it.stocking_price ?? it.price ?? (partPriceMap.get(it.part_number?.toUpperCase()) || (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50)));
+      return sum + (priceUSD * 85);
+    }, 0);
+  }, [currentShipment, partPriceMap]);
 
   // Auto-focus Part Number input on mount
   useEffect(() => {
     pnInputRef.current?.focus();
   }, []);
 
-  // Update shipment when site changes
+  // Update shipment when site changes (auto-select Courier: Lalamove for MM, Lite Express for provincial)
   const handleSiteChange = (newSiteId) => {
     setSelectedSiteId(newSiteId);
     const siteObj = sites.find(s => s.id === newSiteId);
+    const isMM = siteObj?.region === 'Metro Manila';
+    const autoCourier = isMM ? 'Lalamove' : 'Lite Express';
+
     setCurrentShipment(prev => ({
       ...prev,
       site_id: newSiteId,
-      receiving_signature: siteObj?.code || 'ASP NPM'
+      carrier: prev.carrier === 'Utility' ? 'Utility' : autoCourier,
+      courier: prev.carrier === 'Utility' ? 'Utility' : autoCourier,
+      receiving_signature: siteObj?.code || 'ASP NPM',
+      pickup_by_name: prev.carrier === 'Utility' ? 'Utility' : prev.pickup_by_name
+    }));
+  };
+
+  // Handler for Courier selection changes (auto-set Pickup By: Utility when Utility selected)
+  const handleCourierChange = (newCourier) => {
+    setCurrentShipment(prev => ({
+      ...prev,
+      carrier: newCourier,
+      courier: newCourier,
+      pickup_by_name: newCourier === 'Utility' ? 'Utility' : (prev.pickup_by_name === 'Utility' ? '' : prev.pickup_by_name)
     }));
   };
 
@@ -359,7 +386,7 @@ export default function ScanOutPacking() {
       if (s) set.add(s);
     });
     return set;
-  }, [currentShipment?.items]);
+  }, [currentShipment]);
 
   // Reliable Available Stock Calculation (excluding items already in active draft)
   const availableStockUnits = useMemo(() => {
@@ -373,7 +400,6 @@ export default function ScanOutPacking() {
   // State for upgraded Available Stock Verification UI
   const [stockSearch, setStockSearch] = useState('');
   const [stockCategoryTab, setStockCategoryTab] = useState('ALL'); // 'ALL' | category code
-  const [stockViewMode, setStockViewMode] = useState('SUMMARY'); // 'SUMMARY' | 'SERIALIZED' | 'CHIPS'
   const [stockInspectUnit, setStockInspectUnit] = useState(null); // unit for detail modal
   const [copiedSerial, setCopiedSerial] = useState(null);
 
@@ -480,30 +506,6 @@ export default function ScanOutPacking() {
       return true;
     });
   }, [enrichedStockUnits, stockCategoryTab, stockSearch]);
-
-  // Grouped Stock Summary by Part Number
-  const groupedStockSummary = useMemo(() => {
-    const map = new Map();
-    filteredStockUnits.forEach(u => {
-      const pn = (u.part_number || '').toUpperCase();
-      if (!map.has(pn)) {
-        map.set(pn, {
-          part_number: u.part_number,
-          description: u.description,
-          iphone_model: u.iphone_model,
-          category_name: u.category_name,
-          category_code: u.category_code,
-          stocking_price: u.stocking_price,
-          totalQty: 0,
-          units: []
-        });
-      }
-      const group = map.get(pn);
-      group.totalQty += 1;
-      group.units.push(u);
-    });
-    return Array.from(map.values()).sort((a, b) => b.totalQty - a.totalQty);
-  }, [filteredStockUnits]);
 
   const uniquePartTypesCount = useMemo(() => {
     const set = new Set(availableStockUnits.map(u => (u.part_number || '').toUpperCase()));
@@ -673,25 +675,32 @@ export default function ScanOutPacking() {
 
     // Generate fresh new draft so the user can start a new packing list for another site
     const newDraftId = `ship-${Date.now()}`;
-    const newInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+    const newInvoiceRef = generateNextInvoiceRef(shipments);
+    const isMM = selectedSite?.region === 'Metro Manila';
+    const autoCourier = isMM ? 'Lalamove' : 'Lite Express';
 
     setCurrentShipment({
       id: newDraftId,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
       invoice_ref: newInvoiceRef,
       site_id: selectedSiteId,
-      week_number: selectedWeek,
+      week_number: 1,
       shipment_date: new Date().toLocaleDateString('en-US'),
-      carrier: 'Lite Express',
+      carrier: autoCourier,
+      courier: autoCourier,
       tracking_number: '',
+      transfer_slip_number: '',
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
       verified_by_name: 'Anjo Alcazar',
+      pickup_by_name: '',
       receiving_signature: selectedSite?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
     });
+    setTotalBoxes(1);
+    setBoxNumber(1);
 
     setIsClearModalOpen(false);
     setScanResult(null);
@@ -709,9 +718,17 @@ export default function ScanOutPacking() {
 
     try {
       const cleanTracking = String(currentShipment.tracking_number || '').trim();
+      const isMM = selectedSite?.region === 'Metro Manila';
+      const autoCourier = currentShipment.carrier || (isMM ? 'Lalamove' : 'Lite Express');
+
       const finalized = {
         ...currentShipment,
         id: currentShipment.id || `ship-${Date.now()}`,
+        carrier: autoCourier,
+        courier: autoCourier,
+        total_boxes: totalBoxes,
+        box_number: boxNumber,
+        box_number_label: `${boxNumber}/${totalBoxes}`,
         tracking_number: cleanTracking,
         status: 'shipped',
         created_at: currentShipment.created_at || new Date().toISOString(),
@@ -741,25 +758,30 @@ export default function ScanOutPacking() {
       } catch (e) {}
 
       const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
-      const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+      const nextInvoiceRef = generateNextInvoiceRef([finalized, ...shipments]);
 
       setCurrentShipment({
         id: `ship-${Date.now()}`,
         shipment_number: nextShipmentNumber,
         invoice_ref: nextInvoiceRef,
         site_id: selectedSiteId,
-        week_number: selectedWeek,
+        week_number: 1,
         shipment_date: new Date().toLocaleDateString('en-US'),
-        carrier: 'Lite Express',
+        carrier: autoCourier,
+        courier: autoCourier,
         tracking_number: '',
+        transfer_slip_number: '',
         total_boxes: 1,
         status: 'draft',
         prepared_by_name: currentUser?.fullName || '',
         verified_by_name: 'Anjo Alcazar',
+        pickup_by_name: autoCourier === 'Utility' ? 'Utility' : '',
         receiving_signature: selectedSite?.code || 'ASP NPM',
         remarks: 'KGB PARTS',
         items: []
       });
+      setTotalBoxes(1);
+      setBoxNumber(1);
 
       setScanResult(null);
     } catch (err) {
@@ -868,7 +890,7 @@ export default function ScanOutPacking() {
       });
     }
     return list;
-  }, [activePackingStations, currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, currentShipment?.items?.length]);
+  }, [activePackingStations, currentUser, selectedSiteId, selectedSite, currentShipment]);
 
   const otherActiveStations = useMemo(() => {
     return activeStationsList.filter(st => st.userId !== currentUser?.id);
@@ -1023,17 +1045,31 @@ export default function ScanOutPacking() {
         )}
       </div>
 
-      {/* Scanner & Manifest Config Banner */}
-      <div className="scanner-hero" style={{ marginBottom: '24px' }}>
-        <div className="scanner-hero-header">
-          <div>
-            <h2 style={{ color: '#fff', fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <PackageCheck size={22} color="#38bdf8" />
-              <span>Pack Scan-Out & Packing List Generator</span>
-            </h2>
-            <p style={{ color: '#94a3b8', fontSize: '12.5px', marginTop: '2px' }}>
-              Serialized Verification against DC Stock • Batch XLSX/CSV Scan-Out • Real-Time Database Sync
-            </p>
+      {/* Modern High-Efficiency Scan-Out Workstation Hero */}
+      <div
+        style={{
+          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+          borderRadius: '14px',
+          border: '1px solid rgba(56, 189, 248, 0.25)',
+          padding: '22px 26px',
+          marginBottom: '22px',
+          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)'
+        }}
+      >
+        {/* Workstation Header & Quick Tools */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', marginBottom: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '8px', borderRadius: '10px' }}>
+              <PackageCheck size={22} />
+            </div>
+            <div>
+              <h2 style={{ color: '#fff', fontSize: '18.5px', margin: 0, fontWeight: 700, letterSpacing: '-0.01em' }}>
+                Pack Scan-Out Station
+              </h2>
+              <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                Real-time serialized stock verification & automated branch packing list generation
+              </p>
+            </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
@@ -1041,16 +1077,17 @@ export default function ScanOutPacking() {
               className="btn btn-secondary btn-sm"
               onClick={() => setIsImportModalOpen(true)}
               style={{
-                background: '#1e293b',
+                background: 'rgba(30, 41, 59, 0.8)',
                 color: '#38bdf8',
-                borderColor: '#38bdf8',
+                borderColor: 'rgba(56, 189, 248, 0.4)',
                 fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '6px',
+                height: '34px'
               }}
             >
-              <FileSpreadsheet size={16} />
+              <FileSpreadsheet size={15} />
               <span>Import XLSX / CSV</span>
             </button>
 
@@ -1058,25 +1095,38 @@ export default function ScanOutPacking() {
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => setIsClearModalOpen(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', height: '34px' }}
               >
                 <RotateCcw size={14} />
                 <span>Clear Draft ({currentShipment.items.length})</span>
               </button>
             )}
 
-            <div className="scanner-status-indicator">
+            <div className="scanner-status-indicator" style={{ height: '34px', boxSizing: 'border-box' }}>
               <div className="pulse-dot" />
               <span>HID Scanner Ready</span>
             </div>
           </div>
         </div>
 
-        {/* Site & Batch Selectors */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <label className="scanner-field-label" style={{ margin: 0 }}>Destination Service Site</label>
+        {/* Operational Overview: 4 Clean & Balanced Information Cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.3fr 0.9fr 1.3fr', gap: '12px', marginBottom: '18px' }}>
+          {/* Card 1: Destination Branch */}
+          <div
+            style={{
+              background: 'rgba(15, 23, 42, 0.75)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#94a3b8', fontWeight: 700, letterSpacing: '0.4px' }}>
+                Destination Site
+              </span>
               <button
                 type="button"
                 onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
@@ -1085,233 +1135,322 @@ export default function ScanOutPacking() {
                   border: '1px solid rgba(56, 189, 248, 0.4)',
                   color: '#38bdf8',
                   borderRadius: '4px',
-                  padding: '2px 8px',
-                  fontSize: '11px',
+                  padding: '1px 6px',
+                  fontSize: '10px',
                   fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px'
+                  cursor: 'pointer'
                 }}
-                title="Search across all 26+ branch sites"
               >
-                <Search size={11} />
-                <span>Search ({serviceSites.length})</span>
+                Change
               </button>
             </div>
-
             <div
               onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
-              style={{
-                width: '100%',
-                background: '#1e293b',
-                color: '#fff',
-                border: '1px solid #334155',
-                borderRadius: '6px',
-                padding: '8px 12px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '8px',
-                height: '42px',
-                boxSizing: 'border-box'
-              }}
-              title="Click to search and select destination branch site"
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-                <Building2 size={16} color="#38bdf8" style={{ flexShrink: 0 }} />
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <strong style={{ color: '#38bdf8' }}>{selectedSite.code || 'SELECT SITE'}</strong>
-                  <span style={{ color: '#94a3b8', fontSize: '12px', marginLeft: '6px' }}>
-                    {selectedSite.name || 'Click to select destination branch site'}
-                  </span>
+              <div style={{ background: 'rgba(56, 189, 248, 0.12)', padding: '5px', borderRadius: '6px', color: '#38bdf8', flexShrink: 0 }}>
+                <Building2 size={16} />
+              </div>
+              <div style={{ overflow: 'hidden' }}>
+                <div style={{ fontWeight: 800, color: '#38bdf8', fontSize: '13.5px', lineHeight: 1.2 }}>
+                  {selectedSite?.code || 'SELECT SITE'}
+                </div>
+                <div style={{ color: '#cbd5e1', fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                  {selectedSite?.name || 'Click to select branch'}
                 </div>
               </div>
-              <ChevronDown size={15} color="#94a3b8" style={{ flexShrink: 0 }} />
             </div>
           </div>
 
-          <div>
-            <label className="scanner-field-label">Allocation Week</label>
-            <select
-              className="form-select"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-              value={selectedWeek}
-              onChange={(e) => setSelectedWeek(parseInt(e.target.value))}
-            >
-              <option value={1}>Week 1</option>
-              <option value={2}>Week 2</option>
-              <option value={3}>Week 3</option>
-              <option value={4}>Week 4</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="scanner-field-label">Current Box #</label>
-            <select
-              className="form-select"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-              value={boxNumber}
-              onChange={(e) => setBoxNumber(parseInt(e.target.value))}
-            >
-              <option value={1}>Box 1</option>
-              <option value={2}>Box 2</option>
-              <option value={3}>Box 3</option>
-              <option value={4}>Box 4</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="scanner-field-label">Carrier</label>
-            <input
-              type="text"
-              className="form-input"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-              value={currentShipment.carrier ?? 'Lite Express'}
-              placeholder="e.g. Lite Express"
-              onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value }))}
-            />
-          </div>
-        </div>
-
-        {/* Branch Allocated Quota vs Packed Progress Banner */}
-        {branchAllocationProgress && branchAllocationProgress.targetWeekTotal > 0 && (
+          {/* Card 2: Courier & Transfer Slip */}
           <div
             style={{
-              background: '#0a0f1d',
-              border: '1px solid #1e293b',
-              borderRadius: '8px',
-              padding: '12px 16px',
-              marginBottom: '16px'
+              background: 'rgba(15, 23, 42, 0.75)',
+              border: '1px solid #334155',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '6px'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <PackageCheck size={16} color="#38bdf8" />
-                <span style={{ fontSize: '13px', color: '#e2e8f0' }}>
-                  {selectedSite?.name} • <strong>Week {selectedWeek} Allocation Target:</strong> {branchAllocationProgress.targetWeekTotal} units
-                </span>
-              </div>
-              <span style={{ fontSize: '12.5px', fontWeight: 700, color: branchAllocationProgress.pct >= 100 ? '#10b981' : '#38bdf8' }}>
-                {branchAllocationProgress.packedTotal} / {branchAllocationProgress.targetWeekTotal} units ({branchAllocationProgress.pct}%)
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#94a3b8', fontWeight: 700, letterSpacing: '0.4px' }}>
+                Courier & Transfer
+              </span>
+              <span style={{ fontSize: '10.5px', color: '#38bdf8', fontWeight: 600 }}>
+                {currentShipment.carrier || 'Lite Express'}
               </span>
             </div>
-            <div style={{ width: '100%', height: '6px', background: '#1e293b', borderRadius: '3px', overflow: 'hidden' }}>
-              <div
-                style={{
-                  width: `${branchAllocationProgress.pct}%`,
-                  height: '100%',
-                  background: branchAllocationProgress.pct >= 100 ? '#10b981' : '#0284c7',
-                  transition: 'width 0.3s ease'
-                }}
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '6px' }}>
+              <select
+                style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '6px', fontSize: '11px', padding: '4px 6px', height: '30px' }}
+                value={currentShipment.carrier || (selectedSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express')}
+                onChange={(e) => handleCourierChange(e.target.value)}
+              >
+                <option value="Lalamove">Lalamove (MM)</option>
+                <option value="Lite Express">Lite Express (Prov)</option>
+                <option value="Utility">Utility Pickup</option>
+              </select>
+              <input
+                type="text"
+                placeholder="TS # (Manual)"
+                style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '6px', fontSize: '11px', padding: '4px 6px', height: '30px', fontFamily: 'var(--font-mono)' }}
+                value={currentShipment.transfer_slip_number || ''}
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, transfer_slip_number: e.target.value }))}
+                title="Transfer Slip Number (e.g. TS-2026-0089)"
               />
             </div>
           </div>
-        )}
 
-        {/* Editable Manifest Details (Invoice Ref, Tracking, Verified By, Prepared By) */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '20px' }}>
-          <div>
-            <label className="scanner-field-label">Invoice Reference (Editable)</label>
-            <input
-              type="text"
-              className="form-input font-mono"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.invoice_ref ?? 'DCMSPIOWNED#20260808G'}
-              placeholder="e.g. DCMSPIOWNED#20260808G"
-              onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
-            />
+          {/* Card 3: Box Management */}
+          <div
+            style={{
+              background: 'rgba(15, 23, 42, 0.75)',
+              border: '1px solid #334155',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#94a3b8', fontWeight: 700, letterSpacing: '0.4px' }}>
+                Box #
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <span style={{ fontSize: '10px', color: '#64748b' }}>Total:</span>
+                <select
+                  style={{ background: '#1e293b', color: '#38bdf8', border: '1px solid #334155', borderRadius: '4px', fontSize: '10px', padding: '0 4px', height: '20px' }}
+                  value={totalBoxes}
+                  onChange={(e) => {
+                    const nextTotal = Math.max(1, parseInt(e.target.value) || 1);
+                    setTotalBoxes(nextTotal);
+                    if (boxNumber > nextTotal) setBoxNumber(nextTotal);
+                  }}
+                >
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                  <option value={4}>4</option>
+                  <option value={5}>5</option>
+                </select>
+              </div>
+            </div>
+            <select
+              style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '6px', fontSize: '12px', fontWeight: 700, padding: '4px 6px', height: '30px' }}
+              value={boxNumber}
+              onChange={(e) => setBoxNumber(parseInt(e.target.value))}
+            >
+              {Array.from({ length: totalBoxes }, (_, i) => i + 1).map(b => (
+                <option key={b} value={b}>
+                  Box {b}/{totalBoxes}
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div>
-            <label className="scanner-field-label">Tracking Number (Editable)</label>
-            <input
-              type="text"
-              className="form-input font-mono"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.tracking_number || ''}
-              placeholder="Enter Tracking # (Optional)"
-              onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
-            />
-          </div>
-
-          <div>
-            <label className="scanner-field-label">Verified By (Editable)</label>
-            <input
-              type="text"
-              className="form-input"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
-              placeholder="e.g. Anjo Alcazar"
-              onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
-            />
-          </div>
-
-          <div>
-            <label className="scanner-field-label">Prepared By (Editable)</label>
-            <input
-              type="text"
-              className="form-input"
-              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.prepared_by_name ?? (currentUser?.fullName || '')}
-              placeholder={currentUser?.fullName || "e.g. User Full Name"}
-              onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
-            />
-          </div>
-        </div>
-
-        {/* HID Scan Inputs */}
-        <div className="scan-input-grid">
-          <div>
-            <label className="scanner-field-label">1. Part Number (P/N)</label>
-            <input
-              ref={pnInputRef}
-              type="text"
-              className="scanner-input"
-              placeholder="e.g. 661-21991"
-              value={partNumberInput}
-              onChange={(e) => setPartNumberInput(e.target.value)}
-              onKeyDown={handlePnKeyDown}
-            />
-          </div>
-
-          <div>
-            <label className="scanner-field-label">2. Serial Number (S/N)</label>
-            <input
-              ref={serialInputRef}
-              type="text"
-              className="scanner-input"
-              placeholder="e.g. F8Y6276C1UQ13XCB1"
-              value={serialInput}
-              onChange={(e) => setSerialInput(e.target.value)}
-              onKeyDown={handleSerialKeyDown}
-            />
-          </div>
-
-          <div>
-            <button className="btn btn-primary btn-lg" onClick={executePackScan} style={{ height: '54px' }}>
-              <span>Pack Unit</span>
-              <ArrowRight size={18} />
-            </button>
+          {/* Card 4: Total Units & Declared Value */}
+          <div
+            style={{
+              background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(5, 150, 105, 0.18) 100%)',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#6ee7b7', fontWeight: 700, letterSpacing: '0.4px' }}>
+                Packed Units
+              </span>
+              <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', padding: '1px 6px', borderRadius: '8px' }}>
+                {currentShipment.items?.length || 0} units
+              </span>
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', color: '#a7f3d0' }}>Declared Value (85 PHP):</div>
+              <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#34d399', fontFamily: 'var(--font-mono)', lineHeight: 1.2 }}>
+                ₱{totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Feedback Alert */}
+        {/* Primary Barcode Scanner Inputs (Hero Stage) */}
+        <div
+          style={{
+            background: 'rgba(15, 23, 42, 0.95)',
+            border: '2px solid rgba(56, 189, 248, 0.45)',
+            borderRadius: '12px',
+            padding: '16px 20px',
+            marginBottom: '14px',
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)'
+          }}
+        >
+          <div className="scan-input-grid" style={{ alignItems: 'center' }}>
+            <div>
+              <label style={{ color: '#38bdf8', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', display: 'block', letterSpacing: '0.4px' }}>
+                1. Part Number (P/N)
+              </label>
+              <input
+                ref={pnInputRef}
+                type="text"
+                className="scanner-input"
+                placeholder="e.g. 661-21991"
+                value={partNumberInput}
+                onChange={(e) => setPartNumberInput(e.target.value)}
+                onKeyDown={handlePnKeyDown}
+                style={{ height: '46px', fontSize: '15px', borderRadius: '8px' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ color: '#38bdf8', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', display: 'block', letterSpacing: '0.4px' }}>
+                2. Serial Number (S/N)
+              </label>
+              <input
+                ref={serialInputRef}
+                type="text"
+                className="scanner-input"
+                placeholder="e.g. F8Y6276C1UQ13XCB1"
+                value={serialInput}
+                onChange={(e) => setSerialInput(e.target.value)}
+                onKeyDown={handleSerialKeyDown}
+                style={{ height: '46px', fontSize: '15px', borderRadius: '8px' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ opacity: 0, fontSize: '11px', marginBottom: '6px', display: 'block' }}>Action</label>
+              <button
+                className="btn btn-primary btn-lg"
+                onClick={executePackScan}
+                style={{ height: '46px', padding: '0 20px', fontSize: '14px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+              >
+                <span>Pack Unit</span>
+                <ArrowRight size={17} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Scan Result Feedback Box */}
         {scanResult && (
           <div
             className={`scanner-feedback-box ${
               scanResult.type === 'success' ? 'scanner-feedback-success' : 'scanner-feedback-error'
             }`}
+            style={{ marginBottom: '14px' }}
           >
             {scanResult.type === 'success' ? (
-              <CheckCircle2 size={20} color="#10b981" />
+              <CheckCircle2 size={18} color="#10b981" />
             ) : (
-              <AlertCircle size={20} color="#ef4444" />
+              <AlertCircle size={18} color="#ef4444" />
             )}
-            <span style={{ fontSize: '14px', fontWeight: 600 }}>{scanResult.message}</span>
+            <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
           </div>
         )}
+
+        {/* Collapsible Manifest Reference & Signatures Settings Bar */}
+        <div>
+          <button
+            type="button"
+            onClick={() => setIsDetailsExpanded(!isDetailsExpanded)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#94a3b8',
+              fontSize: '11.5px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '2px 0'
+            }}
+          >
+            <SlidersHorizontal size={13} color="#38bdf8" />
+            <span>{isDetailsExpanded ? 'Hide Manifest Reference & Signatures' : 'Show Manifest Reference & Signatures (Invoice Ref, Tracking, Signatures)'}</span>
+            {isDetailsExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+
+          {isDetailsExpanded && (
+            <div
+              style={{
+                marginTop: '10px',
+                background: 'rgba(15, 23, 42, 0.65)',
+                border: '1px solid #334155',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                display: 'grid',
+                gridTemplateColumns: '1.2fr 1fr 1fr 1fr 1fr',
+                gap: '10px'
+              }}
+            >
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600, marginBottom: '4px', display: 'block' }}>Invoice Ref</label>
+                <input
+                  type="text"
+                  className="form-input font-mono"
+                  style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
+                  value={currentShipment.invoice_ref ?? 'DCOWNED#082726A'}
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600, marginBottom: '4px', display: 'block' }}>Tracking # (Optional)</label>
+                <input
+                  type="text"
+                  className="form-input font-mono"
+                  style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
+                  value={currentShipment.tracking_number || ''}
+                  placeholder="e.g. 20227258"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600, marginBottom: '4px', display: 'block' }}>Prepared By</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
+                  value={currentShipment.prepared_by_name ?? (currentUser?.fullName || '')}
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600, marginBottom: '4px', display: 'block' }}>Verified By</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
+                  value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600, marginBottom: '4px', display: 'block' }}>Pickup By</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
+                  value={currentShipment.pickup_by_name || (currentShipment.carrier === 'Utility' ? 'Utility' : '')}
+                  placeholder={currentShipment.carrier === 'Utility' ? 'Utility' : 'Driver Name'}
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, pickup_by_name: e.target.value }))}
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Simplified & High-Usability Available DC Inventory Table */}
@@ -1340,7 +1479,7 @@ export default function ScanOutPacking() {
                 )}
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Click "+ Pack" on any serialized unit to immediately add it to Box #{boxNumber}
+                Click "Pack" on any serialized unit to immediately add it to Box #{boxNumber}
               </p>
             </div>
           </div>
@@ -1512,11 +1651,11 @@ export default function ScanOutPacking() {
                           type="button"
                           className="btn btn-primary btn-sm"
                           onClick={(e) => handleSimulatePack(unit, e)}
-                          style={{ padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px', borderRadius: '4px' }}
+                          style={{ padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px', borderRadius: '4px' }}
                           title={`Pack ${unit.part_number} (${unit.serial_number}) into Box #${boxNumber}`}
                         >
-                          <Plus size={11} />
-                          <span>+ Pack</span>
+                          <Plus size={12} />
+                          <span>Pack</span>
                         </button>
                       </td>
                     </tr>
@@ -1639,8 +1778,8 @@ export default function ScanOutPacking() {
                   type="text"
                   className="packing-inline-input font-mono"
                   style={{ width: '220px', fontWeight: 700 }}
-                  value={currentShipment.invoice_ref ?? `DCMSPIOWNED#20260818N`}
-                  placeholder="DCMSPIOWNED#20260818N"
+                  value={currentShipment.invoice_ref ?? `DCOWNED#082726A`}
+                  placeholder="DCOWNED#082726A"
                   title="Click to edit Invoice Reference"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
                 />
@@ -1658,18 +1797,18 @@ export default function ScanOutPacking() {
               </div>
               <div className="packing-invoice-meta-row">
                 <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>BOX/S #:</strong>
-                <span style={{ minWidth: '40px', textAlign: 'right', fontWeight: 700, paddingRight: '6px' }}>{boxNumber}</span>
+                <span style={{ minWidth: '40px', textAlign: 'right', fontWeight: 700, paddingRight: '6px' }}>{boxNumber}/{totalBoxes}</span>
               </div>
               <div className="packing-invoice-meta-row">
-                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>CARRIER:</strong>
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>COURIER:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
                   style={{ width: '130px' }}
-                  value={currentShipment.carrier ?? 'Lalamove'}
-                  placeholder="Lalamove"
-                  title="Click to edit Carrier"
-                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value }))}
+                  value={currentShipment.carrier ?? (selectedSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express')}
+                  placeholder="Lalamove / Lite Express"
+                  title="Click to edit Courier"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value, courier: e.target.value }))}
                 />
               </div>
               <div className="packing-invoice-meta-row">
@@ -1684,6 +1823,20 @@ export default function ScanOutPacking() {
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
                 />
               </div>
+              {currentShipment.transfer_slip_number && (
+                <div className="packing-invoice-meta-row">
+                  <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>TRANSFER SLIP #:</strong>
+                  <input
+                    type="text"
+                    className="packing-inline-input font-mono"
+                    style={{ width: '140px' }}
+                    value={currentShipment.transfer_slip_number || ''}
+                    placeholder="Transfer Slip #"
+                    title="Click to edit Transfer Slip Number"
+                    onChange={(e) => setCurrentShipment(prev => ({ ...prev, transfer_slip_number: e.target.value }))}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1721,36 +1874,42 @@ export default function ScanOutPacking() {
                     </td>
                   </tr>
                 ) : (
-                  filteredManifestItems.map((it, i) => (
-                    <tr key={i} className={i % 2 === 1 ? 'packing-table-row-alt' : ''}>
-                      <td style={{ textAlign: 'center', color: '#64748b' }}>{i + 1}</td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
-                      <td style={{ textAlign: 'left' }}>{it.description}</td>
-                      <td style={{ textAlign: 'center', fontSize: '11.5px' }}>{it.serial_number}</td>
-                      <td style={{ textAlign: 'center' }}>{it.box_number || 1}</td>
-                      <td className="hide-on-print" style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={() => handleRemoveItem(it.serial_number)}
-                          title="Remove part from packing list & return to DC in-stock inventory"
-                          style={{
-                            background: '#fee2e2',
-                            color: '#dc2626',
-                            border: 'none',
-                            padding: '2px 5px',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                          }}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  filteredManifestItems.map((it, i) => {
+                    const itemBoxDisplay = it.box_number 
+                      ? (String(it.box_number).includes('/') ? it.box_number : `${it.box_number}/${totalBoxes}`)
+                      : `${boxNumber}/${totalBoxes}`;
+
+                    return (
+                      <tr key={i} className={i % 2 === 1 ? 'packing-table-row-alt' : ''}>
+                        <td style={{ textAlign: 'center', color: '#64748b' }}>{i + 1}</td>
+                        <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
+                        <td style={{ textAlign: 'left' }}>{it.description}</td>
+                        <td style={{ textAlign: 'center', fontSize: '11.5px' }}>{it.serial_number}</td>
+                        <td style={{ textAlign: 'center' }}>{itemBoxDisplay}</td>
+                        <td className="hide-on-print" style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() => handleRemoveItem(it.serial_number)}
+                            title="Remove part from packing list & return to DC in-stock inventory"
+                            style={{
+                              background: '#fee2e2',
+                              color: '#dc2626',
+                              border: 'none',
+                              padding: '2px 5px',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1771,14 +1930,20 @@ export default function ScanOutPacking() {
               />
             </div>
 
-            <div className="packing-totals-box">
+            <div className="packing-totals-box" style={{ width: '260px' }}>
               <div className="packing-total-row">
                 <div className="packing-total-label">TOTAL QTY</div>
                 <div className="packing-total-val">{currentShipment.items?.length || 0}</div>
               </div>
               <div className="packing-total-row">
                 <div className="packing-total-label">TOTAL BOXES</div>
-                <div className="packing-total-val">{boxNumber}</div>
+                <div className="packing-total-val">{totalBoxes}</div>
+              </div>
+              <div className="packing-total-row">
+                <div className="packing-total-label">DECLARED VALUE</div>
+                <div className="packing-total-val" style={{ fontSize: '11px', color: '#059669', fontWeight: 800 }}>
+                  PHP {totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
               </div>
             </div>
           </div>
@@ -1809,7 +1974,19 @@ export default function ScanOutPacking() {
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
               />
             </div>
-            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong style={{ color: '#0f172a' }}>Pickup By:</strong>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '170px', fontWeight: 600 }}
+                value={currentShipment.pickup_by_name || (currentShipment.carrier === 'Utility' ? 'Utility' : '')}
+                placeholder={currentShipment.carrier === 'Utility' ? 'Utility' : 'e.g. Lalamove Driver'}
+                title="Click to edit Pickup By"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, pickup_by_name: e.target.value }))}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <strong style={{ color: '#0f172a' }}>Receiving Branch Signature:</strong>
               <input
                 type="text"
@@ -1862,7 +2039,7 @@ export default function ScanOutPacking() {
                   <th>Invoice Reference</th>
                   <th>Destination Branch</th>
                   <th>Total Parts</th>
-                  <th>Carrier & Tracking</th>
+                  <th>Courier & Tracking</th>
                   <th>Prepared / Verified</th>
                   <th>Status</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
@@ -1894,8 +2071,15 @@ export default function ScanOutPacking() {
                           </span>
                         </td>
                         <td style={{ fontSize: '12px' }}>
-                          <div>{s.carrier || 'Lite Express'}</div>
-                          <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>#{s.tracking_number || 'N/A'}</span>
+                          <div><strong>{s.carrier || s.courier || 'Lite Express'}</strong></div>
+                          <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
+                            {s.tracking_number ? `#${s.tracking_number}` : 'No tracking'}
+                          </span>
+                          {s.transfer_slip_number && (
+                            <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
+                              TS: {s.transfer_slip_number}
+                            </div>
+                          )}
                         </td>
                         <td style={{ fontSize: '11.5px', color: '#475569' }}>
                           <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>

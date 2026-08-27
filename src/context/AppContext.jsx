@@ -141,6 +141,8 @@ export function AppProvider({ children }) {
     setUsersList: userManagement.setUsersList,
     showToast,
     hydrateFromSupabase: (...args) => cloudSync.hydrateFromSupabase(...args),
+    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    syncMasterUsersRegistry: userManagement.syncMasterUsersRegistry,
     setActiveTab
   });
 
@@ -170,6 +172,8 @@ export function AppProvider({ children }) {
     setParts: catalogAndSites.setParts,
     sites: catalogAndSites.sites,
     setSites: catalogAndSites.setSites,
+    forecastingModel: forecastingAndAllocation.forecastingModel,
+    setForecastingModel: forecastingAndAllocation.setForecastingModel,
     activePeriod,
     setActivePeriod,
     setActiveTab,
@@ -291,6 +295,8 @@ export function AppProvider({ children }) {
         pendingFirstTimeUser: auth.pendingFirstTimeUser,
         setPendingFirstTimeUser: auth.setPendingFirstTimeUser,
         canAccess: auth.canAccess,
+        canEdit: auth.canEdit,
+        isReadOnly: auth.isReadOnly,
         verifyLoginEmail: auth.verifyLoginEmail,
         signInWithPassword: auth.signInWithPassword,
         createFirstTimePassword: auth.createFirstTimePassword,

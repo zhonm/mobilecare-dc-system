@@ -320,4 +320,60 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
   }).filter(r => r.serial_number);
 }
 
+// Generate auto-sequenced Invoice Reference: DCOWNED# + MMDDYY + Letter (e.g. DCOWNED#082726A, DCOWNED#082726B)
+export function generateNextInvoiceRef(shipmentsList = [], date = new Date()) {
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const yy = String(date.getFullYear()).slice(-2);
+  const dateCode = `${mm}${dd}${yy}`; // e.g. "082726"
 
+  const usedLetters = new Set();
+  const list = Array.isArray(shipmentsList) ? shipmentsList : [];
+
+  list.forEach(s => {
+    const ref = String(s.invoice_ref || s.invoiceRef || s.id || '').toUpperCase();
+    const regex = new RegExp(`(?:DCOWNED[#\\-_]?)?${dateCode}([A-Z]+)`);
+    const match = ref.match(regex);
+    if (match && match[1]) {
+      usedLetters.add(match[1]);
+    }
+  });
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('mdc_pack_draft_') || key === 'mdc_active_pack_draft')) {
+          const d = JSON.parse(localStorage.getItem(key) || '{}');
+          const ref = String(d.invoice_ref || '').toUpperCase();
+          const regex = new RegExp(`(?:DCOWNED[#\\-_]?)?${dateCode}([A-Z]+)`);
+          const match = ref.match(regex);
+          if (match && match[1]) {
+            usedLetters.add(match[1]);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Assign next sequential letter (A, B, C, ... Z)
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (let i = 0; i < alphabet.length; i++) {
+    const letter = alphabet[i];
+    if (!usedLetters.has(letter)) {
+      return `DCOWNED#${dateCode}${letter}`;
+    }
+  }
+
+  // Fallback for > 26 shipments on the same date (AA, AB, etc.)
+  for (let i = 0; i < alphabet.length; i++) {
+    for (let j = 0; j < alphabet.length; j++) {
+      const combo = `${alphabet[i]}${alphabet[j]}`;
+      if (!usedLetters.has(combo)) {
+        return `DCOWNED#${dateCode}${combo}`;
+      }
+    }
+  }
+
+  return `DCOWNED#${dateCode}${Date.now().toString().slice(-2)}`;
+}

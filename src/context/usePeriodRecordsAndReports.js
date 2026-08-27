@@ -3,6 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 
 export function usePeriodRecordsAndReports({
   currentUser,
@@ -14,7 +15,9 @@ export function usePeriodRecordsAndReports({
   setParts,
   sites = [],
   setSites,
-  _activePeriod,
+  forecastingModel = 'linear',
+  setForecastingModel,
+  activePeriod,
   setActivePeriod,
   setActiveTab,
   showToast,
@@ -100,6 +103,12 @@ export function usePeriodRecordsAndReports({
       allocations: recordType !== 'forecast' ? JSON.parse(JSON.stringify(allocations || [])) : [],
       parts: JSON.parse(JSON.stringify(parts || [])),
       sites: JSON.parse(JSON.stringify(sites || [])),
+      forecastingModel: forecastingModel || 'linear',
+      activePeriod: {
+        month: parseInt(periodMonth) || activePeriod?.month || (new Date().getMonth() + 1),
+        year: parseInt(periodYear) || activePeriod?.year || new Date().getFullYear(),
+        label: cleanLabel
+      },
       summary: {
         totalForecastUnits,
         totalAllocatedUnits,
@@ -115,8 +124,8 @@ export function usePeriodRecordsAndReports({
       id: newRecordId,
       record_type: recordType,
       period_label: cleanLabel,
-      period_year: parseInt(periodYear) || new Date().getFullYear(),
-      period_month: parseInt(periodMonth) || (new Date().getMonth() + 1),
+      period_year: parseInt(periodYear) || activePeriod?.year || new Date().getFullYear(),
+      period_month: parseInt(periodMonth) || activePeriod?.month || (new Date().getMonth() + 1),
       period_week: periodWeek ? parseInt(periodWeek) : null,
       notes: (notes || '').trim(),
       saved_by_name: currentUser?.fullName || 'Warehouse Operations',
@@ -217,6 +226,8 @@ export function usePeriodRecordsAndReports({
     }
 
     let restoredCountDesc = [];
+    const restoredForecasts = options.restoreForecast ? (snap.forecastItems || []) : forecastItems;
+    let restoredAllocations = options.restoreAllocation ? (snap.allocations || []) : allocations;
 
     if (options.restoreForecast && snap.forecastItems && snap.forecastItems.length > 0 && setForecastItems) {
       setForecastItems(snap.forecastItems);
@@ -234,9 +245,10 @@ export function usePeriodRecordsAndReports({
         localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
       } catch (e) {}
       restoredCountDesc.push(`${snap.allocations.length} allocations`);
-    } else if (snap.forecastItems && snap.forecastItems.length > 0 && setAllocations) {
+    } else if (options.restoreAllocation && snap.forecastItems && snap.forecastItems.length > 0 && setAllocations) {
       const generated = generateAllocationsFromForecasts(snap.forecastItems, sites);
       if (generated.length > 0) {
+        restoredAllocations = generated;
         setAllocations(generated);
         dbStorage.setItem('mdc_allocations', generated);
         try {
@@ -246,15 +258,74 @@ export function usePeriodRecordsAndReports({
       }
     }
 
-    if (record.period_month || record.period_year || record.period_label) {
-      const restoredPeriod = {
-        month: record.period_month || 9,
-        year: record.period_year || 2026,
-        label: record.period_label || `Period ${record.period_month || 9} ${record.period_year || 2026}`
+    const MONTHS_LIST = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const pMonth = record.period_month || snap.activePeriod?.month || 8;
+    const pYear = record.period_year || snap.activePeriod?.year || 2026;
+    const cleanMonthName = MONTHS_LIST[pMonth - 1] || 'August';
+    const restoredPeriod = {
+      month: pMonth,
+      year: pYear,
+      label: record.period_label || snap.activePeriod?.label || `${cleanMonthName} ${pYear}`
+    };
+
+    if (setActivePeriod) setActivePeriod(restoredPeriod);
+    dbStorage.setItem('mdc_active_period', restoredPeriod);
+    try { localStorage.setItem('mdc_active_period', JSON.stringify(restoredPeriod)); } catch (e) {}
+
+    // Restore calculation model if preserved in snapshot
+    const restoredModel = snap.forecastingModel || 'linear';
+    if (setForecastingModel) {
+      setForecastingModel(restoredModel);
+      try { localStorage.setItem('mdc_forecasting_model', restoredModel); } catch (e) {}
+    }
+
+    // Protect restored working data from being overwritten by cloud background poll
+    const nowTimestamp = Date.now().toString();
+    try {
+      localStorage.setItem('mdc_last_override_time', nowTimestamp);
+    } catch (e) {}
+
+    // Update cloud live master record so all users and future refreshes see the restored state
+    if (supabase) {
+      const liveSnapshotPayload = {
+        id: LIVE_MASTER_RECORD_ID,
+        record_type: 'live_master_state',
+        period_label: `${restoredPeriod.label} Live Master State`,
+        period_year: restoredPeriod.year,
+        period_month: restoredPeriod.month,
+        saved_by_name: currentUser?.fullName || 'Superadmin User',
+        saved_by_user_id: null,
+        notes: `Restored from saved period record: "${record.period_label}"`,
+        snapshot_data: {
+          forecastItems: restoredForecasts,
+          allocations: restoredAllocations,
+          parts: snap.parts || parts,
+          sites: snap.sites || sites,
+          forecastingModel: restoredModel,
+          activePeriod: restoredPeriod
+        },
+        updated_at: new Date().toISOString()
       };
-      if (setActivePeriod) setActivePeriod(restoredPeriod);
-      dbStorage.setItem('mdc_active_period', restoredPeriod);
-      try { localStorage.setItem('mdc_active_period', JSON.stringify(restoredPeriod)); } catch (e) {}
+
+      supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' })
+        .then(() => {
+          // Purge legacy live_master_state_v1 row from database if present
+          supabase.from('saved_records').delete().eq('id', 'live_master_state_v1').then(() => {}).catch(() => {});
+        })
+        .catch(err => console.warn('Cloud sync error on restore:', err));
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('PERIOD_RECORD_RESTORED', {
+        recordId: record.id,
+        period_label: record.period_label,
+        period: restoredPeriod,
+        table: 'saved_records'
+      });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', {
+        table: 'saved_records',
+        period: restoredPeriod
+      });
     }
 
     const descStr = restoredCountDesc.length > 0 ? ` (${restoredCountDesc.join(', ')})` : '';
@@ -273,6 +344,35 @@ export function usePeriodRecordsAndReports({
     }
 
     return { success: true };
+  };
+
+  const registerDeletedPeriodRecordId = async (recordId) => {
+    if (!recordId) return;
+    const cleanId = String(recordId).trim();
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_period_record_ids') || '[]');
+      const updated = Array.from(new Set([...localDeleted, cleanId]));
+      localStorage.setItem('mdc_deleted_period_record_ids', JSON.stringify(updated));
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_period_record_ids_registry').maybeSingle();
+        const cloudDeleted = reg?.snapshot_data?.deletedIds || [];
+        const updatedCloud = Array.from(new Set([...cloudDeleted, cleanId]));
+        await supabase.from('saved_records').upsert({
+          id: 'deleted_period_record_ids_registry',
+          record_type: 'deletion_registry',
+          period_label: 'Deleted Period Record IDs Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { deletedIds: updatedCloud },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (e) {
+        console.warn('Could not register deleted period record in cloud registry:', e);
+      }
+    }
   };
 
   const deletePeriodRecord = async (recordId) => {
@@ -315,12 +415,21 @@ export function usePeriodRecordsAndReports({
       console.warn('LocalStorage delete error:', e);
     }
 
+    // Register deletion in durable cloud & local registry
+    await registerDeletedPeriodRecordId(recordId);
+
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         const { error } = await supabase.from('saved_records').delete().eq('id', recordId);
         if (error) {
-          await supabase.from('saved_records').update({ notes: '__DELETED__', snapshot_data: { isDeleted: true }, updated_at: new Date().toISOString() }).eq('id', recordId);
+          await supabase.from('saved_records').upsert({
+            id: recordId,
+            record_type: 'deleted_snapshot',
+            notes: '__DELETED__',
+            snapshot_data: { isDeleted: true },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_DELETED', { recordId });

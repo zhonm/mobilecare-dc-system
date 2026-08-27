@@ -402,7 +402,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* KPI 3: Inbound Batches & Intake Manifests */}
+        {/* KPI 3: Inbound Batches & Dispatched Manifests */}
         <div
           className="kpi-card"
           style={{
@@ -410,10 +410,10 @@ export default function Dashboard() {
             cursor: 'pointer'
           }}
           onClick={() => setActiveTab('intake-records')}
-          title="Click to view DC Intake Records"
+          title="Click to view Dispatched Already in All Sites"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <span className="kpi-title">Intake Records Saved</span>
+            <span className="kpi-title">Dispatched Already in All Sites</span>
             <div style={{ padding: '8px', background: '#ede9fe', borderRadius: '8px', color: '#8b5cf6' }}>
               <Barcode size={20} />
             </div>
@@ -425,7 +425,7 @@ export default function Dashboard() {
             <span style={{ color: '#6d28d9', fontWeight: 700 }}>
               {totalIntakeUnitsReceived.toLocaleString()} units
             </span>{' '}
-            received & database persisted
+            dispatched across all sites
           </div>
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: '100%', background: '#8b5cf6' }} />
@@ -630,7 +630,7 @@ export default function Dashboard() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>DC Parts Stock Records</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Review saved batches & in-stock manifests</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Review in-stock parts & all-site dispatched records</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
           </div>
@@ -661,16 +661,16 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 5. 2-Column Live Operational Feeds: Intake Records & Recent Shipments */}
+      {/* 5. 2-Column Live Operational Feeds: Dispatched Records & Recent Shipments */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px', marginBottom: '24px' }}>
         
-        {/* Left Column: DC Intake Records (Live Batches) */}
+        {/* Left Column: Dispatched Records (Live Batches) */}
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent DC Parts Stock Records</h3>
+              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent Dispatched in All Sites</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Batches scanned and saved into permanent cloud storage
+                Batches dispatched and saved based on purchase orders
               </p>
             </div>
             <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('intake-records')}>
@@ -682,9 +682,9 @@ export default function Dashboard() {
           {recentIntakes.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
               <Barcode size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
-              <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Intake Records Saved Yet</div>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Dispatched Records Saved Yet</div>
               <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 12px' }}>
-                Scan parts in the Receive station and save an intake record batch.
+                Scan parts in the Receive station and save a dispatched batch record.
               </p>
               <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-in')}>
                 Receive Scan-In (F1)

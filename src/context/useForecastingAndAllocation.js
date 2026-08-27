@@ -3,12 +3,9 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import {
-  calculateProportionalAllocation,
   calculateWeeklySplit,
   generateAllocationsFromForecasts,
-  allocatePartToSites,
-  resolvePartSiteDemands,
-  getOrderRemark
+  allocatePartToSites
 } from '../utils/allocationEngine';
 import { calculateForecastByModel, calculateItemForecast } from '../utils/forecastEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';

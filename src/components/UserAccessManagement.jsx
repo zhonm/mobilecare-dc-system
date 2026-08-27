@@ -383,12 +383,12 @@ export default function UserAccessManagement() {
               <Eye size={18} />
             </div>
             <div>
-              <strong style={{ fontSize: '14px', color: '#0f172a' }}>3. User (View-Only)</strong>
-              <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700 }}>Read-Only Operational View</div>
+              <strong style={{ fontSize: '14px', color: '#0f172a' }}>3. User (View &amp; Export Only)</strong>
+              <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700 }}>Read-Only &amp; XLSX Export</div>
             </div>
           </div>
           <p style={{ fontSize: '12px', color: '#64748b', margin: 0, lineHeight: 1.4 }}>
-            Primarily view-only access to DC Overview, Stock Reports, Serialized Audit Logs, and manifest records.
+            Unrestricted view and styled XLSX export access to Demand Forecasting, Allocation Matrix, Reports, Saved Period Records, and POs. Operations and physical logistics are restricted.
           </p>
         </div>
       </div>

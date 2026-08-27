@@ -1,28 +1,28 @@
 export const ROLE_PRESETS = {
   superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports'],
-  user: ['dashboard', 'intake-records', 'shipments', 'reports', 'forecast-reports', 'audit'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'orders', 'records', 'audit'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'reports', 'orders', 'records', 'audit'],
   // Legacy aliases
   warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports'],
-  site_staff: ['dashboard', 'shipments', 'reports', 'forecast-reports'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'forecast-reports', 'audit']
+  site_staff: ['dashboard', 'forecast', 'allocation', 'shipments', 'reports', 'forecast-reports'],
+  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'reports', 'forecast-reports', 'audit']
 };
 
 export const ROLE_OPTIONS = [
   {
     value: 'superadmin',
     label: 'Superadmin',
-    description: 'Full access to all system features, configurations, and user permissions.'
+    description: 'Full unrestricted governance over all system features, forecasting algorithms, database maintenance, site catalogs, and security permissions.'
   },
   {
     value: 'admin',
     label: 'Admin',
-    description: 'Operational administrator. Page access is assigned by Superadmin. Can edit user role positions.'
+    description: 'Operational administrator. Manages intake operations, allocations, shipments, and edits staff role positions.'
   },
   {
     value: 'user',
-    label: 'User (View-Only)',
-    description: 'Primarily view-only access to operational dashboards, reports, and logs.'
+    label: 'User (View & Export Only)',
+    description: 'View-only access to Demand Forecasting, Allocation Matrix, Reports, Saved Period Records, and POs with full XLSX/PDF export capabilities.'
   }
 ];
 

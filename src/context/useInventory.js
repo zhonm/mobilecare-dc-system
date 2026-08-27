@@ -387,19 +387,6 @@ export function useInventory({
     const cleanSerial = String(serialNumber).trim().toUpperCase();
     const effectiveAssignment = String(newAssignment).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
 
-    // Retrieve target unit synchronously from state or local cache to guarantee Supabase persistence
-    let currentUnit = (inventoryUnits || []).find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
-    if (!currentUnit) {
-      try {
-        const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
-        currentUnit = localInv.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
-      } catch (e) {}
-    }
-
-    const targetUnit = currentUnit
-      ? { ...currentUnit, intake_assignment: effectiveAssignment, notes: effectiveAssignment }
-      : { serial_number: cleanSerial, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
-
     setInventoryUnits(prev => {
       const updated = (prev || []).map(u => {
         if (String(u.serial_number || '').toUpperCase() === cleanSerial) {

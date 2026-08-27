@@ -354,9 +354,14 @@ export function calculateItemForecast(item, modelType = 'linear', historyLength 
   if (!item) return 0;
   const rawCounts = Array.isArray(item.ytd_monthly_counts) ? item.ytd_monthly_counts : [];
 
+  // Slice historical counts according to active historyLength window if specified
+  const effectiveCounts = (historyLength && historyLength > 0 && historyLength < rawCounts.length)
+    ? rawCounts.slice(0, historyLength)
+    : rawCounts;
+
   // ── Linear Regression: plain FORECAST.LINEAR — no Winsorization, no zero-padding ──
   if (modelType === 'linear' || modelType === 'forecast_linear') {
-    const actualCounts = rawCounts.map(v => toNum(v));
+    const actualCounts = effectiveCounts.map(v => toNum(v));
     if (actualCounts.length === 0) return 0;
     const targetX = actualCounts.length + 1;
     return calculateLinearRegressionForecast(actualCounts, targetX, {
@@ -367,11 +372,11 @@ export function calculateItemForecast(item, modelType = 'linear', historyLength 
   }
 
   // ── WMA (and all other models): right-align with leading zeros + Winsorization ──
-  const targetLen = historyLength || (rawCounts.length > 0 ? rawCounts.length : 8);
-  const offset = targetLen - rawCounts.length;
+  const targetLen = historyLength || (effectiveCounts.length > 0 ? effectiveCounts.length : 8);
+  const offset = targetLen - effectiveCounts.length;
   const counts = Array.from({ length: targetLen }, (_, idx) => {
     const dataIdx = idx - offset;
-    return dataIdx >= 0 && dataIdx < rawCounts.length ? (toNum(rawCounts[dataIdx])) : 0;
+    return dataIdx >= 0 && dataIdx < effectiveCounts.length ? (toNum(effectiveCounts[dataIdx])) : 0;
   });
   const targetX = targetLen + 1;
   return calculateForecastByModel(counts, modelType, {

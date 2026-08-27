@@ -1,17 +1,13 @@
 import {
   CANONICAL_SITE_CODES,
-  CANONICAL_SITE_LIST,
-  CANONICAL_DISPLAY_DESCS,
-  CANONICAL_BATTERY_SHARE_DESCS
+  CANONICAL_SITE_LIST
 } from '../constants/config.js';
 import {
-  resolvePartSiteDemands,
   allocatePartToSites,
   generateAllocationsFromForecasts,
   validateSiteSharesConsistency
 } from '../utils/allocationEngine.js';
-import { calculateLinearRegressionForecast, calculateForecastByModel } from '../utils/forecastEngine.js';
-import { displayShares, batteryShares } from '../data/canonicalShares.js';
+import { calculateLinearRegressionForecast } from '../utils/forecastEngine.js';
 
 let totalTests = 0;
 let passedTests = 0;

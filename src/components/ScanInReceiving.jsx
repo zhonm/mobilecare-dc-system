@@ -1111,11 +1111,11 @@ export default function ScanInReceiving() {
                 type="button"
                 className="btn btn-secondary btn-sm"
                 onClick={() => setIsSaveIntakeModalOpen(true)}
-                title="Save current scanned parts into a named DC Intake Record (MDC202600015)"
+                title="Save current scanned parts into a named Dispatched Record (MDC202600015)"
                 style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
               >
                 <BookmarkPlus size={14} />
-                <span>Save Intake Record Batch</span>
+                <span>Save Dispatched Batch</span>
               </button>
             </div>
           </div>
@@ -1851,7 +1851,7 @@ export default function ScanInReceiving() {
                     value={modalPoId}
                     onChange={(e) => setModalPoId(e.target.value)}
                   >
-                    <option value="">-- No PO (Direct DC Intake) --</option>
+                    <option value="">-- No PO (Direct Dispatch) --</option>
                     {purchaseOrders.map(po => (
                       <option key={po.id} value={po.id}>
                         {po.po_number} ({po.status})
@@ -2078,7 +2078,7 @@ export default function ScanInReceiving() {
           localStorage.removeItem('mdc_recent_scans');
           setScanResult({
             type: 'success',
-            message: `[INTAKE RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
+            message: `[DISPATCHED RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
           });
           setActiveTab('intake-records');
         }}

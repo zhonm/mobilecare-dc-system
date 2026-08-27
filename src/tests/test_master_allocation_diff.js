@@ -13,9 +13,7 @@ const require = createRequire(import.meta.url);
 const XLSX = require("xlsx");
 
 import { processRawUsageSheet, CANONICAL_SITE_LIST } from "../utils/excelParser.js";
-import { calculateLinearRegressionForecast, calculateForecastByModel } from "../utils/forecastEngine.js";
-import { calculateOptionAAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from "../utils/allocationEngine.js";
-import { displayShares, batteryShares } from "../data/canonicalShares.js";
+import { calculateWeeklySplit } from "../utils/allocationEngine.js";
 
 let totalTests = 0;
 let passedTests = 0;
@@ -37,8 +35,6 @@ console.log("MASTER ALLOCATION & FORECASTING PARITY DIFF REPORT (SEP 2026)");
 console.log("===============================================================");
 
 const allocFile = "Battery & Display (Allocation) - September 2026.xlsx";
-const forecastFile = "Battery and Display (Forecasting) - September 2026.xlsx";
-const exportedAppFile = "Master_Allocation_September_2026-2.xlsx";
 
 if (!fs.existsSync(allocFile)) {
   console.error("Reference workbook " + allocFile + " missing.");

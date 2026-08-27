@@ -377,7 +377,7 @@ export default function AuditTrail() {
                   }}
                 >
                   <option value="ALL">All Entity Types ({deletionAuditLogs?.length || 0})</option>
-                  <option value="DC Intake Record">DC Intake Records</option>
+                  <option value="DC Intake Record">Dispatched Records (All Sites)</option>
                   <option value="Period Snapshot">Period Snapshots</option>
                   <option value="Shipment Manifest">Shipment Manifests</option>
                   <option value="Purchase Order">Purchase Orders</option>

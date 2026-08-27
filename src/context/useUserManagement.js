@@ -668,6 +668,7 @@ export function useUserManagement({
     deleteUser,
     toggleUserPagePermission,
     applyRolePresetToUser,
-    toggleUserActiveStatus
+    toggleUserActiveStatus,
+    syncMasterUsersRegistry
   };
 }

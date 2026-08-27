@@ -252,7 +252,7 @@ export function useIntakeRecords({
       if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
     }
 
-    showToast(`Saved DC Intake Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+    showToast(`Saved Dispatched Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
     return { success: true, record: newRecord };
   };
 
@@ -264,7 +264,7 @@ export function useIntakeRecords({
     // Authority Rule: Only the user who originally saved the record has permission to delete it
     if (!canUserDeleteRecord(target, currentUser)) {
       const creatorName = target.saved_by_name || 'the original creator';
-      showToast(`Permission Denied: Only ${creatorName} can delete this intake record.`, 'error');
+      showToast(`Permission Denied: Only ${creatorName} can delete this dispatched record.`, 'error');
       return { success: false, error: `Permission Denied: Only ${creatorName} can delete this record.` };
     }
 

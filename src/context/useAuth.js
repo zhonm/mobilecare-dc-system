@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
+import dbStorage from '../utils/dbStorage';
 import { hashPassword, verifyPassword, generateSessionSignature, verifySessionIntegrity } from '../utils/security';
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
@@ -10,6 +11,8 @@ export function useAuth({
   setUsersList,
   showToast,
   hydrateFromSupabase,
+  broadcastCloudEvent,
+  syncMasterUsersRegistry,
   setActiveTab
 }) {
   const [currentUser, setCurrentUser] = useState(() => {
@@ -85,12 +88,17 @@ export function useAuth({
     // 3. Deactivated accounts have zero access
     if (currentUser.isActive === false) return false;
 
-    // 4. Check explicit permitted pages assigned by Superadmin
+    // 4. Regular users (role: 'user') only have view & export access to Planning & Reports modules (excluding operations)
+    if (currentUser.role === 'user') {
+      return ROLE_PRESETS.user.includes(pageId);
+    }
+
+    // 5. Check explicit permitted pages assigned by Superadmin for admin accounts
     if (Array.isArray(currentUser.permittedPages)) {
       return currentUser.permittedPages.includes(pageId);
     }
 
-    // 5. Fallback preset if permittedPages is not set on legacy user
+    // 6. Fallback preset if permittedPages is not set on legacy user
     const fallbackPreset = ROLE_PRESETS[currentUser.role] || ROLE_PRESETS.user;
     return fallbackPreset.includes(pageId) && pageId !== 'user-access';
   };
@@ -108,50 +116,75 @@ export function useAuth({
 
     let user = matchUserByEmail(usersList, email);
 
+    if (!user) {
+      try {
+        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || '[]');
+        user = matchUserByEmail(localUsers, email);
+      } catch (e) {}
+    }
+
     if (!user && supabase) {
       try {
-        const { data: dbProfiles } = await supabase
-          .from('profiles')
-          .select('*');
+        // 1. Check authoritative master_users_registry first
+        const { data: regDoc } = await supabase
+          .from('saved_records')
+          .select('snapshot_data')
+          .eq('id', 'master_users_registry')
+          .maybeSingle();
 
-        if (dbProfiles && dbProfiles.length > 0) {
-          const matchedDb = matchUserByEmail(
-            dbProfiles.map(p => ({
-              ...p,
-              fullName: p.full_name,
-              siteId: p.site_id,
-              hasSetPassword: p.has_set_password,
-              isActive: p.is_active
-            })),
-            email
-          );
+        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
+          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, email);
+          if (matchedFromReg) {
+            user = matchedFromReg;
+            setUsersList(prev => [...(prev || []).filter(u => u.id !== user.id), user]);
+          }
+        }
 
-          if (matchedDb) {
-            const { data: dbPerms } = await supabase
-              .from('user_page_permissions')
-              .select('page_id')
-              .eq('user_id', matchedDb.id);
+        // 2. Fallback to profiles table
+        if (!user) {
+          const { data: dbProfiles } = await supabase
+            .from('profiles')
+            .select('*');
 
-            const resolvedRole = matchedDb.role || 'user';
-            const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
-            const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
-              ? dbPerms.map(p => p.page_id)
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
+          if (dbProfiles && dbProfiles.length > 0) {
+            const matchedDb = matchUserByEmail(
+              dbProfiles.map(p => ({
+                ...p,
+                fullName: p.full_name,
+                siteId: p.site_id,
+                hasSetPassword: p.has_set_password,
+                isActive: p.is_active
+              })),
+              email
+            );
 
-            user = {
-              id: matchedDb.id,
-              email: matchedDb.email,
-              fullName: matchedDb.full_name || matchedDb.fullName,
-              role: resolvedRole,
-              rolePosition: resolvedPosition,
-              siteId: matchedDb.site_id || 'site-dc',
-              hasSetPassword: matchedDb.has_set_password ?? true,
-              passwordHash: matchedDb.password_hash || 'Password123',
-              isActive: matchedDb.is_active ?? true,
-              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
-            };
+            if (matchedDb) {
+              const { data: dbPerms } = await supabase
+                .from('user_page_permissions')
+                .select('page_id')
+                .eq('user_id', matchedDb.id);
 
-            setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
+              const resolvedRole = matchedDb.role || 'user';
+              const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
+              const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
+                ? dbPerms.map(p => p.page_id)
+                : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
+
+              user = {
+                id: matchedDb.id,
+                email: matchedDb.email,
+                fullName: matchedDb.full_name || matchedDb.fullName,
+                role: resolvedRole,
+                rolePosition: resolvedPosition,
+                siteId: matchedDb.site_id || 'site-dc',
+                hasSetPassword: matchedDb.has_set_password ?? (resolvedRole === 'superadmin'),
+                passwordHash: matchedDb.password_hash || (resolvedRole === 'superadmin' ? 'Password123' : null),
+                isActive: matchedDb.is_active ?? true,
+                permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+              };
+
+              setUsersList(prev => [...(prev || []).filter(u => u.id !== user.id), user]);
+            }
           }
         }
       } catch (e) {
@@ -173,10 +206,12 @@ export function useAuth({
       };
     }
 
+    const hasSet = user.hasSetPassword === true || (user.hasSetPassword !== false && Boolean(user.passwordHash));
+
     return {
       success: true,
       user,
-      hasSetPassword: user.hasSetPassword
+      hasSetPassword: hasSet
     };
   };
 
@@ -185,50 +220,73 @@ export function useAuth({
     const cleanEmail = rawEmail.trim().toLowerCase();
     let user = matchUserByEmail(usersList, cleanEmail);
 
+    if (!user) {
+      try {
+        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || '[]');
+        user = matchUserByEmail(localUsers, cleanEmail);
+      } catch (e) {}
+    }
+
     if (!user && supabase) {
       try {
-        const { data: dbProfiles } = await supabase
-          .from('profiles')
-          .select('*');
+        const { data: regDoc } = await supabase
+          .from('saved_records')
+          .select('snapshot_data')
+          .eq('id', 'master_users_registry')
+          .maybeSingle();
 
-        if (dbProfiles && dbProfiles.length > 0) {
-          const matchedDb = matchUserByEmail(
-            dbProfiles.map(p => ({
-              ...p,
-              fullName: p.full_name,
-              siteId: p.site_id,
-              hasSetPassword: p.has_set_password,
-              isActive: p.is_active
-            })),
-            cleanEmail
-          );
+        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
+          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
+          if (matchedFromReg) {
+            user = matchedFromReg;
+            setUsersList(prev => [...(prev || []).filter(u => u.id !== user.id), user]);
+          }
+        }
 
-          if (matchedDb) {
-            const { data: dbPerms } = await supabase
-              .from('user_page_permissions')
-              .select('page_id')
-              .eq('user_id', matchedDb.id);
+        if (!user) {
+          const { data: dbProfiles } = await supabase
+            .from('profiles')
+            .select('*');
 
-            const resolvedRole = matchedDb.role || 'user';
-            const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
-            const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
-              ? dbPerms.map(p => p.page_id)
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
+          if (dbProfiles && dbProfiles.length > 0) {
+            const matchedDb = matchUserByEmail(
+              dbProfiles.map(p => ({
+                ...p,
+                fullName: p.full_name,
+                siteId: p.site_id,
+                hasSetPassword: p.has_set_password,
+                isActive: p.is_active
+              })),
+              cleanEmail
+            );
 
-            user = {
-              id: matchedDb.id,
-              email: matchedDb.email,
-              fullName: matchedDb.full_name || matchedDb.fullName,
-              role: resolvedRole,
-              rolePosition: resolvedPosition,
-              siteId: matchedDb.site_id || 'site-dc',
-              hasSetPassword: matchedDb.has_set_password ?? true,
-              passwordHash: matchedDb.password_hash || 'Password123',
-              isActive: matchedDb.is_active ?? true,
-              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
-            };
+            if (matchedDb) {
+              const { data: dbPerms } = await supabase
+                .from('user_page_permissions')
+                .select('page_id')
+                .eq('user_id', matchedDb.id);
 
-            setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
+              const resolvedRole = matchedDb.role || 'user';
+              const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
+              const perms = matchedDb.permittedPages || (dbPerms && dbPerms.length > 0
+                ? dbPerms.map(p => p.page_id)
+                : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)));
+
+              user = {
+                id: matchedDb.id,
+                email: matchedDb.email,
+                fullName: matchedDb.full_name || matchedDb.fullName,
+                role: resolvedRole,
+                rolePosition: resolvedPosition,
+                siteId: matchedDb.site_id || 'site-dc',
+                hasSetPassword: matchedDb.has_set_password ?? (resolvedRole === 'superadmin'),
+                passwordHash: matchedDb.password_hash || (resolvedRole === 'superadmin' ? 'Password123' : null),
+                isActive: matchedDb.is_active ?? true,
+                permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+              };
+
+              setUsersList(prev => [...(prev || []).filter(u => u.id !== user.id), user]);
+            }
           }
         }
       } catch (e) {
@@ -266,8 +324,9 @@ export function useAuth({
     if (!user.passwordHash?.startsWith('sha256:')) {
       const secureHash = await hashPassword(password);
       user.passwordHash = secureHash;
+      user.hasSetPassword = true;
       if (supabase) {
-        supabase.from('profiles').update({ password_hash: secureHash }).eq('id', user.id).then(() => {}).catch(() => {});
+        supabase.from('profiles').update({ password_hash: secureHash, has_set_password: true }).eq('id', user.id).then(() => {}).catch(() => {});
       }
     }
 
@@ -279,10 +338,17 @@ export function useAuth({
     return { success: true, user };
   };
 
-  // 3. First-Time Password Creation
+  // 3. First-Time Password Creation & Activation
   const createFirstTimePassword = async (rawEmail, newPassword) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
-    const user = matchUserByEmail(usersList, cleanEmail);
+    let user = matchUserByEmail(usersList, cleanEmail);
+
+    if (!user) {
+      try {
+        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || '[]');
+        user = matchUserByEmail(localUsers, cleanEmail);
+      } catch (e) {}
+    }
 
     if (!user) {
       return { success: false, error: 'User profile not found' };
@@ -290,9 +356,53 @@ export function useAuth({
 
     const secureHash = await hashPassword(newPassword);
 
+    const updatedUser = {
+      ...user,
+      hasSetPassword: true,
+      passwordHash: secureHash
+    };
+
+    const nextList = (usersList || []).map(u => (u.id === user.id || u.email?.toLowerCase() === cleanEmail ? updatedUser : u));
+    if (!nextList.some(u => u.id === updatedUser.id || u.email?.toLowerCase() === cleanEmail)) {
+      nextList.push(updatedUser);
+    }
+
+    setUsersList(nextList);
+    setPendingFirstTimeUser(null);
+    setCurrentUser(updatedUser);
+
     try {
-      if (supabase) {
-        await supabase.auth.updateUser({ password: newPassword });
+      localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      localStorage.setItem('mdc_current_user', JSON.stringify(updatedUser));
+      localStorage.setItem('mdc_session_sig', generateSessionSignature(updatedUser));
+      dbStorage.setItem('mdc_users', nextList);
+    } catch (e) {}
+
+    if (typeof syncMasterUsersRegistry === 'function') {
+      await syncMasterUsersRegistry(nextList);
+    } else if (supabase) {
+      try {
+        const deleted = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+        await supabase.from('saved_records').upsert({
+          id: 'master_users_registry',
+          record_type: 'users_registry',
+          period_label: 'Master Users Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master Provisioned Accounts & Permissions Registry',
+          snapshot_data: {
+            users: nextList,
+            deletedUserIds: deleted,
+            updatedAt: new Date().toISOString()
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (e) {}
+    }
+
+    if (supabase) {
+      try {
+        await supabase.auth.updateUser({ password: newPassword }).catch(() => {});
         await supabase
           .from('profiles')
           .update({
@@ -301,18 +411,13 @@ export function useAuth({
             updated_at: new Date().toISOString()
           })
           .or(`id.eq.${user.id},email.ilike.${user.email}`);
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
 
-    const updatedUser = {
-      ...user,
-      hasSetPassword: true,
-      passwordHash: secureHash
-    };
+    if (typeof broadcastCloudEvent === 'function') {
+      broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: updatedUser.id, table: 'saved_records' });
+    }
 
-    setUsersList(prev => prev.map(u => (u.id === user.id ? updatedUser : u)));
-    setPendingFirstTimeUser(null);
-    setCurrentUser(updatedUser);
     const initialPage = updatedUser.permittedPages?.[0] || 'dashboard';
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
     showToast(`Password successfully configured! Welcome to DC System, ${updatedUser.fullName}.`, 'success');
@@ -330,12 +435,17 @@ export function useAuth({
     showToast('Signed out successfully.', 'info');
   };
 
+  const canEdit = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
+  const isReadOnly = !canEdit;
+
   return {
     currentUser,
     setCurrentUser,
     pendingFirstTimeUser,
     setPendingFirstTimeUser,
     canAccess,
+    canEdit,
+    isReadOnly,
     verifyLoginEmail,
     signInWithPassword,
     createFirstTimePassword,

@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef } from '../utils/appContextHelpers';
 
 export function useShipments({
   currentUser,
@@ -446,7 +446,7 @@ export function useShipments({
       ...shipmentData,
       id: shipmentData.id || `ship-${Date.now()}`,
       shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`,
-      invoice_ref: shipmentData.invoice_ref || `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`,
+      invoice_ref: shipmentData.invoice_ref || generateNextInvoiceRef(shipments),
       status: shipmentData.status || 'shipped',
       created_at: shipmentData.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
