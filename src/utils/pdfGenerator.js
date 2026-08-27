@@ -829,6 +829,10 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
 /**
  * Downloads landscape PDF for Fixably Forecasting Report
  */
+/**
+ * Generates the complete multi-section Parts Usage & Forecasting Report PDF
+ * matching the 98-page source structure across Sections A to E.
+ */
 export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) {
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -837,17 +841,12 @@ export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) 
   });
 
   const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 8;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 10;
   const periodLabel = metadata?.periodLabel || 'September 2026';
-
-  // Header Banner
-  doc.setFillColor(15, 23, 42);
-  doc.rect(margin, 8, pageWidth - (margin * 2), 12, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.setTextColor(255, 255, 255);
-  const titleText = `MOBILE CARE SERVICES PHILS. INC. — Fixably Demand Forecasting Report (${periodLabel})`;
-  doc.text(titleText, margin + 6, 15.5);
+  const pastMonthLabel = metadata?.pastMonthLabel || 'August 2026';
+  const rawRecords = metadata?.rawRecords || [];
+  const serviceBranches = metadata?.sites || [];
 
   const resolveStockPrice = (item) => {
     if (!item) return 100;
@@ -857,106 +856,342 @@ export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) 
     if (desc.includes('battery')) return 89;
     if (desc.includes('camera')) return 129;
     if (desc.includes('glass') || desc.includes('back')) return 99;
-    if (desc.includes('rear') || desc.includes('mid')) return 119;
+    if (desc.includes('mid system')) return 449;
+    if (desc.includes('rear system')) return 499;
     return 100;
   };
 
-  const totalForecastUnits = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
-  const totalValuation = forecastItems.reduce((s, it) => {
-    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
-    const price = resolveStockPrice(it);
-    return s + (qty * price);
-  }, 0);
+  const getCommodity = (item) => {
+    if (item.commodity) return item.commodity;
+    const d = String(item.description || '').toLowerCase();
+    if (d.includes('battery')) return 'BATTERY';
+    if (d.includes('display') || d.includes('screen')) return 'DISPLAY';
+    if (d.includes('truedepth') || d.includes('true depth')) return 'CAMERA_TRUE_DEPTH';
+    if (d.includes('front camera') || d.includes('facetime')) return 'CAMERA_FRONT';
+    if (d.includes('camera') || d.includes('rear camera')) return 'CAMERA_REAR';
+    if (d.includes('back glass') || d.includes('rear glass')) return 'BACK_GLASS';
+    if (d.includes('mid system')) return 'LOGIC_BOARD_MID_SYSTEM';
+    if (d.includes('rear system')) return 'LOGIC_BOARD_REAR_SYSTEM';
+    return 'OTHER';
+  };
 
-  // Sub-header Summary
-  doc.setFontSize(8);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    `Total Parts: ${forecastItems.length} SKUs  |  Recommended Demand: ${totalForecastUnits.toLocaleString()} units  |  Projected Stock Cost: $${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2 })}  |  Generated: ${new Date().toLocaleString()}`,
-    margin + 6,
-    24
+  // Helper for Section Cover / Header Bar
+  const renderSectionHeader = (title, subtitle, color = [15, 23, 42]) => {
+    doc.setFillColor(color[0], color[1], color[2]);
+    doc.rect(margin, 8, pageWidth - (margin * 2), 12, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(title, margin + 6, 15.5);
+
+    if (subtitle) {
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text(subtitle, margin + 6, 24);
+    }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 1. EXECUTIVE SUMMARY (Page 1)
+  // ══════════════════════════════════════════════════════════════════════════
+  renderSectionHeader(
+    `MOBILE CARE SERVICES PHILS. INC. — Parts Usage & Demand Forecasting Report (${periodLabel})`,
+    `Source: Live Fixably Masterlist Analysis  |  Generated: ${new Date().toLocaleDateString('en-US')}`
   );
 
-  const headers = [
-    '#',
-    'Part Number',
-    'Description',
-    'iPhone Model',
-    'Commodity',
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
-    'Base',
-    'Final',
-    'Price ($)',
-    'Total Cost ($)'
+  const totalDemand = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
+  const totalValuation = forecastItems.reduce((s, it) => s + ((it.final_forecast ?? it.computed_forecast ?? 0) * resolveStockPrice(it)), 0);
+
+  // KPI Boxes
+  const kpiY = 28;
+  const kpiBoxWidth = (pageWidth - (margin * 2) - 18) / 4;
+  const kpis = [
+    { label: 'TOTAL RECOMMENDED DEMAND', val: `${totalDemand.toLocaleString()} units`, sub: 'All iPhone Commodities' },
+    { label: 'PROJECTED STOCK VALUATION', val: `$${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: `~₱${(totalValuation * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP` },
+    { label: 'ACTIVE PART MODELS', val: `${forecastItems.length} SKUs`, sub: 'Standardized Catalog' },
+    { label: 'RECEIVING SERVICE HUBS', val: `${serviceBranches.length || 26} Hubs`, sub: 'Metro Manila & Regional' }
   ];
 
-  const tableData = forecastItems.map((it, idx) => {
-    const m = it.ytd_monthly_counts || [];
-    const base = it.computed_forecast ?? 0;
-    const finalVal = it.final_forecast ?? base;
-    const price = resolveStockPrice(it);
-    const cost = finalVal * price;
+  kpis.forEach((kpi, idx) => {
+    const kpiX = margin + (idx * (kpiBoxWidth + 6));
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.rect(kpiX, kpiY, kpiBoxWidth, 20, 'FD');
 
-    return [
-      idx + 1,
-      it.part_number || '',
-      it.description || '',
-      it.iphone_model || '',
-      it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General'),
-      m[0] || 0,
-      m[1] || 0,
-      m[2] || 0,
-      m[3] || 0,
-      m[4] || 0,
-      m[5] || 0,
-      m[6] || 0,
-      m[7] || 0,
-      base,
-      finalVal,
-      `$${price.toFixed(2)}`,
-      `$${cost.toFixed(2)}`
-    ];
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(kpi.label, kpiX + 4, kpiY + 5.5);
+
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42);
+    doc.text(kpi.val, kpiX + 4, kpiY + 12.5);
+
+    doc.setFontSize(6.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text(kpi.sub, kpiX + 4, kpiY + 17.5);
   });
 
+  // Executive Commodity Summary Table
+  const commodityAgg = {};
+  forecastItems.forEach(it => {
+    const c = getCommodity(it);
+    if (!commodityAgg[c]) commodityAgg[c] = { name: c.replace(/_/g, ' '), skus: 0, units: 0, val: 0 };
+    const q = it.final_forecast ?? it.computed_forecast ?? 0;
+    commodityAgg[c].skus += 1;
+    commodityAgg[c].units += q;
+    commodityAgg[c].val += (q * resolveStockPrice(it));
+  });
+
+  const execSummaryRows = Object.values(commodityAgg).map(c => [
+    c.name,
+    c.skus,
+    c.units.toLocaleString(),
+    totalDemand > 0 ? `${((c.units / totalDemand) * 100).toFixed(1)}%` : '0%',
+    `$${c.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    `₱${(c.val * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  ]);
+
   autoTable(doc, {
-    startY: 28,
-    head: [headers],
-    body: tableData,
+    startY: kpiY + 26,
+    head: [['COMMODITY SECTION', 'SKU COUNT', 'FORECAST DEMAND', 'VOLUME SHARE', 'STOCK VALUATION (USD)', 'EST. COST (PHP)']],
+    body: execSummaryRows,
     theme: 'grid',
-    headStyles: {
-      fillColor: [15, 23, 42],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: 7.5,
-      halign: 'center'
-    },
-    bodyStyles: {
-      fontSize: 6.8,
-      textColor: [15, 23, 42]
-    },
+    headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
+    bodyStyles: { fontSize: 7.5, textColor: [15, 23, 42] },
     columnStyles: {
-      0: { halign: 'center', cellWidth: 7 },
-      1: { halign: 'center', cellWidth: 20 },
-      2: { halign: 'left', cellWidth: 46 },
-      3: { halign: 'left', cellWidth: 28 },
-      4: { halign: 'center', cellWidth: 16 },
-      5: { halign: 'center', cellWidth: 8 },
-      6: { halign: 'center', cellWidth: 8 },
-      7: { halign: 'center', cellWidth: 8 },
-      8: { halign: 'center', cellWidth: 8 },
-      9: { halign: 'center', cellWidth: 8 },
-      10: { halign: 'center', cellWidth: 8 },
-      11: { halign: 'center', cellWidth: 8 },
-      12: { halign: 'center', cellWidth: 8 },
-      13: { halign: 'center', cellWidth: 12 },
-      14: { halign: 'center', cellWidth: 12 },
-      15: { halign: 'right', cellWidth: 18 },
-      16: { halign: 'right', cellWidth: 22 }
+      0: { fontStyle: 'bold', cellWidth: 70 },
+      1: { halign: 'center', cellWidth: 30 },
+      2: { halign: 'center', fontStyle: 'bold', cellWidth: 40 },
+      3: { halign: 'center', cellWidth: 35 },
+      4: { halign: 'right', fontStyle: 'bold', cellWidth: 50 },
+      5: { halign: 'right', cellWidth: 50 }
     },
     margin: { left: margin, right: margin }
   });
 
-  doc.save(`Forecasting_Report_${periodLabel.replace(/\s+/g, '_')}.pdf`);
+  // ══════════════════════════════════════════════════════════════════════════
+  // TABLE BUILDER HELPER FOR COMMODITY SECTIONS
+  // ══════════════════════════════════════════════════════════════════════════
+  const renderCommoditySubTable = (title, items, type = 'forecasting') => {
+    if (!items || items.length === 0) return;
+    doc.addPage();
+    renderSectionHeader(
+      `${title} — ${periodLabel}`,
+      `Mobile Care Services Phils. Inc.  |  ${items.length} Active SKUs  |  Historical Actuals & 4-Week Projection`
+    );
+
+    if (type === 'variance') {
+      // Forecast vs Actual Audit Table
+      const headers = ['#', 'Part Number', 'Description', 'Model', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', `Actual (${pastMonthLabel.split(' ')[0]})`, 'Forecast', 'Variance', 'Remarks'];
+      const body = items.map((it, idx) => {
+        const m = it.ytd_monthly_counts || [];
+        const actual = m[m.length - 1] || 0;
+        const forecast = it.computed_forecast ?? actual;
+        const diff = actual - forecast;
+        const remarks = diff === 0 ? 'Accurate' : diff > 0 ? 'Under Forecast' : 'Over Forecast';
+        return [
+          idx + 1,
+          it.part_number || '',
+          it.description || '',
+          it.iphone_model || '',
+          m[0] || 0, m[1] || 0, m[2] || 0, m[3] || 0, m[4] || 0, m[5] || 0, m[6] || 0,
+          actual,
+          forecast,
+          diff > 0 ? `+${diff}` : diff,
+          remarks
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 28,
+        head: [headers],
+        body,
+        theme: 'grid',
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+        bodyStyles: { fontSize: 6.5, textColor: [15, 23, 42] },
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 7 },
+          1: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+          2: { halign: 'left', cellWidth: 55 },
+          3: { halign: 'left', cellWidth: 28 },
+          4: { halign: 'center', cellWidth: 8 },
+          5: { halign: 'center', cellWidth: 8 },
+          6: { halign: 'center', cellWidth: 8 },
+          7: { halign: 'center', cellWidth: 8 },
+          8: { halign: 'center', cellWidth: 8 },
+          9: { halign: 'center', cellWidth: 8 },
+          10: { halign: 'center', cellWidth: 8 },
+          11: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
+          12: { halign: 'center', fontStyle: 'bold', cellWidth: 16 },
+          13: { halign: 'center', fontStyle: 'bold', cellWidth: 14 },
+          14: { halign: 'center', fontStyle: 'bold', cellWidth: 22 }
+        },
+        margin: { left: margin, right: margin }
+      });
+    } else {
+      // Demand Forecasting & Weekly Costing Table
+      const headers = ['#', 'Part Number', 'Description', 'Model', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Forecast', 'Price', 'W1', 'W2', 'W3', 'W4', 'Total Cost ($)'];
+      const body = items.map((it, idx) => {
+        const m = it.ytd_monthly_counts || [];
+        const fVal = it.final_forecast ?? it.computed_forecast ?? 0;
+        const price = resolveStockPrice(it);
+        const cost = fVal * price;
+        const split = calculateWeeklySplit(fVal, cost, idx + 3);
+
+        return [
+          idx + 1,
+          it.part_number || '',
+          it.description || '',
+          it.iphone_model || '',
+          m[0] || 0, m[1] || 0, m[2] || 0, m[3] || 0, m[4] || 0, m[5] || 0, m[6] || 0, m[7] || 0,
+          fVal,
+          `$${price}`,
+          split.w1_qty, split.w2_qty, split.w3_qty, split.w4_qty,
+          `$${cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 28,
+        head: [headers],
+        body,
+        theme: 'grid',
+        headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+        bodyStyles: { fontSize: 6.5, textColor: [15, 23, 42] },
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 7 },
+          1: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+          2: { halign: 'left', cellWidth: 50 },
+          3: { halign: 'left', cellWidth: 25 },
+          4: { halign: 'center', cellWidth: 7 },
+          5: { halign: 'center', cellWidth: 7 },
+          6: { halign: 'center', cellWidth: 7 },
+          7: { halign: 'center', cellWidth: 7 },
+          8: { halign: 'center', cellWidth: 7 },
+          9: { halign: 'center', cellWidth: 7 },
+          10: { halign: 'center', cellWidth: 7 },
+          11: { halign: 'center', cellWidth: 7 },
+          12: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
+          13: { halign: 'right', cellWidth: 12 },
+          14: { halign: 'center', cellWidth: 8 },
+          15: { halign: 'center', cellWidth: 8 },
+          16: { halign: 'center', cellWidth: 8 },
+          17: { halign: 'center', cellWidth: 8 },
+          18: { halign: 'right', fontStyle: 'bold', cellWidth: 24 }
+        },
+        margin: { left: margin, right: margin }
+      });
+    }
+  };
+
+  // Group items by commodity
+  const batteryItems = forecastItems.filter(it => getCommodity(it) === 'BATTERY');
+  const displayItems = forecastItems.filter(it => getCommodity(it) === 'DISPLAY');
+  const cameraRearItems = forecastItems.filter(it => getCommodity(it) === 'CAMERA_REAR');
+  const cameraTrueDepthItems = forecastItems.filter(it => getCommodity(it) === 'CAMERA_TRUE_DEPTH');
+  const cameraFrontItems = forecastItems.filter(it => getCommodity(it) === 'CAMERA_FRONT');
+  const backGlassItems = forecastItems.filter(it => getCommodity(it) === 'BACK_GLASS');
+  const logicMidItems = forecastItems.filter(it => getCommodity(it) === 'LOGIC_BOARD_MID_SYSTEM');
+  const logicRearItems = forecastItems.filter(it => getCommodity(it) === 'LOGIC_BOARD_REAR_SYSTEM');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION A: BATTERY & DISPLAY (Pages 2–49)
+  // ══════════════════════════════════════════════════════════════════════════
+  renderCommoditySubTable('SECTION A: iPhone Battery — Forecast vs Actual Variance Audit', batteryItems, 'variance');
+  renderCommoditySubTable('SECTION A: iPhone Battery — Demand Forecasting & Weekly Costing', batteryItems, 'forecasting');
+  renderCommoditySubTable('SECTION A: iPhone Display — Forecast vs Actual Variance Audit', displayItems, 'variance');
+  renderCommoditySubTable('SECTION A: iPhone Display — Demand Forecasting & Weekly Costing', displayItems, 'forecasting');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION B: CAMERA (Pages 50–77)
+  // ══════════════════════════════════════════════════════════════════════════
+  renderCommoditySubTable('SECTION B: iPhone Rear Camera — Forecast vs Actual Audit', cameraRearItems, 'variance');
+  renderCommoditySubTable('SECTION B: iPhone Rear Camera — Demand Forecasting & Costing', cameraRearItems, 'forecasting');
+  renderCommoditySubTable('SECTION B: iPhone TrueDepth Camera — Forecast vs Actual Audit', cameraTrueDepthItems, 'variance');
+  renderCommoditySubTable('SECTION B: iPhone TrueDepth Camera — Demand Forecasting & Costing', cameraTrueDepthItems, 'forecasting');
+  renderCommoditySubTable('SECTION B: iPhone Front Camera / FaceTime — Demand Forecasting & Costing', cameraFrontItems, 'forecasting');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION C: BACK GLASS (Pages 78–82)
+  // ══════════════════════════════════════════════════════════════════════════
+  renderCommoditySubTable('SECTION C: iPhone Back Glass — Forecast vs Actual Audit', backGlassItems, 'variance');
+  renderCommoditySubTable('SECTION C: iPhone Back Glass — Demand Forecasting & Weekly Costing', backGlassItems, 'forecasting');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION D: LOGIC BOARD ASSEMBLIES (Pages 83–88)
+  // NOTE: Page 87 Bug Fix implemented ("Rear System Costing Per Week" NOT "Mid System")
+  // ══════════════════════════════════════════════════════════════════════════
+  renderCommoditySubTable('SECTION D: iPhone Mid System Assemblies — Demand Forecasting & Costing', logicMidItems, 'forecasting');
+  renderCommoditySubTable('SECTION D: iPhone Rear System Assemblies — Demand Forecasting & Costing Per Week', logicRearItems, 'forecasting');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SECTION E: DC STOCK TRANSFERS & DISPATCHES (Pages 89–98)
+  // ══════════════════════════════════════════════════════════════════════════
+  if (rawRecords && rawRecords.length > 0) {
+    doc.addPage();
+    renderSectionHeader(
+      `SECTION E: Central DC Inter-Branch Stock Transfers & Dispatches — ${periodLabel}`,
+      `Mobile Care Services Phils. Inc.  |  ${rawRecords.length} Transfer Events  |  Movement & Logistics Audit`
+    );
+
+    const transferHeaders = ['#', 'Date', 'From Stock Hub', 'To Destination Hub', 'Part Number', 'Product Name', 'Qty', 'Unit Val ($)', 'Total Val ($)'];
+    const transferBody = rawRecords.slice(0, 120).map((r, idx) => {
+      const q = Number(r.transfer_quantity || r.qty || 1);
+      const v = Number(r.unit_price || r.price || 100);
+      return [
+        idx + 1,
+        r.transfer_received_date || r.date || '—',
+        r.from_stock || 'Central DC',
+        r.to_stock || 'Branch Hub',
+        r.product_code || r.part_number || '—',
+        r.product_name || r.description || '—',
+        q,
+        `$${v.toFixed(2)}`,
+        `$${(q * v).toFixed(2)}`
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 28,
+      head: [transferHeaders],
+      body: transferBody,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7, halign: 'center' },
+      bodyStyles: { fontSize: 6.5, textColor: [15, 23, 42] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 8 },
+        1: { halign: 'center', cellWidth: 20 },
+        2: { halign: 'left', cellWidth: 35 },
+        3: { halign: 'left', cellWidth: 35 },
+        4: { halign: 'center', cellWidth: 22, fontStyle: 'bold' },
+        5: { halign: 'left', cellWidth: 60 },
+        6: { halign: 'center', fontStyle: 'bold', cellWidth: 12 },
+        7: { halign: 'right', cellWidth: 18 },
+        8: { halign: 'right', fontStyle: 'bold', cellWidth: 22 }
+      },
+      margin: { left: margin, right: margin }
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PAGE NUMBERING FOOTER ON ALL PAGES
+  // ══════════════════════════════════════════════════════════════════════════
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      `MOBILE CARE SERVICES PHILS. INC.  —  Parts Usage & Forecasting Report (${periodLabel})  |  Page ${i} of ${totalPages}`,
+      pageWidth / 2,
+      pageHeight - 6,
+      { align: 'center' }
+    );
+  }
+
+  doc.save(`Parts_Usage_and_Forecasting_Report_${periodLabel.replace(/\s+/g, '_')}.pdf`);
 }
 
 /**
@@ -972,7 +1207,8 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
     if (desc.includes('battery')) return 89;
     if (desc.includes('camera')) return 129;
     if (desc.includes('glass') || desc.includes('back')) return 99;
-    if (desc.includes('rear') || desc.includes('mid')) return 119;
+    if (desc.includes('mid system')) return 449;
+    if (desc.includes('rear system')) return 499;
     return 100;
   };
 
@@ -1042,7 +1278,7 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
       <div class="header-bar">
         <div>
           <div style="font-size: 14px; font-weight: bold;">MOBILE CARE SERVICES PHILS. INC.</div>
-          <div style="font-size: 11px; color: #94a3b8;">Fixably Demand Forecasting Master Report — ${periodLabel}</div>
+          <div style="font-size: 11px; color: #94a3b8;">Parts Usage & Demand Forecasting Master Report — ${periodLabel}</div>
         </div>
         <div style="font-size: 10px; text-align: right; color: #94a3b8;">
           Printed: ${new Date().toLocaleString()}
@@ -1084,4 +1320,3 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
     printWindow.print();
   }, 400);
 }
-

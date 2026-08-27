@@ -10,8 +10,11 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('xlsx') || id.includes('exceljs') || id.includes('fast-csv') || id.includes('archiver')) {
-              return 'vendor-excel';
+            if (id.includes('exceljs') || id.includes('fast-csv') || id.includes('archiver')) {
+              return 'vendor-exceljs';
+            }
+            if (id.includes('xlsx')) {
+              return 'vendor-xlsx';
             }
             if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('dompurify')) {
               return 'vendor-pdf';

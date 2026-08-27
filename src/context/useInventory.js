@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
-import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord, formatDcIntakeRecordForDb } from '../utils/appContextHelpers';
 
 export function useInventory({
   parts = [],
@@ -453,7 +453,10 @@ export function useInventory({
             });
             const updatedRec = { ...rec, items: updatedItems, updated_at: new Date().toISOString() };
             if (supabase) {
-              supabase.from('dc_intake_records').upsert(updatedRec, { onConflict: 'id' }).then(() => {}).catch(() => {});
+              const formattedRow = formatDcIntakeRecordForDb(updatedRec, currentUser);
+              if (formattedRow) {
+                supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+              }
               const intakeYear = new Date(updatedRec.intake_date || new Date()).getFullYear() || new Date().getFullYear();
               const intakeMonth = (new Date(updatedRec.intake_date || new Date()).getMonth() + 1) || (new Date().getMonth() + 1);
               supabase.from('saved_records').upsert({
@@ -806,7 +809,10 @@ export function useInventory({
 
           for (const rec of recordsToUpdateInDb) {
             try {
-              await supabase.from('dc_intake_records').upsert(rec, { onConflict: 'id' });
+              const formattedRow = formatDcIntakeRecordForDb(rec, currentUser);
+              if (formattedRow) {
+                await supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' });
+              }
               const rYear = new Date(rec.intake_date || new Date()).getFullYear() || new Date().getFullYear();
               const rMonth = (new Date(rec.intake_date || new Date()).getMonth() + 1) || (new Date().getMonth() + 1);
               await supabase.from('saved_records').upsert({

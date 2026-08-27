@@ -234,6 +234,17 @@ const directoryMap = {
     sold_to: '1229790',
     region: 'Iloilo'
   },
+  'APP ILO': {
+    name: 'MOBILECARE - APP SM ILOILO',
+    address: 'Cyberzone, 3/F SM City Iloilo, Senator Benigno Aquino Jr. Ave, Mandurriao, Iloilo City',
+    full_address: 'Space 322-323, 3/F Cyberzone, SM City Iloilo, Mandurriao, Iloilo City 5000',
+    contact_person: 'Service Manager',
+    contact_email: 'app.smiloilo@mobilecareph.com',
+    invoice_prefix: 'APILOSSR#',
+    ship_to: '1029842',
+    sold_to: '1597912',
+    region: 'Iloilo'
+  },
   'ASP CEB': {
     name: 'MOBILECARE - CEBU',
     address: 'Unit 4033, 4/L Robinsons Galleria Cebu, General Maxilom Ave, Cebu City 6000',

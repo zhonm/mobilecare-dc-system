@@ -14,9 +14,11 @@ import {
   RotateCcw,
   AlertTriangle,
   Check,
-  Trash2
+  Trash2,
+  Lock
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
+import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
 
 export default function Shipments() {
   const {
@@ -98,6 +100,7 @@ export default function Shipments() {
   };
 
   const filteredShipments = shipments.filter(s => {
+    if (!s.items || s.items.length === 0) return false;
     if (filterStatus !== 'ALL' && s.status !== filterStatus) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -325,11 +328,20 @@ export default function Shipments() {
                             </button>
                           )}
 
-                          {canUserDeleteRecord(sh, currentUser) ? (
+                          {isLockedConfirmedShipment(sh) ? (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              disabled
+                              style={{ opacity: 0.8, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                              title="Locked Record: Manifest is Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI."
+                            >
+                              <Lock size={13} />
+                            </button>
+                          ) : canUserDeleteRecord(sh, currentUser) ? (
                             <button
                               className="btn btn-danger btn-sm"
                               onClick={() => {
-                                if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will return its parts to DC stock.`)) {
+                                if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will permanently delete both the manifest and all serialized parts included in this shipment.`)) {
                                   deleteShipment(sh.id);
                                 }
                               }}

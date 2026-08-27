@@ -1,0 +1,109 @@
+
+> mdc-system2@0.0.0 test
+> node src/tests/test_forecast_wma.js && node src/tests/test_allocation_parity.js && node src/tests/test_masterlist_parity.js && node src/tests/test_master_allocation_diff.js
+
+====================================================
+TEST SUITE: WMA & Anomaly Filtering Forecasting Engine
+====================================================
+  ✓ PASS: Correctly flagged statistical anomaly in historical usage
+  ✓ PASS: Correctly isolated index 6 (July) as the anomalous spike month
+  ✓ PASS: Smoothed July spike from 85 down to 64
+  ✓ PASS: WMA forecast computed valid positive integer: 42
+  ✓ PASS: WMA forecast (42) is robustly damped against spike compared to unbuffered linear regression (56)
+  ✓ PASS: No false-positive anomaly detected on stable baseline
+  ✓ PASS: Consistent steady series projected accurately (actual: 53)
+  ✓ PASS: Linear model correctly dispatched (forecast: 53)
+  ✓ PASS: Direct Holt helper functions properly (forecast: 57)
+  ✓ PASS: Croston SBA method handled intermittent demand (forecast: 2)
+  ✓ PASS: Variance: exact match categorized as Accurate
+  ✓ PASS: Variance: Actual > Forecast categorized as Under Forecast (+10)
+  ✓ PASS: Variance: Actual < Forecast categorized as Over Forecast (-10)
+  ✓ PASS: Recommended order calculated correctly with 5% safety buffer: 105
+  ✓ PASS: 4-week quantity sum strictly equals 25 units (7+6+6+6)
+  ✓ PASS: 4-week cost sum strictly balances to total: $2237.5
+  ✓ PASS: WMA model allocation sum (31) strictly matches forecast quantity (31)
+  ✓ PASS: Linear model allocation sum (24) strictly matches forecast quantity (24)
+====================================================
+RESULTS: 18 PASSED, 0 FAILED
+====================================================
+====================================================
+TEST SUITE: Master Allocation Matrix Parity & Model Switching
+====================================================
+  ✓ PASS: CANONICAL_SITE_CODES contains exactly 27 active service branches (actual: 27)
+  ✓ PASS: CANONICAL_SITE_CODES includes 'APP ILO'
+  ✓ PASS: CANONICAL_SITE_CODES does not contain malformed 'APPILO'
+  ✓ PASS: 'APP ILO' is at index 20 (between ASP ILO and ASP CEB)
+  ✓ PASS: validateSiteSharesConsistency passes for 27 active service branches
+  ✓ PASS: Part 661-21988 August forecast (Jan-Jul x=8) equals 16 units (actual: 16)
+  ✓ PASS: Part 661-21988 September forecast (Jan-Aug x=9) equals 23 units (actual: 23)
+  ✓ PASS: September Linear allocation sum strictly equals 23 units (actual: 23)
+  ✓ PASS: ASP VN receives 3 units of iPhone 13 display (actual: 3)
+  ✓ PASS: ASP NAG receives 3 units of iPhone 13 display (actual: 3)
+  ✓ PASS: APP FES receives 2 units of iPhone 13 display (actual: 2)
+  ✓ PASS: APP BHS receives 0 units of iPhone 13 display (actual: 0)
+  ✓ PASS: Re-allocating fixed 23 units produces 100% identical per-branch site_quantities
+  ✓ PASS: generateAllocationsFromForecasts (Linear) forecast is 23
+  ✓ PASS: generateAllocationsFromForecasts (Linear) total allocation is 23
+  ✓ PASS: ASP VN allocation in Linear is 3
+  ✓ PASS: APP BHS allocation in Linear is 0
+  ✓ PASS: generateAllocationsFromForecasts (WMA) total (31) strictly matches forecasted qty (31)
+  ✓ PASS: Switching back to Linear produces 23 units
+  ✓ PASS: ASP VN allocation after model roundtrip is still 3
+  ✓ PASS: APP BHS allocation after model roundtrip is still 0
+  ✓ PASS: Ghost column 'APPILO' is NOT present in site_quantities
+====================================================
+RESULTS: 22/22 PASSED (0 FAILED)
+====================================================
+===============================================================
+STARTING MDC SYSTEM 2 MASTERLIST PARITY VALIDATION
+===============================================================
+
+===============================================================
+TEST SUITE 1: September 2026 Masterlist Reference Workbook
+===============================================================
+Loaded Masterlist: 13564 rows from Battery & Display (Allocation) - September 2026.xlsx
+  ✓ PASS: Step 2 Filter matched exactly 4,660 in-scope rows (actual: 4660)
+  ✓ PASS: Extracted exactly 41 iPhone parts: 21 Displays + 20 Batteries (actual: 41)
+  ✓ PASS: Mapped across all 27 canonical service sites (actual: 27)
+  ✓ PASS: Monthly usage counts (Jan-Aug) match 100% across all 41 parts (mismatches: 0)
+  ✓ PASS: Linear regression forecasts for September 2026 match 100% across all 41 parts (mismatches: 0)
+  ✓ PASS: Option A Display allocations match reference workbook bit-for-bit (21/21 parts x 27 sites)
+  ✓ PASS: Option A Battery allocations match reference workbook (17/20 parts bit-for-bit)
+  ✓ PASS: Isolated 3 reference sheet formula-drift rows (Battery Air, pSIM 17 Pro Max, SVC 14 Pro Max)
+  ✓ PASS: Option B strictly preserves exact forecast sum across all 41 parts (errors: 0)
+  ✓ PASS: Option B matches Option A on 1st part of Display block (Display, iPhone 13)
+  ✓ PASS: 4-week splits strictly balance to monthly totals for all 41 parts (errors: 0)
+
+===============================================================
+TEST SUITE 2: August 2026 Reference Workbook
+===============================================================
+Note: 'MDC Forecasting and Allocation/August 2026 Forecasting and Allocation/Battery & Display (Allocation) - August 2026.xlsx' not found in workspace directory. Skipping Suite 2.
+
+===============================================================
+TEST RESULTS: 11/11 PASSED (0 FAILED)
+===============================================================
+===============================================================
+MASTER ALLOCATION & FORECASTING PARITY DIFF REPORT (SEP 2026)
+===============================================================
+
+--- 1. MASTERLIST INGESTION & FILTERING PARITY ---
+  ✓ PASS: Ingested exactly 4,660 in-scope repairs (actual: 4660)
+  ✓ PASS: Extracted exactly 41 target parts (actual: 41)
+  ✓ PASS: Mapped 27 canonical service sites (actual: 27)
+
+--- 2. DEMAND FORECASTING PARITY (41/41 PARTS) ---
+  ✓ PASS: September 2026 Forecasts match reference workbook 100% across all 41 parts (mismatches: 0)
+
+--- 3. OPTION A ALLOCATION MATRIX PARITY (27 SITES) ---
+  ✓ PASS: Display Option A Allocations match reference workbook bit-for-bit (21/21 parts x 27 sites = 567/567 cells)
+  ✓ PASS: Standard Battery Option A Allocations match reference workbook bit-for-bit (17/17 standard parts x 27 sites = 459/459 cells)
+
+--- 4. OPTION B MULTI-SITE TOTAL INTEGRITY ---
+  ✓ PASS: Option B strictly preserves exact forecast sum across all 41 parts (errors: 0)
+
+--- 5. 4-WEEK SPLIT & FINANCIAL BALANCING ---
+  ✓ PASS: All 41 parts balance strictly across W1..W4 pipeline (errors: 0)
+
+===============================================================
+FINAL RESULTS: 8/8 PASSED (0 FAILED)
+===============================================================

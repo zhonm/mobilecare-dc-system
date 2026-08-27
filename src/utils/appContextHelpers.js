@@ -74,13 +74,9 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         shipped_at: packInfo.shipped_at || u.shipped_at
       };
     }
-    return {
-      ...u,
-      status: 'in_stock',
-      current_site_id: 'site-dc',
-      shipped_at: null,
-      shipped_by: null
-    };
+    // Preserve existing unit state — do not reset units that may have been
+    // dispatched via shipments not present in the current shipmentsList
+    return u;
   });
 }
 
@@ -99,9 +95,25 @@ export const isExplicitlyCleared = () => {
   }
 };
 
-// Authority check helper: only the user who originally saved/created the record has permission to delete it
+// Authority check helper: Superadmins and Admins have full operational delete authority, and users can delete their own records
 export function canUserDeleteRecord(record, user) {
   if (!record || !user) return false;
+
+  // 1. Superadmins and Admins have full administrative authority to manage and delete records and units
+  const userRole = String(user.role || '').trim().toLowerCase();
+  const userPosition = String(user.rolePosition || user.position || '').trim().toLowerCase();
+  if (
+    userRole === 'superadmin' ||
+    userRole === 'admin' ||
+    user.isSuperAdmin ||
+    user.isAdmin ||
+    userPosition.includes('superadmin') ||
+    userPosition.includes('admin') ||
+    userPosition.includes('supervisor') ||
+    userPosition.includes('specialist')
+  ) {
+    return true;
+  }
 
   const userId = String(user.id || '').trim().toLowerCase();
   const userEmail = String(user.email || '').trim().toLowerCase();
@@ -113,6 +125,7 @@ export function canUserDeleteRecord(record, user) {
     record.userId ||
     record.created_by_id ||
     record.user_id ||
+    record.received_by_id ||
     ''
   ).trim().toLowerCase();
 
@@ -130,6 +143,7 @@ export function canUserDeleteRecord(record, user) {
     record.saved_by_email ||
     record.userEmail ||
     record.email ||
+    record.received_by_email ||
     ''
   ).trim().toLowerCase();
 
@@ -138,10 +152,151 @@ export function canUserDeleteRecord(record, user) {
   // Match by User Email
   if (savedByEmail && userEmail && savedByEmail === userEmail) return true;
   // Match by Full Name
-  if (savedByName && userName && savedByName === userName) return true;
+  if (savedByName && userName && (savedByName === userName || savedByName.includes(userName) || userName.includes(savedByName))) return true;
 
-  // Fallback: If record was created without creator info, allow
+  // Fallback: If record was created without creator info or generic warehouse staff, allow
   if (!savedById && !savedByName && !savedByEmail) return true;
+  if (savedByName === 'warehouse staff' || savedByName === 'dc warehouse' || savedByName === 'system') return true;
 
   return false;
 }
+
+// Format intake record to match Supabase dc_intake_records table schema perfectly
+export function formatDcIntakeRecordForDb(rec, currentUser = null) {
+  if (!rec) return null;
+  return {
+    id: String(rec.id),
+    record_name: String(rec.record_name || rec.id),
+    intake_date: rec.intake_date || new Date().toISOString().split('T')[0],
+    po_id: safeUUID(rec.po_id),
+    po_number: rec.po_number || null,
+    supplier: rec.supplier || rec.supplier_name || 'Direct Barcode Intake',
+    total_units: parseInt(rec.total_units || (rec.items ? rec.items.length : 0), 10) || 0,
+    saved_by_name: rec.saved_by_name || currentUser?.fullName || 'Warehouse Staff',
+    saved_by_user_id: safeUUID(rec.saved_by_user_id || rec.saved_by_id || currentUser?.id),
+    notes: rec.notes || null,
+    category_breakdown: rec.category_breakdown || {},
+    items: Array.isArray(rec.items) ? rec.items : [],
+    created_at: rec.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+// Check if a shipment/manifest is received/confirmed and permanently locked from system deletion
+export function isLockedConfirmedShipment(shipment) {
+  if (!shipment) return false;
+  const status = String(shipment.status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  return status === 'receivedconfirmed' || status === 'delivered' || status === 'completed';
+}
+
+// Deterministic UUID generator: converts any string (like 'shp-8515656' or 'site-bhs') into a valid, consistent UUID
+export function toValidUUID(str) {
+  if (!str) return '00000000-0000-0000-0000-000000000000';
+  if (isUUID(str)) return str;
+  let hash = 0;
+  let hash2 = 0;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) - hash) + s.charCodeAt(i);
+    hash |= 0;
+    hash2 = ((hash2 << 7) - hash2) + s.charCodeAt(i) * 31;
+    hash2 |= 0;
+  }
+  const hex1 = Math.abs(hash).toString(16).padStart(8, '0');
+  const hex2 = Math.abs(hash2).toString(16).padStart(8, '0');
+  const hex3 = Math.abs(hash ^ hash2).toString(16).padStart(8, '0');
+  const hex4 = Math.abs((hash << 3) ^ hash2).toString(16).padStart(8, '0');
+  const fullHex = (hex1 + hex2 + hex3 + hex4).slice(0, 32);
+  return `${fullHex.slice(0, 8)}-${fullHex.slice(8, 12)}-4${fullHex.slice(13, 16)}-a${fullHex.slice(17, 20)}-${fullHex.slice(20, 32)}`;
+}
+
+// Format shipment record to match Supabase shipments table schema perfectly
+export function formatShipmentForDb(s, sitesList = []) {
+  if (!s) return null;
+
+  let validSiteId = null;
+  if (Array.isArray(sitesList) && sitesList.length > 0) {
+    const matchedSite = sitesList.find(st => 
+      st.id === s.site_id || 
+      (st.code && s.site_code && String(st.code).toUpperCase() === String(s.site_code).toUpperCase()) ||
+      (st.code && s.destination_site_code && String(st.code).toUpperCase() === String(s.destination_site_code).toUpperCase()) ||
+      (st.name && s.site_name && String(st.name).toLowerCase() === String(s.site_name).toLowerCase()) ||
+      (st.name && s.destination_site_name && String(st.name).toLowerCase() === String(s.destination_site_name).toLowerCase())
+    );
+    if (matchedSite && isUUID(matchedSite.id)) {
+      validSiteId = matchedSite.id;
+    } else if (sitesList[0] && isUUID(sitesList[0].id)) {
+      validSiteId = sitesList[0].id;
+    }
+  }
+  if (!validSiteId) {
+    validSiteId = isUUID(s.site_id) ? s.site_id : toValidUUID(s.site_id || s.site_code || 'site-hub');
+  }
+
+  const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
+  const rawStatus = String(s.status || 'draft').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const allowedStatuses = ['draft', 'ready_for_dispatch', 'shipped', 'in_transit', 'delivered', 'received_confirmed'];
+  const validStatus = allowedStatuses.includes(rawStatus) ? rawStatus : (rawStatus.includes('confirm') ? 'received_confirmed' : 'draft');
+
+  return {
+    id: shipmentId,
+    shipment_number: String(s.shipment_number || s.invoice_ref || `SHP-${Date.now()}`),
+    invoice_ref: s.invoice_ref || s.shipment_number || null,
+    site_id: validSiteId,
+    allocation_cycle_id: safeUUID(s.allocation_cycle_id),
+    week_number: parseInt(s.week_number || 1, 10) || 1,
+    shipment_date: s.shipment_date || new Date().toISOString().split('T')[0],
+    carrier: s.carrier || 'Lite Express',
+    tracking_number: s.tracking_number || null,
+    total_boxes: parseInt(s.total_boxes || s.box_count || 1, 10) || 1,
+    status: validStatus,
+    prepared_by_name: s.prepared_by_name || 'Warehouse Staff',
+    verified_by_name: s.verified_by_name || 'Anjo Alcazar',
+    receiving_signature: s.receiving_signature || null,
+    remarks: s.remarks || 'KGB PARTS',
+    created_by: safeUUID(s.created_by || s.prepared_by_id),
+    created_at: s.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+// Format shipment items to match Supabase shipment_items table schema perfectly
+export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [], currentUser = null) {
+  if (!s || !Array.isArray(s.items) || s.items.length === 0) return [];
+  const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
+  const partsMap = new Map();
+  if (Array.isArray(partsList)) {
+    partsList.forEach(p => {
+      if (p.part_number && isUUID(p.id)) partsMap.set(p.part_number.toUpperCase(), p.id);
+    });
+  }
+
+  return s.items.map((it, idx) => {
+    const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+    const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
+    const rawPn = String(it.part_number || existingU?.part_number || '').toUpperCase();
+    const partId = isUUID(it.part_id) 
+      ? it.part_id 
+      : (isUUID(existingU?.part_id) 
+        ? existingU.part_id 
+        : (partsMap.get(rawPn) || toValidUUID('part-' + rawPn)));
+    const unitId = isUUID(existingU?.id) 
+      ? existingU.id 
+      : (isUUID(it.id) ? it.id : toValidUUID('unit-' + cleanSerial));
+
+    const itemId = isUUID(it.id) ? it.id : toValidUUID(`shp-item-${shipmentId}-${cleanSerial}-${idx}`);
+
+    return {
+      id: itemId,
+      shipment_id: shipmentId,
+      inventory_unit_id: unitId,
+      part_id: partId,
+      serial_number: cleanSerial,
+      box_number: it.box_number || 1,
+      scanned_at: it.scanned_at || s.shipment_date || new Date().toISOString(),
+      scanned_by: safeUUID(currentUser?.id)
+    };
+  }).filter(r => r.serial_number);
+}
+
+

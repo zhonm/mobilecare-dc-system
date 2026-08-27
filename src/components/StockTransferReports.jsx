@@ -514,6 +514,12 @@ export default function StockTransferReports() {
       {/* ── ROUTES VIEW ── */}
       {viewMode === 'routes' && <RoutesView analytics={analytics} />}
 
+      {/* ── SITE-BY-PART MATRIX VIEW ── */}
+      {viewMode === 'matrix' && <SitePartMatrixView filteredRecords={filteredRecords} />}
+
+      {/* ── COURIER SHIPPING FEE TRACKER VIEW ── */}
+      {viewMode === 'courier' && <CourierFeeView filteredRecords={filteredRecords} />}
+
       {/* ── PARTS VIEW ── */}
       {viewMode === 'parts' && <PartsView analytics={analytics} />}
     </div>
@@ -548,7 +554,9 @@ function FilterBar({
           {[
             { id: 'overview', label: '📊 Charts & Graphs' },
             { id: 'ledger',   label: '📋 Transfers Ledger' },
-            { id: 'routes',   label: '🔁 Route Matrix' },
+            { id: 'routes',   label: '🔁 Route Routes' },
+            { id: 'matrix',   label: '🏢 Site-by-Part Matrix' },
+            { id: 'courier',  label: '🚚 Courier Fee Tracker' },
             { id: 'parts',    label: '📦 Part Movers' }
           ].map(tab => (
             <button
@@ -1136,6 +1144,222 @@ function PartsView({ analytics }) {
               </td>
             </tr>
           </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Site-by-Part Matrix View ──────────────────────────────────────────────────
+function SitePartMatrixView({ filteredRecords }) {
+  const { matrixData, siteColumns } = useMemo(() => {
+    const sitesSet = new Set();
+    const partMap = {};
+
+    filteredRecords.forEach(r => {
+      const dest = r.to_stock || 'Unknown';
+      const pCode = r.product_code || 'Unknown';
+      const pName = r.product_name || '';
+      const qty = Number(r.transfer_quantity) || 1;
+
+      sitesSet.add(dest);
+
+      if (!partMap[pCode]) {
+        partMap[pCode] = {
+          code: pCode,
+          name: pName,
+          totalQty: 0,
+          sites: {}
+        };
+      }
+      partMap[pCode].totalQty += qty;
+      partMap[pCode].sites[dest] = (partMap[pCode].sites[dest] || 0) + qty;
+    });
+
+    const siteColumns = Array.from(sitesSet).sort();
+    const matrixData = Object.values(partMap).sort((a, b) => b.totalQty - a.totalQty);
+
+    return { matrixData, siteColumns };
+  }, [filteredRecords]);
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
+      <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+        <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>Site-by-Part Transfer Matrix</h4>
+        <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+          Cross-tabulation of parts dispatched to each receiving service branch ({siteColumns.length} receiving hubs)
+        </p>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="matrix-table" style={{ width: '100%', fontSize: '11.5px' }}>
+          <thead>
+            <tr>
+              <th style={{ width: 45, textAlign: 'center', background: '#0f172a', color: '#fff' }}>#</th>
+              <th style={{ width: 120, background: '#0f172a', color: '#fff' }}>Part Number</th>
+              <th style={{ minWidth: 200, background: '#0f172a', color: '#fff' }}>Description</th>
+              <th style={{ width: 75, textAlign: 'center', background: '#0284c7', color: '#fff' }}>Total</th>
+              {siteColumns.map(site => (
+                <th key={site} style={{ textAlign: 'center', minWidth: '90px', background: '#1e293b', color: '#f8fafc' }}>
+                  {site.replace(/_MSPI-Owned|SERVICE_HUB/gi, '').trim()}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {matrixData.map((row, idx) => (
+              <tr key={row.code} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                <td style={{ textAlign: 'center', color: '#94a3b8' }}>{idx + 1}</td>
+                <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0284c7' }}>{row.code}</td>
+                <td style={{ fontWeight: 600, color: '#1e293b' }}>{row.name}</td>
+                <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>{row.totalQty}</td>
+                {siteColumns.map(site => {
+                  const val = row.sites[site] || 0;
+                  return (
+                    <td key={site} style={{
+                      textAlign: 'center',
+                      fontWeight: val > 0 ? 700 : 400,
+                      color: val > 0 ? '#0f172a' : '#cbd5e1',
+                      background: val > 0 ? '#f0fdf4' : 'transparent'
+                    }}>
+                      {val > 0 ? val : '—'}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Courier Delivery Fee Tracker ──────────────────────────────────────────────
+function CourierFeeView({ filteredRecords }) {
+  const courierStats = useMemo(() => {
+    let totalShipments = filteredRecords.length;
+    let mmShipments = 0;
+    let provShipments = 0;
+    const branchBreakdown = {};
+
+    filteredRecords.forEach(r => {
+      const dest = r.to_stock || 'Unknown';
+      const isProv = /cebu|davao|iloilo|bacolod|pampanga|clark|baguio|dagupan|lipa|batangas|palawan|gensan|cagayan/i.test(dest);
+      const feePHP = isProv ? 350 : 180; // Flat estimate: ₱180 NCR, ₱350 Provincial
+      const feeUSD = feePHP / 57;
+
+      if (isProv) provShipments++;
+      else mmShipments++;
+
+      if (!branchBreakdown[dest]) {
+        branchBreakdown[dest] = {
+          name: dest,
+          isProv,
+          shipments: 0,
+          totalFeePHP: 0,
+          totalFeeUSD: 0,
+          units: 0
+        };
+      }
+      branchBreakdown[dest].shipments += 1;
+      branchBreakdown[dest].totalFeePHP += feePHP;
+      branchBreakdown[dest].totalFeeUSD += feeUSD;
+      branchBreakdown[dest].units += (Number(r.transfer_quantity) || 1);
+    });
+
+    const totalFeePHP = (mmShipments * 180) + (provShipments * 350);
+    const totalFeeUSD = totalFeePHP / 57;
+
+    return {
+      totalShipments,
+      mmShipments,
+      provShipments,
+      totalFeePHP,
+      totalFeeUSD,
+      branchList: Object.values(branchBreakdown).sort((a, b) => b.totalFeePHP - a.totalFeePHP)
+    };
+  }, [filteredRecords]);
+
+  return (
+    <div className="card" style={{ padding: '20px', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
+        <div style={{ background: '#0284c71a', color: '#0284c7', padding: '8px', borderRadius: '8px' }}>
+          <Package size={20} />
+        </div>
+        <div>
+          <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>Courier Delivery & Shipping Fee Tracker</h4>
+          <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+            Estimated courier dispatch fees per service hub transfer (Metro Manila: ₱180/pkg • Provincial: ₱350/pkg)
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+        <div style={{ padding: '14px 16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Total Transfer Dispatches</span>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+            {courierStats.totalShipments.toLocaleString()} <span style={{ fontSize: '12px', color: '#64748b' }}>events</span>
+          </div>
+        </div>
+
+        <div style={{ padding: '14px 16px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#1d4ed8', textTransform: 'uppercase' }}>Metro Manila Dispatches</span>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: '#1e40af', marginTop: '4px' }}>
+            {courierStats.mmShipments.toLocaleString()} <span style={{ fontSize: '12px', color: '#1d4ed8' }}>@ ₱180</span>
+          </div>
+        </div>
+
+        <div style={{ padding: '14px 16px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#166534', textTransform: 'uppercase' }}>Provincial Dispatches</span>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: '#15803d', marginTop: '4px' }}>
+            {courierStats.provShipments.toLocaleString()} <span style={{ fontSize: '12px', color: '#166534' }}>@ ₱350</span>
+          </div>
+        </div>
+
+        <div style={{ padding: '14px 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#991b1b', textTransform: 'uppercase' }}>Est. Total Shipping Fees</span>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: '#dc2626', marginTop: '4px' }}>
+            ₱{courierStats.totalFeePHP.toLocaleString()} <span style={{ fontSize: '12px', color: '#991b1b' }}>(${(courierStats.totalFeeUSD).toFixed(2)})</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="table-responsive" style={{ overflowX: 'auto' }}>
+        <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
+          <thead>
+            <tr style={{ background: '#0f172a', color: '#fff', height: '34px' }}>
+              <th style={{ padding: '6px 12px', textAlign: 'left' }}>Destination Hub</th>
+              <th style={{ padding: '6px 12px', textAlign: 'center' }}>Region Tier</th>
+              <th style={{ padding: '6px 12px', textAlign: 'center' }}>Shipments Count</th>
+              <th style={{ padding: '6px 12px', textAlign: 'center' }}>Total Units</th>
+              <th style={{ padding: '6px 12px', textAlign: 'right' }}>Est. Courier Cost (PHP)</th>
+              <th style={{ padding: '6px 12px', textAlign: 'right' }}>Est. Courier Cost (USD)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {courierStats.branchList.map(b => (
+              <tr key={b.name} style={{ borderBottom: '1px solid #f1f5f9', height: '34px' }}>
+                <td style={{ padding: '6px 12px', fontWeight: 700, color: '#0f172a' }}>{b.name}</td>
+                <td style={{ padding: '6px 12px', textAlign: 'center' }}>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700,
+                    background: b.isProv ? '#fef3c7' : '#e0f2fe',
+                    color: b.isProv ? '#92400e' : '#0369a1'
+                  }}>
+                    {b.isProv ? 'Provincial (₱350)' : 'Metro Manila (₱180)'}
+                  </span>
+                </td>
+                <td style={{ padding: '6px 12px', textAlign: 'center', fontWeight: 700 }}>{b.shipments}</td>
+                <td style={{ padding: '6px 12px', textAlign: 'center', fontWeight: 700, color: '#0284c7' }}>{b.units}</td>
+                <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 800, color: '#15803d' }}>
+                  ₱{b.totalFeePHP.toLocaleString()}
+                </td>
+                <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: '#64748b' }}>
+                  ${b.totalFeeUSD.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
         </table>
       </div>
     </div>

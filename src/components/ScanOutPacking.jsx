@@ -31,9 +31,11 @@ import {
   Plus,
   Building2,
   MapPin,
-  ChevronDown
+  ChevronDown,
+  Lock
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
+import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function ScanOutPacking() {
@@ -1874,11 +1876,20 @@ export default function ScanOutPacking() {
                             >
                               <Printer size={12} />
                             </button>
-                            {canUserDeleteRecord(s, currentUser) ? (
+                            {isLockedConfirmedShipment(s) ? (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled
+                                style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.8, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                                title="Locked Record: Manifest is Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI."
+                              >
+                                <Lock size={12} />
+                              </button>
+                            ) : canUserDeleteRecord(s, currentUser) ? (
                               <button
                                 className="btn btn-danger btn-sm"
                                 onClick={() => {
-                                  if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
+                                  if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will permanently delete both the manifest and all serialized parts included in this shipment.`)) {
                                     deleteShipment(s.id);
                                   }
                                 }}

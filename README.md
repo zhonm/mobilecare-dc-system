@@ -136,6 +136,44 @@ flowchart TD
 * **Path:** `Distribution` → `Shipments & Packing Lists`
 * **Purpose:** Manages dispatch tracking, carrier info (Lite Express), waybill tracking numbers, and printable Apple-standard Packing Lists with signature sign-offs.
 
+#### 🔒 Confirmed Shipments Immutability Rule
+Once a shipment / packing manifest reaches **`RECEIVED CONFIRMED`** (or `DELIVERED`), the record is **permanently locked** against deletion in the user interface to ensure full compliance and complete historical audit integrity. The red delete button is replaced with a **green Lock icon**.
+
+#### 🗑️ How to Manually Delete a Locked Shipment & Its Parts in Supabase
+If a database administrator needs to permanently purge a confirmed shipment and its serialized parts from the database, follow these steps in the Supabase Dashboard:
+
+1. **Log In to Supabase Table Editor**:
+   - Open your project at [Supabase Dashboard](https://supabase.com/dashboard) and navigate to **Table Editor**.
+
+2. **One-Time Foreign Key Cascade Setup (Recommended)**:
+   - If you see a foreign key error (`is still referenced from table shipment_items`), run this quick 1-line script in Supabase **SQL Editor**:
+   ```sql
+   ALTER TABLE public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
+   ALTER TABLE public.shipment_items ADD CONSTRAINT shipment_items_inventory_unit_id_fkey FOREIGN KEY (inventory_unit_id) REFERENCES public.inventory_units(id) ON DELETE CASCADE;
+   ```
+
+3. **Delete the Manifest from `public.shipments`**:
+   - Select the **`shipments`** table.
+   - Search for the row by `invoice_ref` or `shipment_number` (e.g. `DCMSPIOWNED#8515656`).
+   - Select the row and click **Delete 1 row**. *(Foreign-key cascade automatically removes the entries in `shipment_items`)*.
+
+4. **Delete the JSON Document from `public.saved_records`**:
+   - Select the **`saved_records`** table.
+   - Search for the invoice reference or ID (`DCMSPIOWNED#8515656` or `record_type = 'shipment'`).
+   - Select the row and click **Delete**.
+
+5. **Delete the Associated Parts from `public.inventory_units`** *(Optional, if removing parts permanently)*:
+   - Select the **`inventory_units`** table.
+   - Filter by `status = 'packed'` or search by the specific serial numbers.
+   - Select the matching rows and click **Delete selected rows**.
+
+6. **Sync Application**:
+   - In the DC System web app, click **Sync DB** or refresh your browser. The manifest and its parts will be permanently removed.
+
+> [!NOTE]
+> **DC Intake Records Safety Guarantee:**
+> Deleting a shipment manifest only modifies the `shipments` and `inventory_units` tables. Your **DC Intake Batch Records** in `dc_intake_records` (`MDC20260826` and `MDC202608016`) remain untouched and permanently preserved as your official receiving log.
+
 ---
 
 ### Step 10: Traceability & Serialized Audit Log
@@ -176,7 +214,44 @@ npm run build
 
 ---
 
+## 📐 How Forecasting & Allocation Are Calculated
+
+### 1. Demand Forecasting Models
+The system supports multiple switchable forecasting algorithms:
+
+* **Linear Regression (Default / Reference Google Sheet Parity):**
+  Uses ordinary least-squares linear regression:
+  $$\hat{Y}_{n+1} = \alpha + \beta (n+1)$$
+  Replicates native Excel/Google Sheets `FORECAST.LINEAR(n+1, known_y, known_x)`. Does not apply Winsorization pre-filtering by default to preserve exact alignment with official reference workbooks.
+
+* **4-Month Weighted Moving Average (WMA):**
+  Computes a weighted average over the trailing 4-month window:
+  $$\hat{Y} = \sum_{i=1}^4 w_i Y_i \quad \text{where } w = [0.10, 0.20, 0.30, 0.40]$$
+  Applies **Winsorization Anomaly Filtering** ($\mu + 1.5\sigma$) by default to dampen isolated promotional spikes (e.g. July battery surges).
+
+### 2. Multi-Branch Allocation Algorithms (Option A vs Option B)
+
+* **Option A (Bit-for-Bit Excel Cumulative Window):**
+  Replicates the live Google Sheet allocation matrix formula:
+  $$\text{Alloc}(i, c) = \max\left(0, \text{round}\left(Q_i \cdot \sum_{r=0}^i \sum_{k=0}^c S_{r,k}\right) - \text{round}\left(Q_i \cdot \left(\sum_{r=0}^i \sum_{k=0}^c S_{r,k} - S_{i,c}\right)\right)\right)$$
+  where $Q_i$ is the forecasted quantity for part $i$, and $S_{r,k}$ is the historical share of part $r$ at branch $k$.
+
+* **Option B (Model-Level Self-Consistent Quota):**
+  Apportions branch quotas using only each part's own empirical share distribution:
+  $$\text{Alloc}(c) = \max\left(0, \text{round}\left(Q \cdot C_c\right) - \text{round}\left(Q \cdot C_{c-1}\right)\right)$$
+  where $C_c = \sum_{k=0}^c S_k / \sum S$ is the cumulative normalized share up to branch $c$. Strictly guarantees that $\sum \text{Alloc} = Q$ with zero drift.
+
+### 3. 4-Week Delivery Split Schedule
+Each allocated monthly quantity $P$ is distributed across 4 weekly shipment batches (`W1`–`W4`) with alternating row parity:
+$$\text{Base} = \lfloor P / 4 \rfloor, \quad \text{Remainder} = P \pmod 4$$
+* **Even Rows:** Week 1 receives the first remainder unit ($\text{rem} \ge 1$), Week 2 receives second ($\text{rem} \ge 2$), Week 3 receives third ($\text{rem} = 3$).
+* **Odd Rows:** Week 3 receives first remainder ($\text{rem} \ge 2$), Week 2 receives second ($\text{rem} = 3$).
+* **Week 4:** Balances remaining units ($P - W_1 - W_2 - W_3$) and absorbs floating-point cent residuals for exact total valuation.
+
+---
+
 ## 📁 Database Migrations
 Database schemas and migrations are located in `src/supabase/`:
 - `schema.sql`: Complete PostgreSQL schema with authentication, RBAC, inventory, and period snapshots.
 - `saved_records_migration.sql`: Dedicated migration script for the `saved_records` JSONB table and RLS policies.
+

@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "node src/tests/test_forecast_wma.js && node src/tests/test_allocation_parity.js && node src/tests/test_masterlist_parity.js && node src/tests/test_master_allocation_diff.js",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -81,7 +81,8 @@ export default function SettingsCatalog() {
 
   const handleAddSite = (e) => {
     e.preventDefault();
-    const cleanCode = newSite.code.trim().toUpperCase();
+    let cleanCode = newSite.code.trim().toUpperCase();
+    if (cleanCode === 'APPILO') cleanCode = 'APP ILO';
     if (!cleanCode || !newSite.name.trim()) {
       showToast('Branch code and name are required', 'error');
       return;

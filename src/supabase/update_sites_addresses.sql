@@ -138,7 +138,16 @@
     contact_email = 'ileto.palenciaii@mobilecareph.com',
     address = 'G/F Festive Walk Mall, Iloilo Business Park, Airport Road, Mandurriao, Iloilo City',
     full_address = 'G/F Festive Walk Mall, Iloilo Business Park, Airport Road, Mandurriao Iloilo City'
-  WHERE code IN ('ILO', 'ASP ILO', 'ASP_ILO') OR name ILIKE '%ILOILO%' OR name ILIKE '%FESTIVE WALK%';
+  WHERE code IN ('ILO', 'ASP ILO', 'ASP_ILO') OR name ILIKE '%FESTIVE WALK%';
+
+  UPDATE sites SET
+    ship_to = '1029842',
+    sold_to = '1597912',
+    invoice_prefix = 'APILOSSR#',
+    contact_email = 'app.smiloilo@mobilecareph.com',
+    address = 'Cyberzone, 3/F SM City Iloilo, Senator Benigno Aquino Jr. Ave, Mandurriao, Iloilo City',
+    full_address = 'Space 322-323, 3/F Cyberzone, SM City Iloilo, Mandurriao, Iloilo City 5000'
+  WHERE code IN ('APP ILO', 'APP_ILO', 'APPILO') OR name ILIKE '%SM ILOILO%';
 
   UPDATE sites SET
     ship_to = '1730389',

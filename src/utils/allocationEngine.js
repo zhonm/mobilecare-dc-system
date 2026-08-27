@@ -1,3 +1,13 @@
+import {
+  CANONICAL_SITE_CODES,
+  CANONICAL_SITE_LIST,
+  CANONICAL_DISPLAY_DESCS,
+  CANONICAL_BATTERY_DESCS,
+  CANONICAL_BATTERY_SHARE_DESCS
+} from '../constants/config.js';
+import { displayShares, batteryShares } from '../data/canonicalShares.js';
+import { calculateForecastByModel, roundExcel } from './forecastEngine.js';
+
 /**
  * Allocation Engine for Multi-Site Distribution
  * Implements:
@@ -6,7 +16,141 @@
  *   - Hamilton-Hare Proportional Quota Allocation
  *   - Verified 4-Week Alternating Parity Split
  *   - Order Remark Generation ("NO NEED TO ORDER" / "ORDER REQUIRED")
+ *   - Per-part empirical and canonical multi-site demand resolution
  */
+
+/**
+ * Resolves per-branch demand weights for a given part according to strict 3-tier priority:
+ * 1. Real empirical historical shares for this exact part from historical site_quantities / site_counts (>0 sum)
+ * 2. Per-part canonical shares from canonicalShares.js (displayShares / batteryShares) matched by model index
+ * 3. Uniform split across active service sites (1 / activeSites.length)
+ *
+ * NOTE: CANONICAL_SITE_WEIGHTS is deprecated for allocation purposes and is never used.
+ *
+ * @param {Object} partOrForecastItem - Part or forecast item with description/part_number/site_quantities
+ * @param {Array} activeServiceSites - Array of active branch site objects
+ * @param {Object} [existingAlloc=null] - Optional existing allocation row
+ * @returns {Array<{siteId: string, historicalDemand: number}>}
+ */
+export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = [], existingAlloc = null) {
+  if (!Array.isArray(activeServiceSites) || activeServiceSites.length === 0) {
+    return [];
+  }
+
+  // Priority 1: Real empirical shares for this exact part from historical site_quantities / site_counts
+  const sources = [
+    partOrForecastItem?.site_counts,
+    partOrForecastItem?.site_quantities,
+    existingAlloc?.site_counts,
+    existingAlloc?.site_quantities
+  ];
+
+  for (const src of sources) {
+    if (src && typeof src === 'object' && Object.keys(src).length > 0) {
+      let totalCount = 0;
+      const demands = activeServiceSites.map(s => {
+        const val = src[s.id] ?? src[s.code] ?? (s.name ? src[s.name] : undefined);
+        const count = typeof val === 'number' && Number.isFinite(val) && val > 0 ? val : 0;
+        totalCount += count;
+        return { siteId: s.id, historicalDemand: count };
+      });
+
+      if (totalCount > 0) {
+        return demands;
+      }
+    }
+  }
+
+  // Priority 2: Fall back to per-part canonical shares in canonicalShares.js
+  const desc = (partOrForecastItem?.description || existingAlloc?.description || '').trim();
+  const lowerDesc = desc.toLowerCase();
+  let rowShares = null;
+
+  if (lowerDesc.includes('display') || lowerDesc.includes('screen')) {
+    const dIdx = CANONICAL_DISPLAY_DESCS.findIndex(d => d.toLowerCase() === lowerDesc || d === desc);
+    if (dIdx >= 0 && displayShares && displayShares[dIdx]) {
+      rowShares = displayShares[dIdx];
+    }
+  } else if (lowerDesc.includes('battery') || lowerDesc.includes('batt')) {
+    let bIdx = CANONICAL_BATTERY_SHARE_DESCS.findIndex(d => d.toLowerCase() === lowerDesc || d === desc);
+    if (bIdx < 0) {
+      bIdx = CANONICAL_BATTERY_DESCS.findIndex(d => d.toLowerCase() === lowerDesc || d === desc);
+    }
+    if (bIdx >= 0 && batteryShares && batteryShares[bIdx]) {
+      rowShares = batteryShares[bIdx];
+    }
+  }
+
+  if (rowShares && Array.isArray(rowShares) && rowShares.length > 0) {
+    let totalCanonicalShare = 0;
+    const demands = activeServiceSites.map((s, sIdx) => {
+      // Find matching column index in canonical site order
+      let siteColIdx = CANONICAL_SITE_LIST.findIndex(cs =>
+        cs.code === s.code ||
+        (s.name && cs.name && (cs.name.includes(s.name) || s.name.includes(cs.name)))
+      );
+      if (siteColIdx < 0) {
+        siteColIdx = CANONICAL_SITE_CODES.indexOf(s.code);
+      }
+      if (siteColIdx < 0) {
+        siteColIdx = sIdx;
+      }
+
+      const share = (siteColIdx >= 0 && siteColIdx < rowShares.length) ? (rowShares[siteColIdx] || 0) : 0;
+      totalCanonicalShare += share;
+      return { siteId: s.id, historicalDemand: share };
+    });
+
+    if (totalCanonicalShare > 0) {
+      return demands;
+    }
+  }
+
+  // Priority 3: Fall back to uniform split across active branches (demand = 1 for each active branch)
+  return activeServiceSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
+}
+
+/**
+ * Calculates proportional allocation for a part to active sites using resolved per-part demand weights.
+ * Guarantees sum(allocations) strictly equals round(targetQty) with zero drift.
+ *
+ * @param {number} targetQty
+ * @param {Object} partOrForecastItem
+ * @param {Array} activeServiceSites
+ * @param {Object} [existingAlloc=null]
+ * @returns {Array<{siteId: string, sharePct: number, allocatedQty: number}>}
+ */
+export function allocatePartToSites(targetQty, partOrForecastItem, activeServiceSites = [], existingAlloc = null) {
+  const siteDemands = resolvePartSiteDemands(partOrForecastItem, activeServiceSites, existingAlloc);
+  return calculateProportionalAllocation(targetQty, siteDemands);
+}
+
+/**
+ * Lightweight consistency check verifying active branch count matches canonical share columns
+ * @param {Array} sitesList
+ * @returns {{isValid: boolean, activeCount: number, expectedCount: number, message?: string}}
+ */
+export function validateSiteSharesConsistency(sitesList = []) {
+  const activeServiceSites = (sitesList || []).filter(s =>
+    !s.is_dc &&
+    !s.code?.toUpperCase().includes('DC') &&
+    !s.code?.toUpperCase().includes('MOBILEC') &&
+    !s.name?.toLowerCase().includes('distribution') &&
+    s.code !== 'DC-MDC'
+  );
+  const expectedCount = displayShares?.[0]?.length || CANONICAL_SITE_CODES.length;
+  const activeCount = activeServiceSites.length;
+  const isValid = activeCount === expectedCount;
+  if (!isValid && typeof console !== 'undefined') {
+    console.warn(`[Allocation Consistency Warning] Active branches count (${activeCount}) does not match canonical matrix columns (${expectedCount}).`);
+  }
+  return {
+    isValid,
+    activeCount,
+    expectedCount,
+    message: isValid ? undefined : `Active branches count (${activeCount}) does not match canonical matrix columns (${expectedCount})`
+  };
+}
 
 /**
  * Option A — Bit-for-Bit Excel Parity Allocation
@@ -46,7 +190,9 @@ export function calculateOptionAAllocation(forecastQty, shareMatrix, matrixRowId
       }
     }
     const cellShare = shareMatrix[matrixRowIdx] ? (shareMatrix[matrixRowIdx][c] || 0) : 0;
-    const alloc = Math.max(0, Math.round(targetQty * sumBlock) - Math.round(targetQty * (sumBlock - cellShare)));
+    const term1 = roundExcel(targetQty * sumBlock);
+    const term2 = roundExcel(targetQty * (sumBlock - cellShare));
+    const alloc = Math.max(0, term1 - term2);
     allocs.push(alloc);
   }
 
@@ -97,7 +243,7 @@ export function calculate2DCumulativeAllocation(forecastQty, shareMatrix, matrix
 
     const alloc = Math.max(
       0,
-      Math.round(targetQty * cumulativeShare) - Math.round(targetQty * prevCumulative)
+      roundExcel(targetQty * cumulativeShare) - roundExcel(targetQty * prevCumulative)
     );
     result.push(alloc);
   }
@@ -157,15 +303,21 @@ export function calculateProportionalAllocation(totalReceivedQty, siteDemands = 
 
   // Exact Excel Cumulative Rounding Formula
   let cumulativeShare = 0;
-  return siteDemands.map(s => {
+  const totalSites = siteDemands.length;
+  return siteDemands.map((s, idx) => {
     const demand = s.historicalDemand || 0;
     const sharePct = demand / totalDemand;
     const prevCumulativeShare = cumulativeShare;
     cumulativeShare += sharePct;
 
+    // Enforce 1.0 boundary at final site to prevent floating-point residual
+    if (idx === totalSites - 1) {
+      cumulativeShare = 1.0;
+    }
+
     const allocatedQty = Math.max(
       0,
-      Math.round(targetQty * cumulativeShare) - Math.round(targetQty * prevCumulativeShare)
+      roundExcel(targetQty * cumulativeShare) - roundExcel(targetQty * prevCumulativeShare)
     );
 
     return {
@@ -295,4 +447,83 @@ export function calculateAllocationTotalsAndRemarks(allocationItems = []) {
   });
 
   return summary;
+}
+
+/**
+ * Generates or synchronizes allocations from an array of forecastItems across service sites
+ * @param {Array} forecastList
+ * @param {Array} sitesList
+ * @param {string} activeModel
+ * @param {Array} existingAllocations
+ * @returns {Array}
+ */
+export function generateAllocationsFromForecasts(forecastList = [], sitesList = [], activeModel = 'linear', existingAllocations = []) {
+  if (!Array.isArray(forecastList) || forecastList.length === 0) return [];
+  const activeServiceSites = (sitesList || []).filter(s =>
+    !s.is_dc &&
+    !s.code?.toUpperCase().includes('DC') &&
+    !s.code?.toUpperCase().includes('MOBILEC') &&
+    !s.name?.toLowerCase().includes('distribution') &&
+    s.code !== 'DC-MDC'
+  );
+  if (activeServiceSites.length === 0) return [];
+
+  validateSiteSharesConsistency(sitesList);
+
+  return forecastList.map((fi, rIdx) => {
+    const rawCounts = fi.ytd_monthly_counts || [];
+    const counts = rawCounts.slice(0, 8);
+    const targetX = (counts.length || 8) + 1;
+    const computed = counts.length === 0
+      ? (fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0))
+      : calculateForecastByModel(counts, activeModel, {
+          targetX,
+          categoryId: fi.category_id,
+          description: fi.description
+        });
+    const hasOverride = fi.admin_override !== null && fi.admin_override !== undefined && fi.admin_override !== '';
+    const fiQty = hasOverride ? parseInt(fi.admin_override, 10) : (fi.final_forecast !== undefined ? fi.final_forecast : computed);
+    const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
+
+    const existingAlloc = (existingAllocations || []).find(a =>
+      a.part_id === fi.part_id ||
+      a.part_number === fi.part_number ||
+      (a.description && fi.description && a.description.trim().toLowerCase() === fi.description.trim().toLowerCase())
+    );
+
+    const fiResults = allocatePartToSites(fiQty, fi, activeServiceSites, existingAlloc);
+    const sq = {};
+    let tAlloc = 0;
+    fiResults.forEach(res => {
+      sq[res.siteId] = res.allocatedQty;
+      const siteObj = activeServiceSites.find(s => s.id === res.siteId);
+      if (siteObj?.code) sq[siteObj.code] = res.allocatedQty;
+      tAlloc += res.allocatedQty;
+    });
+
+    const tCost = tAlloc * fiPrice;
+    const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + 3);
+
+    return {
+      part_id: fi.part_id,
+      part_number: fi.part_number,
+      description: fi.description,
+      category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
+      forecasted_qty: fiQty,
+      stocking_price: fiPrice,
+      exchange_price: fi.exchange_price || existingAlloc?.exchange_price || 0,
+      total_allocated_qty: tAlloc,
+      total_stock_cost: tCost,
+      w1_qty: fiSplit.w1_qty,
+      w2_qty: fiSplit.w2_qty,
+      w3_qty: fiSplit.w3_qty,
+      w4_qty: fiSplit.w4_qty,
+      w1_cost: fiSplit.w1_cost,
+      w2_cost: fiSplit.w2_cost,
+      w3_cost: fiSplit.w3_cost,
+      w4_cost: fiSplit.w4_cost,
+      site_quantities: sq,
+      remarks: getOrderRemark(tAlloc)
+    };
+  });
 }

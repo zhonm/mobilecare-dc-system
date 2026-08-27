@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 
 export function usePeriodRecordsAndReports({
   currentUser,
@@ -233,6 +234,16 @@ export function usePeriodRecordsAndReports({
         localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
       } catch (e) {}
       restoredCountDesc.push(`${snap.allocations.length} allocations`);
+    } else if (snap.forecastItems && snap.forecastItems.length > 0 && setAllocations) {
+      const generated = generateAllocationsFromForecasts(snap.forecastItems, sites);
+      if (generated.length > 0) {
+        setAllocations(generated);
+        dbStorage.setItem('mdc_allocations', generated);
+        try {
+          localStorage.setItem('mdc_allocations', JSON.stringify(generated));
+        } catch (e) {}
+        restoredCountDesc.push(`${generated.length} allocations`);
+      }
     }
 
     if (record.period_month || record.period_year || record.period_label) {

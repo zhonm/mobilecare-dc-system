@@ -6,6 +6,7 @@ import {
   calculateOptionAAllocation,
   calculateOptionBAllocation,
   calculate2DCumulativeAllocation,
+  allocatePartToSites,
   calculateWeeklySplit,
   getOrderRemark
 } from './allocationEngine.js';
@@ -634,14 +635,14 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               final_forecast: 0
             };
             const targetQty = f.final_forecast || f.computed_forecast || 0;
-            const allocatedBranchQuantities = calculate2DCumulativeAllocation(targetQty, dispShares, mIdx);
+            const allocResults = allocatePartToSites(targetQty, f, activeServiceSites);
             const siteQuantities = {};
             let totalAlloc = 0;
-            activeServiceSites.forEach((s, sIdx) => {
-              const q = allocatedBranchQuantities[sIdx] || 0;
-              siteQuantities[s.id] = q;
-              siteQuantities[s.code] = q;
-              totalAlloc += q;
+            allocResults.forEach(res => {
+              siteQuantities[res.siteId] = res.allocatedQty;
+              const sObj = activeServiceSites.find(s => s.id === res.siteId);
+              if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+              totalAlloc += res.allocatedQty;
             });
             const pricing = lookupPartPrice(f.part_number, desc, currentParts);
             const totalCost = totalAlloc * pricing.stockingPrice;
@@ -683,14 +684,14 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               final_forecast: 0
             };
             const targetQty = f.final_forecast || f.computed_forecast || 0;
-            const allocatedBranchQuantities = calculate2DCumulativeAllocation(targetQty, battShares, mIdx);
+            const allocResults = allocatePartToSites(targetQty, f, activeServiceSites);
             const siteQuantities = {};
             let totalAlloc = 0;
-            activeServiceSites.forEach((s, sIdx) => {
-              const q = allocatedBranchQuantities[sIdx] || 0;
-              siteQuantities[s.id] = q;
-              siteQuantities[s.code] = q;
-              totalAlloc += q;
+            allocResults.forEach(res => {
+              siteQuantities[res.siteId] = res.allocatedQty;
+              const sObj = activeServiceSites.find(s => s.id === res.siteId);
+              if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+              totalAlloc += res.allocatedQty;
             });
             const pricing = lookupPartPrice(f.part_number, desc, currentParts);
             const totalCost = totalAlloc * pricing.stockingPrice;
@@ -753,6 +754,8 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             part_number: a.part_number,
             description: a.description,
             category_id: a.category_id,
+            stocking_price: a.stocking_price,
+            exchange_price: a.exchange_price,
             computed_forecast: a.forecasted_qty || a.total_allocated_qty,
             final_forecast: a.forecasted_qty || a.total_allocated_qty,
             safety_stock_units: Math.ceil((a.forecasted_qty || a.total_allocated_qty) * 0.05),
@@ -813,14 +816,14 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               final_forecast: 0
             };
             const targetQty = f.final_forecast || f.computed_forecast || 0;
-            const allocatedBranchQuantities = calculate2DCumulativeAllocation(targetQty, dispShareMatrix, mIdx);
+            const allocResults = allocatePartToSites(targetQty, f, activeServiceSites);
             const siteQuantities = {};
             let totalAlloc = 0;
-            activeServiceSites.forEach((s, sIdx) => {
-              const q = allocatedBranchQuantities[sIdx] || 0;
-              siteQuantities[s.id] = q;
-              siteQuantities[s.code] = q;
-              totalAlloc += q;
+            allocResults.forEach(res => {
+              siteQuantities[res.siteId] = res.allocatedQty;
+              const sObj = activeServiceSites.find(s => s.id === res.siteId);
+              if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+              totalAlloc += res.allocatedQty;
             });
             const pricing = lookupPartPrice(f.part_number, desc, currentParts);
             const totalCost = totalAlloc * pricing.stockingPrice;
@@ -861,14 +864,14 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               final_forecast: 0
             };
             const targetQty = f.final_forecast || f.computed_forecast || 0;
-            const allocatedBranchQuantities = calculate2DCumulativeAllocation(targetQty, battShareMatrix, mIdx);
+            const allocResults = allocatePartToSites(targetQty, f, activeServiceSites);
             const siteQuantities = {};
             let totalAlloc = 0;
-            activeServiceSites.forEach((s, sIdx) => {
-              const q = allocatedBranchQuantities[sIdx] || 0;
-              siteQuantities[s.id] = q;
-              siteQuantities[s.code] = q;
-              totalAlloc += q;
+            allocResults.forEach(res => {
+              siteQuantities[res.siteId] = res.allocatedQty;
+              const sObj = activeServiceSites.find(s => s.id === res.siteId);
+              if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+              totalAlloc += res.allocatedQty;
             });
             const pricing = lookupPartPrice(f.part_number, desc, currentParts);
             const totalCost = totalAlloc * pricing.stockingPrice;
@@ -915,7 +918,12 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         }
 
         // 3. Default: Process as Raw Repair Logs
-        const usageResult = processRawUsageSheet(rawRows, currentSites, currentParts, filterScope, selectedMonth, file.name);
+        const usageResult = processRawUsageSheet(rawRows, currentSites, currentParts, {
+          filterScope,
+          selectedMonth,
+          fileName: file.name,
+          allocationMode: options.allocationMode || 'OPTION_A'
+        });
         resolve({
           success: true,
           type: 'RAW_USAGE_PIPELINE',
@@ -1563,12 +1571,15 @@ export function processRawUsageSheet(
     const pn = pEntry.partNumber;
     const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
+    const pricing = lookupPartPrice(pn, desc, existingParts);
 
     forecastItems.push({
       part_id: `part-${pn}`,
       part_number: pn,
       description: desc,
       category_id: 'cat-display',
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
       ytd_monthly_counts: pEntry.months,
       computed_forecast: computedForecast,
       admin_override: null,
@@ -1577,19 +1588,28 @@ export function processRawUsageSheet(
       recommended_order: recOrder.recommendedOrder
     });
 
-    const pricing = lookupPartPrice(pn, desc, existingParts);
-    const allocatedBranchQuantities = allocationMode === 'OPTION_B'
-      ? calculateOptionBAllocation(computedForecast, displayShareMatrix, matrixRowIdx)
-      : calculateOptionAAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
-
     const siteQuantities = {};
     let totalAlloc = 0;
-    activeServiceSites.forEach((s, sIdx) => {
-      const q = allocatedBranchQuantities[sIdx] || 0;
-      siteQuantities[s.id] = q;
-      siteQuantities[s.code] = q;
-      totalAlloc += q;
-    });
+
+    if (allocationMode === 'OPTION_A') {
+      const optAAllocs = calculateOptionAAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
+      optAAllocs.forEach((qty, colIdx) => {
+        const sObj = activeServiceSites[colIdx];
+        if (sObj) {
+          siteQuantities[sObj.id] = qty;
+          siteQuantities[sObj.code] = qty;
+          totalAlloc += qty;
+        }
+      });
+    } else {
+      const allocResults = allocatePartToSites(computedForecast, { ...pEntry, description: desc }, activeServiceSites);
+      allocResults.forEach(res => {
+        siteQuantities[res.siteId] = res.allocatedQty;
+        const sObj = activeServiceSites.find(s => s.id === res.siteId);
+        if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+        totalAlloc += res.allocatedQty;
+      });
+    }
 
     const totalCost = totalAlloc * pricing.stockingPrice;
     const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
@@ -1646,12 +1666,15 @@ export function processRawUsageSheet(
     const pn = pEntry.partNumber;
     const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
+    const pricing = lookupPartPrice(pn, desc, existingParts);
 
     forecastItems.push({
       part_id: `part-${pn}`,
       part_number: pn,
       description: desc,
       category_id: 'cat-battery',
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
       ytd_monthly_counts: pEntry.months,
       computed_forecast: computedForecast,
       admin_override: null,
@@ -1660,19 +1683,28 @@ export function processRawUsageSheet(
       recommended_order: recOrder.recommendedOrder
     });
 
-    const pricing = lookupPartPrice(pn, desc, existingParts);
-    const allocatedBranchQuantities = allocationMode === 'OPTION_B'
-      ? calculateOptionBAllocation(computedForecast, batteryShareMatrix, matrixRowIdx)
-      : calculateOptionAAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
-
     const siteQuantities = {};
     let totalAlloc = 0;
-    activeServiceSites.forEach((s, sIdx) => {
-      const q = allocatedBranchQuantities[sIdx] || 0;
-      siteQuantities[s.id] = q;
-      siteQuantities[s.code] = q;
-      totalAlloc += q;
-    });
+
+    if (allocationMode === 'OPTION_A') {
+      const optAAllocs = calculateOptionAAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+      optAAllocs.forEach((qty, colIdx) => {
+        const sObj = activeServiceSites[colIdx];
+        if (sObj) {
+          siteQuantities[sObj.id] = qty;
+          siteQuantities[sObj.code] = qty;
+          totalAlloc += qty;
+        }
+      });
+    } else {
+      const allocResults = allocatePartToSites(computedForecast, { ...pEntry, description: desc }, activeServiceSites);
+      allocResults.forEach(res => {
+        siteQuantities[res.siteId] = res.allocatedQty;
+        const sObj = activeServiceSites.find(s => s.id === res.siteId);
+        if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+        totalAlloc += res.allocatedQty;
+      });
+    }
 
     const totalCost = totalAlloc * pricing.stockingPrice;
     const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);

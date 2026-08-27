@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
-import { calculateWeeklySplit, calculateProportionalAllocation } from '../utils/allocationEngine';
+import { calculateWeeklySplit, generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { CANONICAL_SITE_CODES } from '../constants/config';
 import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
@@ -22,7 +22,8 @@ import {
   BookmarkPlus,
   RefreshCw,
   Calendar,
-  RotateCcw
+  RotateCcw,
+  Sliders
 } from 'lucide-react';
 
 export default function AllocationMatrix() {
@@ -34,65 +35,37 @@ export default function AllocationMatrix() {
     parts,
     selectedCategory,
     updateSiteAllocation,
+    resetPartAllocation,
+    resetAllAllocationsToCalculation,
     setActiveTab,
     isAutoRefreshing,
     lastSyncedAt,
     autoRefreshData,
     showToast,
-    activePeriod
+    activePeriod,
+    forecastingModel,
+    changeForecastingModel
   } = useApp();
+
+  // Dynamic fallback: if allocations state is empty but forecastItems exist, generate immediately
+  const effectiveAllocations = useMemo(() => {
+    if (allocations && allocations.length > 0) return allocations;
+    if (forecastItems && forecastItems.length > 0 && sites && sites.length > 0) {
+      return generateAllocationsFromForecasts(forecastItems, sites, forecastingModel);
+    }
+    return [];
+  }, [allocations, forecastItems, sites, forecastingModel]);
 
   // Auto-sync / generate initial allocations from forecastItems if allocations array is empty
   useEffect(() => {
-    if ((!allocations || allocations.length === 0) && forecastItems && forecastItems.length > 0 && setAllocations) {
-      const activeServiceSites = (sites || []).filter(s =>
-        !s.is_dc &&
-        !s.code?.toUpperCase().includes('DC') &&
-        s.code !== 'DC-MDC'
-      );
-      if (activeServiceSites.length === 0) return;
-
-      const generated = forecastItems.map((fi, rIdx) => {
-        const fiQty = fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0);
-        const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
-        const fiDemands = activeServiceSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
-        const fiResults = calculateProportionalAllocation(fiQty, fiDemands);
-        const sq = {};
-        let tAlloc = 0;
-        fiResults.forEach(res => {
-          sq[res.siteId] = res.allocatedQty;
-          const siteObj = activeServiceSites.find(s => s.id === res.siteId);
-          if (siteObj?.code) sq[siteObj.code] = res.allocatedQty;
-          tAlloc += res.allocatedQty;
-        });
-        const tCost = tAlloc * fiPrice;
-        const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + 3);
-        return {
-          part_id: fi.part_id,
-          part_number: fi.part_number,
-          description: fi.description,
-          category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
-          forecasted_qty: fiQty,
-          stocking_price: fiPrice,
-          exchange_price: fi.exchange_price || 0,
-          total_allocated_qty: tAlloc,
-          total_stock_cost: tCost,
-          w1_qty: fiSplit.w1_qty,
-          w2_qty: fiSplit.w2_qty,
-          w3_qty: fiSplit.w3_qty,
-          w4_qty: fiSplit.w4_qty,
-          w1_cost: fiSplit.w1_cost,
-          w2_cost: fiSplit.w2_cost,
-          w3_cost: fiSplit.w3_cost,
-          w4_cost: fiSplit.w4_cost,
-          site_quantities: sq
-        };
-      });
-
-      setAllocations(generated);
-      try { localStorage.setItem('mdc_allocations', JSON.stringify(generated)); } catch (e) {}
+    if ((!allocations || allocations.length === 0) && forecastItems && forecastItems.length > 0) {
+      const generated = generateAllocationsFromForecasts(forecastItems, sites, forecastingModel);
+      if (generated.length > 0 && setAllocations) {
+        setAllocations(generated);
+        try { localStorage.setItem('mdc_allocations', JSON.stringify(generated)); } catch (e) {}
+      }
     }
-  }, [allocations, forecastItems, sites, setAllocations]);
+  }, [allocations, forecastItems, sites, setAllocations, forecastingModel]);
 
   // View Mode: 'sheet' (Master) | 'week-1' | 'week-2' | 'week-3' | 'week-4' | 'shares'
   const [activeViewMode, setActiveViewMode] = useState('sheet');
@@ -115,8 +88,8 @@ export default function AllocationMatrix() {
 
   const orderedServiceSites = useMemo(() => {
     return [...nonDcSites].sort((a, b) => {
-      const idxA = CANONICAL_SITE_CODES.findIndex(c => c.includes(a.code) || a.code.includes(c) || a.name.includes(c));
-      const idxB = CANONICAL_SITE_CODES.findIndex(c => c.includes(b.code) || b.code.includes(b) || b.name.includes(c));
+      const idxA = CANONICAL_SITE_CODES.findIndex(c => c === a.code || c.includes(a.code) || a.code.includes(c) || a.name.includes(c));
+      const idxB = CANONICAL_SITE_CODES.findIndex(c => c === b.code || c.includes(b.code) || b.code.includes(c) || b.name.includes(c));
       if (idxA >= 0 && idxB >= 0) return idxA - idxB;
       if (idxA >= 0) return -1;
       if (idxB >= 0) return 1;
@@ -126,7 +99,7 @@ export default function AllocationMatrix() {
 
   // Filter items by category
   const filteredAllocations = useMemo(() => {
-    return (allocations || []).filter(item => {
+    return (effectiveAllocations || []).filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
       const catId = (item.category_id || part?.category_id || '').toLowerCase();
       const desc = (item.description || part?.description || '').toLowerCase();
@@ -138,7 +111,7 @@ export default function AllocationMatrix() {
       if (selectedCategory === 'BACK_GLASS') return catId.includes('backglass') || desc.includes('back') || desc.includes('rear glass');
       return true;
     });
-  }, [allocations, parts, selectedCategory]);
+  }, [effectiveAllocations, parts, selectedCategory]);
 
   // Split into Displays, Batteries, and Other
   const displayItems = useMemo(() => {
@@ -164,7 +137,7 @@ export default function AllocationMatrix() {
   }, [filteredAllocations, displayItems, batteryItems]);
 
   // Calculate Group Summaries
-  const calculateGroupTotals = useCallback((items, fallbackPrice = 150) => {
+  const calculateGroupTotals = useCallback((items, fallbackPrice = 150, rowOffset = 3) => {
     let totalAlloc = 0;
     let totalCost = 0;
     let w1Qty = 0, w2Qty = 0, w3Qty = 0, w4Qty = 0;
@@ -184,7 +157,7 @@ export default function AllocationMatrix() {
       const stockPrice = item.stocking_price || part?.stocking_price || fallbackPrice;
       const qty = item.total_allocated_qty || 0;
       const rowCost = qty * stockPrice;
-      const split = calculateWeeklySplit(qty, rowCost, rIdx + 3);
+      const split = calculateWeeklySplit(qty, rowCost, rIdx + rowOffset);
 
       totalAlloc += qty;
       totalCost += rowCost;
@@ -201,7 +174,7 @@ export default function AllocationMatrix() {
         const branchQty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
         siteTotals[s.id] = (siteTotals[s.id] || 0) + branchQty;
 
-        const bSplit = calculateWeeklySplit(branchQty, branchQty * stockPrice, rIdx + 3);
+        const bSplit = calculateWeeklySplit(branchQty, branchQty * stockPrice, rIdx + rowOffset);
         siteW1Totals[s.id] = (siteW1Totals[s.id] || 0) + (bSplit.w1_qty || 0);
         siteW2Totals[s.id] = (siteW2Totals[s.id] || 0) + (bSplit.w2_qty || 0);
         siteW3Totals[s.id] = (siteW3Totals[s.id] || 0) + (bSplit.w3_qty || 0);
@@ -247,9 +220,9 @@ export default function AllocationMatrix() {
     };
   }, [parts, orderedServiceSites]);
 
-  const displayTotals = useMemo(() => calculateGroupTotals(displayItems, 279), [displayItems, calculateGroupTotals]);
-  const batteryTotals = useMemo(() => calculateGroupTotals(batteryItems, 99), [batteryItems, calculateGroupTotals]);
-  const otherTotals = useMemo(() => calculateGroupTotals(otherItems, 100), [otherItems, calculateGroupTotals]);
+  const displayTotals = useMemo(() => calculateGroupTotals(displayItems, 279, 3), [displayItems, calculateGroupTotals]);
+  const batteryTotals = useMemo(() => calculateGroupTotals(batteryItems, 99, 25), [batteryItems, calculateGroupTotals]);
+  const otherTotals = useMemo(() => calculateGroupTotals(otherItems, 100, displayItems.length + batteryItems.length + 3), [otherItems, displayItems.length, batteryItems.length, calculateGroupTotals]);
 
   const grandGroupTotals = useMemo(() => ({
     totalAlloc: displayTotals.totalAlloc + batteryTotals.totalAlloc + otherTotals.totalAlloc,
@@ -303,7 +276,7 @@ export default function AllocationMatrix() {
   // Compute Grand Total Cost per site
   const siteCostTotals = useMemo(() => {
     const costs = {};
-    allocations.forEach(item => {
+    (effectiveAllocations || []).forEach(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
       const price = item.stocking_price || part?.stocking_price || 0;
       orderedServiceSites.forEach(s => {
@@ -312,7 +285,7 @@ export default function AllocationMatrix() {
       });
     });
     return costs;
-  }, [allocations, parts, orderedServiceSites]);
+  }, [effectiveAllocations, parts, orderedServiceSites]);
 
   const handleExport = () => {
     if (filteredAllocations.length === 0) {
@@ -383,7 +356,40 @@ export default function AllocationMatrix() {
 
         {/* Sticky 3: Description */}
         <td className="matrix-col-sticky-3" style={{ background: rowBg, color: '#1e293b', fontSize: '12px', fontWeight: 500 }}>
-          {item.description}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.description}>
+              {item.description}
+            </span>
+            {(() => {
+              const matchingFi = (forecastItems || []).find(fi => fi.part_id === item.part_id || fi.part_number === item.part_number);
+              const hasOverride = matchingFi?.admin_override !== null && matchingFi?.admin_override !== undefined && matchingFi?.admin_override !== '';
+              if (!hasOverride) return null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => resetPartAllocation && resetPartAllocation(item.part_id || item.part_number)}
+                  title="Manual override active on this part. Click to reset all site quotas back to algorithmic calculation."
+                  style={{
+                    background: '#fff7ed',
+                    border: '1px solid #fdba74',
+                    borderRadius: '4px',
+                    color: '#c2410c',
+                    cursor: 'pointer',
+                    padding: '2px 5px',
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    flexShrink: 0
+                  }}
+                >
+                  <RotateCcw size={10} />
+                  <span>Reset</span>
+                </button>
+              );
+            })()}
+          </div>
         </td>
 
         {/* Stock Price */}
@@ -438,13 +444,14 @@ export default function AllocationMatrix() {
             const hasValue = qty > 0;
             return (
               <td key={s.id} style={{ textAlign: 'center', padding: '3px 2px' }}>
-                <input
-                  type="number"
-                  className={`matrix-cell-input ${hasValue ? 'has-value' : 'is-zero'}`}
-                  value={qty === 0 ? '' : qty}
-                  placeholder="0"
-                  onChange={(e) => updateSiteAllocation(item.part_id, s.id, e.target.value)}
-                />
+                  <input
+                    type="number"
+                    min="0"
+                    className={`matrix-cell-input ${hasValue ? 'has-value' : 'is-zero'}`}
+                    value={qty === 0 ? '' : qty}
+                    placeholder="0"
+                    onChange={(e) => updateSiteAllocation(item.part_id || item.part_number || item.id, s.id, e.target.value)}
+                  />
               </td>
             );
           })
@@ -564,7 +571,10 @@ export default function AllocationMatrix() {
                 <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '3px' }}>
                   {isWeeklyView
                     ? `Week ${selectedWeekNum} scheduled branch dispatches matching unified Master Allocation table layout.`
-                    : 'Multi-site proportional distribution across 26 branches matching Google Sheet Master Allocation structure.'}
+                    : `Multi-site proportional distribution across 26 branches calculated via ${
+                        forecastingModel === 'linear' ? 'Linear Regression (FORECAST.LINEAR)' :
+                        '4-Mo Weighted Moving Average (WMA [0.10, 0.20, 0.30, 0.40] with Spike Filtering)'
+                      }.`}
                   {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
                 </p>
               </div>
@@ -572,6 +582,33 @@ export default function AllocationMatrix() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {/* Synchronized Calculation Model Engine Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                <Sliders size={13} color="#0284c7" />
+                <span>Model:</span>
+              </span>
+              <select
+                value={forecastingModel}
+                onChange={(e) => changeForecastingModel(e.target.value)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '12px',
+                  borderRadius: '6px',
+                  border: '1px solid #0284c7',
+                  background: '#f0f9ff',
+                  color: '#0369a1',
+                  fontWeight: 600,
+                  outline: 'none',
+                  cursor: 'pointer'
+                }}
+                title="Choose mathematical forecasting algorithm (automatically syncs with Demand Forecasting)"
+              >
+                <option value="wma">4-Mo WMA (Spike Filtered - Recommended)</option>
+                <option value="linear">Linear Regression (FORECAST.LINEAR)</option>
+              </select>
+            </div>
+
             {/* Quick Manual Refresh Button */}
             <button
               className="btn btn-secondary btn-sm"
@@ -582,6 +619,22 @@ export default function AllocationMatrix() {
             >
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
+            {/* Reset All to Calculation Model */}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                if (window.confirm('Reset all branch allocations and clear overrides back to the active mathematical calculation?')) {
+                  resetAllAllocationsToCalculation && resetAllAllocationsToCalculation();
+                }
+              }}
+              disabled={filteredAllocations.length === 0}
+              title="Reset all branch quotas and clear all manual overrides back to mathematical calculation"
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px', color: '#0369a1' }}
+            >
+              <RotateCcw size={13} />
+              <span>Reset to Calculation</span>
             </button>
 
             <button
@@ -1035,7 +1088,7 @@ export default function AllocationMatrix() {
                         </div>
                       </td>
                     </tr>
-                    {otherItems.map((item, idx) => renderItemRow(item, 'OTHER', idx + displayItems.length + batteryItems.length))}
+                    {otherItems.map((item, idx) => renderItemRow(item, 'OTHER', idx, idx + displayItems.length + batteryItems.length + 3))}
                   </>
                 )}
               </tbody>

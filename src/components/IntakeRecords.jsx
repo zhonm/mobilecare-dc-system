@@ -502,20 +502,48 @@ export default function IntakeRecords() {
     }
   };
 
+  // Description lookup map
+  const partDescMap = useMemo(() => {
+    const map = new Map();
+    (parts || []).forEach(p => {
+      if (p.part_number && p.description && p.description !== 'Service Replacement Part' && p.description !== 'Apple Genuine Service Part') {
+        map.set(p.part_number.toUpperCase(), p.description);
+      }
+    });
+    return map;
+  }, [parts]);
+
+  // Model & Category breakdown for Batch Manifest Inspector
+  const inspectModelBreakdown = useMemo(() => {
+    if (!selectedRecordToInspect || !Array.isArray(selectedRecordToInspect.items)) return [];
+    const countsMap = new Map();
+    selectedRecordToInspect.items.forEach(it => {
+      const pn = String(it.part_number || '').trim().toUpperCase();
+      let desc = it.description || partDescMap.get(pn) || '';
+      if (!desc || desc === 'Service Replacement Part' || desc === 'Apple Genuine Service Part') {
+        desc = pn || 'Unknown Part';
+      }
+      countsMap.set(desc, (countsMap.get(desc) || 0) + 1);
+    });
+
+    return Array.from(countsMap.entries())
+      .map(([modelDesc, count]) => ({ modelDesc, count }))
+      .sort((a, b) => b.count - a.count || a.modelDesc.localeCompare(b.modelDesc));
+  }, [selectedRecordToInspect, partDescMap]);
+
   // Batch inspector search
   const filteredInspectItems = useMemo(() => {
     if (!selectedRecordToInspect || !selectedRecordToInspect.items) return [];
     if (!inspectSearch.trim()) return selectedRecordToInspect.items;
     const q = inspectSearch.toLowerCase().trim();
-    return selectedRecordToInspect.items.filter(
-      it =>
-        it.part_number?.toLowerCase().includes(q) ||
-        it.serial_number?.toLowerCase().includes(q) ||
-        it.description?.toLowerCase().includes(q) ||
-        it.intake_assignment?.toLowerCase().includes(q) ||
-        it.notes?.toLowerCase().includes(q)
-    );
-  }, [selectedRecordToInspect, inspectSearch]);
+    return selectedRecordToInspect.items.filter(it => {
+      const pn = String(it.part_number || '').toLowerCase();
+      const resolvedDesc = (it.description || partDescMap.get(it.part_number?.toUpperCase()) || '').toLowerCase();
+      const sn = String(it.serial_number || '').toLowerCase();
+      const assign = String(it.intake_assignment || it.notes || '').toLowerCase();
+      return pn.includes(q) || resolvedDesc.includes(q) || sn.includes(q) || assign.includes(q);
+    });
+  }, [selectedRecordToInspect, inspectSearch, partDescMap]);
 
   return (
     <div className="intake-records-container">
@@ -525,7 +553,7 @@ export default function IntakeRecords() {
           <div>
             <h2 style={{ color: '#fff', fontSize: '22px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
               <BookmarkPlus size={24} color="#38bdf8" />
-              <span>DC Stock Intake Records & Manifests</span>
+              <span>DC Parts Stock Records</span>
             </h2>
             <span
               className="badge"
@@ -1360,6 +1388,71 @@ export default function IntakeRecords() {
             </div>
 
             <div className="modal-body">
+              {/* Scanned Units in Batch Breakdown */}
+              {inspectModelBreakdown.length > 0 && (
+                <div style={{
+                  background: 'var(--bg-card, #ffffff)',
+                  border: '1px solid var(--border-color, #e2e8f0)',
+                  borderRadius: '10px',
+                  padding: '14px 16px',
+                  marginBottom: '16px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13.5px', fontWeight: 600, color: 'var(--text-main, #0f172a)' }}>
+                      <Package size={17} color="#0284c7" />
+                      <span>Scanned Units in Batch</span>
+                    </div>
+                    <span
+                      style={{
+                        background: '#dcfce7',
+                        color: '#15803d',
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        padding: '3px 10px',
+                        borderRadius: '9999px',
+                        letterSpacing: '0.3px'
+                      }}
+                    >
+                      {selectedRecordToInspect.items?.length || 0} TOTAL UNITS
+                    </span>
+                  </div>
+
+                  {/* Model pills */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    {inspectModelBreakdown.map((b, bIdx) => {
+                      const isSelected = inspectSearch.trim().toLowerCase() === b.modelDesc.toLowerCase();
+                      return (
+                        <button
+                          key={bIdx}
+                          type="button"
+                          onClick={() => setInspectSearch(prev => prev.toLowerCase() === b.modelDesc.toLowerCase() ? '' : b.modelDesc)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: isSelected ? '#0284c7' : 'var(--bg-main, #f8fafc)',
+                            color: isSelected ? '#ffffff' : 'var(--text-main, #334155)',
+                            border: `1px solid ${isSelected ? '#0284c7' : 'var(--border-color, #e2e8f0)'}`,
+                            borderRadius: '9999px',
+                            padding: '4px 12px',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                          title={`Click to filter by ${b.modelDesc}`}
+                        >
+                          <strong style={{ color: isSelected ? '#ffffff' : '#0f172a', fontWeight: 700 }}>
+                            {b.count}x
+                          </strong>
+                          <span>{b.modelDesc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Filter bar inside modal */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div style={{ position: 'relative', width: '280px' }}>
@@ -1372,10 +1465,19 @@ export default function IntakeRecords() {
                     className="form-input"
                     style={{ paddingLeft: '32px', height: '32px', fontSize: '12px', width: '100%' }}
                   />
+                  {inspectSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setInspectSearch('')}
+                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Total: <strong>{selectedRecordToInspect.items?.length || 0} serialized units</strong>
+                  Showing: <strong>{filteredInspectItems.length} of {selectedRecordToInspect.items?.length || 0} units</strong>
                 </div>
               </div>
 
@@ -1395,11 +1497,12 @@ export default function IntakeRecords() {
                   <tbody>
                     {filteredInspectItems.map((it, idx) => {
                       const isCrbr = it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR');
+                      const resolvedDesc = it.description || partDescMap.get(it.part_number?.toUpperCase()) || 'Apple Genuine Service Part';
                       return (
                         <tr key={it.id || idx}>
                           <td className="font-mono">{idx + 1}</td>
                           <td className="font-mono"><strong>{it.part_number}</strong></td>
-                          <td>{it.description}</td>
+                          <td>{resolvedDesc}</td>
                           <td className="font-mono">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <span>{it.serial_number}</span>

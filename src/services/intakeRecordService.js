@@ -111,22 +111,26 @@ export const executeSaveIntakeRecord = async ({
 
       // Channel 1: Upsert to direct dc_intake_records table
       try {
-        await supabase.from('dc_intake_records').upsert({
-          id: newRecord.id,
-          record_name: newRecord.record_name,
-          intake_date: newRecord.intake_date,
-          po_id: newRecord.po_id,
-          po_number: newRecord.po_number,
-          supplier_name: newRecord.supplier_name,
-          notes: newRecord.notes,
-          items: newRecord.items,
-          total_units: newRecord.total_units,
-          total_value: newRecord.total_value,
-          saved_by_id: safeUUID(newRecord.saved_by_id),
-          saved_by_name: newRecord.saved_by_name,
-          created_at: newRecord.created_at,
-          updated_at: newRecord.updated_at
-        }, { onConflict: 'id' });
+        const directRow = {
+          id: String(newRecord.id),
+          record_name: String(newRecord.record_name || newRecord.id),
+          intake_date: newRecord.intake_date || new Date().toISOString().split('T')[0],
+          po_id: safeUUID(newRecord.po_id),
+          po_number: newRecord.po_number || null,
+          supplier: newRecord.supplier_name || newRecord.supplier || 'Direct Barcode Intake',
+          total_units: parseInt(newRecord.total_units || (newRecord.items ? newRecord.items.length : 0), 10) || 0,
+          saved_by_name: newRecord.saved_by_name || currentUser?.fullName || 'Warehouse Staff',
+          saved_by_user_id: safeUUID(newRecord.saved_by_user_id || newRecord.saved_by_id || currentUser?.id),
+          notes: newRecord.notes || null,
+          category_breakdown: newRecord.category_breakdown || {},
+          items: Array.isArray(newRecord.items) ? newRecord.items : [],
+          created_at: newRecord.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        const { error: directErr } = await supabase.from('dc_intake_records').upsert(directRow, { onConflict: 'id' });
+        if (directErr) {
+          console.error('Supabase direct dc_intake_records upsert error:', directErr);
+        }
       } catch (tableErr) {
         console.warn('Direct dc_intake_records table notice:', tableErr.message);
       }

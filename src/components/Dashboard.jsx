@@ -45,7 +45,6 @@ export default function Dashboard() {
     activePeriod,
     setActiveTab,
     isAutoRefreshing,
-    lastSyncedAt,
     autoRefreshData,
     selectedCategory,
     activePackDraft
@@ -311,31 +310,6 @@ export default function Dashboard() {
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
-
-            <div
-              style={{
-                background: 'rgba(15, 23, 42, 0.6)',
-                border: `1px solid ${isAutoRefreshing ? '#38bdf8' : '#334155'}`,
-                padding: '6px 14px',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                fontSize: '12px'
-              }}
-              title={lastSyncedAt ? `Last verified: ${new Date(lastSyncedAt).toLocaleTimeString()}` : 'Connected to Supabase'}
-            >
-              <div style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '50%',
-                background: isAutoRefreshing ? '#38bdf8' : '#34d399',
-                boxShadow: `0 0 8px ${isAutoRefreshing ? '#38bdf8' : '#34d399'}`
-              }} />
-              <span style={{ color: '#e2e8f0', fontWeight: 600 }}>
-                {isAutoRefreshing ? 'Auto-Refreshing DB...' : 'Supabase PostgreSQL Live'}
-              </span>
-            </div>
 
             <div
               style={{
@@ -655,8 +629,8 @@ export default function Dashboard() {
               <Layers size={22} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>DC Intake Records</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Review saved batches & audit manifests</div>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>DC Parts Stock Records</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Review saved batches & in-stock manifests</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
           </div>
@@ -694,7 +668,7 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent DC Intake Records</h3>
+              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent DC Parts Stock Records</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                 Batches scanned and saved into permanent cloud storage
               </p>

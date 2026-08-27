@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS shipments (
 CREATE TABLE IF NOT EXISTS shipment_items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     shipment_id UUID NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
-    inventory_unit_id UUID NOT NULL REFERENCES inventory_units(id) ON DELETE RESTRICT,
+    inventory_unit_id UUID NOT NULL REFERENCES inventory_units(id) ON DELETE CASCADE,
     part_id UUID NOT NULL REFERENCES parts(id) ON DELETE RESTRICT,
     serial_number TEXT NOT NULL,
     box_number INT NOT NULL DEFAULT 1,

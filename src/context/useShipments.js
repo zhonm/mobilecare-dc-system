@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb } from '../utils/appContextHelpers';
 
 export function useShipments({
   currentUser,
@@ -159,6 +159,12 @@ export function useShipments({
     const target = shipments.find(s => s.id === shipmentId);
     if (!target) return { success: false, error: 'Shipment not found' };
 
+    // Immutability Rule: Received confirmed shipments are permanently locked in the database
+    if (isLockedConfirmedShipment(target)) {
+      showToast('Locked Record: This shipment is marked as Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI.', 'error');
+      return { success: false, error: 'Confirmed shipments cannot be deleted through the system interface.' };
+    }
+
     // Authority Rule: Only the user who originally saved/prepared the shipment has permission to delete it
     if (!canUserDeleteRecord(target, currentUser)) {
       const creatorName = target.prepared_by_name || target.saved_by_name || 'the original creator';
@@ -166,27 +172,24 @@ export function useShipments({
       return { success: false, error: `Permission Denied: Only ${creatorName} can delete this shipment.` };
     }
 
-    let serialsToRevert = [];
+    let serialsToDelete = [];
     let updatedInventory = inventoryUnits;
     if (target.items && target.items.length > 0) {
-      serialsToRevert = target.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean);
-      const serialsSet = new Set(serialsToRevert);
-      updatedInventory = inventoryUnits.map(u => {
-        if (serialsSet.has(String(u.serial_number || '').toUpperCase())) {
-          return {
-            ...u,
-            status: 'in_stock',
-            current_site_id: 'site-dc',
-            box_number: 1,
-            shipped_at: null,
-            shipped_by: null
-          };
-        }
-        return u;
-      });
+      serialsToDelete = target.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean);
+      const serialsSet = new Set(serialsToDelete);
+      
+      // Permanently remove these units from live DC inventory
+      updatedInventory = (inventoryUnits || []).filter(u => !serialsSet.has(String(u.serial_number || '').toUpperCase()));
       if (setInventoryUnits) setInventoryUnits(updatedInventory);
       dbStorage.setItem('mdc_inventory', updatedInventory);
       try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
+
+      // Register deleted serials in local deletion registry
+      try {
+        const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+        const updatedDeletedSerials = Array.from(new Set([...localDeleted, ...serialsToDelete]));
+        localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeletedSerials));
+      } catch (e) {}
     }
 
     const nextList = shipments.filter(s => s.id !== shipmentId);
@@ -212,7 +215,7 @@ export function useShipments({
           boxCount: target.box_count || 1,
           shippedAt: target.shipped_at || target.created_at
         },
-        reason: 'Deleted by warehouse dispatcher / admin'
+        reason: 'Deleted by warehouse dispatcher / admin (parts purged)'
       });
     }
 
@@ -252,25 +255,27 @@ export function useShipments({
           }, { onConflict: 'id' });
         }
 
-        if (serialsToRevert.length > 0) {
-          let dcSiteId = null;
-          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
-          if (dcSite?.id) dcSiteId = dcSite.id;
-          else {
-            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
-            dcSiteId = anySite?.id;
+        // Permanently delete units from Supabase inventory_units and update deletion registry
+        if (serialsToDelete.length > 0) {
+          try {
+            await supabase.from('inventory_units').delete().in('serial_number', serialsToDelete);
+          } catch (delUnitErr) {
+            console.warn('Supabase inventory_units delete notice:', delUnitErr.message);
           }
-          if (dcSiteId) {
-            await supabase
-              .from('inventory_units')
-              .update({
-                status: 'in_stock',
-                current_site_id: dcSiteId,
-                box_number: 1,
-                shipped_at: null,
-                shipped_by: null
-              })
-              .in('serial_number', serialsToRevert);
+
+          try {
+            const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+            await supabase.from('saved_records').upsert({
+              id: 'deleted_unit_serials_registry',
+              record_type: 'deletion_registry',
+              period_label: 'Deleted Unit Serials Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { deletedSerials: localDeleted },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (regErr) {
+            console.warn('Deleted unit serials registry update notice:', regErr.message);
           }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -285,7 +290,7 @@ export function useShipments({
       if (broadcastCloudEvent) broadcastCloudEvent('SHIPMENT_DELETED', { shipmentId });
     }
 
-    showToast(`Deleted manifest ${target.invoice_ref || target.shipment_number} from database. Parts returned to DC In-Stock.`, 'info');
+    showToast(`Deleted manifest ${target.invoice_ref || target.shipment_number} and permanently removed all included parts from database.`, 'info');
     return { success: true };
   };
 
@@ -455,6 +460,28 @@ export function useShipments({
         }, { onConflict: 'id' });
 
         if (recErr) throw recErr;
+
+        // Channel 1: Upsert to direct shipments table in Supabase
+        const directShipmentRow = formatShipmentForDb(newShipment);
+        if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
+          try {
+            await supabase.from('shipments').upsert(directShipmentRow, { onConflict: 'id' });
+          } catch (shpErr) {
+            console.warn('Direct shipments table notice:', shpErr.message);
+          }
+        }
+
+        // Channel 1b: Upsert to direct shipment_items table in Supabase
+        if (newShipment.items && newShipment.items.length > 0) {
+          try {
+            const shipmentItemsRows = formatShipmentItemsForDb(newShipment, inventoryUnits, [], currentUser);
+            if (shipmentItemsRows.length > 0) {
+              await supabase.from('shipment_items').upsert(shipmentItemsRows, { onConflict: 'id' });
+            }
+          } catch (itErr) {
+            console.warn('Direct shipment_items table notice:', itErr.message);
+          }
+        }
 
         try {
           await supabase.from('saved_records').delete().eq('id', 'active_packing_manifest_draft');

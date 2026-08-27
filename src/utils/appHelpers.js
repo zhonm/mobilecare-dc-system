@@ -3,6 +3,7 @@ export const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]
 export const safeUUID = (str) => isUUID(str) ? str : null;
 
 // Helper to guarantee serialized units that are in an active draft or saved shipments maintain their 'packed' or 'shipped' status
+// NOTE: Keep in sync with the identical function in appContextHelpers.js
 export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null) {
   if (!Array.isArray(units) || units.length === 0) return [];
 
@@ -74,12 +75,8 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         shipped_at: packInfo.shipped_at || u.shipped_at
       };
     }
-    return {
-      ...u,
-      status: 'in_stock',
-      current_site_id: 'site-dc',
-      shipped_at: null,
-      shipped_by: null
-    };
+    // Preserve existing unit state — do not reset units that may have been
+    // dispatched via shipments not present in the current shipmentsList
+    return u;
   });
 }

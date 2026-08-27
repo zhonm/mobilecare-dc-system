@@ -48,7 +48,7 @@ export default function Header() {
     records: { title: 'Saved Period Records', section: 'Planning', showCategories: false },
     orders: { title: 'Purchase Orders', section: 'Planning', showCategories: false },
     'scan-in': { title: 'Receive Scan-In', section: 'Warehouse Operations', showCategories: false },
-    'intake-records': { title: 'DC Intake Records', section: 'Warehouse Operations', showCategories: false },
+    'intake-records': { title: 'DC Parts Stock Records', section: 'Warehouse Operations', showCategories: false },
     allocation: { title: 'Inventory Allocation Matrix', section: 'Planning', showCategories: true },
     'scan-out': { title: 'Pack Scan-Out & Manifest', section: 'Warehouse Operations', showCategories: false },
     shipments: { title: 'Shipments & Packing Lists', section: 'Distribution', showCategories: false },

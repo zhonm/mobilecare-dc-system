@@ -471,6 +471,22 @@
       "invoice_prefix": "LANSSR#",
       "ship_to": "1102535",
       "sold_to": "1029842"
+    },
+    {
+      "id": "site-27",
+      "code": "APP ILO",
+      "name": "MOBILECARE - APP SM ILOILO",
+      "region": "Iloilo",
+      "address": "Cyberzone, 3/F SM City Iloilo, Senator Benigno Aquino Jr. Ave, Mandurriao, Iloilo City",
+      "contact_person": "Service Manager",
+      "contact_phone": "+63 (33) 320-0000",
+      "is_dc": false,
+      "is_active": true,
+      "full_address": "Space 322-323, 3/F Cyberzone, SM City Iloilo, Mandurriao, Iloilo City 5000",
+      "contact_email": "app.smiloilo@mobilecareph.com",
+      "invoice_prefix": "APILOSSR#",
+      "ship_to": "1029842",
+      "sold_to": "1597912"
     }
   ],
   "parts": [

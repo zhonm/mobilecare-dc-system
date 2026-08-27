@@ -3,6 +3,13 @@ import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 
+function normalizeSiteCode(rawCode) {
+  if (!rawCode) return '';
+  const clean = String(rawCode).trim().toUpperCase();
+  if (clean === 'APPILO') return 'APP ILO';
+  return clean;
+}
+
 export function useCatalogAndSites({
   showToast,
   broadcastCloudEvent,
@@ -22,20 +29,25 @@ export function useCatalogAndSites({
     try {
       const saved = localStorage.getItem('mdc_sites');
       const parsed = saved ? JSON.parse(saved) : [];
+      const map = new Map();
+      (seedData.sites || []).forEach(s => {
+        if (s && s.code) {
+          const normCode = normalizeSiteCode(s.code);
+          map.set(normCode, { ...s, code: normCode });
+        }
+      });
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const map = new Map();
-        (seedData.sites || []).forEach(s => { if (s && s.code) map.set(s.code.toUpperCase(), s); });
         parsed.forEach(s => {
           if (s && s.code) {
-            const existing = map.get(s.code.toUpperCase());
-            map.set(s.code.toUpperCase(), { ...existing, ...s });
+            const normCode = normalizeSiteCode(s.code);
+            const existing = map.get(normCode);
+            map.set(normCode, { ...existing, ...s, code: normCode });
           }
         });
-        return Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
       }
-      return (seedData.sites || []).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+      return Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
     } catch {
-      return seedData.sites || [];
+      return (seedData.sites || []).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
     }
   });
 
@@ -198,10 +210,11 @@ export function useCatalogAndSites({
 
   const saveSite = async (siteData) => {
     let savedSite = null;
+    const cleanCode = normalizeSiteCode(siteData.code);
     if (siteData.id) {
-      savedSite = siteData;
+      savedSite = { ...siteData, code: cleanCode };
       setSites(prev => {
-        const next = prev.map(s => s.id === siteData.id ? siteData : s);
+        const next = prev.map(s => s.id === siteData.id ? savedSite : s);
         try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
         dbStorage.setItem('mdc_sites', next);
         return next;
@@ -210,11 +223,12 @@ export function useCatalogAndSites({
     } else {
       savedSite = {
         ...siteData,
+        code: cleanCode,
         id: `site-${Date.now()}`,
         is_active: true
       };
       setSites(prev => {
-        const next = [...prev, savedSite];
+        const next = [...prev.filter(s => normalizeSiteCode(s.code) !== cleanCode), savedSite];
         try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
         dbStorage.setItem('mdc_sites', next);
         return next;
@@ -292,13 +306,14 @@ export function useCatalogAndSites({
 
       if (dbSites && dbSites.length > 0) {
         setSites(prev => {
-          const map = new Map((prev || []).map(s => [s.code, s]));
+          const map = new Map((prev || []).map(s => [normalizeSiteCode(s.code), s]));
           dbSites.forEach(s => {
-            const existing = map.get(s.code);
-            map.set(s.code, {
+            const normCode = normalizeSiteCode(s.code);
+            const existing = map.get(normCode);
+            map.set(normCode, {
               ...(existing || {}),
               id: s.id || existing?.id,
-              code: s.code,
+              code: normCode,
               name: s.name || existing?.name,
               region: s.region || existing?.region || 'Metro Manila',
               address: s.address || s.full_address || existing?.address,
