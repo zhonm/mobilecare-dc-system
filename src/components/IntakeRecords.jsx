@@ -102,13 +102,24 @@ export default function IntakeRecords() {
   // Serials that are currently in an active packing list draft or saved/dispatched shipments
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
-    // 1. Serials in active packing draft
+    // 1. Serials in active packing draft state
     if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
       activePackDraft.items.forEach(it => {
         const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
         if (s) set.add(s);
       });
     }
+    // Check localStorage fallback for active packing draft
+    try {
+      const localDraft = JSON.parse(localStorage.getItem('mdc_active_pack_draft') || 'null');
+      if (localDraft?.items && Array.isArray(localDraft.items)) {
+        localDraft.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          if (s) set.add(s);
+        });
+      }
+    } catch (e) {}
+
     // 2. Serials in finalized/saved shipments & packing lists
     (shipments || []).forEach(sh => {
       if (sh.items && Array.isArray(sh.items)) {
@@ -126,12 +137,15 @@ export default function IntakeRecords() {
   const enrichedStockUnits = useMemo(() => {
     const rawInStock = (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+      if (!cleanSerial) return false;
       // Exclude items in active packing draft or shipments
-      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
+      if (packedSerialsSet.has(cleanSerial)) return false;
+      // Exclude items marked with deleted status
+      if (u.is_deleted || u.status === 'deleted') return false;
       // Exclude items marked with status packed, shipped, dispatched, or allocated
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
       // Must be in_stock in DC warehouse
-      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+      return u.status === 'in_stock' || (!u.status && (u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC'));
     });
 
     const normalizedUnits = normalizeInventoryUnits(rawInStock, parts || []);
@@ -487,7 +501,7 @@ export default function IntakeRecords() {
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;
     if (deleteScanInUnit) {
-      await deleteScanInUnit(unitToDelete.id || unitToDelete.serial_number);
+      await deleteScanInUnit(unitToDelete);
     }
     setUnitToDelete(null);
   };

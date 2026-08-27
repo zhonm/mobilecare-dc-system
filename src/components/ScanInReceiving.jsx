@@ -816,7 +816,7 @@ export default function ScanInReceiving() {
   const handleConfirmDeletePart = async () => {
     if (!unitToDelete) return;
     const serial = unitToDelete.serial_number;
-    await deleteScanInUnit(serial);
+    await deleteScanInUnit(unitToDelete);
     setSessionScans(prev => prev.filter(u => String(u.serial_number).toUpperCase() !== String(serial).toUpperCase()));
     setUnitToDelete(null);
   };

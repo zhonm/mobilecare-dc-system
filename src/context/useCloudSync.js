@@ -177,7 +177,15 @@ export function useCloudSync({
     if (!supabase) return false;
 
     try {
-      const shouldFetch = (tbl) => !selectiveTables || selectiveTables.includes(tbl);
+      const shouldFetch = (tbl) => {
+        if (!selectiveTables) return true;
+        if (selectiveTables.includes(tbl)) return true;
+        // Master registries and dependencies live in saved_records, parts, and sites
+        if (tbl === 'saved_records' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('dc_intake_records') || selectiveTables.includes('shipments') || selectiveTables.includes('profiles'))) return true;
+        if (tbl === 'parts' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('dc_intake_records') || selectiveTables.includes('shipments'))) return true;
+        if (tbl === 'sites' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('shipments'))) return true;
+        return false;
+      };
 
       const [
         resProfiles,
@@ -903,108 +911,154 @@ export function useCloudSync({
             if (p.part_number && !partsByPnMap.has(p.part_number.toUpperCase())) partsByPnMap.set(p.part_number.toUpperCase(), p);
           });
 
-          // 1. If dbUnits has records from Supabase inventory_units:
+          const resolvePartInfo = (rawPn, rawDesc, partId, notes) => {
+            const partObj = (partId ? partsByIdMap.get(partId) : null) ||
+              (rawPn && rawPn.toUpperCase() !== 'PART' ? partsByPnMap.get(rawPn.toUpperCase()) : null);
+
+            const effectivePn = (rawPn && rawPn.toUpperCase() !== 'PART')
+              ? rawPn
+              : (notes && !notes.includes('CRBR') && !notes.includes('Forecasting') && /66[0-9]-/i.test(notes) ? notes : (partObj?.part_number || 'PART-UNKNOWN'));
+
+            const effectiveDesc = partObj?.description || rawDesc || 'Apple Genuine Service Part';
+            return { partObj, effectivePn, effectiveDesc };
+          };
+
+          const hasCloudSource = (dbUnits && dbUnits.length > 0) || (poolUnits && poolUnits.length > 0);
+
+          // 1. Primary Cloud Source: Live Master DC Inventory Pool from saved_records
+          poolUnits.forEach(u => {
+            const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+            if (cleanSerial && !deletedSerialsSet.has(cleanSerial) && !map.has(cleanSerial)) {
+              const isPackedOrShipped = shippedOrPackedSerials.has(cleanSerial);
+              const targetStatus = isPackedOrShipped
+                ? (u.status === 'shipped' ? 'shipped' : 'packed')
+                : (u.status || 'in_stock');
+
+              const cloudAssign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+              const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(u.part_number, u.description, u.part_id, u.notes);
+
+              map.set(cleanSerial, {
+                ...u,
+                id: u.id || `unit-${cleanSerial}`,
+                part_id: partObj?.id || u.part_id,
+                part_number: effectivePn,
+                description: effectiveDesc,
+                category_id: partObj?.category_id || u.category_id,
+                stocking_price: partObj?.stocking_price || u.stocking_price || 99,
+                serial_number: cleanSerial,
+                intake_assignment: cloudAssign,
+                notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('Forecasting') ? `${cloudAssign} | ${u.notes}` : cloudAssign,
+                current_site_id: u.current_site_id || 'site-dc',
+                site_code: u.site_code || 'DC-MDC',
+                status: targetStatus,
+                box_number: u.box_number || 1,
+                received_at: u.received_at || new Date().toISOString(),
+                received_by: u.received_by || u.received_by_name || 'Warehouse Staff',
+                allocated_at: u.allocated_at || null,
+                shipped_at: u.shipped_at || null,
+                intake_record_id: u.intake_record_id || null
+              });
+            }
+          });
+
+          // 2. Secondary Cloud Source: Direct Supabase inventory_units table
           if (dbUnits && dbUnits.length > 0) {
-            dbUnits.filter(u => !u.is_deleted).forEach(dbU => {
-              const cleanSerial = String(dbU.serial_number || '').toUpperCase();
+            dbUnits.filter(u => !u.is_deleted && u.status !== 'deleted').forEach(dbU => {
+              const cleanSerial = String(dbU.serial_number || '').trim().toUpperCase();
               if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
+                const isPackedOrShipped = shippedOrPackedSerials.has(cleanSerial);
+                const targetStatus = isPackedOrShipped
+                  ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
+                  : (dbU.status || 'in_stock');
+
                 const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                 const assign = cloudAssign || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
 
-                const partObj = (dbU.part_id ? partsByIdMap.get(dbU.part_id) : null) ||
-                  (dbU.part_number && dbU.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(dbU.part_number.toUpperCase()) : null);
+                const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(dbU.part_number, dbU.description, dbU.part_id, dbU.notes);
 
-                const rawPn = (dbU.part_number && dbU.part_number.toUpperCase() !== 'PART')
-                  ? dbU.part_number
-                  : (dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') && /66[0-9]-/i.test(dbU.notes) ? dbU.notes : null);
-
-                const resolvedPn = partObj?.part_number || rawPn;
-                const resolvedDesc = partObj?.description || dbU.description || 'Apple Genuine Service Part';
-
+                const existingUnit = map.get(cleanSerial);
                 map.set(cleanSerial, {
-                  id: dbU.id || `unit-${cleanSerial}`,
-                  part_id: partObj?.id || dbU.part_id,
-                  part_number: resolvedPn,
-                  description: resolvedDesc,
-                  category_id: partObj?.category_id || dbU.category_id,
-                  stocking_price: partObj?.stocking_price || dbU.stocking_price || 99,
-                  serial_number: dbU.serial_number || cleanSerial,
+                  ...(existingUnit || {}),
+                  id: dbU.id || existingUnit?.id || `unit-${cleanSerial}`,
+                  part_id: partObj?.id || dbU.part_id || existingUnit?.part_id,
+                  part_number: effectivePn || existingUnit?.part_number,
+                  description: effectiveDesc || existingUnit?.description,
+                  category_id: partObj?.category_id || dbU.category_id || existingUnit?.category_id,
+                  stocking_price: partObj?.stocking_price || dbU.stocking_price || existingUnit?.stocking_price || 99,
+                  serial_number: cleanSerial,
                   intake_assignment: assign,
                   notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
-                  current_site_id: dbU.current_site_id || 'site-dc',
-                  site_code: dbU.site_code || 'DC-MDC',
-                  po_id: dbU.po_id,
-                  status: dbU.status || 'in_stock',
-                  box_number: dbU.box_number || 1,
-                  received_at: dbU.received_at || new Date().toISOString(),
-                  received_by: dbU.received_by_name || 'Warehouse Staff',
-                  allocated_at: dbU.allocated_at,
-                  shipped_at: dbU.shipped_at || null,
-                  intake_record_id: dbU.intake_record_id
+                  current_site_id: dbU.current_site_id || existingUnit?.current_site_id || 'site-dc',
+                  site_code: dbU.site_code || existingUnit?.site_code || 'DC-MDC',
+                  po_id: dbU.po_id || existingUnit?.po_id,
+                  status: targetStatus,
+                  box_number: dbU.box_number || existingUnit?.box_number || 1,
+                  received_at: dbU.received_at || existingUnit?.received_at || new Date().toISOString(),
+                  received_by: dbU.received_by_name || existingUnit?.received_by || 'Warehouse Staff',
+                  allocated_at: dbU.allocated_at || existingUnit?.allocated_at,
+                  shipped_at: dbU.shipped_at || existingUnit?.shipped_at || null,
+                  intake_record_id: dbU.intake_record_id || existingUnit?.intake_record_id
                 });
               }
             });
           }
 
-          const todayDateStr = new Date().toISOString().split('T')[0];
+          // 3. Active Unsaved Intake Session (items scanned right now before saving):
+          const todaySession = (effectiveIntakeRecords || []).find(r => r.id === 'today_active_intake_session');
+          if (todaySession?.items && Array.isArray(todaySession.items)) {
+            todaySession.items.forEach(it => {
+              const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+              if (cleanSerial && !deletedSerialsSet.has(cleanSerial) && !shippedOrPackedSerials.has(cleanSerial) && !map.has(cleanSerial)) {
+                const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(it.part_number, it.description, it.part_id, it.notes);
+                const rawAssign = it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                map.set(cleanSerial, {
+                  id: it.id || `unit-${cleanSerial}`,
+                  part_id: partObj?.id || it.part_id,
+                  part_number: effectivePn,
+                  description: effectiveDesc,
+                  category_id: partObj?.category_id || it.category_id,
+                  stocking_price: partObj?.stocking_price || it.stocking_price || 99,
+                  serial_number: cleanSerial,
+                  intake_assignment: rawAssign,
+                  notes: rawAssign,
+                  current_site_id: 'site-dc',
+                  site_code: 'DC-MDC',
+                  po_id: it.po_id || null,
+                  status: 'in_stock',
+                  box_number: 1,
+                  received_at: it.received_at || new Date().toISOString(),
+                  received_by: it.received_by || 'Warehouse Staff',
+                  shipped_at: null,
+                  intake_record_id: 'today_active_intake_session'
+                });
+              }
+            });
+          }
 
-          // 2. Active Intake Session Recovery (Today's active received intake only):
-          (effectiveIntakeRecords || []).forEach(rec => {
-            const isTodayBatch = String(rec.intake_date || '').startsWith(todayDateStr) || rec.id === 'today_active_intake_session';
-            // Only active/today's intake session supplies live in-stock units
-            if (isTodayBatch && Array.isArray(rec.items)) {
-              rec.items.forEach(it => {
-                const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-                if (cleanSerial && !shippedOrPackedSerials.has(cleanSerial) && !map.has(cleanSerial)) {
-                  const partObj = (it.part_id ? partsByIdMap.get(it.part_id) : null) ||
-                    (it.part_number && it.part_number.toUpperCase() !== 'PART' ? partsByPnMap.get(it.part_number.toUpperCase()) : null);
+          // 4. Offline Fallback ONLY if no cloud inventory source was reachable:
+          if (!hasCloudSource) {
+            (prev || []).forEach(u => {
+              const s = String(u.serial_number || '').trim().toUpperCase();
+              if (s && !deletedSerialsSet.has(s) && !shippedOrPackedSerials.has(s) && !map.has(s)) {
+                map.set(s, u);
+              }
+            });
+            try {
+              const localSaved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+              if (Array.isArray(localSaved)) {
+                localSaved.forEach(u => {
+                  const s = String(u.serial_number || '').trim().toUpperCase();
+                  if (s && !deletedSerialsSet.has(s) && !shippedOrPackedSerials.has(s) && !map.has(s)) {
+                    map.set(s, u);
+                  }
+                });
+              }
+            } catch (e) {}
+          }
 
-                  const resolvedPn = (it.part_number && it.part_number.toUpperCase() !== 'PART')
-                    ? it.part_number
-                    : (partObj?.part_number || null);
-                  const resolvedDesc = (it.description && it.description !== 'Service Replacement Part')
-                    ? it.description
-                    : (partObj?.description || 'Apple Genuine Service Part');
-
-                  const rawAssign = it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-
-                  map.set(cleanSerial, {
-                    id: it.id || `unit-${cleanSerial}`,
-                    part_id: partObj?.id || it.part_id,
-                    part_number: resolvedPn,
-                    description: resolvedDesc,
-                    category_id: partObj?.category_id || it.category_id,
-                    stocking_price: partObj?.stocking_price || it.stocking_price || 99,
-                    serial_number: cleanSerial,
-                    intake_assignment: rawAssign,
-                    notes: rawAssign,
-                    current_site_id: 'site-dc',
-                    site_code: 'DC-MDC',
-                    po_id: it.po_id || rec.po_id || null,
-                    status: 'in_stock',
-                    box_number: 1,
-                    received_at: it.received_at || rec.intake_date || new Date().toISOString(),
-                    received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff',
-                    shipped_at: null,
-                    intake_record_id: rec.id
-                  });
-                }
-              });
-            }
-          });
-
-          // 3. Pool units / local storage fallback (for today's active stock only)
-          poolUnits.forEach(u => {
-            const s = String(u.serial_number || '').toUpperCase();
-            const isTodayUnit = String(u.received_at || '').startsWith(todayDateStr);
-            if (s && isTodayUnit && !shippedOrPackedSerials.has(s) && !map.has(s)) {
-              map.set(s, u);
-            }
-          });
-
-          // Preserve active unsaved session draft items
+          // Preserve active unsaved UI session drafts
           (prev || []).forEach(u => {
-            if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
+            if (u.isSessionDraft && !deletedSerialsSet.has(String(u.serial_number || '').toUpperCase())) {
               map.set(String(u.serial_number || '').toUpperCase(), u);
             }
           });

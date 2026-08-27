@@ -720,9 +720,35 @@ export function useInventory({
     return { success: true, count: finalUnits.length, units: finalUnits };
   };
 
-  const deleteScanInUnit = async (serialNumber) => {
-    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
-    const existing = (inventoryUnits || []).find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
+  const deleteScanInUnit = async (serialOrUnit) => {
+    let cleanSerial = '';
+    let existing = null;
+
+    if (typeof serialOrUnit === 'object' && serialOrUnit !== null) {
+      cleanSerial = String(serialOrUnit.serial_number || serialOrUnit.serialNumber || '').trim().toUpperCase();
+      existing = serialOrUnit;
+    } else {
+      const searchKey = String(serialOrUnit || '').trim().toUpperCase();
+      existing = (inventoryUnits || []).find(u =>
+        String(u.serial_number || '').toUpperCase() === searchKey ||
+        String(u.id || '').toUpperCase() === searchKey
+      );
+      cleanSerial = String(existing?.serial_number || searchKey).trim().toUpperCase();
+    }
+
+    if (!existing) {
+      try {
+        const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        existing = localInv.find(u =>
+          String(u.serial_number || '').toUpperCase() === cleanSerial ||
+          String(u.id || '').toUpperCase() === cleanSerial
+        );
+      } catch (e) {}
+    }
+
+    if (!cleanSerial) {
+      return { success: false, error: 'Invalid or missing serial number' };
+    }
 
     // Authority Rule: Only the user who originally received/saved the unit has permission to delete it
     if (existing && !canUserDeleteRecord(existing, currentUser)) {
@@ -731,15 +757,22 @@ export function useInventory({
       return { success: false, error: `Permission Denied: Only ${creatorName} can delete this part.` };
     }
 
+    let updatedDeleted = [];
     try {
       const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-      const updatedDeleted = Array.from(new Set([...localDeleted, cleanSerial]));
+      updatedDeleted = Array.from(new Set([...localDeleted, cleanSerial]));
       localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(updatedDeleted));
-    } catch (e) {}
+    } catch (e) {
+      updatedDeleted = [cleanSerial];
+    }
+    dbStorage.setItem('mdc_deleted_unit_serials', updatedDeleted);
 
     let nextUnits = [];
     setInventoryUnits(prev => {
-      nextUnits = (prev || []).filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
+      nextUnits = (prev || []).filter(u =>
+        String(u.serial_number || '').toUpperCase() !== cleanSerial &&
+        (!existing?.id || u.id !== existing.id)
+      );
       try {
         localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
         const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
@@ -782,7 +815,7 @@ export function useInventory({
         try {
           const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
           const cloudDeleted = reg?.snapshot_data?.deletedSerials || [];
-          const updatedCloudDeleted = Array.from(new Set([...cloudDeleted, cleanSerial]));
+          const updatedCloudDeleted = Array.from(new Set([...cloudDeleted, ...updatedDeleted, cleanSerial]));
 
           await supabase.from('saved_records').upsert({
             id: 'deleted_unit_serials_registry',
@@ -794,8 +827,11 @@ export function useInventory({
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
 
-          try { await supabase.from('inventory_units').update({ is_deleted: true }).eq('serial_number', cleanSerial); } catch (e) {}
+          try { await supabase.from('inventory_units').update({ is_deleted: true, status: 'deleted' }).eq('serial_number', cleanSerial); } catch (e) {}
           try { await supabase.from('inventory_units').delete().eq('serial_number', cleanSerial); } catch (e) {}
+          if (existing?.id && isUUID(existing.id)) {
+            try { await supabase.from('inventory_units').delete().eq('id', existing.id); } catch (e) {}
+          }
 
           await supabase.from('saved_records').upsert({
             id: 'live_master_dc_inventory',
@@ -806,6 +842,20 @@ export function useInventory({
             snapshot_data: { units: nextUnits },
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
+
+          if (updatedRecords.length > 0) {
+            try {
+              await supabase.from('saved_records').upsert({
+                id: 'master_dc_intakes_registry',
+                record_type: 'intake_registry',
+                period_label: 'Master DC Intakes Registry',
+                period_year: new Date().getFullYear(),
+                period_month: new Date().getMonth() + 1,
+                snapshot_data: { records: updatedRecords },
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' });
+            } catch (e) {}
+          }
 
           for (const rec of recordsToUpdateInDb) {
             try {
@@ -921,6 +971,19 @@ export function useInventory({
               current_site_id: siteId || 'site-dc',
               shipped_at: new Date().toISOString()
             }, { onConflict: 'serial_number' });
+
+          try {
+            await supabase.from('saved_records').upsert({
+              id: 'live_master_dc_inventory',
+              record_type: 'inventory_master',
+              period_label: 'Live Master DC Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { units: updatedUnits },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (e) {}
+
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase pack unit note:', dbErr.message);
@@ -1040,6 +1103,19 @@ export function useInventory({
           await supabase
             .from('inventory_units')
             .upsert(rowsToUpsert, { onConflict: 'serial_number' });
+
+          try {
+            await supabase.from('saved_records').upsert({
+              id: 'live_master_dc_inventory',
+              record_type: 'inventory_master',
+              period_label: 'Live Master DC Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { units: updatedInventory },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (e) {}
+
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase batch pack note:', dbErr.message);
@@ -1135,6 +1211,19 @@ export function useInventory({
               })
               .eq('serial_number', cleanSerial);
           }
+
+          try {
+            await supabase.from('saved_records').upsert({
+              id: 'live_master_dc_inventory',
+              record_type: 'inventory_master',
+              period_label: 'Live Master DC Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { units: updatedInventory },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } catch (e) {}
+
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase unit revert error:', dbErr.message);
