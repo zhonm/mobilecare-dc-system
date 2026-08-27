@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF, printPackingListDirect } from '../utils/pdfGenerator';
 import { calculateWeeklySplit } from '../utils/allocationEngine';
@@ -32,7 +32,12 @@ import {
   Building2,
   MapPin,
   ChevronDown,
-  Lock
+  Lock,
+  Users,
+  Radio,
+  Activity,
+  Sparkles,
+  ShieldAlert
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
@@ -52,13 +57,13 @@ export default function ScanOutPacking() {
     removeScanOutUnit,
     batchAddScanOutUnits,
     clearShipmentDraftItems,
-    activePackDraft,
-    syncActivePackDraftToCloud,
     currentUser,
     showToast,
     autoRefreshData,
     isAutoRefreshing,
-    canUserDeleteRecord
+    canUserDeleteRecord,
+    activePackingStations,
+    broadcastPackingPresence
   } = useApp();
 
   const serviceSites = useMemo(() => {
@@ -80,13 +85,19 @@ export default function ScanOutPacking() {
   const [boxNumber, setBoxNumber] = useState(1);
   const [inspectShipmentModal, setInspectShipmentModal] = useState(null);
 
-  // Active Shipment Draft with LocalStorage persistence
+  // User-isolated draft storage key (prevents draft clashing between simultaneous users)
+  const userDraftStorageKey = useMemo(() => {
+    return currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
+  }, [currentUser?.id]);
+
+  // Active Shipment Draft with user-scoped LocalStorage persistence
   const [currentShipment, setCurrentShipment] = useState(() => {
+    const userKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
     try {
-      const saved = localStorage.getItem('mdc_active_pack_draft');
+      const saved = localStorage.getItem(userKey) || localStorage.getItem('mdc_active_pack_draft');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && parsed.id) {
+        if (parsed && parsed.id && Array.isArray(parsed.items) && parsed.items.length > 0) {
           const rawTrk = parsed.tracking_number;
           const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
           return {
@@ -97,10 +108,10 @@ export default function ScanOutPacking() {
         }
       }
     } catch (e) {
-      console.warn('Could not read mdc_active_pack_draft:', e);
+      console.warn('Could not read user pack draft:', e);
     }
     const existing = shipments.find(s => s.site_id === serviceSites[0]?.id && s.status === 'draft');
-    if (existing) {
+    if (existing && Array.isArray(existing.items) && existing.items.length > 0) {
       const rawTrk = existing.tracking_number;
       const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
       return {
@@ -142,89 +153,58 @@ export default function ScanOutPacking() {
     }
   }, [currentUser?.fullName, currentUser?.id]);
 
-  // Ref to track timestamp of local workstation edits (prevents race conditions with cloud broadcasts)
+  // Ref to track timestamp of local workstation edits
   const lastLocalEditTimeRef = useRef(0);
 
-  // Synchronize incoming activePackDraft from cloud to local currentShipment across all users
+  const markLocalDraftEdit = () => {
+    lastLocalEditTimeRef.current = Date.now();
+  };
+
+  // Keep active user draft persisted to user-scoped LocalStorage
   useEffect(() => {
-    // Check if the current local shipment has already been saved/finalized in the database
-    const isCurrentShipmentSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
-
-    // Case 1: If current shipment was finalized and saved into database history, reset local workstation
-    if (isCurrentShipmentSaved) {
-      const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`;
-      const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
-      try {
-        localStorage.removeItem('mdc_active_pack_draft');
-      } catch (e) {}
-      setCurrentShipment({
-        id: `ship-${Date.now()}`,
-        shipment_number: nextShipmentNumber,
-        invoice_ref: nextInvoiceRef,
-        site_id: selectedSiteId,
-        week_number: selectedWeek,
-        shipment_date: new Date().toLocaleDateString('en-US'),
-        carrier: 'Lite Express',
-        tracking_number: '',
-        total_boxes: 1,
-        status: 'draft',
-        prepared_by_name: currentUser?.fullName || '',
-        verified_by_name: 'Anjo Alcazar',
-        receiving_signature: selectedSite?.code || 'ASP NPM',
-        remarks: 'KGB PARTS',
-        items: []
-      });
-      return;
-    }
-
-    // Case 2: Incoming active draft with items from cloud
-    if (activePackDraft && activePackDraft.id && Array.isArray(activePackDraft.items) && activePackDraft.items.length > 0) {
-      // If the incoming cloud draft is already marked as finalized/saved in shipments, ignore it
-      const isCloudDraftSaved = shipments.some(s => s.id === activePackDraft.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
-      if (isCloudDraftSaved) return;
-
-      // If this browser recently made a local edit within the last 4 seconds and has at least as many items, protect local items from stale cloud overwrite
-      const isRecentLocalEdit = (Date.now() - lastLocalEditTimeRef.current) < 4000;
-      if (isRecentLocalEdit && (currentShipment?.items || []).length >= activePackDraft.items.length) {
-        return;
-      }
-
-      setCurrentShipment(prev => {
-        // If current local shipment already has all items or is ahead, keep local
-        if (prev.id === activePackDraft.id && (prev.items || []).length >= activePackDraft.items.length) {
-          return prev;
-        }
-        const rawTrk = activePackDraft.tracking_number;
-        const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
-        return {
-          ...activePackDraft,
-          tracking_number: cleanTrk,
-          prepared_by_name: currentUser?.fullName || activePackDraft.prepared_by_name || ''
-        };
-      });
-    }
-  }, [activePackDraft, shipments, selectedSiteId, selectedWeek, selectedSite?.code, currentUser?.fullName, currentShipment?.id, currentShipment?.items, currentShipment?.items?.length]);
-
-  // Keep active draft synced to LocalStorage and Supabase Cloud
-  useEffect(() => {
-    // If this shipment is already finalized/saved in database history, do NOT sync it as an active draft
     const isSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
     if (isSaved) return;
 
     if (currentShipment?.items && currentShipment.items.length > 0) {
       try {
-        localStorage.setItem('mdc_active_pack_draft', JSON.stringify(currentShipment));
+        localStorage.setItem(userDraftStorageKey, JSON.stringify(currentShipment));
       } catch (e) {
         console.warn('Could not persist pack draft:', e);
       }
-      syncActivePackDraftToCloud(currentShipment);
     } else {
       try {
-        localStorage.removeItem('mdc_active_pack_draft');
+        localStorage.removeItem(userDraftStorageKey);
       } catch (e) {}
-      syncActivePackDraftToCloud(null);
     }
-  }, [currentShipment, shipments, syncActivePackDraftToCloud]);
+  }, [currentShipment, shipments, userDraftStorageKey]);
+
+  // Live Packing Presence Heartbeat: broadcast current user's active packing station to peers
+  useEffect(() => {
+    if (!currentUser || !broadcastPackingPresence) return;
+
+    const sendPresence = (isPacking = true) => {
+      broadcastPackingPresence({
+        userId: currentUser.id || 'user',
+        userName: currentUser.fullName || currentUser.name || 'Warehouse Staff',
+        userEmail: currentUser.email || '',
+        siteId: selectedSiteId,
+        siteCode: selectedSite?.code || '',
+        siteName: selectedSite?.name || '',
+        itemCount: (currentShipment?.items || []).length,
+        isPacking
+      });
+    };
+
+    sendPresence(true);
+    const heartbeatInterval = setInterval(() => {
+      sendPresence(true);
+    }, 10000);
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      sendPresence(false);
+    };
+  }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, currentShipment?.items?.length, broadcastPackingPresence]);
 
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
@@ -337,7 +317,7 @@ export default function ScanOutPacking() {
       return;
     }
 
-    lastLocalEditTimeRef.current = Date.now();
+    markLocalDraftEdit();
 
     const res = addScanOutUnit({
       shipmentId: currentShipment.id,
@@ -353,10 +333,12 @@ export default function ScanOutPacking() {
         message: `Packed: ${res.item.description} (SN: ${res.item.serial_number}) into Box ${boxNumber}`
       });
 
-      setCurrentShipment(prev => ({
-        ...prev,
-        items: [...(prev.items || []), res.item]
-      }));
+      const updatedDraft = {
+        ...currentShipment,
+        items: [...(currentShipment.items || []), res.item],
+        updated_at: new Date().toISOString()
+      };
+      setCurrentShipment(updatedDraft);
 
       setSerialInput('');
       serialInputRef.current?.focus();
@@ -373,11 +355,11 @@ export default function ScanOutPacking() {
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
     (currentShipment?.items || []).forEach(it => {
-      const s = String(it.serial_number || '').trim().toUpperCase();
+      const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
       if (s) set.add(s);
     });
     return set;
-  }, [currentShipment.items]);
+  }, [currentShipment?.items]);
 
   // Reliable Available Stock Calculation (excluding items already in active draft)
   const availableStockUnits = useMemo(() => {
@@ -415,7 +397,7 @@ export default function ScanOutPacking() {
     return { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' };
   };
 
-  // Enrich available stock units with part catalog info
+  // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedStockUnits = useMemo(() => {
     const partsMap = new Map((parts || []).map(p => [String(p.part_number || '').toUpperCase(), p]));
     const catMap = new Map((categories || []).map(c => [c.id, c]));
@@ -423,18 +405,52 @@ export default function ScanOutPacking() {
     return availableStockUnits.map(unit => {
       const pn = String(unit.part_number || '').toUpperCase();
       const partInfo = partsMap.get(pn);
+      const desc = unit.description || partInfo?.description || 'Apple Genuine Service Part';
+      const descLower = desc.toLowerCase();
+
+      // Resolve true category from description first, then category_id mapping
+      const isDisplay = descLower.includes('display') || descLower.includes('screen');
+      const isBattery = descLower.includes('battery');
+      const isCamera = descLower.includes('camera');
+      const isBackGlass = descLower.includes('back glass') || descLower.includes('rear glass');
+      const isMidSystem = descLower.includes('logic') || descLower.includes('mid system') || descLower.includes('rear system');
+
       const categoryObj = partInfo?.category_id ? catMap.get(partInfo.category_id) : null;
-      const categoryName = categoryObj?.name || (pn.startsWith('661-') ? 'Apple Part' : 'General');
-      const categoryCode = categoryObj?.code || 'GENERAL';
+      let categoryName = 'General';
+      let categoryCode = 'GENERAL';
+
+      if (isDisplay) {
+        categoryName = 'Display';
+        categoryCode = 'DISPLAY';
+      } else if (isBattery) {
+        categoryName = 'Battery';
+        categoryCode = 'BATTERY';
+      } else if (isCamera) {
+        categoryName = 'Camera';
+        categoryCode = 'CAMERA';
+      } else if (isBackGlass) {
+        categoryName = 'Back Glass';
+        categoryCode = 'BACK_GLASS';
+      } else if (isMidSystem) {
+        categoryName = 'Logic / Mid System';
+        categoryCode = 'MID_REAR';
+      } else if (categoryObj?.name) {
+        categoryName = categoryObj.name;
+        categoryCode = categoryObj.code || 'GENERAL';
+      } else if (pn.startsWith('661-')) {
+        categoryName = 'Apple Part';
+        categoryCode = 'APPLE_PART';
+      }
+
       const iphoneModel = partInfo?.iphone_model || unit.iphone_model || '';
 
       return {
         ...unit,
-        description: unit.description || partInfo?.description || 'Service Replacement Part',
+        description: desc,
         iphone_model: iphoneModel,
         category_name: categoryName,
         category_code: categoryCode,
-        stocking_price: partInfo?.stocking_price || 0
+        stocking_price: partInfo?.stocking_price || unit.stocking_price || (isDisplay ? 329 : isBattery ? 99 : 50)
       };
     });
   }, [availableStockUnits, parts, categories]);
@@ -494,36 +510,40 @@ export default function ScanOutPacking() {
     return set.size;
   }, [availableStockUnits]);
 
-  const handleSimulatePack = (unit) => {
-    lastLocalEditTimeRef.current = Date.now();
-    setPartNumberInput(unit.part_number);
-    setSerialInput(unit.serial_number);
+  const handleSimulatePack = (unit, e) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (!unit || !unit.serial_number) return;
+
+    markLocalDraftEdit();
+    const cleanPN = String(unit.part_number || '').trim();
+    const cleanSerial = String(unit.serial_number || '').trim();
+    setPartNumberInput(cleanPN);
+    setSerialInput(cleanSerial);
+
     const res = addScanOutUnit({
       shipmentId: currentShipment.id,
       siteId: selectedSiteId,
-      partNumber: unit.part_number,
-      serialNumber: unit.serial_number,
+      partNumber: cleanPN,
+      serialNumber: cleanSerial,
       boxNumber: boxNumber
     });
+
     if (res.success) {
       setScanResult({
         type: 'success',
         message: `[PACKED] ${res.item.description} (#${res.item.serial_number}) into Box ${boxNumber}`
       });
-      setCurrentShipment(prev => ({
-        ...prev,
-        items: [...(prev.items || []), res.item]
-      }));
+      const updatedDraft = {
+        ...currentShipment,
+        items: [...(currentShipment.items || []), res.item],
+        updated_at: new Date().toISOString()
+      };
+      setCurrentShipment(updatedDraft);
       setSerialInput('');
     } else {
       setScanResult({ type: 'error', message: res.error });
     }
-  };
-
-  const handlePackNextForPart = (partGroup) => {
-    if (!partGroup.units || partGroup.units.length === 0) return;
-    const nextUnit = partGroup.units[0];
-    handleSimulatePack(nextUnit);
   };
 
   // --- XLSX / CSV File Import Handling ---
@@ -562,7 +582,7 @@ export default function ScanOutPacking() {
       return;
     }
 
-    lastLocalEditTimeRef.current = Date.now();
+    markLocalDraftEdit();
 
     const res = batchAddScanOutUnits({
       shipmentId: currentShipment.id,
@@ -571,10 +591,12 @@ export default function ScanOutPacking() {
     });
 
     if (res.success) {
-      setCurrentShipment(prev => ({
-        ...prev,
-        items: [...(prev.items || []), ...res.items]
-      }));
+      const updatedDraft = {
+        ...currentShipment,
+        items: [...(currentShipment.items || []), ...res.items],
+        updated_at: new Date().toISOString()
+      };
+      setCurrentShipment(updatedDraft);
 
       setScanResult({
         type: 'success',
@@ -591,33 +613,63 @@ export default function ScanOutPacking() {
 
   // --- Safe Individual Item Removal (returns part to DC stock) ---
   const handleRemoveItem = (serialNumber) => {
-    lastLocalEditTimeRef.current = Date.now();
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return;
+
+    markLocalDraftEdit();
+
+    const targetItem = (currentShipment.items || []).find(it => 
+      String(it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial
+    );
+
     const res = removeScanOutUnit({
       shipmentId: currentShipment.id,
-      serialNumber: serialNumber
+      serialNumber: cleanSerial,
+      partInfo: targetItem
     });
+
     if (res.success) {
-      setCurrentShipment(prev => ({
-        ...prev,
-        items: (prev.items || []).filter(it => it.serial_number !== serialNumber)
-      }));
+      const remainingItems = (currentShipment.items || []).filter(it => {
+        const itemSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        return itemSerial !== cleanSerial;
+      });
+
+      const updatedDraft = {
+        ...currentShipment,
+        items: remainingItems,
+        updated_at: new Date().toISOString()
+      };
+
+      setCurrentShipment(updatedDraft);
+
+      if (remainingItems.length > 0) {
+        try {
+          localStorage.setItem(userDraftStorageKey, JSON.stringify(updatedDraft));
+        } catch (e) {}
+      } else {
+        try {
+          localStorage.removeItem(userDraftStorageKey);
+        } catch (e) {}
+      }
     }
   };
 
   // --- Safe Clear / Unpack Handling (Clears ONLY active draft, preserves all database history below) ---
-  const handleConfirmClearDraft = () => {
+  const handleConfirmClearDraft = async () => {
+    markLocalDraftEdit();
+
     // If the active draft has items not yet saved to the database, restore them to DC stock
     if (currentShipment.items && currentShipment.items.length > 0) {
       const isAlreadySaved = shipments.some(s => s.id === currentShipment.id && (s.status === 'saved' || s.status === 'shipped'));
       if (!isAlreadySaved) {
-        clearShipmentDraftItems(currentShipment.id, currentShipment.items);
+        await clearShipmentDraftItems(currentShipment.id, currentShipment.items);
       }
     }
 
     try {
+      localStorage.removeItem(userDraftStorageKey);
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {}
-    syncActivePackDraftToCloud(null);
 
     // Generate fresh new draft so the user can start a new packing list for another site
     const newDraftId = `ship-${Date.now()}`;
@@ -653,6 +705,8 @@ export default function ScanOutPacking() {
       return;
     }
 
+    markLocalDraftEdit();
+
     try {
       const cleanTracking = String(currentShipment.tracking_number || '').trim();
       const finalized = {
@@ -680,11 +734,11 @@ export default function ScanOutPacking() {
         showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database! (Tracking # is blank — PDF download skipped until tracking # is provided).`, 'success');
       }
       
-      // 3. Reset draft from localStorage, cloud, and initialize fresh workstation for next shipment
+      // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
       try {
+        localStorage.removeItem(userDraftStorageKey);
         localStorage.removeItem('mdc_active_pack_draft');
       } catch (e) {}
-      syncActivePackDraftToCloud(null);
 
       const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
       const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
@@ -791,8 +845,184 @@ export default function ScanOutPacking() {
     return true;
   });
 
+  // Active packing stations list across all concurrent warehouse users
+  const activeStationsList = useMemo(() => {
+    const now = Date.now();
+    const list = Object.values(activePackingStations || {}).filter(st => {
+      return st && st.userId && st.isPacking && (now - (st.timestamp || 0) < 45000);
+    });
+
+    // Ensure current user is always included in the active station list
+    const hasCurrent = list.some(st => st.userId === currentUser?.id);
+    if (!hasCurrent && currentUser) {
+      list.unshift({
+        userId: currentUser.id || 'user',
+        userName: currentUser.fullName || currentUser.name || 'Warehouse Staff',
+        userEmail: currentUser.email || '',
+        siteId: selectedSiteId,
+        siteCode: selectedSite?.code || '',
+        siteName: selectedSite?.name || '',
+        itemCount: (currentShipment?.items || []).length,
+        isPacking: true,
+        timestamp: Date.now()
+      });
+    }
+    return list;
+  }, [activePackingStations, currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, currentShipment?.items?.length]);
+
+  const otherActiveStations = useMemo(() => {
+    return activeStationsList.filter(st => st.userId !== currentUser?.id);
+  }, [activeStationsList, currentUser?.id]);
+
+  const siteConflictUsers = useMemo(() => {
+    if (!selectedSiteId) return [];
+    return otherActiveStations.filter(st => st.siteId === selectedSiteId);
+  }, [otherActiveStations, selectedSiteId]);
+
   return (
     <div className="scan-out-packing-view" style={{ maxWidth: '1150px', margin: '0 auto' }}>
+      {/* Active Packing Stations & Multi-User Team Activity Banner */}
+      <div
+        style={{
+          background: otherActiveStations.length > 0
+            ? 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%)'
+            : 'rgba(15, 23, 42, 0.85)',
+          border: otherActiveStations.length > 0
+            ? '1px solid rgba(56, 189, 248, 0.35)'
+            : '1px solid rgba(51, 65, 85, 0.6)',
+          borderRadius: '10px',
+          padding: '12px 18px',
+          marginBottom: '18px',
+          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                background: otherActiveStations.length > 0 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(71, 85, 105, 0.25)',
+                color: otherActiveStations.length > 0 ? '#38bdf8' : '#94a3b8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+            >
+              <Users size={18} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h4 style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: '#f8fafc', letterSpacing: '0.2px' }}>
+                  Simultaneous Multi-User Packing Activity
+                </h4>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    background: otherActiveStations.length > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(56, 189, 248, 0.12)',
+                    color: otherActiveStations.length > 0 ? '#34d399' : '#38bdf8',
+                    border: otherActiveStations.length > 0 ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(56, 189, 248, 0.25)'
+                  }}
+                >
+                  <span
+                    style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      background: otherActiveStations.length > 0 ? '#10b981' : '#38bdf8',
+                      boxShadow: otherActiveStations.length > 0 ? '0 0 6px #10b981' : '0 0 6px #38bdf8'
+                    }}
+                  />
+                  {activeStationsList.length} Active {activeStationsList.length === 1 ? 'Station' : 'Stations'}
+                </span>
+              </div>
+              <p style={{ margin: '2px 0 0 0', fontSize: '11.5px', color: '#94a3b8' }}>
+                Workstation drafts are private. Parts in stock remain synchronized in real-time across all users with instant reservation upon scan.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {activeStationsList.map(st => {
+              const isMe = st.userId === currentUser?.id;
+              return (
+                <div
+                  key={st.userId}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    background: isMe ? 'rgba(56, 189, 248, 0.12)' : 'rgba(30, 41, 59, 0.9)',
+                    border: isMe ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(71, 85, 105, 0.4)',
+                    fontSize: '11.5px'
+                  }}
+                  title={isMe ? 'Your active packing workstation' : `Active packing station of ${st.userName}`}
+                >
+                  <div
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      borderRadius: '50%',
+                      background: isMe ? '#0284c7' : '#475569',
+                      color: '#fff',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {(st.userName || 'U').charAt(0).toUpperCase()}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontWeight: 600, color: isMe ? '#38bdf8' : '#f1f5f9', lineHeight: 1.1 }}>
+                      {st.userName} {isMe && <span style={{ fontSize: '10px', opacity: 0.8 }}>(You)</span>}
+                    </span>
+                    <span style={{ fontSize: '10.5px', color: '#94a3b8', lineHeight: 1.1 }}>
+                      {st.siteCode ? `→ ${st.siteCode}` : 'Selecting Site'} • <strong style={{ color: '#cbd5e1' }}>{st.itemCount || 0}</strong> parts
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Site Conflict Alert if two active users are packing for the same site */}
+        {siteConflictUsers.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              background: 'rgba(234, 179, 8, 0.12)',
+              border: '1px solid rgba(234, 179, 8, 0.35)',
+              color: '#fde047',
+              fontSize: '11.5px'
+            }}
+          >
+            <ShieldAlert size={14} color="#facc15" />
+            <span>
+              <strong>Branch Notice:</strong> {siteConflictUsers.map(u => u.userName).join(', ')} is also preparing a packing list for <strong>{selectedSite?.code || selectedSite?.name}</strong>.
+            </span>
+          </div>
+        )}
+      </div>
+
       {/* Scanner & Manifest Config Banner */}
       <div className="scanner-hero" style={{ marginBottom: '24px' }}>
         <div className="scanner-hero-header">
@@ -1084,105 +1314,40 @@ export default function ScanOutPacking() {
         )}
       </div>
 
-      {/* Upgraded Available DC Inventory & Stock Verification Card */}
-      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0' }}>
-        {/* Header with Title, Stats Badges, View Selector */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+      {/* Simplified & High-Usability Available DC Inventory Table */}
+      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
+        {/* Header with Title, Stats Badges, Search & Category Filters */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Boxes size={20} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a', fontWeight: 700 }}>
+                <h3 style={{ margin: 0, fontSize: '15.5px', color: '#0f172a', fontWeight: 700 }}>
                   Available Stock Units in DC
                 </h3>
-                <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '3px 8px' }}>
+                <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
                   {availableStockUnits.length} in-stock
                 </span>
-                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '3px 8px' }}>
+                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 8px' }}>
                   {uniquePartTypesCount} Part Models
                 </span>
                 {currentShipment.items && currentShipment.items.length > 0 && (
-                  <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '11px', padding: '3px 8px' }}>
+                  <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '11px', padding: '2px 8px' }}>
                     {currentShipment.items.length} In Active Manifest
                   </span>
                 )}
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Click any part or serial to pack immediately • Double-check full serials and quantities
+                Click "+ Pack" on any serialized unit to immediately add it to Box #{boxNumber}
               </p>
             </div>
           </div>
 
-          {/* View Mode Switcher */}
-          <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: 'var(--radius-md)', gap: '2px' }}>
-            <button
-              type="button"
-              className={`btn btn-sm ${stockViewMode === 'SUMMARY' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setStockViewMode('SUMMARY')}
-              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
-              title="Grouped by Part Number with Total Quantities"
-            >
-              <Layers size={13} />
-              <span>Summary by Part ({groupedStockSummary.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${stockViewMode === 'SERIALIZED' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setStockViewMode('SERIALIZED')}
-              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
-              title="Table view of all serialized units"
-            >
-              <ListOrdered size={13} />
-              <span>All Units Table ({filteredStockUnits.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${stockViewMode === 'CHIPS' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setStockViewMode('CHIPS')}
-              style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}
-              title="Quick pack pill buttons for all units"
-            >
-              <Zap size={13} />
-              <span>Quick Chips ({filteredStockUnits.length})</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filter & Search Bar */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
-          {/* Category Tabs */}
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '4px' }}>Filter:</span>
-            <button
-              type="button"
-              className={`btn btn-sm ${stockCategoryTab === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setStockCategoryTab('ALL')}
-              style={{ padding: '3px 8px', fontSize: '11.5px', borderRadius: 'var(--radius-full)' }}
-            >
-              All Parts ({availableStockUnits.length})
-            </button>
-            {categories.map(cat => {
-              const countForCat = enrichedStockUnits.filter(u => u.category_code === cat.code || u.category_name?.toUpperCase().includes(cat.code)).length;
-              if (countForCat === 0 && stockCategoryTab !== cat.code) return null;
-              return (
-                <button
-                  key={cat.id}
-                  type="button"
-                  className={`btn btn-sm ${stockCategoryTab === cat.code ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setStockCategoryTab(cat.code)}
-                  style={{ padding: '3px 8px', fontSize: '11.5px', borderRadius: 'var(--radius-full)' }}
-                >
-                  {cat.name} ({countForCat})
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Quick Search in Stock */}
+          {/* Quick Search & Hard Sync Button */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ position: 'relative', width: '220px' }}>
+            <div style={{ position: 'relative', width: '240px' }}>
               <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
@@ -1207,178 +1372,103 @@ export default function ScanOutPacking() {
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Stock card refresh' })}
+                onClick={async (e) => {
+                  if (e && e.preventDefault) e.preventDefault();
+                  showToast('Re-pulling latest stock from Cloud Database...', 'info');
+                  const ok = await autoRefreshData({ force: true, silent: false, reason: 'Manual hard sync' });
+                  if (ok) {
+                    showToast('Stock re-synchronized from Cloud Database!', 'success');
+                  }
+                }}
                 disabled={isAutoRefreshing}
-                title="Sync latest stock from database"
-                style={{ height: '32px', padding: '0 8px' }}
+                title="Hard Sync: Re-pull all serialized stock from Cloud Database"
+                style={{ height: '32px', padding: '0 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
               >
                 <RefreshCw size={12} className={isAutoRefreshing ? 'spin' : ''} />
+                <span style={{ fontSize: '11px' }}>Sync</span>
               </button>
             )}
           </div>
         </div>
 
-        {/* Content Views */}
+        {/* Category Filter Pills */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
+          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>Category:</span>
+          <button
+            type="button"
+            className={`btn btn-sm ${stockCategoryTab === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setStockCategoryTab('ALL')}
+            style={{ padding: '2px 8px', fontSize: '11px', borderRadius: 'var(--radius-full)' }}
+          >
+            All Parts ({availableStockUnits.length})
+          </button>
+          {['DISPLAY', 'BATTERY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(code => {
+            const countForCat = enrichedStockUnits.filter(u => u.category_code === code || u.category_name?.toUpperCase().includes(code)).length;
+            if (countForCat === 0 && stockCategoryTab !== code) return null;
+            const catLabel = code === 'DISPLAY' ? 'Display' : code === 'BATTERY' ? 'Battery' : code === 'CAMERA' ? 'Camera' : code === 'BACK_GLASS' ? 'Back Glass' : 'Logic / Mid';
+            return (
+              <button
+                key={code}
+                type="button"
+                className={`btn btn-sm ${stockCategoryTab === code ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setStockCategoryTab(code)}
+                style={{ padding: '2px 8px', fontSize: '11px', borderRadius: 'var(--radius-full)' }}
+              >
+                {catLabel} ({countForCat})
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Simplified Unified Stock Table */}
         {availableStockUnits.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '32px 16px', background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px dashed #cbd5e1' }}>
-            <CheckCircle2 size={32} color="#10b981" style={{ margin: '0 auto 8px' }} />
-            <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', color: '#0f172a' }}>All Available DC Units Packed</h4>
-            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)' }}>
+          <div style={{ textAlign: 'center', padding: '28px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+            <CheckCircle2 size={28} color="#10b981" style={{ margin: '0 auto 6px' }} />
+            <h4 style={{ margin: '0 0 2px 0', fontSize: '13.5px', color: '#0f172a', fontWeight: 600 }}>All Available DC Units Packed</h4>
+            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
               {currentShipment.items && currentShipment.items.length > 0
-                ? `All ${currentShipment.items.length} units in DC stock are currently loaded into the active manifest.`
+                ? `All ${currentShipment.items.length} units in DC stock are currently loaded into the active manifest below.`
                 : 'No units in DC stock. Receive or import parts in the Receive Scan-In page first.'}
             </p>
           </div>
         ) : filteredStockUnits.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '24px 16px', background: '#f8fafc', borderRadius: 'var(--radius-md)', border: '1px dashed #cbd5e1' }}>
-            <Search size={24} color="#94a3b8" style={{ margin: '0 auto 6px' }} />
-            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)' }}>
-              No available parts match "{stockSearch}". Try adjusting your search term or category filter.
+          <div style={{ textAlign: 'center', padding: '24px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+            <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
+            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
+              No available parts match "{stockSearch}".
             </p>
           </div>
-        ) : stockViewMode === 'SUMMARY' ? (
-          /* View 1: Summary by Part Number with Total Quantities & Clickable Serial Pills */
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '12px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px' }}>
-            {groupedStockSummary.map((group) => {
-              const catBadge = getCategoryBadgeStyle(group.category_code);
-              return (
-                <div
-                  key={group.part_number}
-                  style={{
-                    background: '#f8fafc',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    padding: '12px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    transition: 'border-color 0.15s ease'
-                  }}
-                >
-                  {/* Top: Part Number, Category & Quantity */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <strong className="font-mono" style={{ fontSize: '13px', color: '#0f172a' }}>
-                          {group.part_number}
-                        </strong>
-                        <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
-                          {group.category_name}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#334155', marginTop: '2px', fontWeight: 500 }}>
-                        {group.description}
-                      </div>
-                      {group.iphone_model && (
-                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
-                          Model: <strong>{group.iphone_model}</strong>
-                        </div>
-                      )}
-                    </div>
-
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <span
-                        className="badge"
-                        style={{
-                          background: '#ecfdf5',
-                          color: '#047857',
-                          border: '1px solid #a7f3d0',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          padding: '3px 8px'
-                        }}
-                      >
-                        {group.totalQty} in-stock
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Serials Sub-Grid */}
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                        Available Serial Numbers:
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => handlePackNextForPart(group)}
-                        style={{
-                          padding: '2px 6px',
-                          fontSize: '10.5px',
-                          background: '#0284c7',
-                          color: '#fff',
-                          border: 'none',
-                          borderRadius: '4px',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          cursor: 'pointer'
-                        }}
-                        title={`Pack first available ${group.part_number} into Box ${boxNumber}`}
-                      >
-                        <Plus size={11} />
-                        <span>Pack Next</span>
-                      </button>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', maxHeight: '72px', overflowY: 'auto' }}>
-                      {group.units.map(unit => (
-                        <button
-                          key={unit.id || unit.serial_number}
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleSimulatePack(unit)}
-                          style={{
-                            fontSize: '10.5px',
-                            fontFamily: 'var(--font-mono)',
-                            padding: '2px 6px',
-                            background: '#fff',
-                            borderColor: '#cbd5e1',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px'
-                          }}
-                          title={`Click to pack SN: ${unit.serial_number} into Box ${boxNumber}`}
-                        >
-                          <Plus size={10} color="#0284c7" />
-                          <span>{unit.serial_number}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : stockViewMode === 'SERIALIZED' ? (
-          /* View 2: All Serialized Units Full Table with Double-Check Inspection */
-          <div className="table-container" style={{ maxHeight: '340px', overflowY: 'auto' }}>
-            <table className="data-table" style={{ fontSize: '12px' }}>
-              <thead>
+        ) : (
+          <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+            <table className="data-table" style={{ fontSize: '12px', width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 2 }}>
                 <tr>
-                  <th style={{ width: '38px' }}>#</th>
-                  <th>Part Number</th>
-                  <th>Description</th>
-                  <th>Category</th>
-                  <th>Serial Number</th>
-                  <th>Intake / Received</th>
-                  <th style={{ textAlign: 'right', width: '130px' }}>Action</th>
+                  <th style={{ width: '36px', textAlign: 'center' }}>#</th>
+                  <th style={{ width: '110px' }}>Part Number</th>
+                  <th>Description / Model</th>
+                  <th style={{ width: '100px' }}>Category</th>
+                  <th style={{ width: '190px' }}>Serial Number</th>
+                  <th style={{ width: '130px' }}>Assignment</th>
+                  <th style={{ textAlign: 'right', width: '110px' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredStockUnits.map((unit, idx) => {
                   const catBadge = getCategoryBadgeStyle(unit.category_code);
+                  const isCrbr = unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR');
                   return (
-                    <tr key={unit.id || `${unit.serial_number}-${idx}`}>
-                      <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                    <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
+                        {idx + 1}
+                      </td>
                       <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
                         {unit.part_number}
                       </td>
                       <td>
-                        <div style={{ fontWeight: 500 }}>{unit.description}</div>
-                        {unit.iphone_model && <div style={{ fontSize: '11px', color: '#64748b' }}>{unit.iphone_model}</div>}
+                        <div style={{ fontWeight: 500, color: '#1e293b' }}>{unit.description}</div>
+                        {unit.iphone_model && (
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>Model: <strong>{unit.iphone_model}</strong></div>
+                        )}
                       </td>
                       <td>
                         <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
@@ -1390,7 +1480,10 @@ export default function ScanOutPacking() {
                           <span>{unit.serial_number}</span>
                           <button
                             type="button"
-                            onClick={() => handleCopySerial(unit.serial_number)}
+                            onClick={(e) => {
+                              if (e && e.preventDefault) e.preventDefault();
+                              handleCopySerial(unit.serial_number);
+                            }}
                             style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
                             title="Copy Serial Number"
                           >
@@ -1398,66 +1491,39 @@ export default function ScanOutPacking() {
                           </button>
                         </div>
                       </td>
-                      <td style={{ fontSize: '11px', color: '#64748b' }}>
-                        {unit.received_at ? new Date(unit.received_at).toLocaleDateString('en-US') : 'In Stock'}
+                      <td>
+                        <span
+                          className="badge"
+                          style={{
+                            background: isCrbr ? '#fef3c7' : '#e0f2fe',
+                            color: isCrbr ? '#92400e' : '#0369a1',
+                            border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            padding: '2px 6px',
+                            borderRadius: '4px'
+                          }}
+                        >
+                          {isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}
+                        </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '4px' }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => setStockInspectUnit(unit)}
-                            style={{ padding: '3px 6px', fontSize: '11px' }}
-                            title="Double-check part details"
-                          >
-                            <Eye size={11} />
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            onClick={() => handleSimulatePack(unit)}
-                            style={{ padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                            title={`Pack ${unit.part_number} (${unit.serial_number}) into Box ${boxNumber}`}
-                          >
-                            <Plus size={11} />
-                            <span>Pack Unit</span>
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={(e) => handleSimulatePack(unit, e)}
+                          style={{ padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px', borderRadius: '4px' }}
+                          title={`Pack ${unit.part_number} (${unit.serial_number}) into Box #${boxNumber}`}
+                        >
+                          <Plus size={11} />
+                          <span>+ Pack</span>
+                        </button>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        ) : (
-          /* View 3: Quick-Pack Chips (All Units without artificial 10-item limit!) */
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', maxHeight: '220px', overflowY: 'auto', padding: '4px 0' }}>
-            {filteredStockUnits.map((unit) => {
-              const catBadge = getCategoryBadgeStyle(unit.category_code);
-              return (
-                <button
-                  key={unit.id || unit.serial_number}
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  style={{
-                    fontSize: '11px',
-                    background: '#fff',
-                    borderColor: '#cbd5e1',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '4px 8px'
-                  }}
-                  onClick={() => handleSimulatePack(unit)}
-                  title={`Click to pack: ${unit.description} (#${unit.serial_number}) into Box ${boxNumber}`}
-                >
-                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: catBadge.color }} />
-                  <strong className="font-mono">+{unit.part_number}</strong>
-                  <span className="font-mono" style={{ color: '#64748b' }}>({unit.serial_number})</span>
-                </button>
-              );
-            })}
           </div>
         )}
       </div>

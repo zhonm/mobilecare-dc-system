@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
-import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord, formatDcIntakeRecordForDb } from '../utils/appContextHelpers';
+import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord, formatDcIntakeRecordForDb, isUUID, toValidUUID } from '../utils/appContextHelpers';
 
 export function useInventory({
   parts = [],
@@ -20,40 +20,28 @@ export function useInventory({
   const [inventoryUnits, setInventoryUnits] = useState(() => {
     try {
       if (isExplicitlyCleared()) return [];
+
+      // Load deleted serials FIRST to filter them out immediately (prevents ghost flash on refresh)
+      let deletedSerialsSet = new Set();
+      try {
+        const deletedSerials = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+        deletedSerialsSet = new Set(deletedSerials.map(s => String(s).trim().toUpperCase()));
+      } catch (e) {}
+
       const saved = localStorage.getItem('mdc_inventory');
       let baseUnits = [];
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) baseUnits = parsed;
       }
-      if (baseUnits.length === 0) {
-        const savedIntakes = localStorage.getItem('mdc_dc_intake_records');
-        if (savedIntakes) {
-          const parsedIntakes = JSON.parse(savedIntakes);
-          if (Array.isArray(parsedIntakes)) {
-            parsedIntakes.forEach(rec => {
-              if (Array.isArray(rec.items)) {
-                rec.items.forEach(it => {
-                  baseUnits.push({
-                    id: it.id || `unit-${it.serial_number}`,
-                    part_id: it.part_id || `part-${it.part_number}`,
-                    part_number: it.part_number,
-                    description: it.description || 'Service Replacement Part',
-                    serial_number: it.serial_number,
-                    current_site_id: 'site-dc',
-                    site_code: 'DC-MDC',
-                    status: 'in_stock',
-                    box_number: 1,
-                    received_at: it.received_at || rec.intake_date || new Date().toISOString(),
-                    received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff'
-                  });
-                });
-              }
-            });
-          }
-        }
-      }
-      return reconcileUnitsWithPackedDrafts(baseUnits);
+
+      // Filter out deleted serials before reconciliation (prevents ghost reappearance)
+      const filtered = baseUnits.filter(u => {
+        const s = String(u.serial_number || '').trim().toUpperCase();
+        return !s || !deletedSerialsSet.has(s);
+      });
+
+      return reconcileUnitsWithPackedDrafts(filtered);
     } catch {
       return [];
     }
@@ -481,15 +469,20 @@ export function useInventory({
       });
     }
 
-    if (targetUnit) {
-      await saveUnitsToSupabase([targetUnit]);
-      if (supabase) {
-        try {
-          await supabase
-            .from('inventory_units')
-            .update({ notes: effectiveAssignment })
-            .eq('serial_number', cleanSerial);
-        } catch (e) {}
+    if (supabase) {
+      try {
+        const { error: updateErr } = await supabase
+          .from('inventory_units')
+          .update({
+            notes: effectiveAssignment,
+            updated_at: new Date().toISOString()
+          })
+          .eq('serial_number', cleanSerial);
+        if (updateErr) {
+          console.warn('Supabase inventory_units assignment update notice:', updateErr.message);
+        }
+      } catch (e) {
+        console.error('Supabase assignment update error:', e.message);
       }
     }
 
@@ -917,45 +910,56 @@ export function useInventory({
   };
 
   const addScanOutUnit = ({ shipmentId, siteId, partNumber, serialNumber, boxNumber = 1 }) => {
-    const cleanPN = partNumber.trim().toUpperCase();
-    const cleanSerial = serialNumber.trim().toUpperCase();
+    const cleanPN = String(partNumber || '').trim().toUpperCase();
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
 
-    const unitIndex = inventoryUnits.findIndex(u => 
-      u.serial_number.toUpperCase() === cleanSerial && 
-      u.part_number.toUpperCase() === cleanPN
+    const currentUnit = (inventoryUnits || []).find(u => 
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
     );
 
-    if (unitIndex === -1) {
+    if (!currentUnit) {
       barcodeAudio.playError();
       showToast(`Unit not found in stock: ${cleanPN} / ${cleanSerial}`, 'error');
       logScan('PACK_OUT', cleanPN, cleanSerial, false, 'Unit not found in stock');
       return { success: false, error: 'Unit not found in DC stock' };
     }
 
-    const unit = inventoryUnits[unitIndex];
-    if (unit.status !== 'in_stock' && unit.status !== 'allocated') {
+    if (currentUnit.status !== 'in_stock' && currentUnit.status !== 'allocated') {
       barcodeAudio.playError();
-      showToast(`Unit ${cleanSerial} cannot be scanned out (Status: ${unit.status})`, 'error');
-      logScan('PACK_OUT', cleanPN, cleanSerial, false, `Invalid status: ${unit.status}`);
-      return { success: false, error: `Unit is already ${unit.status}` };
+      showToast(`Unit ${cleanSerial} cannot be scanned out (Status: ${currentUnit.status})`, 'error');
+      logScan('PACK_OUT', cleanPN, cleanSerial, false, `Invalid status: ${currentUnit.status}`);
+      return { success: false, error: `Unit is already ${currentUnit.status}` };
     }
 
-    const updatedUnits = [...inventoryUnits];
-    updatedUnits[unitIndex] = {
-      ...unit,
-      status: 'packed',
-      current_site_id: siteId,
-      box_number: boxNumber,
-      shipped_at: new Date().toISOString(),
-      shipped_by: currentUser?.fullName || 'Warehouse Staff'
+    const itemToAdd = {
+      id: currentUnit.id || `unit-${cleanSerial}`,
+      part_id: currentUnit.part_id,
+      part_number: currentUnit.part_number,
+      description: currentUnit.description,
+      serial_number: currentUnit.serial_number,
+      box_number: boxNumber
     };
-    setInventoryUnits(updatedUnits);
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedUnits));
-    } catch (e) {
-      console.warn('LocalStorage save error in addScanOutUnit:', e);
-    }
-    dbStorage.setItem('mdc_inventory', updatedUnits);
+
+    setInventoryUnits(prev => {
+      const updated = (prev || []).map(u => {
+        if (String(u.serial_number || '').trim().toUpperCase() === cleanSerial) {
+          return {
+            ...u,
+            status: 'packed',
+            current_site_id: siteId || 'site-dc',
+            box_number: boxNumber,
+            shipped_at: new Date().toISOString(),
+            shipped_by: currentUser?.fullName || 'Warehouse Staff'
+          };
+        }
+        return u;
+      });
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', updated);
+      return updated;
+    });
 
     if (supabase) {
       (async () => {
@@ -964,25 +968,13 @@ export function useInventory({
           await supabase
             .from('inventory_units')
             .upsert({
-              part_id: unit.part_id,
+              part_id: currentUnit.part_id,
               serial_number: cleanSerial,
               status: 'packed',
               box_number: boxNumber,
               current_site_id: siteId || 'site-dc',
               shipped_at: new Date().toISOString()
             }, { onConflict: 'serial_number' });
-
-          try {
-            await supabase.from('saved_records').upsert({
-              id: 'live_master_dc_inventory',
-              record_type: 'inventory_master',
-              period_label: 'Live Master DC Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              snapshot_data: { units: updatedUnits },
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
-          } catch (e) {}
 
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
@@ -991,13 +983,6 @@ export function useInventory({
         }
       })();
     }
-
-    const itemToAdd = {
-      part_number: unit.part_number,
-      description: unit.description,
-      serial_number: unit.serial_number,
-      box_number: boxNumber
-    };
 
     if (setShipments) {
       setShipments(prev => prev.map(sh => {
@@ -1011,57 +996,66 @@ export function useInventory({
       }));
     }
 
-    if (broadcastCloudEvent) broadcastCloudEvent('UNIT_PACKED', { serialNumber: cleanSerial });
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('UNIT_PACKED', {
+        serialNumber: cleanSerial,
+        partNumber: cleanPN,
+        siteId: siteId || 'site-dc',
+        boxNumber: boxNumber,
+        status: 'packed',
+        shippedBy: currentUser?.fullName || 'Warehouse Staff'
+      });
+    }
 
     barcodeAudio.playSuccess();
     logScan('PACK_OUT', cleanPN, cleanSerial, true);
-    showToast(`Packed: ${unit.description} (#${cleanSerial}) into Box ${boxNumber}`, 'success');
+    showToast(`Packed: ${itemToAdd.description} (#${cleanSerial}) into Box ${boxNumber}`, 'success');
     return { success: true, item: itemToAdd };
   };
 
-  const batchAddScanOutUnits = ({ shipmentId, siteId, items }) => {
-    if (!items || items.length === 0) {
-      return { success: false, error: 'No items to pack' };
+  const batchAddScanOutUnits = async (shipmentId, siteId, scannedRows = []) => {
+    if (!scannedRows || scannedRows.length === 0) {
+      return { success: false, error: 'No parts to pack.' };
     }
 
     const itemsToAdd = [];
     const newLogs = [];
     const updatedSerialsMap = new Map();
 
-    for (const item of items) {
-      const cleanPN = String(item.partNumber || '').trim().toUpperCase();
-      const cleanSerial = String(item.serialNumber || '').trim().toUpperCase();
-      const box = item.boxNumber || 1;
-      const targetSiteId = item.siteId || siteId;
+    for (const row of scannedRows) {
+      const cleanPN = (row.part_number || '').trim().toUpperCase();
+      const cleanSerial = (row.serial_number || '').trim().toUpperCase();
+      if (!cleanSerial) continue;
 
-      const unit = inventoryUnits.find(u =>
+      const unit = (inventoryUnits || []).find(u => 
+        u.serial_number && 
         u.serial_number.toUpperCase() === cleanSerial &&
         (u.status === 'in_stock' || u.status === 'allocated')
       );
 
       if (unit) {
-        updatedSerialsMap.set(unit.serial_number.toUpperCase(), {
-          ...unit,
-          status: 'packed',
-          current_site_id: targetSiteId,
-          box_number: box,
-          shipped_at: new Date().toISOString(),
-          shipped_by: currentUser?.fullName || 'Warehouse Staff (Import)'
-        });
-
-        itemsToAdd.push({
+        const itemObj = {
           part_number: unit.part_number,
           description: unit.description,
           serial_number: unit.serial_number,
-          box_number: box
+          box_number: row.box_number || 1
+        };
+        itemsToAdd.push(itemObj);
+
+        updatedSerialsMap.set(cleanSerial, {
+          ...unit,
+          status: 'packed',
+          current_site_id: siteId,
+          box_number: row.box_number || 1,
+          shipped_at: new Date().toISOString(),
+          shipped_by: currentUser?.fullName || 'Warehouse Staff'
         });
 
         newLogs.push({
-          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          scan_type: 'PACK_OUT_BATCH',
-          part_number: cleanPN || unit.part_number,
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          scan_type: 'PACK_OUT',
+          part_number: cleanPN,
           serial_number: cleanSerial,
-          user_name: currentUser?.fullName || 'Warehouse Staff (Import)',
           is_valid: true,
           error_message: null,
           created_at: new Date().toISOString()
@@ -1073,17 +1067,17 @@ export function useInventory({
       return { success: false, error: 'No matching in-stock units found to pack.' };
     }
 
-    const updatedInventory = inventoryUnits.map(u => {
-      const match = updatedSerialsMap.get(u.serial_number.toUpperCase());
-      return match ? match : u;
+    setInventoryUnits(prev => {
+      const updatedInventory = (prev || []).map(u => {
+        const match = updatedSerialsMap.get(String(u.serial_number || '').toUpperCase());
+        return match ? match : u;
+      });
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', updatedInventory);
+      return updatedInventory;
     });
-    setInventoryUnits(updatedInventory);
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
-    } catch (e) {
-      console.warn('LocalStorage save error in batchAddScanOutUnits:', e);
-    }
-    dbStorage.setItem('mdc_inventory', updatedInventory);
 
     if (supabase) {
       (async () => {
@@ -1103,18 +1097,6 @@ export function useInventory({
           await supabase
             .from('inventory_units')
             .upsert(rowsToUpsert, { onConflict: 'serial_number' });
-
-          try {
-            await supabase.from('saved_records').upsert({
-              id: 'live_master_dc_inventory',
-              record_type: 'inventory_master',
-              period_label: 'Live Master DC Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              snapshot_data: { units: updatedInventory },
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
-          } catch (e) {}
 
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
@@ -1139,53 +1121,86 @@ export function useInventory({
     }
 
     setScanLogs(prev => [...newLogs, ...(prev || [])].slice(0, 300));
-    if (broadcastCloudEvent) broadcastCloudEvent('UNITS_BATCH_PACKED', { count: itemsToAdd.length });
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('UNITS_BATCH_PACKED', {
+        count: itemsToAdd.length,
+        serialNumbers: itemsToAdd.map(it => it.serial_number),
+        siteId: siteId || 'site-dc',
+        status: 'packed'
+      });
+    }
 
     barcodeAudio.playSuccess();
     showToast(`Batch packed ${itemsToAdd.length} units into ${targetShipmentNumber || 'Shipment'}!`, 'success');
     return { success: true, count: itemsToAdd.length, items: itemsToAdd };
   };
 
-  const removeScanOutUnit = ({ shipmentId, serialNumber }) => {
+  const removeScanOutUnit = ({ shipmentId, serialNumber, partInfo = null }) => {
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
     if (!cleanSerial) return { success: false };
 
-    let revertedPart = null;
-    const updatedInventory = inventoryUnits.map(u => {
-      if (u.serial_number && u.serial_number.toUpperCase() === cleanSerial) {
-        revertedPart = u;
-        return {
-          ...u,
-          status: 'in_stock',
-          current_site_id: 'site-dc',
-          box_number: 1,
-          shipped_at: null,
-          shipped_by: null
-        };
-      }
-      return u;
-    });
+    // 1. Unmark from deleted serials registry
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const filtered = localDeleted.filter(s => String(s).trim().toUpperCase() !== cleanSerial);
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filtered));
+    } catch (e) {}
 
-    setInventoryUnits(updatedInventory);
+    let revertedPart = null;
+    setInventoryUnits(prev => {
+      let found = false;
+      const updated = (prev || []).map(u => {
+        if (String(u.serial_number || '').trim().toUpperCase() === cleanSerial) {
+          found = true;
+          revertedPart = {
+            ...u,
+            status: 'in_stock',
+            current_site_id: 'site-dc',
+            box_number: 1,
+            shipped_at: null,
+            shipped_by: null
+          };
+          return revertedPart;
+        }
+        return u;
+      });
+
+      // If unit wasn't in inventoryUnits array, construct it from partInfo fallback
+      if (!found && partInfo) {
+        revertedPart = {
+          id: partInfo.id || `unit-${cleanSerial}`,
+          part_id: partInfo.part_id || `part-${partInfo.part_number || 'unknown'}`,
+          part_number: partInfo.part_number,
+          description: partInfo.description || 'Service Replacement Part',
+          serial_number: cleanSerial,
+          current_site_id: 'site-dc',
+          site_code: 'DC-MDC',
+          status: 'in_stock',
+          box_number: 1,
+          received_at: partInfo.received_at || new Date().toISOString(),
+          received_by: partInfo.received_by || currentUser?.fullName || 'Warehouse Staff'
+        };
+        updated.push(revertedPart);
+      }
+
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', updated);
+      return updated;
+    });
 
     if (setShipments) {
       setShipments(prev => prev.map(sh => {
         if (sh.id === shipmentId) {
           return {
             ...sh,
-            items: (sh.items || []).filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial)
+            items: (sh.items || []).filter(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase() !== cleanSerial)
           };
         }
         return sh;
       }));
     }
-
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
-    } catch (e) {
-      console.warn('LocalStorage save error in removeScanOutUnit:', e);
-    }
-    dbStorage.setItem('mdc_inventory', updatedInventory);
 
     if (supabase) {
       (async () => {
@@ -1199,30 +1214,32 @@ export function useInventory({
             dcSiteId = anySite?.id;
           }
 
-          if (dcSiteId) {
-            await supabase
-              .from('inventory_units')
-              .update({
-                status: 'in_stock',
-                current_site_id: dcSiteId,
-                box_number: 1,
-                shipped_at: null,
-                shipped_by: null
-              })
-              .eq('serial_number', cleanSerial);
-          }
+          await supabase
+            .from('inventory_units')
+            .update({
+              status: 'in_stock',
+              current_site_id: dcSiteId || 'site-dc',
+              shipped_at: null,
+              box_number: 1
+            })
+            .eq('serial_number', cleanSerial);
 
-          try {
-            await supabase.from('saved_records').upsert({
-              id: 'live_master_dc_inventory',
-              record_type: 'inventory_master',
-              period_label: 'Live Master DC Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              snapshot_data: { units: updatedInventory },
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
-          } catch (e) {}
+          if (revertedPart) {
+            const partId = isUUID(revertedPart.part_id) ? revertedPart.part_id : toValidUUID(revertedPart.part_id || 'part-' + (revertedPart.part_number || cleanSerial));
+            if (isUUID(partId)) {
+              await supabase.from('inventory_units').upsert({
+                id: isUUID(revertedPart.id) ? revertedPart.id : toValidUUID(revertedPart.id || cleanSerial),
+                part_id: partId,
+                serial_number: cleanSerial,
+                status: 'in_stock',
+                current_site_id: dcSiteId || 'site-dc',
+                box_number: 1,
+                received_at: revertedPart.received_at || new Date().toISOString(),
+                received_by_name: revertedPart.received_by || currentUser?.fullName || 'Warehouse Staff',
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'serial_number' });
+            }
+          }
 
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
@@ -1232,7 +1249,13 @@ export function useInventory({
       })();
     }
 
-    if (broadcastCloudEvent) broadcastCloudEvent('UNIT_UNPACKED', { serialNumber: cleanSerial });
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('UNIT_UNPACKED', {
+        serialNumber: cleanSerial,
+        status: 'in_stock',
+        unit: revertedPart
+      });
+    }
 
     showToast(`Removed #${cleanSerial} from packing list. Returned to DC In-Stock inventory.`, 'info');
     return { success: true, unit: revertedPart };

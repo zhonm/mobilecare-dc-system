@@ -78,6 +78,8 @@ export function useCloudSync({
   const pendingRealtimeTablesRef = useRef(new Set());
   const debounceRealtimeTimerRef = useRef(null);
 
+  const [activePackingStations, setActivePackingStations] = useState({});
+
   // Broadcast event across peers and browser tabs
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
     try {
@@ -100,6 +102,56 @@ export function useCloudSync({
       }
     }
   }, [currentUser]);
+
+  // Broadcast and locally track active packing session presence
+  const broadcastPackingPresence = useCallback((presenceData) => {
+    if (!presenceData) return;
+    const payload = {
+      userId: presenceData.userId || currentUser?.id || 'anon',
+      userName: presenceData.userName || currentUser?.fullName || currentUser?.name || 'Warehouse Staff',
+      userEmail: presenceData.userEmail || currentUser?.email || '',
+      siteId: presenceData.siteId || '',
+      siteCode: presenceData.siteCode || '',
+      siteName: presenceData.siteName || '',
+      itemCount: typeof presenceData.itemCount === 'number' ? presenceData.itemCount : 0,
+      isPacking: presenceData.isPacking !== false,
+      timestamp: Date.now()
+    };
+
+    setActivePackingStations(prev => {
+      if (!payload.isPacking) {
+        const next = { ...prev };
+        delete next[payload.userId];
+        return next;
+      }
+      return {
+        ...prev,
+        [payload.userId]: payload
+      };
+    });
+
+    broadcastCloudEvent('PACKING_PRESENCE', payload);
+  }, [currentUser, broadcastCloudEvent]);
+
+  // Prune stale packing station sessions (> 40s since last heartbeat)
+  useEffect(() => {
+    const pruneTimer = setInterval(() => {
+      const now = Date.now();
+      setActivePackingStations(prev => {
+        let changed = false;
+        const next = {};
+        for (const [uid, st] of Object.entries(prev)) {
+          if (now - (st.timestamp || 0) < 40000 && st.isPacking) {
+            next[uid] = st;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 10000);
+    return () => clearInterval(pruneTimer);
+  }, []);
 
   // Offline Sync Queue Processor
   const enqueueOfflineAction = useCallback(async (actionType, payload) => {
@@ -180,8 +232,9 @@ export function useCloudSync({
       const shouldFetch = (tbl) => {
         if (!selectiveTables) return true;
         if (selectiveTables.includes(tbl)) return true;
-        // Master registries and dependencies live in saved_records, parts, and sites
+        // Master registries and dependencies live in saved_records, parts, sites, and shipments
         if (tbl === 'saved_records' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('dc_intake_records') || selectiveTables.includes('shipments') || selectiveTables.includes('profiles'))) return true;
+        if (tbl === 'shipments' && selectiveTables.includes('inventory_units')) return true;
         if (tbl === 'parts' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('dc_intake_records') || selectiveTables.includes('shipments'))) return true;
         if (tbl === 'sites' && (selectiveTables.includes('inventory_units') || selectiveTables.includes('shipments'))) return true;
         return false;
@@ -202,7 +255,7 @@ export function useCloudSync({
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(500) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(250) : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(250) : Promise.resolve({ data: null }),
-        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*').limit(3000) : Promise.resolve({ data: null }),
+        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*, parts:part_id(*)').limit(3000) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(500) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(100) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(50) : Promise.resolve({ data: null }),
@@ -644,14 +697,18 @@ export function useCloudSync({
           } catch (e) {}
         }
 
-        const draftRecord = dbSavedRecords.find(r => r.id === 'active_packing_manifest_draft');
-        if (draftRecord && draftRecord.snapshot_data && draftRecord.snapshot_data.items && draftRecord.snapshot_data.items.length > 0) {
-          effectiveDraft = draftRecord.snapshot_data;
-          setActivePackDraft(effectiveDraft);
-          try { localStorage.setItem('mdc_active_pack_draft', JSON.stringify(effectiveDraft)); } catch (e) {}
+        let localDraftSnapshot = null;
+        try {
+          const userDraftKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_active_pack_draft';
+          localDraftSnapshot = JSON.parse(localStorage.getItem(userDraftKey) || localStorage.getItem('mdc_active_pack_draft') || 'null');
+        } catch (e) {}
+
+        if (localDraftSnapshot && Array.isArray(localDraftSnapshot.items) && localDraftSnapshot.items.length > 0) {
+          effectiveDraft = localDraftSnapshot;
+          if (setActivePackDraft) setActivePackDraft(effectiveDraft);
         } else {
-          setActivePackDraft(null);
-          try { localStorage.removeItem('mdc_active_pack_draft'); } catch (e) {}
+          effectiveDraft = null;
+          if (setActivePackDraft) setActivePackDraft(null);
         }
 
         const cloudDeletedShipmentsDoc = dbSavedRecords.find(r => r.id === 'deleted_shipment_ids_registry');
@@ -874,27 +931,51 @@ export function useCloudSync({
           deletedSerialsSet = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
         }
 
-        // Serials that are already shipped, dispatched, packed, or explicitly deleted:
-        const shippedOrPackedSerials = new Set([...deletedSerialsSet]);
-        (effectiveShipments || []).forEach(sh => {
-          if (Array.isArray(sh.items)) {
+        // Serials that are already shipped, dispatched, or packed in active drafts:
+        const shippedOrPackedSerials = new Set();
+
+        // 1. Gather all shipments from effectiveShipments, _shipments prop, and localStorage
+        const allShipmentsToCheck = [
+          ...(effectiveShipments || []),
+          ...(_shipments || [])
+        ];
+        try {
+          const localSavedSh = JSON.parse(localStorage.getItem('mdc_shipments') || '[]');
+          if (Array.isArray(localSavedSh)) allShipmentsToCheck.push(...localSavedSh);
+        } catch (e) {}
+
+        allShipmentsToCheck.forEach(sh => {
+          if (sh && Array.isArray(sh.items)) {
             sh.items.forEach(it => {
               const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
               if (s) shippedOrPackedSerials.add(s);
             });
           }
         });
+
+        // 2. Gather all active drafts from effectiveDraft and all mdc_pack_draft_* in localStorage
         if (effectiveDraft?.items && Array.isArray(effectiveDraft.items)) {
           effectiveDraft.items.forEach(it => {
             const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
             if (s) shippedOrPackedSerials.add(s);
           });
         }
-
-        const liveMasterPoolDoc = dbSavedRecords?.find(r => r.id === 'live_master_dc_inventory');
-        const poolUnits = (liveMasterPoolDoc?.snapshot_data?.units && Array.isArray(liveMasterPoolDoc.snapshot_data.units))
-          ? liveMasterPoolDoc.snapshot_data.units
-          : [];
+        if (typeof window !== 'undefined') {
+          try {
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i);
+              if (k && (k.startsWith('mdc_pack_draft_') || k === 'mdc_active_pack_draft')) {
+                const d = JSON.parse(localStorage.getItem(k) || 'null');
+                if (d && Array.isArray(d.items)) {
+                  d.items.forEach(it => {
+                    const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+                    if (s) shippedOrPackedSerials.add(s);
+                  });
+                }
+              }
+            }
+          } catch (e) {}
+        }
 
         setInventoryUnits(prev => {
           const map = new Map();
@@ -923,49 +1004,11 @@ export function useCloudSync({
             return { partObj, effectivePn, effectiveDesc };
           };
 
-          const hasCloudSource = (dbUnits && dbUnits.length > 0) || (poolUnits && poolUnits.length > 0);
-
-          // 1. Primary Cloud Source: Live Master DC Inventory Pool from saved_records
-          poolUnits.forEach(u => {
-            const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-            if (cleanSerial && !deletedSerialsSet.has(cleanSerial) && !map.has(cleanSerial)) {
-              const isPackedOrShipped = shippedOrPackedSerials.has(cleanSerial);
-              const targetStatus = isPackedOrShipped
-                ? (u.status === 'shipped' ? 'shipped' : 'packed')
-                : (u.status || 'in_stock');
-
-              const cloudAssign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-              const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(u.part_number, u.description, u.part_id, u.notes);
-
-              map.set(cleanSerial, {
-                ...u,
-                id: u.id || `unit-${cleanSerial}`,
-                part_id: partObj?.id || u.part_id,
-                part_number: effectivePn,
-                description: effectiveDesc,
-                category_id: partObj?.category_id || u.category_id,
-                stocking_price: partObj?.stocking_price || u.stocking_price || 99,
-                serial_number: cleanSerial,
-                intake_assignment: cloudAssign,
-                notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('Forecasting') ? `${cloudAssign} | ${u.notes}` : cloudAssign,
-                current_site_id: u.current_site_id || 'site-dc',
-                site_code: u.site_code || 'DC-MDC',
-                status: targetStatus,
-                box_number: u.box_number || 1,
-                received_at: u.received_at || new Date().toISOString(),
-                received_by: u.received_by || u.received_by_name || 'Warehouse Staff',
-                allocated_at: u.allocated_at || null,
-                shipped_at: u.shipped_at || null,
-                intake_record_id: u.intake_record_id || null
-              });
-            }
-          });
-
-          // 2. Secondary Cloud Source: Direct Supabase inventory_units table
-          if (dbUnits && dbUnits.length > 0) {
+          // 1. Authoritative Source: Direct Supabase public.inventory_units table
+          if (Array.isArray(dbUnits)) {
             dbUnits.filter(u => !u.is_deleted && u.status !== 'deleted').forEach(dbU => {
               const cleanSerial = String(dbU.serial_number || '').trim().toUpperCase();
-              if (cleanSerial && !deletedSerialsSet.has(cleanSerial)) {
+              if (cleanSerial) {
                 const isPackedOrShipped = shippedOrPackedSerials.has(cleanSerial);
                 const targetStatus = isPackedOrShipped
                   ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
@@ -974,89 +1017,57 @@ export function useCloudSync({
                 const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                 const assign = cloudAssign || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
 
-                const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(dbU.part_number, dbU.description, dbU.part_id, dbU.notes);
+                const partJoined = dbU.parts || null;
+                const rawPn = dbU.part_number || partJoined?.part_number;
+                const rawDesc = dbU.description || partJoined?.description;
+                const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(rawPn, rawDesc, dbU.part_id, dbU.notes);
 
-                const existingUnit = map.get(cleanSerial);
                 map.set(cleanSerial, {
-                  ...(existingUnit || {}),
-                  id: dbU.id || existingUnit?.id || `unit-${cleanSerial}`,
-                  part_id: partObj?.id || dbU.part_id || existingUnit?.part_id,
-                  part_number: effectivePn || existingUnit?.part_number,
-                  description: effectiveDesc || existingUnit?.description,
-                  category_id: partObj?.category_id || dbU.category_id || existingUnit?.category_id,
-                  stocking_price: partObj?.stocking_price || dbU.stocking_price || existingUnit?.stocking_price || 99,
+                  id: dbU.id || `unit-${cleanSerial}`,
+                  part_id: partJoined?.id || partObj?.id || dbU.part_id,
+                  part_number: partJoined?.part_number || effectivePn,
+                  description: partJoined?.description || effectiveDesc,
+                  category_id: partJoined?.category_id || partObj?.category_id || dbU.category_id,
+                  stocking_price: partJoined?.stocking_price || partObj?.stocking_price || dbU.stocking_price || 99,
                   serial_number: cleanSerial,
                   intake_assignment: assign,
                   notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
-                  current_site_id: dbU.current_site_id || existingUnit?.current_site_id || 'site-dc',
-                  site_code: dbU.site_code || existingUnit?.site_code || 'DC-MDC',
-                  po_id: dbU.po_id || existingUnit?.po_id,
+                  current_site_id: dbU.current_site_id || 'site-dc',
+                  site_code: dbU.site_code || 'DC-MDC',
+                  po_id: dbU.po_id || null,
                   status: targetStatus,
-                  box_number: dbU.box_number || existingUnit?.box_number || 1,
-                  received_at: dbU.received_at || existingUnit?.received_at || new Date().toISOString(),
-                  received_by: dbU.received_by_name || existingUnit?.received_by || 'Warehouse Staff',
-                  allocated_at: dbU.allocated_at || existingUnit?.allocated_at,
-                  shipped_at: dbU.shipped_at || existingUnit?.shipped_at || null,
-                  intake_record_id: dbU.intake_record_id || existingUnit?.intake_record_id
+                  box_number: dbU.box_number || 1,
+                  received_at: dbU.received_at || new Date().toISOString(),
+                  received_by: dbU.received_by_name || dbU.received_by || 'Warehouse Staff',
+                  allocated_at: dbU.allocated_at || null,
+                  shipped_at: dbU.shipped_at || null,
+                  intake_record_id: dbU.intake_record_id || null
                 });
               }
             });
-          }
-
-          // 3. Active Unsaved Intake Session (items scanned right now before saving):
-          const todaySession = (effectiveIntakeRecords || []).find(r => r.id === 'today_active_intake_session');
-          if (todaySession?.items && Array.isArray(todaySession.items)) {
-            todaySession.items.forEach(it => {
-              const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-              if (cleanSerial && !deletedSerialsSet.has(cleanSerial) && !shippedOrPackedSerials.has(cleanSerial) && !map.has(cleanSerial)) {
-                const { partObj, effectivePn, effectiveDesc } = resolvePartInfo(it.part_number, it.description, it.part_id, it.notes);
-                const rawAssign = it.intake_assignment || (it.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-                map.set(cleanSerial, {
-                  id: it.id || `unit-${cleanSerial}`,
-                  part_id: partObj?.id || it.part_id,
-                  part_number: effectivePn,
-                  description: effectiveDesc,
-                  category_id: partObj?.category_id || it.category_id,
-                  stocking_price: partObj?.stocking_price || it.stocking_price || 99,
-                  serial_number: cleanSerial,
-                  intake_assignment: rawAssign,
-                  notes: rawAssign,
-                  current_site_id: 'site-dc',
-                  site_code: 'DC-MDC',
-                  po_id: it.po_id || null,
-                  status: 'in_stock',
-                  box_number: 1,
-                  received_at: it.received_at || new Date().toISOString(),
-                  received_by: it.received_by || 'Warehouse Staff',
-                  shipped_at: null,
-                  intake_record_id: 'today_active_intake_session'
-                });
-              }
-            });
-          }
-
-          // 4. Offline Fallback ONLY if no cloud inventory source was reachable:
-          if (!hasCloudSource) {
-            (prev || []).forEach(u => {
-              const s = String(u.serial_number || '').trim().toUpperCase();
-              if (s && !deletedSerialsSet.has(s) && !shippedOrPackedSerials.has(s) && !map.has(s)) {
-                map.set(s, u);
-              }
-            });
+          } else {
+            // Offline fallback ONLY when Supabase query is completely unavailable
             try {
               const localSaved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
               if (Array.isArray(localSaved)) {
                 localSaved.forEach(u => {
                   const s = String(u.serial_number || '').trim().toUpperCase();
-                  if (s && !deletedSerialsSet.has(s) && !shippedOrPackedSerials.has(s) && !map.has(s)) {
-                    map.set(s, u);
+                  if (s && !deletedSerialsSet.has(s) && !map.has(s)) {
+                    const isPackedOrShipped = shippedOrPackedSerials.has(s);
+                    const targetStatus = isPackedOrShipped
+                      ? (u.status === 'shipped' ? 'shipped' : 'packed')
+                      : (u.status || 'in_stock');
+                    map.set(s, {
+                      ...u,
+                      status: targetStatus
+                    });
                   }
                 });
               }
             } catch (e) {}
           }
 
-          // Preserve active unsaved UI session drafts
+          // Preserve active unsaved UI session drafts (in-progress receiving session before clicking Save Batch)
           (prev || []).forEach(u => {
             if (u.isSessionDraft && !deletedSerialsSet.has(String(u.serial_number || '').toUpperCase())) {
               map.set(String(u.serial_number || '').toUpperCase(), u);
@@ -1068,27 +1079,6 @@ export function useCloudSync({
           const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft);
           try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
           dbStorage.setItem('mdc_inventory', merged);
-
-          // Backfill active in-stock units to Supabase inventory_units if missing
-          if (supabase && (!dbUnits || dbUnits.length < merged.length) && merged.length > 0) {
-            const unitsToSync = merged.map(u => ({
-              id: isUUID(u.id) ? u.id : toValidUUID(u.id || u.serial_number),
-              part_id: isUUID(u.part_id) ? u.part_id : (partsByIdMap.get(u.part_id)?.id || toValidUUID('part-' + (u.part_number || u.id))),
-              serial_number: String(u.serial_number || '').toUpperCase(),
-              status: u.status || 'in_stock',
-              current_site_id: isUUID(u.current_site_id) ? u.current_site_id : (dbSites?.[0]?.id || toValidUUID('site-dc')),
-              box_number: u.box_number || 1,
-              received_at: u.received_at || new Date().toISOString(),
-              received_by_name: u.received_by || 'Warehouse Staff',
-              notes: u.notes || null,
-              created_at: u.received_at || new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            })).filter(u => u.serial_number && isUUID(u.part_id));
-
-            if (unitsToSync.length > 0) {
-              supabase.from('inventory_units').upsert(unitsToSync, { onConflict: 'serial_number' }).then(() => {}).catch(() => {});
-            }
-          }
 
           return merged;
         });
@@ -1200,6 +1190,99 @@ export function useCloudSync({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Instant zero-latency real-time inventory synchronizer across concurrent users
+  const handleRealtimeInventoryEvent = useCallback((type, payload) => {
+    if (!setInventoryUnits || !payload) return;
+
+    if (type === 'UNIT_PACKED' && payload.serialNumber) {
+      const cleanS = String(payload.serialNumber).trim().toUpperCase();
+      setInventoryUnits(prev => {
+        const updated = (prev || []).map(u => {
+          if (String(u.serial_number || '').trim().toUpperCase() === cleanS) {
+            return {
+              ...u,
+              status: 'packed',
+              current_site_id: payload.siteId || u.current_site_id,
+              box_number: payload.boxNumber || u.box_number || 1,
+              shipped_at: new Date().toISOString()
+            };
+          }
+          return u;
+        });
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updated);
+        return updated;
+      });
+    } else if (type === 'UNITS_BATCH_PACKED' && Array.isArray(payload.serialNumbers)) {
+      const serialsSet = new Set(payload.serialNumbers.map(s => String(s).trim().toUpperCase()));
+      setInventoryUnits(prev => {
+        const updated = (prev || []).map(u => {
+          if (serialsSet.has(String(u.serial_number || '').trim().toUpperCase())) {
+            return {
+              ...u,
+              status: 'packed',
+              current_site_id: payload.siteId || u.current_site_id,
+              shipped_at: new Date().toISOString()
+            };
+          }
+          return u;
+        });
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updated);
+        return updated;
+      });
+    } else if ((type === 'UNIT_UNPACKED' || type === 'UNIT_RETURNED') && payload.serialNumber) {
+      const cleanS = String(payload.serialNumber).trim().toUpperCase();
+      setInventoryUnits(prev => {
+        let found = false;
+        const updated = (prev || []).map(u => {
+          if (String(u.serial_number || '').trim().toUpperCase() === cleanS) {
+            found = true;
+            return {
+              ...u,
+              status: 'in_stock',
+              current_site_id: 'site-dc',
+              box_number: 1,
+              shipped_at: null,
+              shipped_by: null
+            };
+          }
+          return u;
+        });
+        if (!found && payload.unit) {
+          updated.push({
+            ...payload.unit,
+            status: 'in_stock',
+            current_site_id: 'site-dc'
+          });
+        }
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updated);
+        return updated;
+      });
+    } else if (type === 'DRAFT_CLEARED' && Array.isArray(payload.serialNumbers)) {
+      const serialsSet = new Set(payload.serialNumbers.map(s => String(s).trim().toUpperCase()));
+      setInventoryUnits(prev => {
+        const updated = (prev || []).map(u => {
+          if (serialsSet.has(String(u.serial_number || '').trim().toUpperCase())) {
+            return {
+              ...u,
+              status: 'in_stock',
+              current_site_id: 'site-dc',
+              box_number: 1,
+              shipped_at: null,
+              shipped_by: null
+            };
+          }
+          return u;
+        });
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updated);
+        return updated;
+      });
+    }
+  }, [setInventoryUnits]);
+
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
     let realtimeChannel = null;
@@ -1212,11 +1295,28 @@ export function useCloudSync({
         broadcastBus = new BroadcastChannel('mdc_sync_bus');
         broadcastBus.onmessage = (ev) => {
           if (ev.data && ev.data.type) {
+            handleRealtimeInventoryEvent(ev.data.type, ev.data.payload);
+
             if (ev.data.type === 'CALCULATION_MODEL_CHANGED') {
               const incomingModel = ev.data.payload?.model;
               if (incomingModel && ['wma', 'linear', 'holt', 'croston'].includes(incomingModel) && setForecastingModel) {
                 setForecastingModel(incomingModel);
                 try { localStorage.setItem('mdc_forecasting_model', incomingModel); } catch (e) {}
+              }
+            } else if (ev.data.type === 'PACKING_PRESENCE') {
+              const p = ev.data.payload;
+              if (p && p.userId) {
+                setActivePackingStations(prev => {
+                  if (!p.isPacking) {
+                    const next = { ...prev };
+                    delete next[p.userId];
+                    return next;
+                  }
+                  return {
+                    ...prev,
+                    [p.userId]: p
+                  };
+                });
               }
             }
             triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
@@ -1231,14 +1331,36 @@ export function useCloudSync({
           })
           .on('broadcast', { event: 'mdc_sync' }, (payload) => {
             console.debug('[Realtime WebSocket] Received global peer sync broadcast:', payload);
-            if (payload?.payload?.type === 'CALCULATION_MODEL_CHANGED') {
-              const incomingModel = payload?.payload?.payload?.model;
+            const bType = payload?.payload?.type;
+            const bPayload = payload?.payload?.payload;
+
+            if (bType && bPayload) {
+              handleRealtimeInventoryEvent(bType, bPayload);
+            }
+
+            if (bType === 'CALCULATION_MODEL_CHANGED') {
+              const incomingModel = bPayload?.model;
               if (incomingModel && ['wma', 'linear', 'holt', 'croston'].includes(incomingModel) && setForecastingModel) {
                 setForecastingModel(incomingModel);
                 try { localStorage.setItem('mdc_forecasting_model', incomingModel); } catch (e) {}
               }
+            } else if (bType === 'PACKING_PRESENCE') {
+              const p = bPayload;
+              if (p && p.userId) {
+                setActivePackingStations(prev => {
+                  if (!p.isPacking) {
+                    const next = { ...prev };
+                    delete next[p.userId];
+                    return next;
+                  }
+                  return {
+                    ...prev,
+                    [p.userId]: p
+                  };
+                });
+              }
             }
-            triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${payload?.payload?.type || 'SYNC'}`, payload?.payload?.table || null);
+            triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });
 
         const SYNC_TABLES = [
@@ -1265,6 +1387,43 @@ export function useCloudSync({
         SYNC_TABLES.forEach(tbl => {
           realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, (ev) => {
             console.debug(`[Realtime Postgres] ${tbl} ${ev.eventType}`);
+
+            if (tbl === 'inventory_units' && setInventoryUnits) {
+              if (ev.eventType === 'UPDATE' && ev.new?.serial_number) {
+                const cleanS = String(ev.new.serial_number).trim().toUpperCase();
+                setInventoryUnits(prev => {
+                  const updated = (prev || []).map(u => {
+                    if (String(u.serial_number || '').trim().toUpperCase() === cleanS) {
+                      return {
+                        ...u,
+                        status: ev.new.status || u.status,
+                        current_site_id: ev.new.current_site_id || u.current_site_id,
+                        box_number: ev.new.box_number || u.box_number,
+                        shipped_at: ev.new.shipped_at || u.shipped_at
+                      };
+                    }
+                    return u;
+                  });
+                  try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+                  dbStorage.setItem('mdc_inventory', updated);
+                  return updated;
+                });
+              } else if (ev.eventType === 'DELETE' && (ev.old?.serial_number || ev.old?.id)) {
+                const targetSerial = ev.old?.serial_number ? String(ev.old.serial_number).trim().toUpperCase() : null;
+                const targetId = ev.old?.id;
+                setInventoryUnits(prev => {
+                  const updated = (prev || []).filter(u => {
+                    if (targetSerial && String(u.serial_number || '').trim().toUpperCase() === targetSerial) return false;
+                    if (targetId && u.id === targetId) return false;
+                    return true;
+                  });
+                  try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+                  dbStorage.setItem('mdc_inventory', updated);
+                  return updated;
+                });
+              }
+            }
+
             triggerDebouncedRealtimeSync(`postgres_changes:${tbl}`, tbl);
           });
         });
@@ -1989,6 +2148,8 @@ export function useCloudSync({
     syncAllDataToCloud,
     resetToDefaultData,
     clearAllData,
-    applyParsedDataset
+    applyParsedDataset,
+    activePackingStations,
+    broadcastPackingPresence
   };
 }

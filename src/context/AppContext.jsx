@@ -381,6 +381,8 @@ export function AppProvider({ children }) {
         resetToDefaultData: cloudSync.resetToDefaultData,
         clearAllData: cloudSync.clearAllData,
         deleteAllStockUnits: inventory.deleteAllStockUnits,
+        activePackingStations: cloudSync.activePackingStations,
+        broadcastPackingPresence: cloudSync.broadcastPackingPresence,
         isCommandPaletteOpen,
         setIsCommandPaletteOpen
       }}

@@ -8,30 +8,52 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
 
   const packedSerialsMap = new Map();
 
-  // 1. Check active draft from arg or localStorage (actively being packed in Scan-Out right now)
-  let draft = explicitDraft;
-  if (!draft && typeof window !== 'undefined') {
-    try {
-      const saved = localStorage.getItem('mdc_active_pack_draft');
-      if (saved) draft = JSON.parse(saved);
-    } catch (e) {}
-  }
-  if (draft && Array.isArray(draft.items) && draft.status !== 'shipped' && draft.status !== 'delivered') {
-    draft.items.forEach(it => {
+  // 1. Check explicit draft from caller
+  if (explicitDraft && Array.isArray(explicitDraft.items) && explicitDraft.status !== 'shipped' && explicitDraft.status !== 'delivered') {
+    explicitDraft.items.forEach(it => {
       const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
       if (s) {
         packedSerialsMap.set(s, {
           status: 'packed',
           box_number: it.box_number || 1,
-          current_site_id: draft.site_id || 'site-dc',
-          shipped_at: draft.shipment_date || new Date().toISOString(),
+          current_site_id: explicitDraft.site_id || 'site-dc',
+          shipped_at: explicitDraft.shipment_date || new Date().toISOString(),
           isDraft: true
         });
       }
     });
   }
 
-  // 2. Check all finalized shipments in shipmentsList or from localStorage
+  // 2. Scan ALL user-scoped drafts in localStorage (mdc_pack_draft_*) + legacy mdc_active_pack_draft
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('mdc_pack_draft_') || key === 'mdc_active_pack_draft')) {
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            const d = JSON.parse(saved);
+            if (d && Array.isArray(d.items) && d.status !== 'shipped' && d.status !== 'delivered') {
+              d.items.forEach(it => {
+                const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+                if (s) {
+                  packedSerialsMap.set(s, {
+                    status: 'packed',
+                    box_number: it.box_number || 1,
+                    current_site_id: d.site_id || 'site-dc',
+                    shipped_at: d.shipment_date || new Date().toISOString(),
+                    isDraft: true
+                  });
+                }
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 3. Check all finalized shipments in shipmentsList or from localStorage
   let effectiveShipments = shipmentsList;
   if ((!effectiveShipments || effectiveShipments.length === 0) && typeof window !== 'undefined') {
     try {
@@ -74,8 +96,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         shipped_at: packInfo.shipped_at || u.shipped_at
       };
     }
-    // Preserve existing unit state — do not reset units that may have been
-    // dispatched via shipments not present in the current shipmentsList
+    // Preserve existing unit state (if unit is already packed or shipped in database, preserve it)
     return u;
   });
 }

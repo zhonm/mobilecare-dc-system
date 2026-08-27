@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb } from '../utils/appContextHelpers';
 
 export function useShipments({
   currentUser,
@@ -37,28 +37,20 @@ export function useShipments({
   });
 
   const syncActivePackDraftToCloud = useCallback(async (draftObj) => {
-    setActivePackDraft(draftObj || null);
-    if (!supabase) return;
+    const hasItems = draftObj && Array.isArray(draftObj.items) && draftObj.items.length > 0;
+    const cleanDraft = hasItems ? draftObj : null;
+
+    setActivePackDraft(cleanDraft);
+    const userDraftKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_active_pack_draft';
     try {
-      if (!draftObj || !draftObj.items || draftObj.items.length === 0) {
-        await supabase.from('saved_records').delete().eq('id', 'active_packing_manifest_draft');
+      if (cleanDraft) {
+        localStorage.setItem(userDraftKey, JSON.stringify(cleanDraft));
+        localStorage.setItem('mdc_active_pack_draft', JSON.stringify(cleanDraft));
       } else {
-        await supabase.from('saved_records').upsert({
-          id: 'active_packing_manifest_draft',
-          record_type: 'packing_draft',
-          period_label: draftObj.invoice_ref || draftObj.shipment_number || 'Live Packing Draft',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          period_week: draftObj.week_number || 1,
-          notes: 'Live workstation packing list draft in progress',
-          saved_by_name: draftObj.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
-          snapshot_data: draftObj,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        localStorage.removeItem(userDraftKey);
+        localStorage.removeItem('mdc_active_pack_draft');
       }
-    } catch (e) {
-      console.warn('Sync active pack draft error:', e);
-    }
+    } catch (e) {}
   }, [currentUser]);
 
   const clearShipmentDraftItems = async (shipmentIdOrObj, explicitItems = []) => {
@@ -84,9 +76,20 @@ export function useShipments({
       itemsToProcess.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean)
     );
 
+    // 1. Remove these serials from deleted serials registry so they are never filtered out
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      const filteredDeleted = localDeleted.filter(s => !serialsToRevert.has(String(s).trim().toUpperCase()));
+      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filteredDeleted));
+    } catch (e) {}
+
+    // 2. Restore all units in local inventoryUnits state
     if (serialsToRevert.size > 0 && setInventoryUnits) {
-      const updatedInventory = inventoryUnits.map(u => {
-        if (serialsToRevert.has(String(u.serial_number || '').toUpperCase())) {
+      const existingSerialsMap = new Map();
+      const updatedInventory = (inventoryUnits || []).map(u => {
+        const s = String(u.serial_number || '').trim().toUpperCase();
+        if (s) existingSerialsMap.set(s, true);
+        if (serialsToRevert.has(s)) {
           return {
             ...u,
             status: 'in_stock',
@@ -98,6 +101,28 @@ export function useShipments({
         }
         return u;
       });
+
+      // If any units from draft were missing in inventoryUnits, construct and append them
+      itemsToProcess.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        if (s && serialsToRevert.has(s) && !existingSerialsMap.has(s)) {
+          updatedInventory.push({
+            id: it.id || `unit-${s}`,
+            part_id: it.part_id || `part-${it.part_number || 'unknown'}`,
+            part_number: it.part_number,
+            description: it.description || 'Service Replacement Part',
+            serial_number: s,
+            current_site_id: 'site-dc',
+            site_code: 'DC-MDC',
+            status: 'in_stock',
+            box_number: 1,
+            received_at: it.received_at || new Date().toISOString(),
+            received_by: it.received_by || currentUser?.fullName || 'Warehouse Staff'
+          });
+          existingSerialsMap.set(s, true);
+        }
+      });
+
       setInventoryUnits(updatedInventory);
       dbStorage.setItem('mdc_inventory', updatedInventory);
       try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
@@ -115,6 +140,7 @@ export function useShipments({
       }));
     }
 
+    // 3. Update Supabase with both update and upsert fallback
     if (supabase && serialsToRevert.size > 0) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
@@ -139,16 +165,37 @@ export function useShipments({
               shipped_by: null
             })
             .in('serial_number', serialsArray);
+
+          // Upsert fallback to ensure rows definitely exist in Supabase
+          const rowsToUpsert = itemsToProcess.map(it => {
+            const cleanS = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+            return {
+              id: isUUID(it.id) ? it.id : toValidUUID(it.id || cleanS),
+              part_id: isUUID(it.part_id) ? it.part_id : toValidUUID('part-' + (it.part_number || 'unknown')),
+              serial_number: cleanS,
+              status: 'in_stock',
+              current_site_id: dcSiteId,
+              box_number: 1,
+              received_at: it.received_at || new Date().toISOString(),
+              received_by_name: it.received_by || currentUser?.fullName || 'Warehouse Staff',
+              notes: it.notes || null,
+              updated_at: new Date().toISOString()
+            };
+          }).filter(r => r.serial_number && isUUID(r.part_id));
+
+          if (rowsToUpsert.length > 0) {
+            await supabase.from('inventory_units').upsert(rowsToUpsert, { onConflict: 'serial_number' });
+          }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
+        if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId, serialNumbers: Array.from(serialsToRevert), status: 'in_stock' });
       } catch (dbErr) {
         console.error('Supabase inventory revert error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
+        if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId, serialNumbers: Array.from(serialsToRevert), status: 'in_stock' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId });
+      if (broadcastCloudEvent) broadcastCloudEvent('DRAFT_CLEARED', { shipmentId: targetShipmentId, serialNumbers: Array.from(serialsToRevert), status: 'in_stock' });
     }
 
     showToast(`Cleared ${serialsToRevert.size} packed items from draft. Units returned to In-Stock DC inventory!`, 'info');
@@ -483,13 +530,12 @@ export function useShipments({
           }
         }
 
+        setActivePackDraft(null);
         try {
-          await supabase.from('saved_records').delete().eq('id', 'active_packing_manifest_draft');
-          setActivePackDraft(null);
-          try { localStorage.removeItem('mdc_active_pack_draft'); } catch (e) {}
-        } catch (draftDelErr) {
-          console.warn('active_packing_manifest_draft delete notice:', draftDelErr.message);
-        }
+          const userDraftKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_active_pack_draft';
+          localStorage.removeItem(userDraftKey);
+          localStorage.removeItem('mdc_active_pack_draft');
+        } catch (e) {}
 
         if (updatedInv && updatedInv.length > 0) {
           try {

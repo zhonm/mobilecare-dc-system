@@ -120,31 +120,20 @@ assert(deleteResult.updatedDeleted.includes('G9PQHU084CQ9D088S5L4B'), `Deleted s
 assert(deleteResult.nextRecords[0].total_units === 2, `Intake batch items reduced to 2 (actual: ${deleteResult.nextRecords[0].total_units})`);
 
 // --- TEST 2: Re-hydration / Refresh Protection ---
-function simulateHydration({ dbUnits, poolUnits = [], effectiveIntakeRecords = [], deletedSerials = [], localSavedUnits = [] }) {
+function simulateHydration({ dbUnits, deletedSerials = [], localSavedUnits = [] }) {
   const deletedSet = new Set((deletedSerials || []).map(s => String(s).toUpperCase()));
   const map = new Map();
-  const hasCloudSource = (dbUnits && dbUnits.length > 0) || (poolUnits && poolUnits.length > 0);
 
-  // 1. Live Master DC Inventory Pool
-  poolUnits.forEach(u => {
-    const s = String(u.serial_number || '').trim().toUpperCase();
-    if (s && !deletedSet.has(s) && !map.has(s)) {
-      map.set(s, u);
-    }
-  });
-
-  // 2. Direct Supabase dbUnits
-  if (dbUnits && dbUnits.length > 0) {
+  // 1. Authoritative Supabase dbUnits (when connected, database is source of truth)
+  if (Array.isArray(dbUnits)) {
     dbUnits.filter(u => !u.is_deleted && u.status !== 'deleted').forEach(dbU => {
       const s = String(dbU.serial_number || '').trim().toUpperCase();
       if (s && !deletedSet.has(s)) {
-        map.set(s, { ...(map.get(s) || {}), ...dbU });
+        map.set(s, dbU);
       }
     });
-  }
-
-  // 3. Offline fallback only if no cloud source is present
-  if (!hasCloudSource) {
+  } else {
+    // 2. Offline fallback ONLY if dbUnits is completely unavailable (null)
     localSavedUnits.forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && !deletedSet.has(s) && !map.has(s)) {
@@ -158,7 +147,6 @@ function simulateHydration({ dbUnits, poolUnits = [], effectiveIntakeRecords = [
 
 // Suppose stale local storage had 3 units, but cloud pool only has 2 after delete
 const hydratedUnits = simulateHydration({
-  poolUnits: deleteResult.nextUnits,
   dbUnits: deleteResult.nextUnits,
   deletedSerials: deleteResult.updatedDeleted,
   localSavedUnits: initialUnits
@@ -251,14 +239,12 @@ const staleLocalUnitsZhon = [
 
 // Hydrate User A (Joshua)
 const joshuaHydrated = simulateHydration({
-  poolUnits: cloudActiveUnits,
   dbUnits: cloudActiveUnits,
   localSavedUnits: []
 });
 
 // Hydrate User B (Zhon)
 const zhonHydrated = simulateHydration({
-  poolUnits: cloudActiveUnits,
   dbUnits: cloudActiveUnits,
   localSavedUnits: staleLocalUnitsZhon
 });
@@ -266,6 +252,14 @@ const zhonHydrated = simulateHydration({
 assert(joshuaHydrated.length === 31, `Joshua sees exactly 31 active units (actual: ${joshuaHydrated.length})`);
 assert(zhonHydrated.length === 31, `Zhon's stale 63 ghost units are evicted and Zhon sees exactly 31 active units (actual: ${zhonHydrated.length})`);
 assert(joshuaHydrated.length === zhonHydrated.length, `Multi-user stock parity: Joshua (${joshuaHydrated.length}) === Zhon (${zhonHydrated.length})`);
+
+// --- TEST 7: Supabase Empty Table -> 0 In-Stock Units (Database-First Authority) ---
+const emptyDbHydration = simulateHydration({
+  dbUnits: [],
+  localSavedUnits: staleLocalUnitsZhon
+});
+
+assert(emptyDbHydration.length === 0, `When Supabase database table is empty, hydrated stock is 0 (actual: ${emptyDbHydration.length})`);
 
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${totalTests} PASSED (${failedTests} FAILED)`);
