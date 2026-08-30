@@ -1,7 +1,15 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { hashPassword, verifyPassword, generateSessionSignature, verifySessionIntegrity } from '../utils/security';
+import {
+  hashPassword,
+  verifyPassword,
+  generateSessionSignature,
+  verifySessionIntegrity,
+  getStoredUserSession,
+  persistUserSession,
+  clearStoredUserSession
+} from '../utils/security';
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
@@ -15,29 +23,82 @@ export function useAuth({
   syncMasterUsersRegistry,
   setActiveTab
 }) {
+  // Synchronous multi-tier session resolution (LocalStorage + SessionStorage + Cookie)
   const [currentUser, setCurrentUser] = useState(() => {
     try {
-      const savedUser = localStorage.getItem('mdc_current_user');
-      if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        if (parsed && typeof parsed === 'object' && parsed.email) {
-          return parsed;
+      const savedUser = getStoredUserSession();
+      if (savedUser && typeof savedUser === 'object' && savedUser.email) {
+        if (savedUser.role === 'parts_management') {
+          savedUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
         }
+        return savedUser;
       }
     } catch (e) {
-      console.warn('Error loading mdc_current_user:', e);
+      console.warn('Error loading user session:', e);
     }
     return null;
   });
 
   const [pendingFirstTimeUser, setPendingFirstTimeUser] = useState(null);
 
-  // Sync currentUser session to localStorage & IndexedDB (Only write on valid user, never blindly delete on mount)
+  // Asynchronous safety-net recovery from IndexedDB (dbStorage) and active Supabase Auth session on app mount
+  useEffect(() => {
+    let isMounted = true;
+
+    const recoverPersistedSession = async () => {
+      // If already resolved synchronously, ensure all storage tiers are aligned
+      if (currentUser) {
+        persistUserSession(currentUser);
+        dbStorage.setItem('mdc_current_user', currentUser);
+        return;
+      }
+
+      // 1. Recover from IndexedDB if LocalStorage/Cookie was delayed or wiped on localhost reload
+      try {
+        const dbUser = await dbStorage.getItem('mdc_current_user');
+        if (isMounted && dbUser && typeof dbUser === 'object' && dbUser.email) {
+          if (dbUser.role === 'parts_management') {
+            dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
+          }
+          persistUserSession(dbUser);
+          setCurrentUser(dbUser);
+          return;
+        }
+      } catch (e) {
+        console.debug('IndexedDB session recovery note:', e);
+      }
+
+      // 2. Recover from Supabase Auth active cloud session if available
+      if (supabase) {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const authEmail = sessionData?.session?.user?.email;
+          if (isMounted && authEmail) {
+            const matched = matchUserByEmail(usersList, authEmail);
+            if (matched) {
+              persistUserSession(matched);
+              dbStorage.setItem('mdc_current_user', matched);
+              setCurrentUser(matched);
+            }
+          }
+        } catch (e) {
+          console.debug('Supabase session recovery note:', e);
+        }
+      }
+    };
+
+    recoverPersistedSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Sync currentUser session to LocalStorage, SessionStorage, Cookie, & IndexedDB
   useEffect(() => {
     if (currentUser && typeof currentUser === 'object' && currentUser.email) {
       try {
-        localStorage.setItem('mdc_current_user', JSON.stringify(currentUser));
-        localStorage.setItem('mdc_session_sig', generateSessionSignature(currentUser));
+        persistUserSession(currentUser);
         dbStorage.setItem('mdc_current_user', currentUser);
       } catch (e) {
         console.warn('Could not persist currentUser session:', e);
@@ -96,12 +157,17 @@ export function useAuth({
       return ROLE_PRESETS.user.includes(pageId);
     }
 
-    // 5. Check explicit permitted pages assigned by Superadmin for admin accounts
+    // 5. Parts Management (PMG) role: Allow all pages in ROLE_PRESETS.parts_management
+    if (currentUser.role === 'parts_management') {
+      return (ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']).includes(pageId);
+    }
+
+    // 6. Check explicit permitted pages assigned by Superadmin for admin accounts
     if (Array.isArray(currentUser.permittedPages)) {
       return currentUser.permittedPages.includes(pageId);
     }
 
-    // 6. Fallback preset if permittedPages is not set on legacy user
+    // 7. Fallback preset if permittedPages is not set on legacy user
     const fallbackPreset = ROLE_PRESETS[currentUser.role] || ROLE_PRESETS.user;
     return fallbackPreset.includes(pageId) && pageId !== 'user-access';
   };
@@ -333,6 +399,10 @@ export function useAuth({
       }
     }
 
+    // Persist immediately across all tiers (LocalStorage, SessionStorage, Cookies, and IndexedDB)
+    persistUserSession(user);
+    dbStorage.setItem('mdc_current_user', user);
+
     setCurrentUser(user);
     const initialPage = user.permittedPages?.[0] || 'dashboard';
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
@@ -348,7 +418,7 @@ export function useAuth({
 
     if (!user) {
       try {
-        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || '[]');
+        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
         user = matchUserByEmail(localUsers, cleanEmail);
       } catch (e) {}
     }
@@ -372,12 +442,13 @@ export function useAuth({
 
     setUsersList(nextList);
     setPendingFirstTimeUser(null);
+    persistUserSession(updatedUser);
+    dbStorage.setItem('mdc_current_user', updatedUser);
     setCurrentUser(updatedUser);
 
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
-      localStorage.setItem('mdc_current_user', JSON.stringify(updatedUser));
-      localStorage.setItem('mdc_session_sig', generateSessionSignature(updatedUser));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
@@ -433,8 +504,7 @@ export function useAuth({
       if (supabase) await supabase.auth.signOut();
     } catch (e) {}
     try {
-      localStorage.removeItem('mdc_current_user');
-      localStorage.removeItem('mdc_session_sig');
+      clearStoredUserSession();
       await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
     setCurrentUser(null);

@@ -219,3 +219,137 @@ export function verifySessionIntegrity(user, signature) {
   const expected = generateSessionSignature(user);
   return expected === signature;
 }
+
+/**
+ * 7. Cookie-based Session Storage Helpers (Works seamlessly on localhost http:// and production https://)
+ */
+export function setSessionCookie(name, value, days = 30) {
+  try {
+    if (typeof document === 'undefined') return;
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    const encoded = encodeURIComponent(typeof value === 'string' ? value : JSON.stringify(value));
+    const isHttps = typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+    const secureFlag = isHttps ? '; Secure' : '';
+    document.cookie = `${name}=${encoded}; expires=${expires}; path=/; SameSite=Lax${secureFlag}`;
+  } catch (e) {
+    console.debug('Cookie set error:', e);
+  }
+}
+
+export function getSessionCookie(name) {
+  try {
+    if (typeof document === 'undefined' || !document.cookie) return null;
+    const prefix = `${name}=`;
+    const cookies = document.cookie.split(';');
+    for (let c of cookies) {
+      c = c.trim();
+      if (c.indexOf(prefix) === 0) {
+        const raw = decodeURIComponent(c.substring(prefix.length));
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return raw;
+        }
+      }
+    }
+  } catch (e) {
+    console.debug('Cookie get error:', e);
+  }
+  return null;
+}
+
+export function removeSessionCookie(name) {
+  try {
+    if (typeof document === 'undefined') return;
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; SameSite=Lax`;
+  } catch (e) {}
+}
+
+/**
+ * 8. Multi-tiered Synchronous & Resilient Session Management
+ * Reads and persists across LocalStorage, SessionStorage, and Cookies.
+ */
+export function getStoredUserSession() {
+  // 1. Try LocalStorage
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem('mdc_current_user');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && parsed.email) {
+          return parsed;
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 2. Try SessionStorage (Preserved across reloads in same browser tab)
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const raw = window.sessionStorage.getItem('mdc_current_user');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && parsed.email) {
+          return parsed;
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 3. Try Session Cookie (Preserved across localhost HTTP and production HTTPS)
+  try {
+    const cookieUser = getSessionCookie('mdc_current_user');
+    if (cookieUser && typeof cookieUser === 'object' && cookieUser.email) {
+      return cookieUser;
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+export function persistUserSession(user) {
+  if (!user || typeof user !== 'object' || !user.email) return;
+  const sig = generateSessionSignature(user);
+
+  // 1. LocalStorage
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem('mdc_current_user', JSON.stringify(user));
+      window.localStorage.setItem('mdc_session_sig', sig);
+    }
+  } catch (e) {}
+
+  // 2. SessionStorage
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.setItem('mdc_current_user', JSON.stringify(user));
+      window.sessionStorage.setItem('mdc_session_sig', sig);
+    }
+  } catch (e) {}
+
+  // 3. Cookie
+  setSessionCookie('mdc_current_user', user, 30);
+  setSessionCookie('mdc_session_sig', sig, 30);
+}
+
+export function clearStoredUserSession() {
+  // 1. LocalStorage
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem('mdc_current_user');
+      window.localStorage.removeItem('mdc_session_sig');
+    }
+  } catch (e) {}
+
+  // 2. SessionStorage
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.removeItem('mdc_current_user');
+      window.sessionStorage.removeItem('mdc_session_sig');
+    }
+  } catch (e) {}
+
+  // 3. Cookie
+  removeSessionCookie('mdc_current_user');
+  removeSessionCookie('mdc_session_sig');
+}

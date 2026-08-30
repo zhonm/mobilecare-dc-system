@@ -12,6 +12,8 @@ export const ALL_PAGES = [
   { id: 'reports', label: 'Stock Transfer Reports', section: 'Reports & Analytics' },
   { id: 'forecast-reports', label: 'Forecasting Reports', section: 'Reports & Analytics' },
   { id: 'audit', label: 'Serialized Audit Log', section: 'Traceability' },
+  { id: 'request-parts', label: 'Parts Requests', section: 'Warehouse Operations' },
+  { id: 'all-stocks', label: 'All Stocks & Inventory', section: 'Warehouse Operations' },
   { id: 'settings', label: 'Parts & Site Catalog', section: 'Admin' },
   { id: 'user-access', label: 'User Access Management', section: 'Admin' }
 ];
@@ -22,11 +24,13 @@ export const PAGE_TITLES = {
   forecast: 'Demand Forecasting & PO Recommendations',
   records: 'Saved Period Records & Historical Archives',
   orders: 'Purchase Order Tracking',
-  'scan-in': 'Receive Scan-In (Physical Barcode Scanner)',
+  'scan-in': 'Receive Scan-In & Intake Ingestion',
   'intake-records': 'DC Parts Stock Records & In-Stock Verification',
   allocation: 'Master Allocation Matrix & Weekly Batches',
   'scan-out': 'Pack Scan-Out & Packing List Generator',
   shipments: 'Shipment Manifests & Proof of Delivery',
+  'request-parts': 'New Request of Parts & Demand Replenishment',
+  'all-stocks': 'All Stocks & Multi-Site Inventory Visibility',
   reports: 'Fixably Stock Transfer Reports & Analytics',
   'forecast-reports': 'Fixably Forecasting Reports & Analytics',
   audit: 'Serialized Lifecycle & Traceability Audit',

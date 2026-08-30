@@ -20,7 +20,9 @@ import {
   Users,
   LogOut,
   Search,
-  X
+  X,
+  Inbox,
+  Boxes
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -32,6 +34,7 @@ export default function Sidebar() {
     signOut,
     purchaseOrders,
     shipments,
+    partsRequests,
     sites
   } = useApp();
 
@@ -39,6 +42,7 @@ export default function Sidebar() {
 
   const openPOsCount = purchaseOrders.filter(p => p.status !== 'closed' && p.status !== 'received').length;
   const pendingShipmentsCount = shipments.filter(s => s.status === 'draft' || s.status === 'packing').length;
+  const pendingRequestsCount = (partsRequests || []).filter(r => r.status === 'pending').length;
 
   const userSite = sites.find(s => s.id === currentUser?.siteId);
 
@@ -52,7 +56,9 @@ export default function Sidebar() {
     { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning & Allocation' },
 
     // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)
+    { id: 'request-parts', label: 'Parts Requests', icon: Inbox, badge: pendingRequestsCount, section: 'Operations & Logistics' },
     { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Operations & Logistics' },
+    { id: 'all-stocks', label: 'All Stocks & Inventory', icon: Boxes, section: 'Operations & Logistics' },
     { id: 'intake-records', label: 'DC Parts Stock Records', icon: BookmarkPlus, section: 'Operations & Logistics' },
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Operations & Logistics' },
     { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Operations & Logistics' },

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { hashPassword } from '../utils/security';
@@ -22,15 +22,29 @@ export function useUserManagement({
   const [usersList, setUsersList] = useState(() => {
     try {
       const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-      const saved = localStorage.getItem('mdc_users');
+      let saved = null;
+      try {
+        saved = localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users');
+      } catch (e) {}
+
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.filter(u =>
-          !deletedIds.includes(u.id) &&
-          !deletedIds.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_IDS.includes(u.id)
-        );
+        return parsed
+          .filter(u =>
+            !deletedIds.includes(u.id) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
+          )
+          .map(u => {
+            if (u.role === 'parts_management') {
+              return {
+                ...u,
+                permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
+              };
+            }
+            return u;
+          });
       }
       return INITIAL_USERS.filter(u =>
         !deletedIds.includes(u.id) &&
@@ -43,6 +57,41 @@ export function useUserManagement({
     }
     return INITIAL_USERS;
   });
+
+  // Asynchronous recovery for usersList from IndexedDB on startup
+  useEffect(() => {
+    let isMounted = true;
+    const recoverUsersFromDb = async () => {
+      try {
+        const dbUsers = await dbStorage.getItem('mdc_users');
+        if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
+          const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+          const filtered = dbUsers.filter(u =>
+            !deletedIds.includes(u.id) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
+          );
+          if (filtered.length > 0) {
+            setUsersList(prev => {
+              if (prev && prev.length > filtered.length) return prev;
+              return filtered;
+            });
+            try {
+              localStorage.setItem('mdc_users', JSON.stringify(filtered));
+              sessionStorage.setItem('mdc_users', JSON.stringify(filtered));
+            } catch (e) {}
+          }
+        }
+      } catch (e) {
+        console.debug('IndexedDB users recovery note:', e);
+      }
+    };
+    recoverUsersFromDb();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
@@ -108,6 +157,7 @@ export function useUserManagement({
     setUsersList(nextList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
@@ -196,6 +246,7 @@ export function useUserManagement({
     setUsersList(nextUsersList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
       dbStorage.setItem('mdc_users', nextUsersList);
     } catch (e) {}
 
@@ -259,6 +310,7 @@ export function useUserManagement({
     setUsersList(nextUsersList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
       dbStorage.setItem('mdc_users', nextUsersList);
     } catch (e) {}
 
@@ -326,6 +378,7 @@ export function useUserManagement({
     setUsersList(nextUsersList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextUsersList));
       dbStorage.setItem('mdc_users', nextUsersList);
     } catch (e) {}
 
@@ -392,6 +445,7 @@ export function useUserManagement({
     setUsersList(nextList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
@@ -493,6 +547,7 @@ export function useUserManagement({
 
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
@@ -550,6 +605,7 @@ export function useUserManagement({
 
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
@@ -626,6 +682,7 @@ export function useUserManagement({
     setUsersList(nextList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 

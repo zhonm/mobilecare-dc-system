@@ -421,10 +421,19 @@ export default function UserAccessManagement() {
               {usersList.map(user => {
                 const isSuper = user.role === 'superadmin';
                 const isAdm = user.role === 'admin';
+                const isPmg = user.role === 'parts_management';
                 const isSelf = user.id === currentUser?.id || user.email?.toLowerCase() === currentUser?.email?.toLowerCase();
                 const siteObj = sites.find(s => s.id === user.siteId) || {};
                 const canEditFull = isSuperadmin;
                 const canEditPosition = isSuperadmin || (isAdmin && user.role === 'user');
+
+                const getRoleColor = (role) => {
+                  if (role === 'superadmin') return { bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd', avatarBg: '#0284c7' };
+                  if (role === 'admin') return { bg: '#ede9fe', text: '#6d28d9', border: '#ddd6fe', avatarBg: '#7c3aed' };
+                  if (role === 'parts_management') return { bg: '#fef3c7', text: '#b45309', border: '#fde68a', avatarBg: '#d97706' };
+                  return { bg: '#dcfce7', text: '#047857', border: '#bbf7d0', avatarBg: '#059669' };
+                };
+                const roleColors = getRoleColor(user.role);
 
                 return (
                   <tr key={user.id} style={{ opacity: user.isActive ? 1 : 0.6 }}>
@@ -435,7 +444,7 @@ export default function UserAccessManagement() {
                             width: '34px',
                             height: '34px',
                             borderRadius: '50%',
-                            background: isSuper ? '#0284c7' : isAdm ? '#7c3aed' : '#059669',
+                            background: roleColors.avatarBg,
                             color: '#ffffff',
                             display: 'flex',
                             alignItems: 'center',
@@ -487,15 +496,15 @@ export default function UserAccessManagement() {
                       <span
                         className="badge"
                         style={{
-                          background: isSuper ? '#e0f2fe' : isAdm ? '#ede9fe' : '#dcfce7',
-                          color: isSuper ? '#0369a1' : isAdm ? '#6d28d9' : '#047857',
-                          border: `1px solid ${isSuper ? '#bae6fd' : isAdm ? '#ddd6fe' : '#bbf7d0'}`,
+                          background: roleColors.bg,
+                          color: roleColors.text,
+                          border: `1px solid ${roleColors.border}`,
                           fontWeight: 700,
                           fontSize: '11px',
                           textTransform: 'uppercase'
                         }}
                       >
-                        {user.role === 'superadmin' ? 'SUPERADMIN' : user.role === 'admin' ? 'ADMIN' : 'USER'}
+                        {user.role === 'parts_management' ? 'PMG' : (user.role || 'USER').toUpperCase()}
                       </span>
                     </td>
 
@@ -766,7 +775,7 @@ export default function UserAccessManagement() {
                   <Shield size={13} />
                   <span>Security Role</span>
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   {ROLE_OPTIONS.map(opt => (
                     <div
                       key={opt.value}
@@ -784,7 +793,7 @@ export default function UserAccessManagement() {
                         {opt.label}
                       </div>
                       <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', lineHeight: 1.3 }}>
-                        {opt.value === 'superadmin' ? 'Full access' : opt.value === 'admin' ? 'Assigned access' : 'View only'}
+                        {opt.value === 'superadmin' ? 'Full access' : opt.value === 'admin' ? 'Assigned access' : opt.value === 'parts_management' ? 'Site Parts Requests Only' : 'View only'}
                       </div>
                     </div>
                   ))}

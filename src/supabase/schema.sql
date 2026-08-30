@@ -1,20 +1,21 @@
 -- ============================================================================
--- MDC SYSTEM 2: Distribution Center Parts Allocation & Reporting System
--- Supabase / PostgreSQL Schema Definition with Authentication & RBAC
+-- MDC SYSTEM 2: Distribution Center Parts Allocation, Inventory & Reporting
+-- Supabase / PostgreSQL Schema Definition with Hardened Security, RBAC & RPCs
 -- ============================================================================
 
 -- 1. Enable Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- 2. Custom Enums
 DO $$ BEGIN
-    CREATE TYPE user_role AS ENUM ('superadmin', 'admin', 'warehouse_staff', 'site_staff', 'management_viewer');
+    CREATE TYPE user_role AS ENUM ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician', 'site_staff', 'management_viewer', 'parts_management', 'user');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'received', 'damaged', 'returned');
+    CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -26,7 +27,7 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'shipped', 'delivered', 'received_confirmed', 'discrepancy');
+    CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', 'shipped', 'in_transit', 'delivered', 'received_confirmed', 'discrepancy', 'cancelled');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -37,38 +38,47 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- 3. Profiles Table (Linked with Supabase Auth)
-CREATE TABLE IF NOT EXISTS profiles (
+-- ============================================================================
+-- 3. CORE & REFERENCE TABLES
+-- ============================================================================
+
+-- 3.1 Profiles Table (Linked with Supabase Auth)
+CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT UNIQUE NOT NULL,
     full_name TEXT NOT NULL,
     role user_role NOT NULL DEFAULT 'warehouse_staff',
+    role_position TEXT,
     site_id UUID,
+    password_hash TEXT,
     has_set_password BOOLEAN NOT NULL DEFAULT false,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Ensure columns exist if table was previously created
-ALTER TABLE profiles ADD COLUMN IF NOT EXISTS has_set_password BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
-CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(LOWER(email));
-CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS role_position TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS has_set_password BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
--- 4. User Page Permissions Table (Normalized Access Control)
-CREATE TABLE IF NOT EXISTS user_page_permissions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    page_id TEXT NOT NULL, -- e.g. 'dashboard', 'import', 'forecast', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'
-    granted_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(LOWER(email));
+CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
+CREATE INDEX IF NOT EXISTS idx_profiles_updated_at ON public.profiles(updated_at DESC);
+
+-- 3.2 User Page Permissions Table (Normalized Access Control)
+CREATE TABLE IF NOT EXISTS public.user_page_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    page_id TEXT NOT NULL,
+    granted_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(user_id, page_id)
 );
-CREATE INDEX IF NOT EXISTS idx_user_page_perm ON user_page_permissions(user_id, page_id);
+CREATE INDEX IF NOT EXISTS idx_user_page_perm ON public.user_page_permissions(user_id, page_id);
 
--- 5. Part Categories Table
-CREATE TABLE IF NOT EXISTS part_categories (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 3.3 Part Categories Table
+CREATE TABLE IF NOT EXISTS public.part_categories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     has_imei BOOLEAN NOT NULL DEFAULT false,
@@ -77,10 +87,10 @@ CREATE TABLE IF NOT EXISTS part_categories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 6. Parts Catalog Table
-CREATE TABLE IF NOT EXISTS parts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    category_id UUID NOT NULL REFERENCES part_categories(id) ON DELETE RESTRICT,
+-- 3.4 Parts Catalog Table
+CREATE TABLE IF NOT EXISTS public.parts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category_id UUID NOT NULL REFERENCES public.part_categories(id) ON DELETE RESTRICT,
     part_number TEXT UNIQUE NOT NULL,
     description TEXT NOT NULL,
     iphone_model TEXT,
@@ -90,16 +100,23 @@ CREATE TABLE IF NOT EXISTS parts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_parts_category ON parts(category_id);
-CREATE INDEX IF NOT EXISTS idx_parts_pn ON parts(part_number);
+CREATE INDEX IF NOT EXISTS idx_parts_category ON public.parts(category_id);
+CREATE INDEX IF NOT EXISTS idx_parts_pn ON public.parts(part_number);
+CREATE INDEX IF NOT EXISTS idx_parts_updated_at ON public.parts(updated_at DESC);
 
--- 7. Sites Table
-CREATE TABLE IF NOT EXISTS sites (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 3.5 Sites Table (Warehouses and ASP Service Centers)
+CREATE TABLE IF NOT EXISTS public.sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'Metro Manila',
     address TEXT,
+    full_address TEXT,
+    city TEXT,
+    ship_to TEXT,
+    sold_to TEXT,
+    invoice_prefix TEXT,
+    contact_email TEXT,
     contact_person TEXT,
     contact_phone TEXT,
     is_dc BOOLEAN NOT NULL DEFAULT false,
@@ -107,16 +124,29 @@ CREATE TABLE IF NOT EXISTS sites (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_sites_region ON sites(region);
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS full_address TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS ship_to TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS sold_to TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS invoice_prefix TEXT;
+ALTER TABLE public.sites ADD COLUMN IF NOT EXISTS contact_email TEXT;
 
--- 8. Repair Usage Records (GSX / Fixably Imports)
-CREATE TABLE IF NOT EXISTS repair_usage_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+CREATE INDEX IF NOT EXISTS idx_sites_region ON public.sites(region);
+CREATE INDEX IF NOT EXISTS idx_sites_code ON public.sites(code);
+CREATE INDEX IF NOT EXISTS idx_sites_updated_at ON public.sites(updated_at DESC);
+
+-- ============================================================================
+-- 4. OPERATIONAL & TRANSACTION TABLES
+-- ============================================================================
+
+-- 4.1 Repair Usage Records (GSX / Fixably Imports)
+CREATE TABLE IF NOT EXISTS public.repair_usage_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     import_batch_id UUID NOT NULL,
     month_name TEXT NOT NULL,
     closed_date DATE,
-    site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
-    part_id UUID REFERENCES parts(id) ON DELETE SET NULL,
+    site_id UUID REFERENCES public.sites(id) ON DELETE SET NULL,
+    part_id UUID REFERENCES public.parts(id) ON DELETE SET NULL,
     raw_part_number TEXT,
     raw_part_description TEXT,
     raw_site_name TEXT,
@@ -126,25 +156,25 @@ CREATE TABLE IF NOT EXISTS repair_usage_records (
     quantity INT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_repair_usage_part_month ON repair_usage_records(part_id, closed_date);
-CREATE INDEX IF NOT EXISTS idx_repair_usage_site ON repair_usage_records(site_id);
+CREATE INDEX IF NOT EXISTS idx_repair_usage_part_month ON public.repair_usage_records(part_id, closed_date);
+CREATE INDEX IF NOT EXISTS idx_repair_usage_site ON public.repair_usage_records(site_id);
 
--- 9. Forecast Cycles & Entries
-CREATE TABLE IF NOT EXISTS forecast_cycles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 4.2 Forecast Cycles & Entries
+CREATE TABLE IF NOT EXISTS public.forecast_cycles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     period_year INT NOT NULL,
     period_month INT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     notes TEXT,
-    created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(period_year, period_month)
 );
 
-CREATE TABLE IF NOT EXISTS forecast_entries (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    forecast_cycle_id UUID NOT NULL REFERENCES forecast_cycles(id) ON DELETE CASCADE,
-    part_id UUID NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS public.forecast_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    forecast_cycle_id UUID NOT NULL REFERENCES public.forecast_cycles(id) ON DELETE CASCADE,
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE CASCADE,
     ytd_monthly_counts JSONB NOT NULL DEFAULT '[]'::jsonb,
     computed_forecast INT NOT NULL DEFAULT 0,
     admin_override INT,
@@ -154,73 +184,78 @@ CREATE TABLE IF NOT EXISTS forecast_entries (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(forecast_cycle_id, part_id)
 );
+CREATE INDEX IF NOT EXISTS idx_forecast_entries_cycle ON public.forecast_entries(forecast_cycle_id);
+CREATE INDEX IF NOT EXISTS idx_forecast_entries_part ON public.forecast_entries(part_id);
 
--- 10. Purchase Orders
-CREATE TABLE IF NOT EXISTS purchase_orders (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 4.3 Purchase Orders & Items
+CREATE TABLE IF NOT EXISTS public.purchase_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     po_number TEXT UNIQUE NOT NULL,
-    forecast_cycle_id UUID REFERENCES forecast_cycles(id) ON DELETE SET NULL,
+    forecast_cycle_id UUID REFERENCES public.forecast_cycles(id) ON DELETE SET NULL,
     order_date DATE NOT NULL DEFAULT CURRENT_DATE,
     expected_date DATE,
     status po_status NOT NULL DEFAULT 'draft',
     remarks TEXT,
-    created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS po_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    po_id UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
-    part_id UUID NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS public.po_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    po_id UUID NOT NULL REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE CASCADE,
     quantity_ordered INT NOT NULL,
     quantity_received INT NOT NULL DEFAULT 0,
     unit_price NUMERIC(10,2) DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(po_id, part_id)
 );
+CREATE INDEX IF NOT EXISTS idx_po_items_po_id ON public.po_items(po_id);
+CREATE INDEX IF NOT EXISTS idx_po_items_part_id ON public.po_items(part_id);
 
--- 11. Serialized Inventory Units
-CREATE TABLE IF NOT EXISTS inventory_units (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    part_id UUID NOT NULL REFERENCES parts(id) ON DELETE RESTRICT,
+-- 4.4 Serialized Inventory Units
+CREATE TABLE IF NOT EXISTS public.inventory_units (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE RESTRICT,
     serial_number TEXT UNIQUE NOT NULL,
     imei_number TEXT,
-    current_site_id UUID NOT NULL REFERENCES sites(id) ON DELETE RESTRICT,
-    po_id UUID REFERENCES purchase_orders(id) ON DELETE SET NULL,
+    current_site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE RESTRICT,
+    po_id UUID REFERENCES public.purchase_orders(id) ON DELETE SET NULL,
     status inventory_status NOT NULL DEFAULT 'in_stock',
     box_number INT DEFAULT 1,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    received_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    received_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     allocated_at TIMESTAMPTZ,
-    allocated_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    allocated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     shipped_at TIMESTAMPTZ,
-    shipped_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    shipped_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     received_confirmed_at TIMESTAMPTZ,
-    received_confirmed_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    received_confirmed_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_inventory_serial ON inventory_units(serial_number);
-CREATE INDEX IF NOT EXISTS idx_inventory_part_status ON inventory_units(part_id, status);
-CREATE INDEX IF NOT EXISTS idx_inventory_site ON inventory_units(current_site_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_serial ON public.inventory_units(serial_number);
+CREATE INDEX IF NOT EXISTS idx_inventory_part_status ON public.inventory_units(part_id, status);
+CREATE INDEX IF NOT EXISTS idx_inventory_site ON public.inventory_units(current_site_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_units_updated_at ON public.inventory_units(updated_at DESC);
 
--- 12. Allocation Cycles & Per-Site Allocations
-CREATE TABLE IF NOT EXISTS allocation_cycles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    forecast_cycle_id UUID REFERENCES forecast_cycles(id) ON DELETE SET NULL,
+-- 4.5 Allocation Cycles & Per-Site Allocation Items
+CREATE TABLE IF NOT EXISTS public.allocation_cycles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    forecast_cycle_id UUID REFERENCES public.forecast_cycles(id) ON DELETE SET NULL,
     period_year INT NOT NULL,
     period_month INT NOT NULL,
     status allocation_status NOT NULL DEFAULT 'draft',
-    approved_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    approved_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS allocation_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    allocation_cycle_id UUID NOT NULL REFERENCES allocation_cycles(id) ON DELETE CASCADE,
-    part_id UUID NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
-    site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS public.allocation_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    allocation_cycle_id UUID NOT NULL REFERENCES public.allocation_cycles(id) ON DELETE CASCADE,
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE CASCADE,
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
     forecasted_share_pct NUMERIC(6,4) NOT NULL DEFAULT 0,
     monthly_allocated_qty INT NOT NULL DEFAULT 0,
     week1_qty INT NOT NULL DEFAULT 0,
@@ -231,137 +266,733 @@ CREATE TABLE IF NOT EXISTS allocation_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(allocation_cycle_id, part_id, site_id)
 );
+CREATE INDEX IF NOT EXISTS idx_allocation_items_cycle_site ON public.allocation_items(allocation_cycle_id, site_id);
+CREATE INDEX IF NOT EXISTS idx_allocation_items_part ON public.allocation_items(part_id);
 
--- 13. Shipments & Packing Lists
-CREATE TABLE IF NOT EXISTS shipments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 4.6 Shipments & Shipment Items
+CREATE TABLE IF NOT EXISTS public.shipments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     shipment_number TEXT UNIQUE NOT NULL,
     invoice_ref TEXT,
-    site_id UUID NOT NULL REFERENCES sites(id) ON DELETE RESTRICT,
-    allocation_cycle_id UUID REFERENCES allocation_cycles(id) ON DELETE SET NULL,
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE RESTRICT,
+    allocation_cycle_id UUID REFERENCES public.allocation_cycles(id) ON DELETE SET NULL,
     week_number INT DEFAULT 1,
     shipment_date DATE NOT NULL DEFAULT CURRENT_DATE,
     carrier TEXT DEFAULT 'Lite Express',
     tracking_number TEXT,
     total_boxes INT DEFAULT 1,
     status shipment_status NOT NULL DEFAULT 'draft',
-    prepared_by_name TEXT DEFAULT 'Joshua Juvida',
-    verified_by_name TEXT DEFAULT 'Zhon Manaois',
+    prepared_by_name TEXT DEFAULT 'Warehouse Staff',
+    verified_by_name TEXT DEFAULT 'Supervisor',
     receiving_signature TEXT,
     remarks TEXT DEFAULT 'KGB PARTS',
-    created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_shipments_shipment_number ON public.shipments(shipment_number);
+CREATE INDEX IF NOT EXISTS idx_shipments_site_status ON public.shipments(site_id, status);
+CREATE INDEX IF NOT EXISTS idx_shipments_created_at ON public.shipments(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shipments_updated_at ON public.shipments(updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS shipment_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    shipment_id UUID NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
-    inventory_unit_id UUID NOT NULL REFERENCES inventory_units(id) ON DELETE CASCADE,
-    part_id UUID NOT NULL REFERENCES parts(id) ON DELETE RESTRICT,
+CREATE TABLE IF NOT EXISTS public.shipment_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shipment_id UUID NOT NULL REFERENCES public.shipments(id) ON DELETE CASCADE,
+    inventory_unit_id UUID NOT NULL REFERENCES public.inventory_units(id) ON DELETE CASCADE,
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE RESTRICT,
     serial_number TEXT NOT NULL,
     box_number INT NOT NULL DEFAULT 1,
     scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    scanned_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    scanned_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     UNIQUE(shipment_id, inventory_unit_id)
 );
+CREATE INDEX IF NOT EXISTS idx_shipment_items_shipment_id ON public.shipment_items(shipment_id);
+CREATE INDEX IF NOT EXISTS idx_shipment_items_inventory_unit_id ON public.shipment_items(inventory_unit_id);
+CREATE INDEX IF NOT EXISTS idx_shipment_items_part_id ON public.shipment_items(part_id);
+CREATE INDEX IF NOT EXISTS idx_shipment_items_serial ON public.shipment_items(serial_number);
 
--- 14. Audit & Barcode Scan Logs
-CREATE TABLE IF NOT EXISTS scan_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- 4.7 Barcode Scan Logs
+CREATE TABLE IF NOT EXISTS public.scan_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     scan_type TEXT NOT NULL,
     part_number TEXT NOT NULL,
     serial_number TEXT NOT NULL,
-    user_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
-    site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
-    shipment_id UUID REFERENCES shipments(id) ON DELETE SET NULL,
-    po_id UUID REFERENCES purchase_orders(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    site_id UUID REFERENCES public.sites(id) ON DELETE SET NULL,
+    shipment_id UUID REFERENCES public.shipments(id) ON DELETE SET NULL,
+    po_id UUID REFERENCES public.purchase_orders(id) ON DELETE SET NULL,
     is_valid BOOLEAN NOT NULL,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_scan_logs_serial ON scan_logs(serial_number);
-CREATE INDEX IF NOT EXISTS idx_scan_logs_created_at ON scan_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_logs_serial ON public.scan_logs(serial_number);
+CREATE INDEX IF NOT EXISTS idx_scan_logs_created_at ON public.scan_logs(created_at DESC);
 
--- 15. Tightened Row Level Security (RLS) Policies
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_page_permissions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE parts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE repair_usage_records ENABLE ROW LEVEL SECURITY;
-ALTER TABLE forecast_cycles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE forecast_entries ENABLE ROW LEVEL SECURITY;
-ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE po_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE inventory_units ENABLE ROW LEVEL SECURITY;
-ALTER TABLE allocation_cycles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE allocation_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE shipments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE shipment_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE scan_logs ENABLE ROW LEVEL SECURITY;
+-- 4.8 DC Intake Batch Records
+CREATE TABLE IF NOT EXISTS public.dc_intake_records (
+    id TEXT PRIMARY KEY,
+    record_name TEXT NOT NULL,
+    intake_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    po_id UUID,
+    po_number TEXT,
+    supplier TEXT,
+    total_units INT NOT NULL DEFAULT 0,
+    saved_by_name TEXT NOT NULL,
+    saved_by_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    notes TEXT,
+    category_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb,
+    items JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dc_intake_records_created_at ON public.dc_intake_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dc_intake_records_date ON public.dc_intake_records(intake_date DESC);
+CREATE INDEX IF NOT EXISTS idx_dc_intake_records_name ON public.dc_intake_records(record_name);
 
--- Helper RLS function: Check current role
-CREATE OR REPLACE FUNCTION current_user_role() RETURNS user_role AS $$
-    SELECT role FROM profiles WHERE id = auth.uid() AND is_active = true;
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+-- 4.9 Period-Based Saved Records Snapshots Table
+CREATE TABLE IF NOT EXISTS public.saved_records (
+    id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL DEFAULT 'both',
+    period_label TEXT NOT NULL,
+    period_year INT NOT NULL,
+    period_month INT NOT NULL,
+    period_week INT,
+    notes TEXT,
+    saved_by_name TEXT,
+    saved_by_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    snapshot_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_saved_records_created_at ON public.saved_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_saved_records_type ON public.saved_records(record_type);
+CREATE INDEX IF NOT EXISTS idx_saved_records_period ON public.saved_records(period_year, period_month);
+CREATE INDEX IF NOT EXISTS idx_saved_records_updated_at ON public.saved_records(updated_at DESC);
 
--- Profiles Policies
-CREATE POLICY "Users can view own profile or admins view all" ON profiles
-    FOR SELECT TO authenticated
-    USING (auth.uid() = id OR current_user_role() IN ('superadmin', 'admin'));
+-- 4.10 Append-Only Audit Logs Table (Tamper-Proof)
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    entity_label TEXT,
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    user_name TEXT,
+    user_email TEXT,
+    user_role TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON public.audit_logs(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON public.audit_logs(entity_type, entity_id);
 
-CREATE POLICY "Superadmins can manage profiles" ON profiles
+-- 4.11 Parts Requests Table
+CREATE TABLE IF NOT EXISTS public.parts_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_number TEXT UNIQUE NOT NULL,
+    site_id UUID NOT NULL REFERENCES public.sites(id) ON DELETE RESTRICT,
+    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE RESTRICT,
+    quantity_requested INT NOT NULL CHECK (quantity_requested > 0),
+    quantity_fulfilled INT NOT NULL DEFAULT 0 CHECK (quantity_fulfilled >= 0),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'partially_fulfilled', 'fulfilled', 'cancelled')),
+    priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('normal', 'urgent', 'critical')),
+    requested_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    requested_by_name TEXT NOT NULL,
+    reviewed_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMPTZ,
+    fulfilled_shipment_id UUID REFERENCES public.shipments(id) ON DELETE SET NULL,
+    reason TEXT NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_site_status ON public.parts_requests(site_id, status);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_part_id ON public.parts_requests(part_id);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_created_at ON public.parts_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_requested_by ON public.parts_requests(requested_by);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_number ON public.parts_requests(request_number);
+CREATE INDEX IF NOT EXISTS idx_parts_requests_open ON public.parts_requests(site_id, created_at DESC) WHERE status IN ('pending', 'approved', 'partially_fulfilled');
+
+-- ============================================================================
+-- 5. FUNCTIONS & ATOMIC TRANSACTION RPCS
+-- ============================================================================
+
+-- 5.1 Helper Functions: Role & Site Resolvers (Public Schema, Security Definer)
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT role::text FROM public.profiles WHERE id = auth.uid() AND is_active = true;
+$$;
+GRANT EXECUTE ON FUNCTION public.current_user_role() TO authenticated, anon;
+
+CREATE OR REPLACE FUNCTION public.current_user_site_id()
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT site_id FROM public.profiles WHERE id = auth.uid() AND is_active = true;
+$$;
+GRANT EXECUTE ON FUNCTION public.current_user_site_id() TO authenticated, anon;
+
+-- 5.2 Atomic Transaction RPC: Parts Request Creation
+CREATE OR REPLACE FUNCTION public.create_parts_request(
+    p_site_id UUID,
+    p_part_id UUID,
+    p_quantity INT,
+    p_priority TEXT DEFAULT 'normal',
+    p_reason TEXT DEFAULT 'Site replenishment request',
+    p_notes TEXT DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_caller_profile RECORD;
+    v_target_site RECORD;
+    v_target_part RECORD;
+    v_is_fulfillment_role BOOLEAN;
+    v_prefix TEXT;
+    v_seq_num INT;
+    v_request_number TEXT;
+    v_new_request RECORD;
+BEGIN
+    IF p_quantity IS NULL OR p_quantity <= 0 THEN
+        RAISE EXCEPTION 'Requested quantity must be greater than zero (received %)', p_quantity;
+    END IF;
+
+    IF p_priority NOT IN ('normal', 'urgent', 'critical') THEN
+        p_priority := 'normal';
+    END IF;
+
+    SELECT * INTO v_caller_profile
+    FROM public.profiles
+    WHERE id = auth.uid() AND is_active = true;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Authenticated user profile not found or account is deactivated';
+    END IF;
+
+    SELECT * INTO v_target_site
+    FROM public.sites
+    WHERE id = p_site_id AND is_active = true;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Target site % not found or inactive', p_site_id;
+    END IF;
+
+    SELECT * INTO v_target_part
+    FROM public.parts
+    WHERE id = p_part_id AND is_active = true;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Target part % not found or inactive', p_part_id;
+    END IF;
+
+    v_is_fulfillment_role := v_caller_profile.role IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff');
+    
+    IF NOT v_is_fulfillment_role THEN
+        IF v_caller_profile.site_id IS NULL OR v_caller_profile.site_id <> p_site_id THEN
+            RAISE EXCEPTION 'Permission Denied: Staff accounts can only submit parts requests for their assigned branch site';
+        END IF;
+    END IF;
+
+    v_prefix := 'PR-' || TO_CHAR(NOW(), 'YYYYMM') || '-';
+
+    SELECT COALESCE(
+        MAX(
+            CASE 
+                WHEN request_number LIKE v_prefix || '%' AND LENGTH(request_number) >= LENGTH(v_prefix) + 5
+                THEN SUBSTRING(request_number FROM LENGTH(v_prefix) + 1)::INT
+                ELSE 0
+            END
+        ), 0
+    ) + 1 INTO v_seq_num
+    FROM public.parts_requests
+    WHERE request_number LIKE v_prefix || '%';
+
+    v_request_number := v_prefix || LPAD(v_seq_num::TEXT, 5, '0');
+
+    INSERT INTO public.parts_requests (
+        request_number,
+        site_id,
+        part_id,
+        quantity_requested,
+        quantity_fulfilled,
+        status,
+        priority,
+        requested_by,
+        requested_by_name,
+        reason,
+        notes,
+        created_at,
+        updated_at
+    ) VALUES (
+        v_request_number,
+        p_site_id,
+        p_part_id,
+        p_quantity,
+        0,
+        'pending',
+        p_priority,
+        v_caller_profile.id,
+        COALESCE(v_caller_profile.full_name, 'MobileCare Staff'),
+        COALESCE(TRIM(p_reason), 'Site replenishment request'),
+        NULLIF(TRIM(p_notes), ''),
+        NOW(),
+        NOW()
+    )
+    RETURNING * INTO v_new_request;
+
+    INSERT INTO public.audit_logs (
+        action,
+        entity_type,
+        entity_id,
+        entity_label,
+        user_id,
+        user_name,
+        user_email,
+        user_role,
+        metadata
+    ) VALUES (
+        'PARTS_REQUEST_CREATED',
+        'parts_requests',
+        v_new_request.id::TEXT,
+        v_request_number || ' (' || v_target_part.part_number || ' x' || p_quantity || ')',
+        v_caller_profile.id,
+        v_caller_profile.full_name,
+        v_caller_profile.email,
+        v_caller_profile.role::TEXT,
+        jsonb_build_object(
+            'request_number', v_request_number,
+            'site_code', v_target_site.code,
+            'site_name', v_target_site.name,
+            'part_number', v_target_part.part_number,
+            'part_description', v_target_part.description,
+            'quantity_requested', p_quantity,
+            'priority', p_priority,
+            'reason', p_reason
+        )
+    );
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'id', v_new_request.id,
+        'request_number', v_request_number,
+        'status', v_new_request.status,
+        'created_at', v_new_request.created_at
+    );
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.create_parts_request(UUID, UUID, INT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- 5.2 Atomic Transaction RPC: Shipment Header + Items Creation
+CREATE OR REPLACE FUNCTION public.create_or_update_shipment_with_items(
+    p_shipment JSONB,
+    p_items JSONB
+) RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_shipment_id UUID;
+    v_item JSONB;
+BEGIN
+    -- 1. Insert or update shipment header using shipment_number
+    INSERT INTO public.shipments (
+        id,
+        shipment_number,
+        invoice_ref,
+        site_id,
+        allocation_cycle_id,
+        week_number,
+        shipment_date,
+        carrier,
+        tracking_number,
+        total_boxes,
+        status,
+        prepared_by_name,
+        verified_by_name,
+        receiving_signature,
+        remarks,
+        created_by,
+        updated_at
+    ) VALUES (
+        COALESCE(NULLIF(p_shipment->>'id', '')::UUID, gen_random_uuid()),
+        p_shipment->>'shipment_number',
+        p_shipment->>'invoice_ref',
+        (p_shipment->>'site_id')::UUID,
+        NULLIF(p_shipment->>'allocation_cycle_id', '')::UUID,
+        COALESCE((p_shipment->>'week_number')::INT, 1),
+        COALESCE((p_shipment->>'shipment_date')::DATE, CURRENT_DATE),
+        COALESCE(p_shipment->>'carrier', 'Lite Express'),
+        p_shipment->>'tracking_number',
+        COALESCE((p_shipment->>'total_boxes')::INT, 1),
+        COALESCE(p_shipment->>'status', 'draft')::shipment_status,
+        p_shipment->>'prepared_by_name',
+        p_shipment->>'verified_by_name',
+        p_shipment->>'receiving_signature',
+        p_shipment->>'remarks',
+        NULLIF(p_shipment->>'created_by', '')::UUID,
+        NOW()
+    )
+    ON CONFLICT (shipment_number) DO UPDATE SET
+        status = EXCLUDED.status,
+        total_boxes = EXCLUDED.total_boxes,
+        carrier = EXCLUDED.carrier,
+        tracking_number = EXCLUDED.tracking_number,
+        remarks = EXCLUDED.remarks,
+        updated_at = NOW()
+    RETURNING id INTO v_shipment_id;
+
+    -- 2. Insert items only after header exists
+    IF p_items IS NOT NULL AND jsonb_array_length(p_items) > 0 THEN
+        FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+            INSERT INTO public.shipment_items (
+                id,
+                shipment_id,
+                inventory_unit_id,
+                part_id,
+                serial_number,
+                box_number,
+                scanned_at,
+                scanned_by
+            ) VALUES (
+                COALESCE(NULLIF(v_item->>'id', '')::UUID, gen_random_uuid()),
+                v_shipment_id,
+                NULLIF(v_item->>'inventory_unit_id', '')::UUID,
+                (v_item->>'part_id')::UUID,
+                v_item->>'serial_number',
+                COALESCE((v_item->>'box_number')::INT, 1),
+                COALESCE((v_item->>'scanned_at')::TIMESTAMPTZ, NOW()),
+                NULLIF(v_item->>'scanned_by', '')::UUID
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                box_number = EXCLUDED.box_number,
+                scanned_at = EXCLUDED.scanned_at;
+        END LOOP;
+    END IF;
+
+    RETURN v_shipment_id;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.create_or_update_shipment_with_items(JSONB, JSONB) TO authenticated;
+
+-- ============================================================================
+-- 6. HARDENED ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================================================
+
+ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.user_page_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.parts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.part_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.sites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.repair_usage_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.forecast_cycles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.forecast_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.purchase_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.po_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.inventory_units ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.allocation_cycles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.allocation_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.shipments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.shipment_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.scan_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.dc_intake_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.saved_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- 6.1 Profiles & Permissions
+DROP POLICY IF EXISTS "profiles_select_authenticated" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_self_or_admin" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_admin_manage" ON public.profiles;
+
+CREATE POLICY "profiles_select_authenticated" ON public.profiles
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "profiles_update_self_or_admin" ON public.profiles
+    FOR UPDATE TO authenticated
+    USING (auth.uid() = id OR public.current_user_role() = 'superadmin')
+    WITH CHECK (auth.uid() = id OR public.current_user_role() = 'superadmin');
+
+CREATE POLICY "profiles_admin_manage" ON public.profiles
     FOR ALL TO authenticated
-    USING (current_user_role() = 'superadmin');
+    USING (public.current_user_role() = 'superadmin')
+    WITH CHECK (public.current_user_role() = 'superadmin');
 
--- User Page Permissions Policies
-CREATE POLICY "Users can read own page permissions" ON user_page_permissions
+DROP POLICY IF EXISTS "user_perms_select" ON public.user_page_permissions;
+DROP POLICY IF EXISTS "user_perms_manage" ON public.user_page_permissions;
+
+CREATE POLICY "user_perms_select" ON public.user_page_permissions
     FOR SELECT TO authenticated
-    USING (auth.uid() = user_id OR current_user_role() IN ('superadmin', 'admin'));
+    USING (auth.uid() = user_id OR public.current_user_role() = 'superadmin');
 
-CREATE POLICY "Superadmins can manage page permissions" ON user_page_permissions
+CREATE POLICY "user_perms_manage" ON public.user_page_permissions
     FOR ALL TO authenticated
-    USING (current_user_role() = 'superadmin');
+    USING (public.current_user_role() = 'superadmin')
+    WITH CHECK (public.current_user_role() = 'superadmin');
 
--- Operational Tables (Authenticated Access Only)
-CREATE POLICY "Authenticated users read parts" ON parts
+-- 6.2 Catalog (Parts, Categories, Sites)
+DROP POLICY IF EXISTS "parts_select_authenticated" ON public.parts;
+DROP POLICY IF EXISTS "parts_manage_staff" ON public.parts;
+
+CREATE POLICY "parts_select_authenticated" ON public.parts
     FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Admins manage parts" ON parts
-    FOR ALL TO authenticated USING (current_user_role() IN ('superadmin', 'admin'));
 
-CREATE POLICY "Authenticated users read sites" ON sites
+CREATE POLICY "parts_manage_staff" ON public.parts
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
+
+DROP POLICY IF EXISTS "categories_select_authenticated" ON public.part_categories;
+DROP POLICY IF EXISTS "categories_manage_staff" ON public.part_categories;
+
+CREATE POLICY "categories_select_authenticated" ON public.part_categories
     FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Admins manage sites" ON sites
-    FOR ALL TO authenticated USING (current_user_role() IN ('superadmin', 'admin'));
 
-CREATE POLICY "Staff read inventory" ON inventory_units
+CREATE POLICY "categories_manage_staff" ON public.part_categories
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
+
+DROP POLICY IF EXISTS "sites_select_authenticated" ON public.sites;
+DROP POLICY IF EXISTS "sites_manage_staff" ON public.sites;
+
+CREATE POLICY "sites_select_authenticated" ON public.sites
     FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Staff manage inventory" ON inventory_units
-    FOR ALL TO authenticated USING (current_user_role() IN ('superadmin', 'admin', 'warehouse_staff'));
 
-CREATE POLICY "Staff read shipments" ON shipments
+CREATE POLICY "sites_manage_staff" ON public.sites
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'logistics_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'logistics_staff'));
+
+-- 6.3 Inventory Units, Scan Logs & Repair Usage
+DROP POLICY IF EXISTS "inventory_select_authenticated" ON public.inventory_units;
+DROP POLICY IF EXISTS "inventory_write_staff" ON public.inventory_units;
+
+CREATE POLICY "inventory_select_authenticated" ON public.inventory_units
+    FOR SELECT TO authenticated
+    USING (
+        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
+        OR current_site_id = public.current_user_site_id()
+    );
+
+CREATE POLICY "inventory_write_staff" ON public.inventory_units
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'));
+
+DROP POLICY IF EXISTS "scan_logs_select_authenticated" ON public.scan_logs;
+DROP POLICY IF EXISTS "scan_logs_insert_staff" ON public.scan_logs;
+
+CREATE POLICY "scan_logs_select_authenticated" ON public.scan_logs
     FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Staff manage shipments" ON shipments
-    FOR ALL TO authenticated USING (current_user_role() IN ('superadmin', 'admin', 'warehouse_staff'));
 
-CREATE POLICY "Staff read forecast" ON forecast_entries
+CREATE POLICY "scan_logs_insert_staff" ON public.scan_logs
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "repair_usage_select_authenticated" ON public.repair_usage_records;
+DROP POLICY IF EXISTS "repair_usage_write_staff" ON public.repair_usage_records;
+
+CREATE POLICY "repair_usage_select_authenticated" ON public.repair_usage_records
     FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Admins manage forecast" ON forecast_entries
-    FOR ALL TO authenticated USING (current_user_role() IN ('superadmin', 'admin'));
 
--- 16. Seed Superadmin Profiles & Default Page Permissions
--- PREREQUISITE: Create users in Supabase Auth first (Dashboard → Authentication → Users).
--- profiles.id references auth.users(id); do NOT use gen_random_uuid() here.
+CREATE POLICY "repair_usage_write_staff" ON public.repair_usage_records
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'technician', 'warehouse_staff', 'planner'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'technician', 'warehouse_staff', 'planner'));
+
+-- 6.4 Shipments & Shipment Items
+DROP POLICY IF EXISTS "shipments_select_authenticated" ON public.shipments;
+DROP POLICY IF EXISTS "shipments_write_staff" ON public.shipments;
+
+CREATE POLICY "shipments_select_authenticated" ON public.shipments
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "shipments_write_staff" ON public.shipments
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
+
+DROP POLICY IF EXISTS "shipment_items_select_authenticated" ON public.shipment_items;
+DROP POLICY IF EXISTS "shipment_items_write_staff" ON public.shipment_items;
+
+CREATE POLICY "shipment_items_select_authenticated" ON public.shipment_items
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "shipment_items_write_staff" ON public.shipment_items
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
+
+-- 6.5 Forecasts, Allocations & Purchase Orders
+DROP POLICY IF EXISTS "forecast_cycles_select" ON public.forecast_cycles;
+DROP POLICY IF EXISTS "forecast_cycles_write" ON public.forecast_cycles;
+
+CREATE POLICY "forecast_cycles_select" ON public.forecast_cycles
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "forecast_cycles_write" ON public.forecast_cycles
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
+
+DROP POLICY IF EXISTS "forecast_entries_select" ON public.forecast_entries;
+DROP POLICY IF EXISTS "forecast_entries_write" ON public.forecast_entries;
+
+CREATE POLICY "forecast_entries_select" ON public.forecast_entries
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "forecast_entries_write" ON public.forecast_entries
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
+
+DROP POLICY IF EXISTS "allocation_cycles_select" ON public.allocation_cycles;
+DROP POLICY IF EXISTS "allocation_cycles_write" ON public.allocation_cycles;
+
+CREATE POLICY "allocation_cycles_select" ON public.allocation_cycles
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "allocation_cycles_write" ON public.allocation_cycles
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
+
+DROP POLICY IF EXISTS "allocation_items_select" ON public.allocation_items;
+DROP POLICY IF EXISTS "allocation_items_write" ON public.allocation_items;
+
+CREATE POLICY "allocation_items_select" ON public.allocation_items
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "allocation_items_write" ON public.allocation_items
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
+
+DROP POLICY IF EXISTS "purchase_orders_select" ON public.purchase_orders;
+DROP POLICY IF EXISTS "purchase_orders_write" ON public.purchase_orders;
+
+CREATE POLICY "purchase_orders_select" ON public.purchase_orders
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "purchase_orders_write" ON public.purchase_orders
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
+
+DROP POLICY IF EXISTS "po_items_select" ON public.po_items;
+DROP POLICY IF EXISTS "po_items_write" ON public.po_items;
+
+CREATE POLICY "po_items_select" ON public.po_items
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "po_items_write" ON public.po_items
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
+
+-- 6.6 Intake Records & Historical Saved Records
+DROP POLICY IF EXISTS "dc_intake_select" ON public.dc_intake_records;
+DROP POLICY IF EXISTS "dc_intake_write" ON public.dc_intake_records;
+
+CREATE POLICY "dc_intake_select" ON public.dc_intake_records
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "dc_intake_write" ON public.dc_intake_records
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
+
+DROP POLICY IF EXISTS "saved_records_select" ON public.saved_records;
+DROP POLICY IF EXISTS "saved_records_write" ON public.saved_records;
+
+CREATE POLICY "saved_records_select" ON public.saved_records
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "saved_records_write" ON public.saved_records
+    FOR ALL TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'))
+    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'));
+
+-- 6.7 Append-Only Audit Logs
+DROP POLICY IF EXISTS "audit_logs_select" ON public.audit_logs;
+DROP POLICY IF EXISTS "audit_logs_insert" ON public.audit_logs;
+
+CREATE POLICY "audit_logs_select" ON public.audit_logs
+    FOR SELECT TO authenticated
+    USING (public.current_user_role() IN ('superadmin', 'admin', 'planner'));
+
+CREATE POLICY "audit_logs_insert" ON public.audit_logs
+    FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() IS NOT NULL);
+
+REVOKE UPDATE, DELETE ON public.audit_logs FROM authenticated, anon, public;
+
+-- 6.8 Parts Requests Policies
+ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "parts_requests_select" ON public.parts_requests;
+DROP POLICY IF EXISTS "parts_requests_insert" ON public.parts_requests;
+DROP POLICY IF EXISTS "parts_requests_update" ON public.parts_requests;
+
+CREATE POLICY "parts_requests_select" ON public.parts_requests
+    FOR SELECT TO authenticated
+    USING (
+        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
+        OR site_id = public.current_user_site_id()
+        OR requested_by = auth.uid()
+    );
+
+CREATE POLICY "parts_requests_insert" ON public.parts_requests
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        requested_by = auth.uid()
+        AND (
+            public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
+            OR site_id = public.current_user_site_id()
+        )
+    );
+
+CREATE POLICY "parts_requests_update" ON public.parts_requests
+    FOR UPDATE TO authenticated
+    USING (
+        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
+        OR (
+            requested_by = auth.uid()
+            AND status = 'pending'
+        )
+    )
+    WITH CHECK (
+        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
+        OR (
+            requested_by = auth.uid()
+            AND status = 'cancelled'
+        )
+    );
+
+REVOKE DELETE ON public.parts_requests FROM authenticated, anon, public;
+
+-- ============================================================================
+-- 7. SEED SUPERADMIN PROFILES & DEFAULT PERMISSIONS
+-- ============================================================================
 
 DO $$ BEGIN
-    ALTER TABLE profiles ADD CONSTRAINT profiles_email_key UNIQUE (email);
+    ALTER TABLE public.profiles ADD CONSTRAINT profiles_email_key UNIQUE (email);
 EXCEPTION
     WHEN duplicate_table THEN null;
     WHEN duplicate_object THEN null;
 END $$;
 
-INSERT INTO profiles (id, email, full_name, role, has_set_password, is_active)
-SELECT u.id, u.email, 'Zhon Manaois', 'superadmin', true, true
+INSERT INTO public.profiles (id, email, full_name, role, has_set_password, is_active)
+SELECT u.id, u.email, 'Zhon Manaois', 'superadmin'::user_role, true, true
 FROM auth.users u
 WHERE u.email = 'zhon@mobilecare.com.ph'
 ON CONFLICT (id) DO UPDATE SET
@@ -372,8 +1003,8 @@ ON CONFLICT (id) DO UPDATE SET
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
 
-INSERT INTO profiles (id, email, full_name, role, has_set_password, is_active)
-SELECT u.id, u.email, 'Joshua Juvida', 'superadmin', true, true
+INSERT INTO public.profiles (id, email, full_name, role, has_set_password, is_active)
+SELECT u.id, u.email, 'Joshua Juvida', 'superadmin'::user_role, true, true
 FROM auth.users u
 WHERE u.email = 'joshua@mobilecare.com.ph'
 ON CONFLICT (id) DO UPDATE SET
@@ -384,45 +1015,18 @@ ON CONFLICT (id) DO UPDATE SET
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
 
--- Grant all page permissions to both superadmins
+-- Grant all page permissions to superadmins
 DO $$
 DECLARE
     uid UUID;
     pages TEXT[] := ARRAY['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'];
     p TEXT;
 BEGIN
-    FOR uid IN SELECT id FROM profiles WHERE role = 'superadmin' LOOP
+    FOR uid IN SELECT id FROM public.profiles WHERE role = 'superadmin' LOOP
         FOREACH p IN ARRAY pages LOOP
-            INSERT INTO user_page_permissions (user_id, page_id)
+            INSERT INTO public.user_page_permissions (user_id, page_id)
             VALUES (uid, p)
             ON CONFLICT (user_id, page_id) DO NOTHING;
         END LOOP;
     END LOOP;
 END $$;
-
--- 17. Period-Based Saved Records Snapshots Table
-CREATE TABLE IF NOT EXISTS saved_records (
-    id TEXT PRIMARY KEY,
-    record_type TEXT NOT NULL DEFAULT 'both',
-    period_label TEXT NOT NULL,
-    period_year INT NOT NULL,
-    period_month INT NOT NULL,
-    period_week INT,
-    notes TEXT,
-    saved_by_name TEXT,
-    saved_by_user_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
-    snapshot_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_saved_records_created_at ON saved_records(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_saved_records_type ON saved_records(record_type);
-CREATE INDEX IF NOT EXISTS idx_saved_records_period ON saved_records(period_year, period_month);
-
-ALTER TABLE saved_records ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow public read of saved_records" ON saved_records FOR SELECT TO public USING (true);
-CREATE POLICY "Allow public insert of saved_records" ON saved_records FOR INSERT TO public WITH CHECK (true);
-CREATE POLICY "Allow public update of saved_records" ON saved_records FOR UPDATE TO public USING (true) WITH CHECK (true);
-CREATE POLICY "Allow public delete of saved_records" ON saved_records FOR DELETE TO public USING (true);
-
-

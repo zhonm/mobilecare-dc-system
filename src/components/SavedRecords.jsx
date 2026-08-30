@@ -125,9 +125,9 @@ export default function SavedRecords() {
     setRestoreAllocation(hasAlloc);
   };
 
-  const handleConfirmRestore = () => {
+  const handleConfirmRestore = async () => {
     if (!recordToRestore) return;
-    restorePeriodRecord(recordToRestore.id, {
+    await restorePeriodRecord(recordToRestore.id, {
       restoreForecast,
       restoreAllocation
     });

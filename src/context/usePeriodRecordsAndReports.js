@@ -187,8 +187,8 @@ export function usePeriodRecordsAndReports({
     return { success: true, record: newRecord };
   };
 
-  const restorePeriodRecord = (recordId, options = { restoreForecast: true, restoreAllocation: true }) => {
-    const record = savedRecords.find(r => r.id === recordId);
+  const restorePeriodRecord = async (recordId, options = { restoreForecast: true, restoreAllocation: true }) => {
+    let record = savedRecords.find(r => r.id === recordId);
     if (!record) {
       showToast('Record not found', 'error');
       return { success: false, error: 'Record not found' };
@@ -197,7 +197,21 @@ export function usePeriodRecordsAndReports({
     dbStorage.removeItem('mdc_is_cleared');
     try { localStorage.removeItem('mdc_is_cleared'); } catch (e) {}
 
-    const snap = record.snapshot_data || {};
+    let snap = record.snapshot_data || {};
+    if ((!snap || Object.keys(snap).length === 0) && supabase && record.id) {
+      try {
+        const { data: fullDoc } = await supabase
+          .from('saved_records')
+          .select('snapshot_data')
+          .eq('id', record.id)
+          .maybeSingle();
+        if (fullDoc?.snapshot_data) {
+          snap = fullDoc.snapshot_data;
+        }
+      } catch (e) {
+        console.warn('On-demand snapshot fetch notice:', e.message);
+      }
+    }
 
     if (snap.parts && snap.parts.length > 0 && setParts) {
       setParts(prev => {

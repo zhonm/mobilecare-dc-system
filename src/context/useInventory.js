@@ -263,7 +263,16 @@ export function useInventory({
     }
   };
 
-  const addScanInUnit = ({ partNumber, serialNumber, poId, intakeAssignment = 'MDC - Forecasting', notes = null }) => {
+  const addScanInUnit = ({
+    partNumber,
+    serialNumber,
+    poId,
+    intakeAssignment = 'MDC - Forecasting',
+    notes = null,
+    targetSiteId = null,
+    targetSiteCode = null,
+    targetSiteName = null
+  }) => {
     const rawPN = String(partNumber || '').trim();
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
 
@@ -308,13 +317,16 @@ export function useInventory({
     const existingUnit = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === validatedSerial);
     if (existingUnit) {
       barcodeAudio.playError();
-      showToast(`Duplicate Serial: ${validatedSerial} already exists in DC stock!`, 'error');
+      showToast(`Duplicate Serial: ${validatedSerial} already exists in stock!`, 'error');
       logScan('RECEIVE_IN', cleanPN, validatedSerial, false, 'Duplicate serial number');
       return { success: false, error: `Duplicate serial number: ${validatedSerial}` };
     }
 
     const effectiveAssignment = intakeAssignment === 'DC - CRBR' ? 'DC - CRBR' : 'MDC - Forecasting';
     const effectiveNotes = notes || effectiveAssignment;
+
+    const resolvedSiteId = targetSiteId || currentUser?.siteId || 'site-dc';
+    const resolvedSiteCode = targetSiteCode || (currentUser?.siteId ? (currentUser.siteCode || 'BRANCH') : 'DC-MDC');
 
     const newUnit = {
       id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -325,13 +337,17 @@ export function useInventory({
       serial_number: validatedSerial,
       intake_assignment: effectiveAssignment,
       notes: effectiveNotes,
-      current_site_id: 'site-dc',
-      site_code: 'DC-MDC',
+      current_site_id: resolvedSiteId,
+      site_code: resolvedSiteCode,
+      site_name: targetSiteName || null,
       po_id: poId || null,
       status: 'in_stock',
       box_number: 1,
       received_at: new Date().toISOString(),
       received_by: currentUser?.fullName || 'Warehouse Staff',
+      received_by_id: currentUser?.id || null,
+      added_by_user_id: currentUser?.id || null,
+      created_by_site_id: currentUser?.siteId || resolvedSiteId,
       stocking_price: part.stocking_price || 99
     };
 
@@ -485,7 +501,14 @@ export function useInventory({
     return { success: true, assignment: effectiveAssignment };
   };
 
-  const batchAddScanInUnits = (itemsList = [], defaultPoId = null, defaultAssignment = 'MDC - Forecasting') => {
+  const batchAddScanInUnits = (
+    itemsList = [],
+    defaultPoId = null,
+    defaultAssignment = 'MDC - Forecasting',
+    targetSiteId = null,
+    targetSiteCode = null,
+    targetSiteName = null
+  ) => {
     if (!itemsList || itemsList.length === 0) {
       return { success: false, error: 'No units provided to import' };
     }
@@ -498,6 +521,9 @@ export function useInventory({
 
     const seenSerials = new Set();
     const existingInventoryMap = new Map((inventoryUnits || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+
+    const resolvedSiteId = targetSiteId || currentUser?.siteId || 'site-dc';
+    const resolvedSiteCode = targetSiteCode || (currentUser?.siteId ? (currentUser.siteCode || 'BRANCH') : 'DC-MDC');
 
     for (const item of itemsList) {
       const rawPN = String(item.part_number || item.partNumber || '').trim();
@@ -537,6 +563,9 @@ export function useInventory({
       const effectiveAssignment = String(assignedType).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
       const effectiveNotes = item.notes || effectiveAssignment;
 
+      const itemSiteId = item.current_site_id || item.site_id || resolvedSiteId;
+      const itemSiteCode = item.site_code || resolvedSiteCode;
+
       const processedUnit = {
         id: existingUnit?.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         part_id: part.id || `part-${part.part_number}`,
@@ -546,13 +575,17 @@ export function useInventory({
         serial_number: validatedSerial,
         intake_assignment: effectiveAssignment,
         notes: effectiveNotes,
-        current_site_id: 'site-dc',
-        site_code: 'DC-MDC',
+        current_site_id: itemSiteId,
+        site_code: itemSiteCode,
+        site_name: targetSiteName || item.site_name || null,
         po_id: assignedPoId || existingUnit?.po_id || null,
         status: 'in_stock',
-        box_number: item.boxNumber || existingUnit?.box_number || 1,
+        box_number: item.boxNumber || item.box_number || existingUnit?.box_number || 1,
         received_at: existingUnit?.received_at || new Date().toISOString(),
         received_by: currentUser?.fullName || 'Warehouse Staff (Import)',
+        received_by_id: currentUser?.id || null,
+        added_by_user_id: currentUser?.id || null,
+        created_by_site_id: currentUser?.siteId || itemSiteId,
         stocking_price: part.stocking_price || 99
       };
 

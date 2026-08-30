@@ -20,6 +20,7 @@ import ForecastingReports from './components/ForecastingReports';
 import AuditTrail from './components/AuditTrail';
 import SettingsCatalog from './components/SettingsCatalog';
 import UserAccessManagement from './components/UserAccessManagement';
+import RequestParts from './components/RequestParts';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
 import MobileWarning from './components/MobileWarning';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
@@ -71,6 +72,10 @@ function MainApp() {
         return <ScanOutPacking />;
       case 'shipments':
         return <Shipments />;
+      case 'request-parts':
+        return <RequestParts />;
+      case 'all-stocks':
+        return <RequestParts defaultTab="all_stocks" />;
       case 'reports':
         return <StockTransferReports />;
       case 'forecast-reports':

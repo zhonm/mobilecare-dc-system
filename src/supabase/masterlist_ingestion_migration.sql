@@ -47,11 +47,8 @@ CREATE INDEX IF NOT EXISTS idx_repair_usage_month ON repair_usage_records(month_
 CREATE INDEX IF NOT EXISTS idx_repair_usage_in_scope ON repair_usage_records(is_in_scope);
 
 -- 3. SQL View: Filtered In-Scope Universe (Battery & Display iPhone)
--- Exact Filter Specification:
---   a. raw_part_description ILIKE '%iphone%'
---   b. raw_part_description ILIKE '%battery%' OR raw_part_description ILIKE '%display%'
---   c. TRIM(raw_part_description) does NOT case-insensitively match the 20 legacy exclusions
-CREATE OR REPLACE VIEW view_repair_usage_in_scope AS
+CREATE OR REPLACE VIEW view_repair_usage_in_scope
+WITH (security_invoker = true) AS
 SELECT 
     r.*,
     CASE 
@@ -89,7 +86,8 @@ WHERE
     );
 
 -- 4. SQL View: Monthly Aggregated Usage per Part
-CREATE OR REPLACE VIEW view_monthly_part_usage AS
+CREATE OR REPLACE VIEW view_monthly_part_usage
+WITH (security_invoker = true) AS
 SELECT 
     raw_part_number,
     raw_part_description,
@@ -115,7 +113,8 @@ ORDER BY
 
 -- 5. SQL View: All-Time Per-Site Historical Shares
 -- Computes: (filtered repairs of this part at this site) / (filtered repairs of this part, all sites, all time)
-CREATE OR REPLACE VIEW view_part_site_shares AS
+CREATE OR REPLACE VIEW view_part_site_shares
+WITH (security_invoker = true) AS
 WITH part_site_counts AS (
     SELECT 
         raw_part_number,

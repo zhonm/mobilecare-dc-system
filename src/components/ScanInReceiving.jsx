@@ -51,8 +51,29 @@ export default function ScanInReceiving() {
     commitUnitsToStock,
     setActiveTab,
     activePackDraft,
-    shipments
+    shipments,
+    currentUser,
+    sites = []
   } = useApp();
+
+  const isSuperadmin = currentUser?.role === 'superadmin';
+  const isPmgUser = currentUser?.role === 'parts_management';
+  const isFulfillment = ['superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff'].includes(currentUser?.role);
+
+  const userSiteObj = useMemo(() => {
+    return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
+  }, [sites, currentUser?.siteId]);
+
+  const [receivingSiteId, setReceivingSiteId] = useState(() => {
+    if (!isFulfillment && currentUser?.siteId) {
+      return currentUser.siteId;
+    }
+    return currentUser?.siteId || sites[0]?.id || 'site-dc';
+  });
+
+  const activeReceivingSite = useMemo(() => {
+    return sites.find(s => s.id === receivingSiteId || s.code === receivingSiteId) || userSiteObj;
+  }, [sites, receivingSiteId, userSiteObj]);
 
   const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
   const [partNumberInput, setPartNumberInput] = useState('');
@@ -425,7 +446,10 @@ export default function ScanInReceiving() {
       serialNumber: snToUse,
       poId: selectedPoId || null,
       intakeAssignment: currentAssignment,
-      notes: currentAssignment
+      notes: currentAssignment,
+      targetSiteId: activeReceivingSite.id,
+      targetSiteCode: activeReceivingSite.code,
+      targetSiteName: activeReceivingSite.name
     });
 
     if (res.success) {
@@ -632,12 +656,15 @@ export default function ScanInReceiving() {
           serialNumber: serial,
           poId: selectedPoId || null,
           intakeAssignment: currentAssignment,
-          notes: currentAssignment
+          notes: currentAssignment,
+          targetSiteId: activeReceivingSite.id,
+          targetSiteCode: activeReceivingSite.code,
+          targetSiteName: activeReceivingSite.name
         });
         if (res.success) {
           setScanResult({
             type: 'success',
-            message: `[AUTO-RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
+            message: `[AUTO-RECEIVED ${currentAssignment} @ ${activeReceivingSite.code}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
           });
           setSessionScans(prev => [res.unit, ...prev]);
           setSerialInput('');
@@ -710,7 +737,10 @@ export default function ScanInReceiving() {
       .map(it => ({
         ...it,
         intake_assignment: it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment,
-        notes: it.notes || modalAssignment
+        notes: it.notes || modalAssignment,
+        current_site_id: activeReceivingSite.id,
+        site_code: activeReceivingSite.code,
+        site_name: activeReceivingSite.name
       }));
 
     if (validItems.length === 0) {
@@ -718,14 +748,21 @@ export default function ScanInReceiving() {
       return;
     }
 
-    const res = batchAddScanInUnits(validItems, modalPoId || selectedPoId || null, modalAssignment);
+    const res = batchAddScanInUnits(
+      validItems,
+      modalPoId || selectedPoId || null,
+      modalAssignment,
+      activeReceivingSite.id,
+      activeReceivingSite.code,
+      activeReceivingSite.name
+    );
     if (res.success) {
       const importedWithFlag = res.units.map(u => ({ ...u, isImported: true }));
       setSessionScans(prev => [...importedWithFlag, ...prev]);
 
       setScanResult({
         type: 'success',
-        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts (${modalAssignment}) from "${parsedBatch.fileName}" into DC Database!`
+        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts (${modalAssignment}) into ${activeReceivingSite.name} database!`
       });
 
       setActiveTableView('ALL_DC_STOCK');
@@ -881,10 +918,10 @@ export default function ScanInReceiving() {
           <div>
             <h2 style={{ color: '#fff', fontSize: '21px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
               <Barcode size={24} color="#38bdf8" />
-              <span>DC Receive Scan-In Station</span>
+              <span>{isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}</span>
             </h2>
             <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '3px', margin: '3px 0 0 0' }}>
-              Physical Keyboard HID Barcode Scanner Active • Current Destination: <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8' }}>{intakeAssignment}</strong>
+              Physical Keyboard HID Barcode Scanner Active • Receiving Site: <strong style={{ color: '#38bdf8' }}>{activeReceivingSite.name} ({activeReceivingSite.code})</strong>
             </p>
           </div>
 
@@ -925,11 +962,51 @@ export default function ScanInReceiving() {
 
         {/* Workstation Controls & Actions Toolbar */}
         <div className="workstation-controls-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          {/* Column 1: PO Selector */}
+          {/* Column 1: Receiving Destination Branch */}
           <div>
             <label className="workstation-col-label">
               <Building2 size={13} color="#38bdf8" />
-              <span>1. Linked Purchase Order</span>
+              <span>1. Receiving Destination Site</span>
+            </label>
+            {isFulfillment ? (
+              <select
+                className="form-select"
+                style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
+                value={receivingSiteId}
+                onChange={(e) => setReceivingSiteId(e.target.value)}
+              >
+                {sites.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.code} - {s.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div
+                style={{
+                  width: '100%',
+                  background: '#0f172a',
+                  color: '#38bdf8',
+                  border: '1px solid #334155',
+                  borderRadius: 'var(--radius-sm)',
+                  height: '42px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '0 12px',
+                  fontSize: '12.5px',
+                  fontWeight: 700
+                }}
+              >
+                {activeReceivingSite.name} ({activeReceivingSite.code})
+              </div>
+            )}
+          </div>
+
+          {/* Column 2: PO Selector */}
+          <div>
+            <label className="workstation-col-label">
+              <Building2 size={13} color="#38bdf8" />
+              <span>2. Linked Purchase Order</span>
             </label>
             <select
               className="form-select"
@@ -946,91 +1023,93 @@ export default function ScanInReceiving() {
             </select>
           </div>
 
-          {/* Column 2: Part Assignment Classification (CRBR vs Forecasting) */}
-          <div>
-            <label className="workstation-col-label">
-              <Layers size={13} color="#38bdf8" />
-              <span>2. Part Assignment Category</span>
-            </label>
-            <div style={{
-              display: 'flex',
-              gap: '6px',
-              background: '#0f172a',
-              padding: '4px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid #334155',
-              height: '42px',
-              alignItems: 'center'
-            }}>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = 'MDC - Forecasting';
-                  setIntakeAssignment(next);
-                  intakeAssignmentRef.current = next;
-                  try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                  showToast('Part assignment set to "MDC - Forecasting"', 'info');
-                }}
-                style={{
-                  flex: 1,
-                  height: '32px',
-                  background: intakeAssignment === 'MDC - Forecasting' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-                  color: intakeAssignment === 'MDC - Forecasting' ? '#fff' : '#94a3b8',
-                  border: intakeAssignment === 'MDC - Forecasting' ? '1px solid #38bdf8' : 'none',
-                  borderRadius: '4px',
-                  fontSize: '11.5px',
-                  fontWeight: intakeAssignment === 'MDC - Forecasting' ? 700 : 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px',
-                  transition: 'all 0.15s'
-                }}
-                title="Designated for Monthly Forecasting & Branch Stock Allocation"
-              >
-                <span>MDC - Forecasting</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = 'DC - CRBR';
-                  setIntakeAssignment(next);
-                  intakeAssignmentRef.current = next;
-                  try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                  showToast('Part assignment set to "DC - CRBR"', 'info');
-                }}
-                style={{
-                  flex: 1,
-                  height: '32px',
-                  background: intakeAssignment === 'DC - CRBR' ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)' : 'transparent',
-                  color: intakeAssignment === 'DC - CRBR' ? '#fff' : '#94a3b8',
-                  border: intakeAssignment === 'DC - CRBR' ? '1px solid #f59e0b' : 'none',
-                  borderRadius: '4px',
-                  fontSize: '11.5px',
-                  fontWeight: intakeAssignment === 'DC - CRBR' ? 700 : 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px',
-                  transition: 'all 0.15s'
-                }}
-                title="Designated for Customer Return / Repair Buffer Returns (CRBR) — Separate from Forecasting"
-              >
-                <span>DC - CRBR</span>
-              </button>
+          {/* Column 3: Part Assignment Classification (CRBR vs Forecasting) - DC Central Warehouse Only */}
+          {!isPmgUser && (
+            <div>
+              <label className="workstation-col-label">
+                <Layers size={13} color="#38bdf8" />
+                <span>3. Part Assignment Category</span>
+              </label>
+              <div style={{
+                display: 'flex',
+                gap: '6px',
+                background: '#0f172a',
+                padding: '4px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid #334155',
+                height: '42px',
+                alignItems: 'center'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = 'MDC - Forecasting';
+                    setIntakeAssignment(next);
+                    intakeAssignmentRef.current = next;
+                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                    showToast('Part assignment set to "MDC - Forecasting"', 'info');
+                  }}
+                  style={{
+                    flex: 1,
+                    height: '32px',
+                    background: intakeAssignment === 'MDC - Forecasting' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+                    color: intakeAssignment === 'MDC - Forecasting' ? '#fff' : '#94a3b8',
+                    border: intakeAssignment === 'MDC - Forecasting' ? '1px solid #38bdf8' : 'none',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: intakeAssignment === 'MDC - Forecasting' ? 700 : 500,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '4px',
+                    transition: 'all 0.15s'
+                  }}
+                  title="Designated for Monthly Forecasting & Branch Stock Allocation"
+                >
+                  <span>MDC - Forecasting</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = 'DC - CRBR';
+                    setIntakeAssignment(next);
+                    intakeAssignmentRef.current = next;
+                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                    showToast('Part assignment set to "DC - CRBR"', 'info');
+                  }}
+                  style={{
+                    flex: 1,
+                    height: '32px',
+                    background: intakeAssignment === 'DC - CRBR' ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)' : 'transparent',
+                    color: intakeAssignment === 'DC - CRBR' ? '#fff' : '#94a3b8',
+                    border: intakeAssignment === 'DC - CRBR' ? '1px solid #f59e0b' : 'none',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: intakeAssignment === 'DC - CRBR' ? 700 : 500,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '4px',
+                    transition: 'all 0.15s'
+                  }}
+                  title="Designated for Customer Return / Repair Buffer Returns (CRBR) — Separate from Forecasting"
+                >
+                  <span>DC - CRBR</span>
+                </button>
+              </div>
+              <span style={{ fontSize: '11px', color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
+                {intakeAssignment === 'DC - CRBR' ? '• Tagged: DC - CRBR (Customer Return & Buffer)' : '• Tagged: MDC - Forecasting (Stock Allocation)'}
+              </span>
             </div>
-            <span style={{ fontSize: '11px', color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
-              {intakeAssignment === 'DC - CRBR' ? '• Tagged: DC - CRBR (Customer Return & Buffer)' : '• Tagged: MDC - Forecasting (Stock Allocation)'}
-            </span>
-          </div>
+          )}
 
-          {/* Column 3: Auto-Receive Switch & Settings */}
+          {/* Column: Auto-Receive Switch & Settings */}
           <div>
             <label className="workstation-col-label">
               <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
-              <span>3. Scanner Intake Mode</span>
+              <span>{isPmgUser ? '2. Barcode Auto-Receive' : '4. Scanner Intake Mode'}</span>
             </label>
             <div
               className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
@@ -1046,7 +1125,7 @@ export default function ScanInReceiving() {
                   {autoReceive ? '⚡ Auto-Receive: ON' : 'Auto-Receive: OFF'}
                 </strong>
                 <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                  {autoReceive ? 'Intakes instantly on scan' : 'Requires manual click'}
+                  {autoReceive ? 'Saves instantly to DB on scan' : 'Requires manual click'}
                 </span>
               </div>
               <div className={`toggle-switch-pill ${autoReceive ? 'checked' : ''}`}>
@@ -1067,56 +1146,84 @@ export default function ScanInReceiving() {
             )}
           </div>
 
-          {/* Column 4: Workstation Action Buttons */}
+          {/* Column: Workstation Action Buttons */}
           <div>
             <label className="workstation-col-label">
               <Sparkles size={13} color="#38bdf8" />
-              <span>4. Batch Actions</span>
+              <span>{isPmgUser ? '3. Bulk Import & Actions' : '5. Batch Actions'}</span>
             </label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <button
-                type="button"
-                className="action-btn-emerald"
-                onClick={handleAddAllToStock}
-                disabled={isAddingToStock || (sessionScans.length === 0 && availableInStockUnits.length === 0)}
-                style={{
-                  background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
-                  color: '#fff',
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  boxShadow: '0 3px 10px rgba(16, 185, 129, 0.35)',
-                  border: '1px solid #34d399',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  cursor: 'pointer'
-                }}
-                title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
-              >
-                {isAddingToStock ? <RefreshCw size={15} className="spin" /> : <PackageCheck size={16} />}
-                <span>Add to Stock ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
-              </button>
+              {!isPmgUser && (
+                <button
+                  type="button"
+                  className="action-btn-emerald"
+                  onClick={handleAddAllToStock}
+                  disabled={isAddingToStock || (sessionScans.length === 0 && availableInStockUnits.length === 0)}
+                  style={{
+                    background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                    color: '#fff',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    boxShadow: '0 3px 10px rgba(16, 185, 129, 0.35)',
+                    border: '1px solid #34d399',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer'
+                  }}
+                  title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
+                >
+                  {isAddingToStock ? <RefreshCw size={15} className="spin" /> : <PackageCheck size={16} />}
+                  <span>Add to Stock ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
+                </button>
+              )}
 
               <button
                 type="button"
                 className="action-btn-slate"
                 onClick={() => setIsImportModalOpen(true)}
                 title="Bulk upload parts spreadsheet (.xlsx / .csv)"
+                style={{
+                  background: isPmgUser ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : undefined,
+                  color: '#fff',
+                  border: isPmgUser ? '1px solid #38bdf8' : undefined,
+                  fontWeight: 700
+                }}
               >
                 <FileSpreadsheet size={15} />
-                <span>Import Spreadsheet</span>
+                <span>Import Spreadsheet (XLSX/CSV)</span>
               </button>
 
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setIsSaveIntakeModalOpen(true)}
-                title="Save current scanned parts into a named Dispatched Record (MDC202600015)"
-                style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
-              >
-                <BookmarkPlus size={14} />
-                <span>Save Dispatched Batch</span>
-              </button>
+              {!isPmgUser && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setIsSaveIntakeModalOpen(true)}
+                  title="Save current scanned parts into a named Dispatched Record (MDC202600015)"
+                  style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
+                >
+                  <BookmarkPlus size={14} />
+                  <span>Save Dispatched Batch</span>
+                </button>
+              )}
+
+              {isPmgUser && (
+                <div style={{
+                  padding: '6px 10px',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11.5px',
+                  color: '#34d399',
+                  fontWeight: 600
+                }}>
+                  <CheckCircle2 size={13} color="#34d399" />
+                  <span>Permanent Database Sync Active</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

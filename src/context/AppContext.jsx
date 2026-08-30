@@ -23,6 +23,7 @@ import { useAuditLogs } from './useAuditLogs';
 import { useInventory } from './useInventory';
 import { useIntakeRecords } from './useIntakeRecords';
 import { useShipments } from './useShipments';
+import { usePartsRequests } from './usePartsRequests';
 import { usePeriodRecordsAndReports } from './usePeriodRecordsAndReports';
 import { useCloudSync } from './useCloudSync';
 
@@ -222,7 +223,20 @@ export function AppProvider({ children }) {
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
 
-  // 10. Central Cloud Sync & Realtime Engine
+  // 10. Parts Requests Domain
+  const partsRequestsDomain = usePartsRequests({
+    currentUser: auth.currentUser,
+    parts: catalogAndSites.parts,
+    sites: catalogAndSites.sites,
+    inventoryUnits: inventory.inventoryUnits,
+    repairUsageRecords: inventory.repairUsageRecords,
+    showToast,
+    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
+  });
+
+  // 11. Central Cloud Sync & Realtime Engine
   const cloudSync = useCloudSync({
     currentUser: auth.currentUser,
     activeTab,
@@ -264,6 +278,8 @@ export function AppProvider({ children }) {
     setStockTransferMetadata: periodRecords.setStockTransferMetadata,
     dcIntakeRecords: intakeRecords.dcIntakeRecords,
     setDcIntakeRecords: intakeRecords.setDcIntakeRecords,
+    partsRequests: partsRequestsDomain.partsRequests,
+    setPartsRequests: partsRequestsDomain.setPartsRequests,
     uploadAuditLogs: auditLogs.uploadAuditLogs,
     setUploadAuditLogs: auditLogs.setUploadAuditLogs,
     deletionAuditLogs: auditLogs.deletionAuditLogs,
@@ -338,6 +354,18 @@ export function AppProvider({ children }) {
         generateNextIntakeRecordId: intakeRecords.generateNextIntakeRecordId,
         saveIntakeRecord: intakeRecords.saveIntakeRecord,
         deleteIntakeRecord: intakeRecords.deleteIntakeRecord,
+        // Parts Requests Domain
+        partsRequests: partsRequestsDomain.partsRequests,
+        setPartsRequests: partsRequestsDomain.setPartsRequests,
+        isLoadingPartsRequests: partsRequestsDomain.isLoadingRequests,
+        isFulfillmentUser: partsRequestsDomain.isFulfillmentUser,
+        fetchPartsRequests: partsRequestsDomain.fetchPartsRequests,
+        submitPartsRequest: partsRequestsDomain.submitPartsRequest,
+        cancelPartsRequest: partsRequestsDomain.cancelPartsRequest,
+        updatePartsRequestStatus: partsRequestsDomain.updatePartsRequestStatus,
+        getStockOnHandForSite: partsRequestsDomain.getStockOnHandForSite,
+        getAllSitesStockSummary: partsRequestsDomain.getAllSitesStockSummary,
+        getUsedPartsForSite: partsRequestsDomain.getUsedPartsForSite,
         stockTransferReports: periodRecords.stockTransferReports,
         setStockTransferReports: periodRecords.setStockTransferReports,
         stockTransferMetadata: periodRecords.stockTransferMetadata,
