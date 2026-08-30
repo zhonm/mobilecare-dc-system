@@ -395,7 +395,7 @@ export function useCloudSync({
             dbStorage.setItem('mdc_users', merged);
           } catch (e) {}
 
-          // Self-heal: If cloud registry is missing or has fewer users, auto-seed it
+          // Self-heal: If cloud registry is missing or has fewer users, auto-seed it without self-triggering broadcasts
           if (merged.length > 0 && supabase) {
             if (!cloudUsersRegistryDoc || cloudUsersList.length < merged.length) {
               supabase.from('saved_records').upsert({
@@ -411,11 +411,7 @@ export function useCloudSync({
                   updatedAt: new Date().toISOString()
                 },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {
-                if (broadcastCloudEvent) {
-                  broadcastCloudEvent('USER_REGISTRY_UPDATED', { users: merged, table: 'saved_records' });
-                }
-              }).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
+              }, { onConflict: 'id' }).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
             }
           }
 
@@ -708,11 +704,7 @@ export function useCloudSync({
                   metadata: localSavedMeta
                 },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {
-                if (broadcastCloudEvent) {
-                  broadcastCloudEvent('STOCK_TRANSFERS_UPDATED', { count: localSavedReports.length, metadata: localSavedMeta, table: 'saved_records' });
-                }
-              }).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
+              }, { onConflict: 'id' }).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
             }
           } catch (e) {}
         }
@@ -1128,8 +1120,16 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'save_in_progress' };
     }
 
-    // Runaway protection: enforce at least 6000ms throttle unless explicit user manual button click or forced
-    if (!isManual && !force && now - lastRefreshTimeRef.current < 6000) {
+    // Runaway protection:
+    // 1. Manual user click: allow immediately.
+    // 2. Forced / realtime: enforce at least a 2000ms cooldown to avoid cascade storms.
+    // 3. Automatic / background: enforce a 6000ms cooldown.
+    const minCooldown = isManual ? 0 : (force ? 2000 : 6000);
+    if (now - lastRefreshTimeRef.current < minCooldown) {
+      if (tables) {
+        tables.forEach(t => pendingRealtimeTablesRef.current.add(t));
+        pendingRealtimeSyncRef.current = true;
+      }
       return { success: true, throttled: true };
     }
 
@@ -1184,10 +1184,10 @@ export function useCloudSync({
   }, [cloudSyncStatus.isSaving]);
 
   const refreshDataFromCloud = async () => {
-    return await autoRefreshData({ silent: false, force: true, reason: 'Manual sync trigger' });
+    return await autoRefreshData({ silent: false, force: true, isManual: true, reason: 'Manual sync trigger' });
   };
 
-  // Debounced burst handler for Realtime Postgres & WebSocket events (Part 1 Fix: force: true)
+  // Debounced burst handler for Realtime Postgres & WebSocket events with safe 600ms cooldown
   const triggerDebouncedRealtimeSync = useCallback((reason, table = null) => {
     if (table) {
       pendingRealtimeTablesRef.current.add(table);
@@ -1202,11 +1202,11 @@ export function useCloudSync({
       pendingRealtimeTablesRef.current.clear();
       autoRefreshData({
         silent: true,
-        force: true, // Part 1 Fix: Always force hydration on remote realtime invalidations
+        force: true,
         reason: `Debounced Realtime [${reason}]`,
         tables: targetTables
       });
-    }, 300);
+    }, 600);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1520,16 +1520,16 @@ export function useCloudSync({
 
   // 2. Auto-Refresh on Page Navigation
   useEffect(() => {
-    if (currentUser && activeTab) {
+    if (currentUser?.id && activeTab) {
       autoRefreshData({ silent: true, force: false, reason: `Page visit: ${activeTab}` });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, currentUser]);
+  }, [activeTab, currentUser?.id]);
 
   // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection
   useEffect(() => {
     const handleFocusOrVisibility = () => {
-      if (document.visibilityState === 'visible' && currentUser) {
+      if (document.visibilityState === 'visible' && currentUser?.id) {
         const now = Date.now();
         if (now - lastRefreshTimeRef.current >= 15000) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
@@ -1538,9 +1538,9 @@ export function useCloudSync({
     };
 
     const handleOnline = () => {
-      if (currentUser) {
+      if (currentUser?.id) {
         processOfflineSyncQueue();
-        autoRefreshData({ silent: false, force: true, reason: 'Network reconnected' });
+        autoRefreshData({ silent: false, force: true, isManual: true, reason: 'Network reconnected' });
       }
     };
 
@@ -1554,11 +1554,11 @@ export function useCloudSync({
       window.removeEventListener('online', handleOnline);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser, processOfflineSyncQueue]);
+  }, [currentUser?.id, processOfflineSyncQueue]);
 
   // 4. Periodic background safety-net heartbeat revalidation
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser?.id) return;
     const intervalMs = realtimeConnected ? 120000 : 45000;
     const heartbeatInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -1568,7 +1568,7 @@ export function useCloudSync({
     }, intervalMs);
     return () => clearInterval(heartbeatInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser, realtimeConnected, processOfflineSyncQueue]);
+  }, [currentUser?.id, realtimeConnected, processOfflineSyncQueue]);
 
   // Sync All Data to Supabase Cloud
   const syncAllDataToCloud = async (overrideData = null) => {

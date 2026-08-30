@@ -47,7 +47,8 @@ export default function Dashboard() {
     isAutoRefreshing,
     autoRefreshData,
     selectedCategory,
-    activePackDraft
+    activePackDraft,
+    supervisorSettings
   } = useApp();
 
   const [tableSearch, setTableSearch] = useState('');
@@ -785,7 +786,13 @@ export default function Dashboard() {
                       <button
                         className="btn btn-secondary btn-sm"
                         style={{ padding: '4px 8px', fontSize: '11.5px' }}
-                        onClick={() => generatePackingListPDF(sh, sh.items, destSite)}
+                        onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
+                          supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+                          supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+                          supervisorSignature: supervisorSettings?.signature_image,
+                          guardOnDuty: sh.guard_on_duty || supervisorSettings?.guard_on_duty,
+                          pickupDate: sh.pickup_date || sh.shipment_date
+                        })}
                         title="Download Google Sheets styled PDF"
                       >
                         PDF

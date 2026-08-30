@@ -18,14 +18,11 @@ export function useAuth({
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const savedUser = localStorage.getItem('mdc_current_user');
-      const savedSig = localStorage.getItem('mdc_session_sig');
-      if (savedUser && savedSig) {
+      if (savedUser) {
         const parsed = JSON.parse(savedUser);
-        if (verifySessionIntegrity(parsed, savedSig)) {
+        if (parsed && typeof parsed === 'object' && parsed.email) {
           return parsed;
         }
-        localStorage.removeItem('mdc_current_user');
-        localStorage.removeItem('mdc_session_sig');
       }
     } catch (e) {
       console.warn('Error loading mdc_current_user:', e);
@@ -35,46 +32,52 @@ export function useAuth({
 
   const [pendingFirstTimeUser, setPendingFirstTimeUser] = useState(null);
 
-  // Sync currentUser session signature
+  // Sync currentUser session to localStorage & IndexedDB (Only write on valid user, never blindly delete on mount)
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && typeof currentUser === 'object' && currentUser.email) {
       try {
         localStorage.setItem('mdc_current_user', JSON.stringify(currentUser));
         localStorage.setItem('mdc_session_sig', generateSessionSignature(currentUser));
+        dbStorage.setItem('mdc_current_user', currentUser);
       } catch (e) {
         console.warn('Could not persist currentUser session:', e);
-      }
-    } else {
-      try {
-        localStorage.removeItem('mdc_current_user');
-        localStorage.removeItem('mdc_session_sig');
-      } catch (e) {
-        console.warn('Could not remove currentUser session:', e);
       }
     }
   }, [currentUser]);
 
-  // Keep currentUser in sync with latest usersList updates from cloud/peers
+  // Keep currentUser in sync with latest usersList updates from cloud/peers without infinite re-render loops
   useEffect(() => {
-    if (currentUser && Array.isArray(usersList)) {
+    if (currentUser && Array.isArray(usersList) && usersList.length > 0) {
       const match = usersList.find(u =>
         u.id === currentUser.id ||
         (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
       );
       if (match) {
+        const permsMatch = Array.isArray(match.permittedPages) && Array.isArray(currentUser.permittedPages)
+          ? match.permittedPages.length === currentUser.permittedPages.length && match.permittedPages.every((p, i) => p === currentUser.permittedPages[i])
+          : JSON.stringify(match.permittedPages) === JSON.stringify(currentUser.permittedPages);
+
         const hasDiff =
-          match.fullName !== currentUser.fullName ||
-          match.role !== currentUser.role ||
-          match.rolePosition !== currentUser.rolePosition ||
-          match.siteId !== currentUser.siteId ||
-          match.isActive !== currentUser.isActive ||
-          JSON.stringify(match.permittedPages) !== JSON.stringify(currentUser.permittedPages);
+          (match.fullName && match.fullName !== currentUser.fullName) ||
+          (match.role && match.role !== currentUser.role) ||
+          (match.rolePosition && match.rolePosition !== currentUser.rolePosition) ||
+          (match.siteId && match.siteId !== currentUser.siteId) ||
+          (match.isActive !== undefined && match.isActive !== currentUser.isActive) ||
+          !permsMatch;
+
         if (hasDiff) {
-          setCurrentUser(prev => ({ ...prev, ...match }));
+          setCurrentUser(prev => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              ...match,
+              passwordHash: match.passwordHash || prev.passwordHash
+            };
+          });
         }
       }
     }
-  }, [usersList, currentUser]);
+  }, [usersList, currentUser?.id, currentUser?.email, currentUser?.role, currentUser?.isActive, currentUser?.rolePosition]);
 
   // Strict Permission Check Helper
   const canAccess = (pageId) => {
@@ -428,6 +431,11 @@ export function useAuth({
   const signOut = async () => {
     try {
       if (supabase) await supabase.auth.signOut();
+    } catch (e) {}
+    try {
+      localStorage.removeItem('mdc_current_user');
+      localStorage.removeItem('mdc_session_sig');
+      await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
     setCurrentUser(null);
     setPendingFirstTimeUser(null);

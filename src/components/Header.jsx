@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Layers, ChevronDown, Filter } from 'lucide-react';
 
 export default function Header() {
   const {
@@ -85,29 +85,26 @@ export default function Header() {
           </h1>
         </div>
 
-        {/* Global Part Category Filter Pills (Dynamic scrollable / auto-adapting track) */}
+        {/* Global Part Category Filter Dropdown (Space-efficient top bar selector) */}
         {currentMeta.showCategories && (
-          <div className="category-pills" role="tablist" aria-label="Hardware Category Filters">
-            <button
-              type="button"
-              className={`category-pill ${selectedCategory === 'ALL' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('ALL')}
-              title="Show Both Battery and Display parts"
-            >
-              <span className="pill-long-text">Both (Battery & Display)</span>
-              <span className="pill-short-text">Both</span>
-            </button>
-            {categories && categories.length > 0 && categories.map(cat => (
-              <button
-                key={cat.id}
-                type="button"
-                className={`category-pill ${selectedCategory === cat.code ? 'active' : ''}`}
-                onClick={() => setSelectedCategory(cat.code)}
-                title={`Filter by ${cat.name}`}
+          <div className="header-category-dropdown-wrapper" title="Filter parts by hardware category">
+            <div className="header-category-dropdown">
+              <Layers size={13} className="header-category-icon" />
+              <select
+                className="header-category-select"
+                value={selectedCategory || 'ALL'}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                aria-label="Filter parts by category"
               >
-                {cat.name}
-              </button>
-            ))}
+                <option value="ALL">Both (Battery & Display)</option>
+                {categories && categories.length > 0 && categories.map(cat => (
+                  <option key={cat.id} value={cat.code}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="header-category-chevron" />
+            </div>
           </div>
         )}
       </div>

@@ -453,7 +453,81 @@
   line-height: 1.2;
 }
 
-/* Category Pills - Sleek scrollable track with hidden scrollbars */
+/* Space-Saving Category Dropdown Selector */
+.header-category-dropdown-wrapper {
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.header-category-dropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0 8px 0 28px;
+  height: 32px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: all 0.2s ease;
+}
+
+.header-category-dropdown:hover {
+  background: #ffffff;
+  border-color: #94a3b8;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+}
+
+.header-category-dropdown:focus-within {
+  background: #ffffff;
+  border-color: #0284c7;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+}
+
+.header-category-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #0284c7;
+  pointer-events: none;
+}
+
+.header-category-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  padding-right: 18px;
+  cursor: pointer;
+  outline: none;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.header-category-select option {
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 500;
+  padding: 6px 10px;
+}
+
+.header-category-chevron {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  pointer-events: none;
+}
+
+/* Category Pills - Backwards compatibility fallback */
 .category-pills {
   display: flex;
   align-items: center;
@@ -798,8 +872,19 @@
   .header-section-breadcrumb {
     display: none;
   }
-  .category-pills {
-    max-width: 240px;
+  .header-category-dropdown-wrapper {
+    margin-left: 6px;
+  }
+  .header-category-dropdown {
+    height: 30px;
+    padding: 0 6px 0 24px;
+  }
+  .header-category-icon {
+    left: 7px;
+  }
+  .header-category-select {
+    font-size: 11px;
+    padding-right: 14px;
   }
   .header-period-badge {
     padding: 3px 8px;
@@ -822,6 +907,9 @@
   .header-left {
     width: 100%;
     justify-content: space-between;
+  }
+  .header-category-dropdown-wrapper {
+    margin-left: 0;
   }
   .category-pills {
     max-width: 60%;

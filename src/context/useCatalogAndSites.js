@@ -2,6 +2,14 @@ import { useState } from 'react';
 import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
+import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
+
+export const DEFAULT_SUPERVISOR_SETTINGS = {
+  supervisor_name: 'Anjo Alcazar',
+  supervisor_title: 'MDC Supervisor of DC',
+  signature_image: DEFAULT_SUPERVISOR_SIGNATURE_BASE64,
+  guard_on_duty: ''
+};
 
 function normalizeSiteCode(rawCode) {
   if (!rawCode) return '';
@@ -16,6 +24,23 @@ export function useCatalogAndSites({
   enqueueOfflineAction,
   setCloudSyncStatus
 }) {
+  const [supervisorSettings, setSupervisorSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_supervisor_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_SUPERVISOR_SETTINGS,
+          ...parsed,
+          signature_image: parsed.signature_image || DEFAULT_SUPERVISOR_SIGNATURE_BASE64
+        };
+      }
+      return DEFAULT_SUPERVISOR_SETTINGS;
+    } catch {
+      return DEFAULT_SUPERVISOR_SETTINGS;
+    }
+  });
+
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_categories');
@@ -343,6 +368,33 @@ export function useCatalogAndSites({
     }
   };
 
+  const saveSupervisorSettings = (newSettings) => {
+    setSupervisorSettings(prev => {
+      const updated = {
+        ...prev,
+        ...newSettings,
+        updated_at: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem('mdc_supervisor_settings', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_supervisor_settings', updated);
+      return updated;
+    });
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('SUPERVISOR_SETTINGS_UPDATED', newSettings);
+    }
+    showToast('Supervisor & Declaration Form settings updated', 'success');
+  };
+
+  const resetSupervisorSignature = () => {
+    saveSupervisorSettings({
+      signature_image: DEFAULT_SUPERVISOR_SIGNATURE_BASE64
+    });
+    showToast('Supervisor signature reset to default official signature', 'info');
+  };
+
   return {
     categories,
     setCategories,
@@ -350,6 +402,10 @@ export function useCatalogAndSites({
     setSites,
     parts,
     setParts,
+    supervisorSettings,
+    setSupervisorSettings,
+    saveSupervisorSettings,
+    resetSupervisorSignature,
     savePart,
     deletePart,
     saveSite,
@@ -357,3 +413,4 @@ export function useCatalogAndSites({
     applyPmgDirectoryToSites
   };
 }
+

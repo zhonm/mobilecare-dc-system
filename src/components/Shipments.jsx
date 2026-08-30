@@ -31,7 +31,8 @@ export default function Shipments() {
     clearAllShipmentsData,
     showToast,
     currentUser,
-    canUserDeleteRecord
+    canUserDeleteRecord,
+    supervisorSettings
   } = useApp();
 
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -52,7 +53,7 @@ export default function Shipments() {
 
   // Safe Print / PDF Request Handler (Requires Tracking Number)
   const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'pdf') => {
-    const trk = String(shipmentObj.tracking_number || '').trim();
+    const trk = String(shipmentObj.tracking_number || shipmentObj.booking_id || '').trim();
     if (!trk) {
       setTrackingModalState({
         shipment: shipmentObj,
@@ -60,16 +61,29 @@ export default function Shipments() {
         site: siteObj || {},
         action,
         trackingInput: '',
-        carrierInput: shipmentObj.carrier || 'Lite Express'
+        carrierInput: shipmentObj.carrier || (siteObj?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express'),
+        courierNameInput: shipmentObj.pickup_by_name || shipmentObj.courier_name || shipmentObj.rider_name || '',
+        pickupDateInput: shipmentObj.pickup_date || shipmentObj.shipment_date || new Date().toLocaleDateString('en-US'),
+        guardOnDutyInput: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty || '',
+        riderPhoneInput: shipmentObj.rider_phone || '',
+        vehiclePlateInput: shipmentObj.vehicle_plate || ''
       });
       return;
     }
 
+    const pdfOptions = {
+      supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
+      supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+      supervisorSignature: supervisorSettings?.signature_image,
+      guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
+      pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
+    };
+
     if (action === 'pdf') {
-      generatePackingListPDF(shipmentObj, items || [], siteObj || {});
-      showToast(`Downloaded PDF for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+      generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
+      showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
     } else {
-      printPackingListDirect(shipmentObj, items || [], siteObj || {});
+      printPackingListDirect(shipmentObj, items || [], siteObj || {}, pdfOptions);
     }
   };
 
@@ -77,23 +91,44 @@ export default function Shipments() {
     if (!trackingModalState) return;
     const cleanTrk = String(trackingModalState.trackingInput || '').trim();
     if (!cleanTrk) {
-      showToast('Please enter a tracking number before printing/downloading PDF.', 'warning');
+      showToast('Booking ID / Tracking Number is required.', 'warning');
       return;
     }
+
+    const cleanCarrier = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
+    const cleanCourierName = String(trackingModalState.courierNameInput || '').trim();
+    const cleanGuardOnDuty = String(trackingModalState.guardOnDutyInput || '').trim();
+    const cleanPickupDate = String(trackingModalState.pickupDateInput || '').trim() || new Date().toLocaleDateString('en-US');
 
     const updatedShipment = {
       ...trackingModalState.shipment,
       tracking_number: cleanTrk,
-      carrier: trackingModalState.carrierInput || trackingModalState.shipment.carrier || 'Lite Express'
+      booking_id: cleanTrk,
+      carrier: cleanCarrier,
+      courier: cleanCarrier,
+      pickup_by_name: cleanCourierName,
+      courier_name: cleanCourierName,
+      pickup_date: cleanPickupDate,
+      guard_on_duty: cleanGuardOnDuty,
+      rider_phone: String(trackingModalState.riderPhoneInput || '').trim(),
+      vehicle_plate: String(trackingModalState.vehiclePlateInput || '').trim()
     };
 
     await saveShipment(updatedShipment);
-    showToast(`Tracking number #${cleanTrk} saved!`, 'success');
+    showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
+
+    const pdfOptions = {
+      supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+      supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+      supervisorSignature: supervisorSettings?.signature_image,
+      guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
+      pickupDate: updatedShipment.pickup_date
+    };
 
     if (trackingModalState.action === 'pdf') {
-      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site);
+      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
     } else {
-      printPackingListDirect(updatedShipment, trackingModalState.items, trackingModalState.site);
+      printPackingListDirect(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
     }
 
     setTrackingModalState(null);
@@ -574,21 +609,21 @@ export default function Shipments() {
         </div>
       )}
 
-      {/* --- Modal: Tracking Number Required for Official Print / PDF --- */}
+      {/* --- Modal: Tracking Number & Declaration Form Required for Official Print / PDF --- */}
       {trackingModalState && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setTrackingModalState(null); }}>
-          <div className="modal-content" style={{ maxWidth: '500px' }}>
+          <div className="modal-content" style={{ maxWidth: '580px', width: '95%' }}>
             <div className="modal-header" style={{ background: '#0f172a' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
                   <Printer size={20} />
                 </div>
                 <div>
-                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
-                    Tracking Number Required
+                  <h3 style={{ color: '#fff', fontSize: '15px', margin: 0 }}>
+                    Dispatch Details & Declaration Form Record
                   </h3>
-                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Manifest {trackingModalState.shipment?.invoice_ref || trackingModalState.shipment?.shipment_number || 'Shipment'}
+                  <p style={{ color: '#94a3b8', fontSize: '11.5px', margin: '2px 0 0 0' }}>
+                    Manifest {trackingModalState.shipment?.invoice_ref || trackingModalState.shipment?.shipment_number || 'Shipment'} • Destination: {trackingModalState.site?.name || 'Service Hub'}
                   </p>
                 </div>
               </div>
@@ -598,41 +633,119 @@ export default function Shipments() {
             </div>
 
             <form onSubmit={(e) => { e.preventDefault(); handleConfirmTrackingModal(); }}>
-              <div className="modal-body">
-                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
-                  <p style={{ margin: 0, fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
-                    To generate, download, or print the official corporate packing list, please provide the carrier tracking number for this shipment.
+              <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px' }}>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#334155', lineHeight: 1.4 }}>
+                    To generate the official 2-Page corporate Packing List and Declaration Form, please provide the courier and pickup details below.
                   </p>
                 </div>
 
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label font-bold" style={{ fontSize: '12.5px' }}>
-                    Tracking Number <span style={{ color: '#dc2626' }}>*</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="form-input font-mono"
-                    placeholder="e.g. 20227258, TRK-987654"
-                    value={trackingModalState.trackingInput}
-                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, trackingInput: e.target.value }))}
-                    autoFocus
-                    required
-                    style={{ fontSize: '13px' }}
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                      Booking ID / Airway Bill <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input font-mono"
+                      placeholder="e.g. TRK-20227258, LAL-897123"
+                      value={trackingModalState.trackingInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, trackingInput: e.target.value }))}
+                      autoFocus
+                      required
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                      Type of Courier <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Lalamove, Lite Express, Grab"
+                      value={trackingModalState.carrierInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, carrierInput: e.target.value }))}
+                      required
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
                 </div>
 
-                <div className="form-group" style={{ marginBottom: '6px' }}>
-                  <label className="form-label" style={{ fontSize: '12.5px' }}>
-                    Courier / Carrier
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px' }}>
+                      Courier / Rider Name (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Juan Dela Cruz (or leave blank)"
+                      value={trackingModalState.courierNameInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, courierNameInput: e.target.value }))}
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px' }}>
+                      Guard on Duty (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. SG. Roberto Cruz (or leave blank for physical sign)"
+                      value={trackingModalState.guardOnDutyInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, guardOnDutyInput: e.target.value }))}
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '12px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                    Date of Pickup <span style={{ color: '#dc2626' }}>*</span>
                   </label>
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="e.g. Lite Express, Lalamove, J&T"
-                    value={trackingModalState.carrierInput}
-                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, carrierInput: e.target.value }))}
-                    style={{ fontSize: '13px' }}
+                    placeholder="e.g. 8/30/2026"
+                    value={trackingModalState.pickupDateInput}
+                    onChange={(e) => setTrackingModalState(prev => ({ ...prev, pickupDateInput: e.target.value }))}
+                    required
+                    style={{ fontSize: '12.5px' }}
                   />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '4px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px' }}>
+                      Rider Contact Phone (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. 0917-123-4567"
+                      value={trackingModalState.riderPhoneInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, riderPhoneInput: e.target.value }))}
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px' }}>
+                      Vehicle Plate # (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input font-mono"
+                      placeholder="e.g. ABC 1234"
+                      value={trackingModalState.vehiclePlateInput}
+                      onChange={(e) => setTrackingModalState(prev => ({ ...prev, vehiclePlateInput: e.target.value }))}
+                      style={{ fontSize: '12.5px' }}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -646,7 +759,7 @@ export default function Shipments() {
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   {trackingModalState.action === 'pdf' ? <Download size={14} /> : <Printer size={14} />}
-                  <span>Save & {trackingModalState.action === 'pdf' ? 'Download PDF' : 'Print Manifest'}</span>
+                  <span>Save & {trackingModalState.action === 'pdf' ? 'Download PDF (2 Pages)' : 'Print Manifest'}</span>
                 </button>
               </div>
             </form>

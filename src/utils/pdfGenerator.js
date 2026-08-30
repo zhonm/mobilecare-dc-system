@@ -1,12 +1,16 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64 } from '../assets/logoBase64.js';
+import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
 import { calculateWeeklySplit } from './allocationEngine.js';
 
+export { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 };
+
 /**
- * Generates and downloads a pixel-perfect Packing List PDF matching corporate standards
+ * Generates and downloads a pixel-perfect Packing List PDF matching corporate standards,
+ * with the official Declaration Form appended seamlessly as Page 2.
  */
-export function generatePackingListPDF(shipment, items = [], site = {}) {
+export function generatePackingListPDF(shipment, items = [], site = {}, options = {}) {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -19,6 +23,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   const isMedium = totalItemsCount > 25;
   const margin = isDense ? 9 : isMedium ? 11 : 14;
   const tableWidth = pageWidth - (margin * 2);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PAGE 1: PACKING LIST MANIFEST
+  // ══════════════════════════════════════════════════════════════════════════
 
   // Title: "Packing List" Centered
   doc.setFont('helvetica', 'bold');
@@ -69,7 +77,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     { label: 'SHIPMENT DATE:', val: shipment.shipment_date || new Date().toLocaleDateString('en-US') },
     { label: 'BOX/S #:', val: boxDisplay },
     { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
-    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || 'N/A' },
+    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || shipment.booking_id || 'N/A' },
     ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
   ];
 
@@ -246,10 +254,11 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 42, sigRow1Y);
 
   // Row 1 - Right: Verified by
+  const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
   doc.setFont('helvetica', 'bold');
   doc.text('Verified by:', colRightX, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.verified_by_name || 'Anjo Alcazar', colRightX + 20, sigRow1Y);
+  doc.text(supervisorName, colRightX + 20, sigRow1Y);
 
   // Row 2 - Left: Receiving Branch Signature
   doc.setFont('helvetica', 'bold');
@@ -258,7 +267,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 42, sigRow2Y);
 
   // Row 2 - Right: Pickup By (Always aligned on the right under Verified By)
-  const pickupByName = shipment.pickup_by_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+  const pickupByName = shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
   if (pickupByName) {
     doc.setFont('helvetica', 'bold');
     doc.text('Pickup By:', colRightX, sigRow2Y);
@@ -266,15 +275,166 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
     doc.text(pickupByName, colRightX + 20, sigRow2Y);
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // PAGE 2: OFFICIAL DECLARATION FORM FOR SITE TRANSFERS
+  // ══════════════════════════════════════════════════════════════════════════
+  doc.addPage();
+
+  const decMargin = 20;
+  const decPageWidth = doc.internal.pageSize.getWidth();
+  const decHeaderY = 25;
+
+  // Top Left: Mobile Care Logo + BUSINESS DISTRIBUTION CENTER
+  try {
+    if (MOBILECARE_LOGO_BASE64) {
+      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', decMargin, decHeaderY, 18, 18);
+    }
+  } catch (e) {
+    console.warn('Could not render logo in Declaration Form PDF:', e);
+  }
+
+  const decCompX = decMargin + 24;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(15, 23, 42);
+  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + 11);
+
+  // Two-Column Section Geometry
+  const formStartY = decHeaderY + 34;
+  const decLeftColX = decMargin;
+  const decLeftColWidth = 84;
+  const idBoxX = decLeftColX + decLeftColWidth + 14;
+  const idBoxWidth = decPageWidth - decMargin - idBoxX;
+  const idBoxHeight = 98;
+
+  // Dynamic values
+  const destSiteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
+  const courierType = (shipment.carrier || shipment.courier || 'Lite Express').toUpperCase();
+  const bookingId = (shipment.booking_id || shipment.tracking_number || shipment.airway_bill || 'N/A').toUpperCase();
+  const supervisorSig = options.supervisorSignature || DEFAULT_SUPERVISOR_SIGNATURE_BASE64;
+  const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
+  const pickupDate = options.pickupDate || shipment.pickup_date || shipment.shipment_date || new Date().toLocaleDateString('en-US');
+
+  // Left Column Fields
+  const decRowGap = 25;
+
+  // 1. TRANSFER TO (SITE)
+  const f1Y = formStartY;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  doc.text('TRANSFER TO (SITE)', decLeftColX, f1Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(destSiteName, decLeftColX, f1Y + 7, { maxWidth: decLeftColWidth });
+  doc.setDrawColor(100, 116, 139);
+  doc.setLineWidth(0.35);
+  doc.line(decLeftColX, f1Y + 9.5, decLeftColX + decLeftColWidth, f1Y + 9.5);
+
+  // 2. TYPE OF COURIER
+  const f2Y = f1Y + decRowGap;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('TYPE OF COURIER', decLeftColX, f2Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(courierType, decLeftColX, f2Y + 7, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f2Y + 9.5, decLeftColX + decLeftColWidth, f2Y + 9.5);
+
+  // 3. BOOKING ID / AIRWAY BILL:
+  const f3Y = f2Y + decRowGap;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('BOOKING ID / AIRWAY BILL:', decLeftColX, f3Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(bookingId, decLeftColX, f3Y + 7, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f3Y + 9.5, decLeftColX + decLeftColWidth, f3Y + 9.5);
+
+  // 4. COURIER NAME AND SIGNATURE
+  const f4Y = f3Y + decRowGap;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('COURIER NAME AND SIGNATURE', decLeftColX, f4Y);
+  let courierDisplay = pickupByName;
+  if (shipment.vehicle_plate || shipment.rider_phone) {
+    const extras = [];
+    if (shipment.vehicle_plate) extras.push(`Plate: ${shipment.vehicle_plate}`);
+    if (shipment.rider_phone) extras.push(`Tel: ${shipment.rider_phone}`);
+    if (extras.length > 0) courierDisplay = courierDisplay ? `${courierDisplay} (${extras.join(' • ')})` : extras.join(' • ');
+  }
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(courierDisplay, decLeftColX, f4Y + 7, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f4Y + 9.5, decLeftColX + decLeftColWidth, f4Y + 9.5);
+
+  // Right Column: ID HERE Box
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.4);
+  doc.rect(idBoxX, f1Y - 4, idBoxWidth, idBoxHeight, 'S');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(15, 23, 42);
+  doc.text('ID HERE', idBoxX + (idBoxWidth / 2), f1Y - 4 + (idBoxHeight / 2) + 2, { align: 'center' });
+
+  // Bottom Section
+  const bottomY = f4Y + 42;
+
+  // Left: MDC - SUPERVISOR
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('MDC - SUPERVISOR', decLeftColX, bottomY);
+
+  try {
+    if (supervisorSig) {
+      doc.addImage(supervisorSig, 'PNG', decLeftColX + 10, bottomY - 5, 34, 18);
+    }
+  } catch (sigErr) {
+    console.warn('Could not render supervisor signature in Declaration Form PDF:', sigErr);
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text(supervisorName.toUpperCase(), decLeftColX + 16, bottomY + 9);
+  doc.setDrawColor(100, 116, 139);
+  doc.setLineWidth(0.35);
+  doc.line(decLeftColX, bottomY + 11.5, decLeftColX + decLeftColWidth, bottomY + 11.5);
+
+  // Right: GUARD ON DUTY & DATE PICKED UP
+  const rightBottomColX = idBoxX;
+  const rightBottomWidth = idBoxWidth;
+
+  // GUARD ON DUTY:
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('GUARD ON DUTY:', rightBottomColX, bottomY);
+  if (guardOnDuty) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(guardOnDuty, rightBottomColX, bottomY + 7);
+  }
+  doc.line(rightBottomColX, bottomY + 11.5, rightBottomColX + rightBottomWidth, bottomY + 11.5);
+
+  // DATE PICKED UP:
+  const bottomDateY = bottomY + 24;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(pickupDate, rightBottomColX, bottomDateY + 7);
+  doc.line(rightBottomColX, bottomDateY + 11.5, rightBottomColX + rightBottomWidth, bottomDateY + 11.5);
+
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
   doc.save(filename);
 }
 
 /**
- * Triggers native browser print preview for immediate packing list manifest printing
+ * Triggers native browser print preview for immediate packing list manifest printing,
+ * with the official Declaration Form appended as Page 2.
  */
-export function printPackingListDirect(shipment, items = [], site = {}) {
+export function printPackingListDirect(shipment, items = [], site = {}, options = {}) {
   const printWindow = window.open('', '_blank', 'width=900,height=800');
   if (!printWindow) {
     window.print();
@@ -343,7 +503,19 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
   `;
   }).join('');
 
-  const pickupByName = shipment.pickup_by_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+  const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
+  const supervisorSig = options.supervisorSignature || DEFAULT_SUPERVISOR_SIGNATURE_BASE64;
+  const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
+  const pickupDate = options.pickupDate || shipment.pickup_date || shipment.shipment_date || new Date().toLocaleDateString('en-US');
+  const pickupByName = shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+
+  let courierDisplayHtml = pickupByName;
+  if (shipment.vehicle_plate || shipment.rider_phone) {
+    const extras = [];
+    if (shipment.vehicle_plate) extras.push(`Plate: ${shipment.vehicle_plate}`);
+    if (shipment.rider_phone) extras.push(`Tel: ${shipment.rider_phone}`);
+    if (extras.length > 0) courierDisplayHtml = courierDisplayHtml ? `${courierDisplayHtml} (${extras.join(' • ')})` : extras.join(' • ');
+  }
 
   const html = `
     <!DOCTYPE html>
@@ -351,7 +523,7 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
     <head>
       <title>Packing List - ${shipment.invoice_ref || 'Manifest'}</title>
       <style>
-        @page { size: portrait; margin: 5mm 8mm; }
+        @page { size: portrait; margin: 6mm 10mm; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; }
         body { padding: 4px 6px; font-size: ${bodyFontSize}; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -373,12 +545,16 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
         .totals-table .label-cell { background-color: #54595F !important; color: #ffffff !important; font-weight: 700; font-size: ${metaFontSize}; width: 52%; text-align: center; }
         .totals-table .val-cell { text-align: right; font-weight: 800; font-size: ${metaFontSize}; background: #ffffff; border: 1px solid #54595F; }
         .signatures-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px 14px; margin-top: 8px; border-top: 1px solid #cbd5e1; padding-top: 8px; font-size: ${metaFontSize}; page-break-inside: avoid; }
+
+        .page-break { page-break-before: always; }
         @media print {
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .page-break { page-break-before: always; }
         }
       </style>
     </head>
     <body>
+      <!-- PAGE 1: PACKING LIST MANIFEST -->
       <div class="header-title">Packing List</div>
       <div class="top-grid">
         <div style="display: flex; align-items: flex-start; gap: 12px;">
@@ -397,7 +573,7 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
             <tr><td class="meta-label">SHIPMENT DATE:</td><td class="meta-val">${shipment.shipment_date || new Date().toLocaleDateString('en-US')}</td></tr>
             <tr><td class="meta-label">BOX/S #:</td><td class="meta-val">${boxDisplay}</td></tr>
             <tr><td class="meta-label">COURIER:</td><td class="meta-val">${shipment.carrier || shipment.courier || 'Lite Express'}</td></tr>
-            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || 'N/A'}</td></tr>
+            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || shipment.booking_id || 'N/A'}</td></tr>
             ${shipment.transfer_slip_number ? `<tr><td class="meta-label">TRANSFER SLIP #:</td><td class="meta-val">${shipment.transfer_slip_number}</td></tr>` : ''}
           </table>
         </div>
@@ -454,7 +630,7 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
           <strong>Prepared and Counted by:</strong> <span style="margin-left: 8px;">${shipment.prepared_by_name || 'Joshua Juvida'}</span>
         </div>
         <div>
-          <strong>Verified by:</strong> <span style="margin-left: 8px;">${shipment.verified_by_name || 'Anjo Alcazar'}</span>
+          <strong>Verified by:</strong> <span style="margin-left: 8px;">${supervisorName}</span>
         </div>
         <div>
           <strong>Receiving Branch Signature:</strong> <span style="margin-left: 8px;">${shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}</span>
@@ -464,6 +640,84 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
           <strong>Pickup By:</strong> <span style="margin-left: 8px;">${pickupByName}</span>
         </div>` : '<div></div>'}
       </div>
+
+      <!-- PAGE BREAK TO PAGE 2: DECLARATION FORM -->
+      <div class="page-break" style="padding: 24px 20px 10px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
+        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 36px;">
+          <img src="${MOBILECARE_LOGO_BASE64}" alt="Mobile Care Logo" style="width: 54px; height: 54px; object-fit: contain; flex-shrink: 0;" />
+          <div style="font-size: 14pt; font-weight: 800; color: #0f172a; letter-spacing: -0.01em;">
+            BUSINESS DISTRIBUTION CENTER
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1.15fr 1fr; gap: 32px; align-items: start; margin-bottom: 50px;">
+          <!-- Left Column Fields -->
+          <div style="display: flex; flex-direction: column; gap: 26px;">
+            <div>
+              <div style="font-size: 10pt; font-weight: 800; color: #0f172a; margin-bottom: 4px;">TRANSFER TO (SITE)</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 18px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${destSiteName}
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 10pt; font-weight: 800; color: #0f172a; margin-bottom: 4px;">TYPE OF COURIER</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 18px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${courierType}
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 10pt; font-weight: 800; color: #0f172a; margin-bottom: 4px;">BOOKING ID / AIRWAY BILL:</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 18px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${bookingId}
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 10pt; font-weight: 800; color: #0f172a; margin-bottom: 4px;">COURIER NAME AND SIGNATURE</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 18px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${courierDisplayHtml || '&nbsp;'}
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: ID HERE Box -->
+          <div style="border: 2px solid #0f172a; height: 300px; display: flex; align-items: center; justify-content: center; background: #ffffff;">
+            <div style="font-size: 15pt; font-weight: 800; letter-spacing: 0.05em; color: #0f172a;">ID HERE</div>
+          </div>
+        </div>
+
+        <!-- Bottom Row Signatures -->
+        <div style="display: grid; grid-template-columns: 1.15fr 1fr; gap: 32px; align-items: start;">
+          <!-- Left: MDC Supervisor -->
+          <div>
+            <div style="font-size: 11pt; font-weight: 800; color: #0f172a; margin-bottom: 2px;">MDC - SUPERVISOR</div>
+            <div style="position: relative; padding-top: 6px; border-bottom: 1.5px solid #64748b; min-height: 48px; display: flex; align-items: flex-end; justify-content: center;">
+              ${supervisorSig ? `<img src="${supervisorSig}" alt="Supervisor Signature" style="position: absolute; bottom: 2px; height: 48px; object-fit: contain; pointer-events: none;" />` : ''}
+              <div style="font-size: 10pt; font-weight: 800; color: #0f172a; z-index: 1;">${supervisorName.toUpperCase()}</div>
+            </div>
+          </div>
+
+          <!-- Right: Guard on Duty and Date Picked Up -->
+          <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div>
+              <div style="font-size: 11pt; font-weight: 800; color: #0f172a; margin-bottom: 2px;">GUARD ON DUTY:</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 20px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${guardOnDuty || '&nbsp;'}
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 11pt; font-weight: 800; color: #0f172a; margin-bottom: 2px;">DATE PICKED UP:</div>
+              <div style="font-size: 10.5pt; font-weight: 500; color: #0f172a; min-height: 20px; padding-bottom: 4px; border-bottom: 1.5px solid #64748b;">
+                ${pickupDate || '&nbsp;'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <script>
         window.onload = function() {
           window.print();

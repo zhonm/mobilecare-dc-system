@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import UserAccessManagement from './UserAccessManagement';
 import {
@@ -19,8 +19,14 @@ import {
   Building2,
   Phone,
   User,
-  RefreshCw
+  RefreshCw,
+  FileSignature,
+  UploadCloud,
+  RotateCcw,
+  ShieldCheck,
+  FileText
 } from 'lucide-react';
+import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
 
 export default function SettingsCatalog() {
   const {
@@ -33,11 +39,20 @@ export default function SettingsCatalog() {
     refreshSitesFromCloud,
     syncAllDataToCloud,
     currentUser,
-    showToast
+    showToast,
+    supervisorSettings,
+    saveSupervisorSettings,
+    resetSupervisorSignature
   } = useApp();
-  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'users' | 'sql'
+  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'users' | 'sql'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
+
+  // Supervisor Form State
+  const [supervisorName, setSupervisorName] = useState(supervisorSettings?.supervisor_name || 'Anjo Alcazar');
+  const [supervisorTitle, setSupervisorTitle] = useState(supervisorSettings?.supervisor_title || 'MDC Supervisor of DC');
+  const [guardOnDutyDefault, setGuardOnDutyDefault] = useState(supervisorSettings?.guard_on_duty || '');
+  const signatureFileInputRef = useRef(null);
 
   // Search & Filter State
   const [partSearch, setPartSearch] = useState('');
@@ -244,6 +259,13 @@ export default function SettingsCatalog() {
         >
           <Settings size={15} />
           <span>Part Categories ({categories.length})</span>
+        </button>
+        <button
+          className={`btn ${activeTab === 'supervisor' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setActiveTab('supervisor')}
+        >
+          <FileSignature size={15} />
+          <span>Supervisor & Declaration Form</span>
         </button>
         {currentUser?.role === 'superadmin' && (
           <button
@@ -1007,7 +1029,289 @@ export default function SettingsCatalog() {
         </div>
       )}
 
-      {/* 4. User Access Management Tab (for Superadmin) */}
+      {/* 4. Supervisor & Declaration Form Settings Tab */}
+      {activeTab === 'supervisor' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={20} color="var(--primary)" />
+                  <h3 style={{ margin: 0 }}>MDC Supervisor & Declaration Form Directive</h3>
+                </div>
+                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Configure the default Distribution Center supervisor assignment, official signature image, and declaration form auto-population rules.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={resetSupervisorSignature}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <RotateCcw size={13} />
+                  <span>Reset to Official Signature</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    saveSupervisorSettings({
+                      supervisor_name: supervisorName.trim() || 'Anjo Alcazar',
+                      supervisor_title: supervisorTitle.trim() || 'MDC Supervisor of DC',
+                      guard_on_duty: guardOnDutyDefault.trim()
+                    });
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Save size={13} />
+                  <span>Save Supervisor Details</span>
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+              {/* Supervisor Info Card */}
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ margin: '0 0 14px 0', fontSize: '13.5px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <User size={15} color="var(--primary)" />
+                  <span>Supervisor Assignment & Identity</span>
+                </h4>
+
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                    MDC Supervisor Name <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Anjo Alcazar"
+                    value={supervisorName}
+                    onChange={(e) => setSupervisorName(e.target.value)}
+                    style={{ fontSize: '13px' }}
+                  />
+                  <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
+                    Default supervisor for all packing lists and declaration forms (Fixed to Anjo Alcazar).
+                  </span>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label" style={{ fontSize: '12px' }}>
+                    Supervisor Position / Role Title
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. MDC Supervisor of DC"
+                    value={supervisorTitle}
+                    onChange={(e) => setSupervisorTitle(e.target.value)}
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: '4px' }}>
+                  <label className="form-label" style={{ fontSize: '12px' }}>
+                    Default Guard on Duty (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. SG. Roberto Cruz"
+                    value={guardOnDutyDefault}
+                    onChange={(e) => setGuardOnDutyDefault(e.target.value)}
+                    style={{ fontSize: '13px' }}
+                  />
+                  <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
+                    Can be left blank if guard on duty physically signs upon pickup.
+                  </span>
+                </div>
+              </div>
+
+              {/* Signature Management Card */}
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ margin: '0 0 14px 0', fontSize: '13.5px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileSignature size={15} color="var(--primary)" />
+                  <span>Official Signature Image File</span>
+                </h4>
+
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                  {/* Signature Preview Box */}
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '110px',
+                      background: '#ffffff',
+                      border: '1.5px dashed #cbd5e1',
+                      borderRadius: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '10px',
+                      position: 'relative'
+                    }}
+                  >
+                    {supervisorSettings?.signature_image ? (
+                      <img
+                        src={supervisorSettings.signature_image}
+                        alt="Supervisor Signature Preview"
+                        style={{ maxHeight: '90px', maxWidth: '90%', objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>No signature image loaded</span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
+                    <input
+                      type="file"
+                      ref={signatureFileInputRef}
+                      accept="image/png,image/jpeg,image/webp"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (!file.type.startsWith('image/')) {
+                          showToast('Please select a valid image file (PNG, JPG, or WebP)', 'error');
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = (loadEvt) => {
+                          const base64Data = loadEvt.target.result;
+                          saveSupervisorSettings({
+                            supervisor_name: supervisorName.trim() || 'Anjo Alcazar',
+                            supervisor_title: supervisorTitle.trim() || 'MDC Supervisor of DC',
+                            signature_image: base64Data,
+                            guard_on_duty: guardOnDutyDefault.trim()
+                          });
+                          showToast('New supervisor signature uploaded and saved!', 'success');
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      onClick={() => signatureFileInputRef.current?.click()}
+                    >
+                      <UploadCloud size={14} />
+                      <span>Upload New Signature (PNG/JPG)</span>
+                    </button>
+                  </div>
+
+                  <span style={{ fontSize: '11px', color: '#64748b', textAlign: 'center', lineHeight: 1.4 }}>
+                    Attaches the supervisor’s signature file (<code>SupervisorSignature.png</code>) to Page 2 of all site transfer packing lists. Easy replacement without code changes.
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Declaration Form Mockup Preview */}
+          <div className="card" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+              <FileText size={16} color="var(--primary)" />
+              <h4 style={{ margin: 0, fontSize: '13px', color: '#0f172a' }}>
+                Live Declaration Form Layout (Page 2 Preview)
+              </h4>
+            </div>
+
+            <div
+              style={{
+                background: '#ffffff',
+                border: '1px solid #94a3b8',
+                borderRadius: '4px',
+                padding: '24px',
+                maxWidth: '720px',
+                margin: '0 auto',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+              }}
+            >
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '28px' }}>
+                <div style={{ width: '42px', height: '42px', background: '#0f172a', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffffff', fontWeight: 800, fontSize: '10px' }}>
+                  MOBILE CARE
+                </div>
+                <div style={{ fontSize: '13pt', fontWeight: 800, color: '#0f172a' }}>
+                  BUSINESS DISTRIBUTION CENTER
+                </div>
+              </div>
+
+              {/* Grid 2 Columns */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px', marginBottom: '40px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  <div>
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>TRANSFER TO (SITE)</div>
+                    <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
+                      SERVICE HUB / BRANCH NAME
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>TYPE OF COURIER</div>
+                    <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
+                      LALAMOVE / LITE EXPRESS / UTILITY
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>BOOKING ID / AIRWAY BILL:</div>
+                    <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
+                      TRK-20260827-001
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>COURIER NAME AND SIGNATURE</div>
+                    <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b', color: '#64748b' }}>
+                      [Courier Rider Name & Physical Signature Line]
+                    </div>
+                  </div>
+                </div>
+
+                {/* ID HERE Box */}
+                <div style={{ border: '2px solid #0f172a', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc' }}>
+                  <div style={{ fontSize: '14pt', fontWeight: 800, color: '#0f172a', letterSpacing: '0.05em' }}>ID HERE</div>
+                </div>
+              </div>
+
+              {/* Bottom Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+                <div>
+                  <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>MDC - SUPERVISOR</div>
+                  <div style={{ position: 'relative', borderBottom: '1px solid #64748b', minHeight: '38px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                    {supervisorSettings?.signature_image && (
+                      <img src={supervisorSettings.signature_image} alt="Supervisor Signature" style={{ position: 'absolute', bottom: '2px', height: '36px', objectFit: 'contain' }} />
+                    )}
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', zIndex: 1 }}>{supervisorName.toUpperCase()}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>GUARD ON DUTY:</div>
+                    <div style={{ fontSize: '9.5pt', minHeight: '18px', paddingBottom: '2px', borderBottom: '1px solid #64748b', color: '#64748b' }}>
+                      {guardOnDutyDefault || '[Guard on duty signature]'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>DATE PICKED UP:</div>
+                    <div style={{ fontSize: '9.5pt', minHeight: '18px', paddingBottom: '2px', borderBottom: '1px solid #64748b' }}>
+                      {new Date().toLocaleDateString('en-US')}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. User Access Management Tab (for Superadmin) */}
       {activeTab === 'users' && (
         <UserAccessManagement />
       )}
