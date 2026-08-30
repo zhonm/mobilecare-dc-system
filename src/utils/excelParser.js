@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
-import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
+import { calculateForecastByModel, calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import {
   calculateOptionAAllocation,
   allocatePartToSites,
@@ -450,7 +450,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             filterScope,
             selectedMonth,
             fileName: file.name,
-            allocationMode: options.allocationMode || 'OPTION_A'
+            allocationMode: options.allocationMode || 'OPTION_B'
           });
 
           resolve({
@@ -898,7 +898,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           filterScope,
           selectedMonth,
           fileName: file.name,
-          allocationMode: options.allocationMode || 'OPTION_A'
+          allocationMode: options.allocationMode || 'OPTION_B'
         });
         resolve({
           success: true,
@@ -986,11 +986,17 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
         }
         const rec = calculateRecommendedOrder(targetValue, 0.05);
 
+        const pricingBat = lookupPartPrice(pnBat, descBat, parts);
+        const stockPriceBat = pricingBat.stockingPrice || 99;
+        const exchangePriceBat = pricingBat.exchangePrice || 51;
+
         forecastItems.push({
           part_id: `part-${pnBat}`,
           part_number: pnBat,
           description: descBat,
           category_id: 'cat-battery',
+          stocking_price: stockPriceBat,
+          exchange_price: exchangePriceBat,
           ytd_monthly_counts: historyCounts,
           computed_forecast: targetValue,
           admin_override: null,
@@ -1005,7 +1011,8 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
           description: descBat,
           category_id: 'cat-battery',
           iphone_model: descBat.replace(/^(Battery),?\s*/i, ''),
-          stocking_price: 150,
+          stocking_price: stockPriceBat,
+          exchange_price: exchangePriceBat,
           is_active: true
         });
       }
@@ -1027,12 +1034,17 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
           }
         }
         const rec = calculateRecommendedOrder(targetValue, 0.05);
+        const pricingDisp = lookupPartPrice(pnDisp, descDisp, parts);
+        const stockPriceDisp = pricingDisp.stockingPrice || 279;
+        const exchangePriceDisp = pricingDisp.exchangePrice || 234;
 
         forecastItems.push({
           part_id: `part-${pnDisp}`,
           part_number: pnDisp,
           description: descDisp,
           category_id: 'cat-display',
+          stocking_price: stockPriceDisp,
+          exchange_price: exchangePriceDisp,
           ytd_monthly_counts: historyCounts,
           computed_forecast: targetValue,
           admin_override: null,
@@ -1047,7 +1059,8 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
           description: descDisp,
           category_id: 'cat-display',
           iphone_model: descDisp.replace(/^(Display),?\s*/i, ''),
-          stocking_price: 280,
+          stocking_price: stockPriceDisp,
+          exchange_price: exchangePriceDisp,
           is_active: true
         });
       }
@@ -1096,12 +1109,17 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
       const isDisplay = desc.toLowerCase().includes('display') || desc.toLowerCase().includes('screen');
       const catId = isDisplay ? 'cat-display' : 'cat-battery';
       const rec = calculateRecommendedOrder(targetValue, 0.05);
+      const pricing = lookupPartPrice(pn, desc, parts);
+      const stockPrice = pricing.stockingPrice || (isDisplay ? 279 : 99);
+      const exchangePrice = pricing.exchangePrice || (isDisplay ? 234 : 51);
 
       forecastItems.push({
         part_id: `part-${pn}`,
         part_number: pn,
         description: desc,
         category_id: catId,
+        stocking_price: stockPrice,
+        exchange_price: exchangePrice,
         ytd_monthly_counts: historyCounts,
         computed_forecast: targetValue,
         admin_override: null,
@@ -1116,7 +1134,8 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
         description: desc,
         category_id: catId,
         iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
-        stocking_price: isDisplay ? 279 : 99,
+        stocking_price: stockPrice,
+        exchange_price: exchangePrice,
         is_active: true
       });
     }
@@ -1296,13 +1315,14 @@ export function processRawUsageSheet(
         filterScope: optionsOrFilterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY',
         selectedMonth: maybeSelectedMonth || 'auto',
         fileName: maybeFileName || '',
-        allocationMode: 'OPTION_A'
+        allocationMode: 'OPTION_B'
       };
 
   const filterScope = options.filterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
   const selectedMonth = options.selectedMonth !== undefined ? options.selectedMonth : 'auto';
   const fileName = options.fileName || '';
-  const allocationMode = options.allocationMode || 'OPTION_A';
+  const allocationMode = options.allocationMode || 'OPTION_B';
+  const forecastingModel = options.forecastingModel || (typeof window !== 'undefined' ? localStorage.getItem('mdc_forecasting_model') : null) || 'linear';
 
   // 1. Identify header row
   let headerIndex = 0;
@@ -1545,7 +1565,12 @@ export function processRawUsageSheet(
     };
 
     const pn = pEntry.partNumber;
-    const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
+    const computedForecast = calculateForecastByModel(pEntry.months, forecastingModel, {
+      targetX: regressionTargetX,
+      filterAnomalies: forecastingModel !== 'linear',
+      categoryId: 'cat-display',
+      description: desc
+    });
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
     const pricing = lookupPartPrice(pn, desc, existingParts);
 
@@ -1640,7 +1665,12 @@ export function processRawUsageSheet(
     };
 
     const pn = pEntry.partNumber;
-    const computedForecast = calculateLinearRegressionForecast(pEntry.months, regressionTargetX);
+    const computedForecast = calculateForecastByModel(pEntry.months, forecastingModel, {
+      targetX: regressionTargetX,
+      filterAnomalies: forecastingModel !== 'linear',
+      categoryId: 'cat-battery',
+      description: desc
+    });
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
     const pricing = lookupPartPrice(pn, desc, existingParts);
 

@@ -11,6 +11,7 @@ export function usePartsRequests({
   parts = [],
   sites = [],
   inventoryUnits = [],
+  setInventoryUnits,
   repairUsageRecords = [],
   showToast,
   broadcastCloudEvent,
@@ -179,60 +180,99 @@ export function usePartsRequests({
 
     if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
 
-    // Execute atomic RPC in Supabase if online and UUIDs are valid
-    if (supabase && isUUID(resolvedSiteId) && isUUID(resolvedPartId)) {
+    // Execute atomic creation in Supabase
+    if (supabase) {
       try {
-        const { data: rpcRes, error: rpcErr } = await supabase.rpc('create_parts_request', {
-          p_site_id: resolvedSiteId,
-          p_part_id: resolvedPartId,
-          p_quantity: qty,
-          p_priority: cleanPriority,
-          p_reason: cleanReason,
-          p_notes: cleanNotes
+        let validSiteId = isUUID(resolvedSiteId) ? resolvedSiteId : null;
+        let validPartId = isUUID(resolvedPartId) ? resolvedPartId : null;
+
+        // 1. Resolve site UUID if not already a UUID
+        if (!validSiteId) {
+          const siteCodeToMatch = (targetSite?.code || effectiveSiteId).toUpperCase();
+          const { data: dbSite } = await supabase.from('sites').select('id').eq('code', siteCodeToMatch).maybeSingle();
+          if (dbSite?.id) {
+            validSiteId = dbSite.id;
+          } else {
+            const { data: anyDbSite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+            validSiteId = anyDbSite?.id || toValidUUID(effectiveSiteId);
+          }
+        }
+
+        // 2. Resolve part UUID if not already a UUID
+        if (!validPartId) {
+          const pnToMatch = (targetPart?.part_number || partId).toUpperCase();
+          const { data: dbPart } = await supabase.from('parts').select('id').eq('part_number', pnToMatch).maybeSingle();
+          if (dbPart?.id) {
+            validPartId = dbPart.id;
+          } else {
+            // Upsert part if missing
+            const { data: newPart } = await supabase.from('parts').upsert({
+              part_number: pnToMatch,
+              description: targetPart?.description || `Part ${pnToMatch}`
+            }, { onConflict: 'part_number' }).select('id').maybeSingle();
+            validPartId = newPart?.id || toValidUUID(partId);
+          }
+        }
+
+        // 3. Insert into public.parts_requests table in Supabase
+        const insertPayload = {
+          request_number: tempReqNum,
+          site_id: validSiteId,
+          part_id: validPartId,
+          quantity_requested: qty,
+          quantity_fulfilled: 0,
+          status: 'pending',
+          priority: cleanPriority,
+          requested_by: isUUID(currentUser?.id) ? currentUser?.id : null,
+          requested_by_name: currentUser?.fullName || 'MobileCare Staff',
+          reason: cleanReason,
+          notes: cleanNotes,
+          created_at: nowIso,
+          updated_at: nowIso
+        };
+
+        const { data: directInsert, error: directErr } = await supabase
+          .from('parts_requests')
+          .insert(insertPayload)
+          .select('*, parts:part_id(*), sites:site_id(*)')
+          .maybeSingle();
+
+        if (directErr) {
+          console.warn('parts_requests direct insert warning:', directErr.message);
+        }
+
+        const finalReq = directInsert ? {
+          ...optimisticRequest,
+          id: directInsert.id,
+          request_number: directInsert.request_number || optimisticRequest.request_number,
+          created_at: directInsert.created_at || optimisticRequest.created_at
+        } : optimisticRequest;
+
+        setPartsRequests(prev => {
+          const updated = (prev || []).map(r => r.id === optimisticRequest.id ? finalReq : r);
+          persistPartsRequests(updated);
+          return updated;
         });
 
-        if (rpcErr) {
-          console.warn('create_parts_request RPC error, attempting direct insert fallback:', rpcErr.message);
-          // Fallback direct insert if RPC not registered yet
-          const { data: directInsert, error: directErr } = await supabase
-            .from('parts_requests')
-            .insert({
-              request_number: tempReqNum,
-              site_id: resolvedSiteId,
-              part_id: resolvedPartId,
-              quantity_requested: qty,
-              quantity_fulfilled: 0,
-              status: 'pending',
-              priority: cleanPriority,
-              requested_by: currentUser?.id,
-              requested_by_name: currentUser?.fullName || 'MobileCare Staff',
-              reason: cleanReason,
-              notes: cleanNotes,
-              created_at: nowIso,
-              updated_at: nowIso
-            })
-            .select()
-            .maybeSingle();
-
-          if (directErr) throw directErr;
-          if (directInsert) {
-            setPartsRequests(prev => {
-              const updated = (prev || []).map(r => r.id === optimisticRequest.id ? { ...optimisticRequest, ...directInsert } : r);
-              persistPartsRequests(updated);
-              return updated;
-            });
-          }
-        } else if (rpcRes && rpcRes.id) {
-          setPartsRequests(prev => {
-            const updated = (prev || []).map(r => r.id === optimisticRequest.id ? {
-              ...optimisticRequest,
-              id: rpcRes.id,
-              request_number: rpcRes.request_number || optimisticRequest.request_number,
-              created_at: rpcRes.created_at || optimisticRequest.created_at
-            } : r);
-            persistPartsRequests(updated);
-            return updated;
-          });
+        // 4. Update master_parts_requests_registry in saved_records for instant cross-tier synchronization
+        try {
+          const currentRequests = JSON.parse(localStorage.getItem('mdc_parts_requests') || '[]');
+          const mergedReg = [finalReq, ...currentRequests.filter(r => r.id !== finalReq.id && r.id !== optimisticRequest.id)];
+          await supabase.from('saved_records').upsert({
+            id: 'master_parts_requests_registry',
+            record_type: 'parts_requests_registry',
+            period_label: 'Master Parts Requests Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Live Parts Requests registry across all branches',
+            saved_by_name: currentUser?.fullName || 'MobileCare Staff',
+            snapshot_data: {
+              requests: mergedReg.slice(0, 300)
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (regErr) {
+          console.warn('master_parts_requests_registry sync note:', regErr.message);
         }
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -327,9 +367,10 @@ export function usePartsRequests({
     notes,
     fulfilledShipmentId = null
   }) => {
-    if (!isSuperadmin) {
-      showToast?.('Permission Denied: Only the DC Superadmin has the authority to approve or deny parts requests.', 'error');
-      return { success: false, error: 'Permission Denied: Only Superadmin can approve/deny requests' };
+    const isAuthorized = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
+    if (!isAuthorized) {
+      showToast?.('Permission Denied: Only the DC Superadmin or Admin has the authority to review parts requests.', 'error');
+      return { success: false, error: 'Permission Denied' };
     }
 
     const validStatuses = ['pending', 'approved', 'rejected', 'partially_fulfilled', 'fulfilled', 'cancelled'];
@@ -353,7 +394,7 @@ export function usePartsRequests({
     const updatePayload = {
       status,
       quantity_fulfilled: effectiveQtyFulfilled,
-      reviewed_by: currentUser?.id || null,
+      reviewed_by: isUUID(currentUser?.id) ? currentUser?.id : null,
       reviewed_at: nowIso,
       fulfilled_shipment_id: fulfilledShipmentId || target.fulfilled_shipment_id || null,
       notes: notes !== undefined ? notes : target.notes,
@@ -374,12 +415,28 @@ export function usePartsRequests({
     setPartsRequests(nextRequests);
     persistPartsRequests(nextRequests);
 
-    if (supabase && isUUID(target.id)) {
+    if (supabase) {
       try {
-        await supabase
-          .from('parts_requests')
-          .update(updatePayload)
-          .eq('id', target.id);
+        if (isUUID(target.id)) {
+          await supabase
+            .from('parts_requests')
+            .update(updatePayload)
+            .eq('id', target.id);
+        }
+
+        await supabase.from('saved_records').upsert({
+          id: 'master_parts_requests_registry',
+          record_type: 'parts_requests_registry',
+          period_label: 'Master Parts Requests Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Live Parts Requests registry across all branches',
+          saved_by_name: currentUser?.fullName || 'MobileCare Staff',
+          snapshot_data: {
+            requests: nextRequests.slice(0, 300)
+          },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
       } catch (err) {
         console.warn('updatePartsRequestStatus cloud sync error:', err.message);
         if (enqueueOfflineAction) {
@@ -451,6 +508,62 @@ export function usePartsRequests({
       }
       partsSummary[cleanPN].total += 1;
     });
+
+    // Load zero-stock 3-day purge tracker
+    let zeroStockTracker = {};
+    try {
+      zeroStockTracker = JSON.parse(localStorage.getItem('mdc_zero_stock_tracker') || '{}');
+    } catch (e) {}
+
+    let trackerModified = false;
+    const nowMs = Date.now();
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
+    Object.keys(partsSummary).forEach(pn => {
+      const item = partsSummary[pn];
+      const trackerKey = `${siteId}_${pn}`;
+
+      if (item.inStock > 0) {
+        item.status = 'in_stock';
+        item.outOfStockDays = 0;
+        item.daysUntilPurge = null;
+        if (zeroStockTracker[trackerKey]) {
+          delete zeroStockTracker[trackerKey];
+          trackerModified = true;
+        }
+      } else {
+        item.status = 'out_of_stock';
+        if (!zeroStockTracker[trackerKey] || !zeroStockTracker[trackerKey].zeroStockSince) {
+          zeroStockTracker[trackerKey] = {
+            siteId,
+            siteCode,
+            partNumber: pn,
+            zeroStockSince: new Date().toISOString()
+          };
+          trackerModified = true;
+        }
+
+        const zeroSinceMs = new Date(zeroStockTracker[trackerKey].zeroStockSince).getTime();
+        const elapsedMs = nowMs - zeroSinceMs;
+        const elapsedDays = Math.floor(elapsedMs / (24 * 60 * 60 * 1000));
+        const daysUntilPurge = Math.max(0, 3 - elapsedDays);
+
+        item.outOfStockDays = elapsedDays;
+        item.daysUntilPurge = daysUntilPurge;
+        item.zeroStockSince = zeroStockTracker[trackerKey].zeroStockSince;
+
+        // Auto-purge rule: if 0 units for 3 consecutive days, delete from branch table
+        if (elapsedMs >= THREE_DAYS_MS) {
+          delete partsSummary[pn];
+        }
+      }
+    });
+
+    if (trackerModified) {
+      try {
+        localStorage.setItem('mdc_zero_stock_tracker', JSON.stringify(zeroStockTracker));
+      } catch (e) {}
+    }
 
     return {
       siteId,
@@ -592,6 +705,329 @@ export function usePartsRequests({
     };
   }, [repairUsageRecords, sites]);
 
+  // 7. Live Used Units Log (Returns units with status === 'used')
+  const getUsedUnitsLog = useCallback((siteIdOrCode = 'ALL') => {
+    const targetSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
+    const siteId = targetSite?.id || siteIdOrCode;
+    const siteCode = targetSite?.code || siteIdOrCode;
+
+    return (inventoryUnits || []).filter(u => {
+      const isUsed = String(u.status || '').toLowerCase() === 'used';
+      if (!isUsed) return false;
+
+      if (siteIdOrCode && siteIdOrCode !== 'ALL') {
+        const uSiteId = u.current_site_id || u.siteId;
+        const uSiteCode = u.site_code || u.siteCode;
+        const matches = (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
+                        (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
+        if (!matches) return false;
+      }
+      return true;
+    }).sort((a, b) => new Date(b.used_at || b.received_at || 0) - new Date(a.used_at || a.received_at || 0));
+  }, [inventoryUnits, sites]);
+
+  // 8. Mark Unit as Used / Consumed in Repair
+  const markUnitAsUsed = useCallback(async ({
+    serialNumber,
+    partNumber,
+    siteId,
+    workOrderNumber = '',
+    notes = ''
+  }) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) {
+      showToast?.('Please specify a valid serial number.', 'error');
+      return { success: false, error: 'Missing serial number' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+
+    if (!targetUnit) {
+      showToast?.(`Unit with serial number ${cleanSerial} was not found in inventory.`, 'error');
+      return { success: false, error: 'Unit not found' };
+    }
+
+    const effectiveSiteId = siteId || targetUnit.current_site_id || targetUnit.siteId || currentUser?.siteId;
+    const targetSite = sites.find(s => s.id === effectiveSiteId || s.code === effectiveSiteId);
+    const targetPart = parts.find(p => p.part_number?.toUpperCase() === String(targetUnit.part_number || partNumber).toUpperCase());
+
+    const updatedUnit = {
+      ...targetUnit,
+      status: 'used',
+      used_at: nowIso,
+      used_by_id: currentUser?.id || null,
+      used_by_name: currentUser?.fullName || 'Branch Specialist',
+      work_order_number: workOrderNumber ? String(workOrderNumber).trim() : null,
+      usage_notes: notes ? String(notes).trim() : null,
+      notes: notes ? `Used in ${workOrderNumber || 'Repair'} | ${notes}` : (targetUnit.notes || 'Used in Repair')
+    };
+
+    let nextUnits = [];
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        nextUnits = (prev || []).map(u =>
+          String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u
+        );
+        try {
+          localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
+        } catch (e) {}
+        dbStorage.setItem('mdc_inventory', nextUnits);
+        return nextUnits;
+      });
+    }
+
+    const usageEntry = {
+      id: `usage-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      site_id: targetSite?.id || effectiveSiteId,
+      raw_site_name: targetSite?.name || 'Branch Site',
+      site_name: targetSite?.name || 'Branch Site',
+      site_code: targetSite?.code || 'BRANCH',
+      part_id: targetPart?.id || targetUnit.part_id,
+      part_number: targetUnit.part_number,
+      raw_part_number: targetUnit.part_number,
+      raw_part_description: targetUnit.description || targetPart?.description || '',
+      description: targetUnit.description || targetPart?.description || '',
+      serial_number: cleanSerial,
+      quantity: 1,
+      work_order_number: workOrderNumber ? String(workOrderNumber).trim() : null,
+      usage_notes: notes ? String(notes).trim() : null,
+      used_by: currentUser?.fullName || 'Branch Specialist',
+      used_by_id: currentUser?.id || null,
+      used_at: nowIso,
+      month_name: new Date().toLocaleString('default', { month: 'long', year: 'numeric' })
+    };
+
+    if (supabase) {
+      try {
+        await supabase
+          .from('inventory_units')
+          .update({
+            status: 'used',
+            notes: updatedUnit.notes,
+            allocated_at: nowIso
+          })
+          .eq('serial_number', cleanSerial);
+
+        const currentAllUnits = nextUnits.length > 0
+          ? nextUnits
+          : (inventoryUnits || []).map(u => String(u.serial_number || '').toUpperCase() === cleanSerial ? updatedUnit : u);
+
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'inventory_master',
+          period_label: 'Live Master DC Inventory',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: 1,
+          notes: 'Master In-Stock inventory pool across all accounts',
+          saved_by_name: currentUser?.fullName || 'Branch Specialist',
+          snapshot_data: {
+            units: currentAllUnits
+          },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+
+        const { data: existReg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'master_used_parts_registry').maybeSingle();
+        const existingEntries = Array.isArray(existReg?.snapshot_data?.records) ? existReg.snapshot_data.records : [];
+        const nextEntries = [usageEntry, ...existingEntries.filter(e => e.serial_number !== cleanSerial)].slice(0, 500);
+
+        await supabase.from('saved_records').upsert({
+          id: 'master_used_parts_registry',
+          record_type: 'used_parts_registry',
+          period_label: 'Master Used Parts Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Log of serialized parts consumed in repairs',
+          saved_by_name: currentUser?.fullName || 'Branch Specialist',
+          snapshot_data: {
+            records: nextEntries
+          },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+      } catch (err) {
+        console.warn('markUnitAsUsed cloud sync notice:', err.message);
+      }
+    }
+
+    barcodeAudio?.playSuccess?.();
+    showToast?.(`Part #${targetUnit.part_number} (${cleanSerial}) recorded as USED in repair order ${workOrderNumber || 'N/A'}.`, 'success');
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('PART_MARKED_AS_USED', { unit: updatedUnit, usage: usageEntry });
+    }
+
+    return { success: true, unit: updatedUnit, usage: usageEntry };
+  }, [inventoryUnits, sites, currentUser, parts, setInventoryUnits, showToast, broadcastCloudEvent]);
+
+  // 9. Unmark / Restore Part back to In-Stock (Undo)
+  const unmarkUnitAsUsed = useCallback(async (serialNumber) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return { success: false, error: 'Missing serial' };
+
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+
+    const nowIso = new Date().toISOString();
+    const updatedUnit = {
+      ...(targetUnit || {}),
+      status: 'in_stock',
+      used_at: null,
+      used_by_id: null,
+      used_by_name: null,
+      work_order_number: null,
+      usage_notes: null
+    };
+
+    let nextUnits = [];
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        nextUnits = (prev || []).map(u =>
+          String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u
+        );
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', nextUnits);
+        return nextUnits;
+      });
+    }
+
+    if (supabase) {
+      try {
+        await supabase
+          .from('inventory_units')
+          .update({ status: 'in_stock' })
+          .eq('serial_number', cleanSerial);
+
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'inventory_master',
+          period_label: 'Live Master DC Inventory',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: 1,
+          notes: 'Master In-Stock inventory pool across all accounts',
+          saved_by_name: currentUser?.fullName || 'Branch Specialist',
+          snapshot_data: { units: nextUnits },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+
+        const { data: existReg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'master_used_parts_registry').maybeSingle();
+        const existingEntries = Array.isArray(existReg?.snapshot_data?.records) ? existReg.snapshot_data.records : [];
+        const nextEntries = existingEntries.filter(e => e.serial_number !== cleanSerial);
+        await supabase.from('saved_records').upsert({
+          id: 'master_used_parts_registry',
+          record_type: 'used_parts_registry',
+          period_label: 'Master Used Parts Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { records: nextEntries },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+      } catch (err) {
+        console.warn('unmarkUnitAsUsed cloud sync notice:', err.message);
+      }
+    }
+
+    showToast?.(`Part #${cleanSerial} has been restored back to In-Stock.`, 'info');
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('PART_RESTORED_TO_STOCK', { serialNumber: cleanSerial });
+    }
+    return { success: true };
+  }, [inventoryUnits, setInventoryUnits, currentUser, showToast, broadcastCloudEvent]);
+
+  // 10. Auto-Purge 3-Day Zero-Stock Parts from Database & Local State
+  const purgeStaleZeroStockUnits = useCallback(async () => {
+    let tracker = {};
+    try {
+      tracker = JSON.parse(localStorage.getItem('mdc_zero_stock_tracker') || '{}');
+    } catch (e) {}
+
+    const now = Date.now();
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const expiredKeys = [];
+    const expiredPartSites = [];
+
+    Object.entries(tracker).forEach(([key, val]) => {
+      if (val && val.zeroStockSince) {
+        const elapsed = now - new Date(val.zeroStockSince).getTime();
+        if (elapsed >= THREE_DAYS_MS) {
+          expiredKeys.push(key);
+          expiredPartSites.push({
+            siteId: val.siteId,
+            siteCode: val.siteCode,
+            partNumber: String(val.partNumber).toUpperCase()
+          });
+        }
+      }
+    });
+
+    if (expiredPartSites.length === 0) return;
+
+    let nextUnits = [];
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        nextUnits = (prev || []).filter(u => {
+          const uSiteId = u.current_site_id || u.siteId;
+          const uSiteCode = u.site_code || u.siteCode;
+          const uPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+
+          const isExpired = expiredPartSites.some(exp =>
+            uPN === exp.partNumber &&
+            (uSiteId === exp.siteId || uSiteId === exp.siteCode || uSiteCode === exp.siteCode || uSiteCode === exp.siteId) &&
+            String(u.status || '').toLowerCase() !== 'in_stock'
+          );
+          return !isExpired;
+        });
+
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', nextUnits);
+        return nextUnits;
+      });
+    }
+
+    expiredKeys.forEach(k => delete tracker[k]);
+    try {
+      localStorage.setItem('mdc_zero_stock_tracker', JSON.stringify(tracker));
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        await supabase.from('saved_records').upsert({
+          id: 'live_master_dc_inventory',
+          record_type: 'inventory_master',
+          period_label: 'Live Master DC Inventory',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          period_week: 1,
+          notes: 'Master In-Stock inventory pool across all accounts',
+          saved_by_name: 'Auto-Cleanup (3-Day Zero-Stock Purge)',
+          snapshot_data: { units: nextUnits.length > 0 ? nextUnits : inventoryUnits },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+
+        await supabase.from('saved_records').upsert({
+          id: 'master_zero_stock_tracker',
+          record_type: 'zero_stock_tracker',
+          period_label: 'Zero Stock 3-Day Purge Tracker',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { tracker },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (err) {
+        console.warn('purgeStaleZeroStockUnits cloud sync notice:', err.message);
+      }
+    }
+  }, [inventoryUnits, setInventoryUnits]);
+
+  // Run periodic 3-day zero-stock auto-purge check on mount
+  useEffect(() => {
+    purgeStaleZeroStockUnits();
+  }, [purgeStaleZeroStockUnits]);
+
   return {
     partsRequests,
     setPartsRequests,
@@ -603,6 +1039,10 @@ export function usePartsRequests({
     updatePartsRequestStatus,
     getStockOnHandForSite,
     getAllSitesStockSummary,
-    getUsedPartsForSite
+    getUsedPartsForSite,
+    getUsedUnitsLog,
+    markUnitAsUsed,
+    unmarkUnitAsUsed,
+    purgeStaleZeroStockUnits
   };
 }

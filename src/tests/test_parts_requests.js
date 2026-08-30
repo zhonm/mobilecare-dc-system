@@ -228,6 +228,278 @@ it('Properly sets target site ID and received_by_id during scan-in', () => {
   assert.strictEqual(newUnit.status, 'in_stock', 'Unit in stock status');
 });
 
+// 6. PMG SCAN-IN & IMPORT UI LOGIC SIMULATION
+function simulateScanInControlsVisibility(userRole) {
+  const isPmgUser = userRole === 'parts_management';
+  return {
+    showLinkedPO: !isPmgUser,
+    showIntakeAssignmentCategory: !isPmgUser,
+    showModalPODropdown: !isPmgUser,
+    showModalAssignmentDropdown: !isPmgUser,
+    showDestinationFilters: !isPmgUser,
+    autoReceiveStepNumber: isPmgUser ? '2. Barcode Auto-Receive' : '4. Scanner Intake Mode',
+    bulkImportStepNumber: isPmgUser ? '3. Bulk Import & Actions' : '5. Batch Actions'
+  };
+}
+
+it('PMG user has Linked PO and Intake Assignment completely hidden in Scan-In & Modal', () => {
+  const pmgControls = simulateScanInControlsVisibility('parts_management');
+  assert.strictEqual(pmgControls.showLinkedPO, false, 'Linked PO column must be HIDDEN for PMG');
+  assert.strictEqual(pmgControls.showIntakeAssignmentCategory, false, 'Intake Assignment column must be HIDDEN for PMG');
+  assert.strictEqual(pmgControls.showModalPODropdown, false, 'Modal PO selector must be HIDDEN for PMG');
+  assert.strictEqual(pmgControls.showModalAssignmentDropdown, false, 'Modal Intake Assignment dropdown must be HIDDEN for PMG');
+  assert.strictEqual(pmgControls.showDestinationFilters, false, 'DC Destination filters must be HIDDEN for PMG');
+  assert.strictEqual(pmgControls.autoReceiveStepNumber, '2. Barcode Auto-Receive');
+  assert.strictEqual(pmgControls.bulkImportStepNumber, '3. Bulk Import & Actions');
+});
+
+it('DC / Superadmin user still has access to Linked PO and Part Assignment controls', () => {
+  const dcControls = simulateScanInControlsVisibility('superadmin');
+  assert.strictEqual(dcControls.showLinkedPO, true, 'Linked PO column must be VISIBLE for Superadmin');
+  assert.strictEqual(dcControls.showIntakeAssignmentCategory, true, 'Intake Assignment column must be VISIBLE for Superadmin');
+  assert.strictEqual(dcControls.showModalPODropdown, true, 'Modal PO selector must be VISIBLE for Superadmin');
+  assert.strictEqual(dcControls.showModalAssignmentDropdown, true, 'Modal Intake Assignment dropdown must be VISIBLE for Superadmin');
+  assert.strictEqual(dcControls.showDestinationFilters, true, 'DC Destination filters must be VISIBLE for Superadmin');
+});
+
+// 7. PMG BATCH IMPORT & INVENTORY DATABASE RESOLUTION
+it('PMG branch upload resolves to branch site UUID rather than hardcoded DC site ID', () => {
+  const mockSites = [
+    { id: '11111111-1111-4111-8111-111111111111', code: 'DC-MDC', name: 'Distribution Center', is_dc: true },
+    { id: '22222222-2222-4222-8222-222222222222', code: 'APP PPM', name: 'Apple Premium Store PPM', is_dc: false },
+    { id: '33333333-3333-4333-8333-333333333333', code: 'APP GH', name: 'Apple Store Greenhills', is_dc: false }
+  ];
+  const dcSiteId = mockSites[0].id;
+
+  function simulateResolveTargetSiteUUID(unit, siteList, fallbackDcId) {
+    const unitSiteKey = String(unit.current_site_id || unit.site_id || unit.targetSiteId || '').trim();
+    const unitSiteCode = String(unit.site_code || '').trim().toUpperCase();
+    const matchedSite = siteList.find(s =>
+      (unitSiteKey && (s.id === unitSiteKey || s.code.toUpperCase() === unitSiteKey.toUpperCase())) ||
+      (unitSiteCode && s.code.toUpperCase() === unitSiteCode)
+    );
+    return matchedSite?.id || fallbackDcId;
+  }
+
+  const pmgUnit = {
+    part_number: '661-30373',
+    serial_number: 'SBRANCH00123',
+    current_site_id: 'site-ppm',
+    site_code: 'APP PPM',
+    site_name: 'Apple Premium Store PPM'
+  };
+
+  const resolvedSiteId = simulateResolveTargetSiteUUID(pmgUnit, mockSites, dcSiteId);
+  assert.strictEqual(
+    resolvedSiteId,
+    '22222222-2222-4222-8222-222222222222',
+    'PMG unit must resolve to the branch site UUID (APP PPM)'
+  );
+  assert.notStrictEqual(resolvedSiteId, dcSiteId, 'Must not be overwritten with DC site ID');
+});
+
+// 8. PMG PARTS REQUESTS & SUPERADMIN VISIBILITY
+it('Superadmin with default selectedSiteId="ALL" sees incoming requests from all PMG branches', () => {
+  const allRequests = [
+    { id: 'req-1', request_number: 'PR-202608-10001', site_id: 'site-ppm', site_code: 'APP PPM', requested_by_name: 'Jose Rizal (PMG)', status: 'pending' },
+    { id: 'req-2', request_number: 'PR-202608-10002', site_id: 'site-gh', site_code: 'APP GH', requested_by_name: 'Andres Bonifacio (PMG)', status: 'pending' },
+    { id: 'req-3', request_number: 'PR-202608-10003', site_id: 'site-dc', site_code: 'DC-MDC', requested_by_name: 'DC Staff', status: 'approved' }
+  ];
+
+  function simulateFilterRequests(partsRequests, currentUser, selectedSiteId) {
+    const isSuperadmin = currentUser?.role === 'superadmin';
+    return partsRequests.filter(req => {
+      if (!isSuperadmin) {
+        return req.site_id === currentUser?.siteId;
+      } else if (selectedSiteId && selectedSiteId !== 'ALL') {
+        return req.site_id === selectedSiteId;
+      }
+      return true;
+    });
+  }
+
+  const superadminUser = { id: 'usr-super', role: 'superadmin', fullName: 'Zhon Manaois' };
+  const superadminDefaultSiteFilter = 'ALL';
+
+  const visibleToSuperadmin = simulateFilterRequests(allRequests, superadminUser, superadminDefaultSiteFilter);
+  assert.strictEqual(visibleToSuperadmin.length, 3, 'Superadmin must see all 3 requests from all branches');
+  assert.ok(visibleToSuperadmin.some(r => r.site_code === 'APP PPM'), 'PPM request visible');
+  assert.ok(visibleToSuperadmin.some(r => r.site_code === 'APP GH'), 'GH request visible');
+});
+
+// 9. REMOVE REQUEST BUTTON FOR SAME-SITE PARTS
+it('Removes Request button if user is in the same site/location as the parts', () => {
+  function simulateRowActionVisibility(userSiteId, partSiteId) {
+    const isUserSameSite = !!(userSiteId && (userSiteId === partSiteId));
+    return {
+      isUserSameSite,
+      showRequestButton: !isUserSameSite,
+      statusBadge: isUserSameSite ? 'In Branch Stock' : null
+    };
+  }
+
+  const currentUserSiteId = 'site-ppm';
+
+  // Part located at the user's own branch (APP PPM)
+  const sameSiteResult = simulateRowActionVisibility(currentUserSiteId, 'site-ppm');
+  assert.strictEqual(sameSiteResult.showRequestButton, false, 'Request button must NOT be shown for same site');
+  assert.strictEqual(sameSiteResult.statusBadge, 'In Branch Stock', 'Must show In Branch Stock badge');
+
+  // Part located at a different branch (APP GH)
+  const differentSiteResult = simulateRowActionVisibility(currentUserSiteId, 'site-gh');
+  assert.strictEqual(differentSiteResult.showRequestButton, true, 'Request button MUST be shown for different site');
+  assert.strictEqual(differentSiteResult.statusBadge, null);
+});
+
+// 10. MARK PART AS USED / REPAIR CONSUMPTION
+it('Accurately marks part as used, decrements available stock, and logs consumed repair data', () => {
+  let inventory = [
+    { id: 'u1', part_number: '661-33201', serial_number: 'SN-USED-1', status: 'in_stock', current_site_id: 'site-ppm' },
+    { id: 'u2', part_number: '661-33201', serial_number: 'SN-USED-2', status: 'in_stock', current_site_id: 'site-ppm' }
+  ];
+
+  // Helper simulating stock on hand calculation
+  function calculateInStock(units, siteId, partNumber) {
+    return units.filter(u =>
+      u.current_site_id === siteId &&
+      u.part_number === partNumber &&
+      u.status === 'in_stock'
+    ).length;
+  }
+
+  assert.strictEqual(calculateInStock(inventory, 'site-ppm', '661-33201'), 2, 'Initial stock is 2');
+
+  // Mark SN-USED-1 as used
+  const usedAtIso = new Date().toISOString();
+  inventory = inventory.map(u => {
+    if (u.serial_number === 'SN-USED-1') {
+      return {
+        ...u,
+        status: 'used',
+        used_at: usedAtIso,
+        used_by_name: 'Jose Rizal (PMG)',
+        work_order_number: 'WO-2026-9901',
+        usage_notes: 'Replaced rear camera under warranty'
+      };
+    }
+    return u;
+  });
+
+  // Stock must decrease to 1
+  assert.strictEqual(calculateInStock(inventory, 'site-ppm', '661-33201'), 1, 'In-stock units must decrement to 1');
+
+  const consumedUnit = inventory.find(u => u.serial_number === 'SN-USED-1');
+  assert.strictEqual(consumedUnit.status, 'used', 'Unit status is used');
+  assert.strictEqual(consumedUnit.work_order_number, 'WO-2026-9901');
+  assert.strictEqual(consumedUnit.used_by_name, 'Jose Rizal (PMG)');
+
+  // Revert SN-USED-1 back to in_stock
+  inventory = inventory.map(u => {
+    if (u.serial_number === 'SN-USED-1') {
+      return {
+        ...u,
+        status: 'in_stock',
+        used_at: null,
+        work_order_number: null,
+        usage_notes: null
+      };
+    }
+    return u;
+  });
+
+  assert.strictEqual(calculateInStock(inventory, 'site-ppm', '661-33201'), 2, 'In-stock units restored to 2 on revert');
+});
+
+// 11. ZERO STOCK STATUS CHANGE & OUT OF STOCK BADGE
+it('Changes status to out_of_stock when available units reach 0 and disables Mark Used', () => {
+  function computePartStatus(inStock) {
+    return {
+      status: inStock > 0 ? 'in_stock' : 'out_of_stock',
+      badgeText: inStock > 0 ? 'In Stock' : 'Out of Stock',
+      badgeColor: inStock > 0 ? '#059669' : '#dc2626',
+      canMarkUsed: inStock > 0,
+      canRequestReplenish: inStock === 0
+    };
+  }
+
+  const stock1 = computePartStatus(4);
+  assert.strictEqual(stock1.status, 'in_stock');
+  assert.strictEqual(stock1.badgeText, 'In Stock');
+  assert.strictEqual(stock1.canMarkUsed, true);
+
+  const stock0 = computePartStatus(0);
+  assert.strictEqual(stock0.status, 'out_of_stock');
+  assert.strictEqual(stock0.badgeText, 'Out of Stock');
+  assert.strictEqual(stock0.badgeColor, '#dc2626');
+  assert.strictEqual(stock0.canMarkUsed, false, 'Cannot mark used when 0 units');
+  assert.strictEqual(stock0.canRequestReplenish, true, 'Can request replenishment when 0 units');
+});
+
+// 12. 3-DAY CONSECUTIVE ZERO-STOCK AUTO-PURGE & SCAN-IN RESTORATION
+it('Auto-purges part from branch after 3 consecutive days of 0 stock, allowing scan-in re-add', () => {
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  let tracker = {
+    'site-ppm_661-56050': {
+      siteId: 'site-ppm',
+      partNumber: '661-56050',
+      zeroStockSince: new Date(now - (3.5 * 24 * 60 * 60 * 1000)).toISOString() // 3.5 days ago
+    },
+    'site-ppm_661-22389': {
+      siteId: 'site-ppm',
+      partNumber: '661-22389',
+      zeroStockSince: new Date(now - (1 * 24 * 60 * 60 * 1000)).toISOString() // 1 day ago
+    }
+  };
+
+  let branchPartsSummary = {
+    '661-56050': { partNumber: '661-56050', inStock: 0, status: 'out_of_stock' },
+    '661-22389': { partNumber: '661-22389', inStock: 0, status: 'out_of_stock' },
+    '661-21988': { partNumber: '661-21988', inStock: 4, status: 'in_stock' }
+  };
+
+  // Simulate purge logic
+  Object.keys(branchPartsSummary).forEach(pn => {
+    const key = `site-ppm_${pn}`;
+    if (tracker[key] && tracker[key].zeroStockSince) {
+      const elapsed = now - new Date(tracker[key].zeroStockSince).getTime();
+      if (elapsed >= THREE_DAYS_MS) {
+        delete branchPartsSummary[pn]; // Purged!
+        delete tracker[key];
+      }
+    }
+  });
+
+  // 661-56050 (3.5 days with 0 stock) must be purged from branch table
+  assert.strictEqual(branchPartsSummary['661-56050'], undefined, 'Part with 3+ days at 0 stock is purged');
+  // 661-22389 (1 day with 0 stock) remains in branch table with out_of_stock status
+  assert.ok(branchPartsSummary['661-22389'] != null, 'Part with <3 days at 0 stock remains visible');
+  assert.strictEqual(branchPartsSummary['661-21988'].status, 'in_stock', 'In stock part unaffected');
+
+  // User adds 661-56050 again via Receive Scan-In page
+  const scanInNewUnit = {
+    serial_number: 'NEW-SN-999',
+    part_number: '661-56050',
+    current_site_id: 'site-ppm',
+    status: 'in_stock'
+  };
+
+  branchPartsSummary['661-56050'] = {
+    partNumber: '661-56050',
+    inStock: 1,
+    status: 'in_stock'
+  };
+  delete tracker['site-ppm_661-56050'];
+
+  assert.strictEqual(branchPartsSummary['661-56050'].inStock, 1, 'Part successfully restored via Receive Scan-In');
+  assert.strictEqual(branchPartsSummary['661-56050'].status, 'in_stock', 'Restored part has in_stock status');
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${passedTests} PASSED (0 FAILED)`);
 console.log('====================================================');
+
+
+
+

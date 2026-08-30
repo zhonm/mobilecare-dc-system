@@ -270,7 +270,16 @@ export default function ForecastingReports() {
     : (maxHistoryLength > 0 ? maxHistoryLength : 8);
 
   const historyMonths = ALL_MONTH_NAMES.slice(0, historyMonthCount);
-  const currentPeriodLabel = activePeriod?.label || `${ALL_MONTH_NAMES[historyMonthCount] || 'Sep'} 2026`;
+  const currentPeriodLabel = (() => {
+    if (activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')) {
+      return activePeriod.label;
+    }
+    const monthIdx = (activePeriod?.month && activePeriod.month >= 1 && activePeriod.month <= 12)
+      ? (activePeriod.month - 1)
+      : (historyMonthCount < 12 ? historyMonthCount : 8);
+    const mName = ALL_MONTH_NAMES[monthIdx] || 'September';
+    return `${mName} ${activePeriod?.year || 2026}`;
+  })();
 
   // 26 Service Branches list (excluding Central DC)
   const serviceBranches = useMemo(() => {
@@ -384,7 +393,7 @@ export default function ForecastingReports() {
       const parsedOverride = (it.admin_override !== null && it.admin_override !== undefined && it.admin_override !== '')
         ? parseInt(it.admin_override, 10)
         : null;
-      const hasOverride = parsedOverride !== null && !isNaN(parsedOverride) && parsedOverride !== computed;
+      const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
       const finalVal = hasOverride ? parsedOverride : computed;
       const price = getPartStockPrice(it);
 
@@ -1082,8 +1091,8 @@ export default function ForecastingReports() {
                 cursor: 'pointer'
               }}
             >
-              <option value="wma">4-Mo WMA (Spike Filtered - Recommended)</option>
-              <option value="linear">Linear Regression (FORECAST.LINEAR)</option>
+              <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
+              <option value="wma">4-Mo WMA (Spike Filtered)</option>
             </select>
           </div>
 
@@ -1467,7 +1476,7 @@ export default function ForecastingReports() {
                     const parsedOverride = (it.admin_override !== null && it.admin_override !== undefined && it.admin_override !== '')
                       ? parseInt(it.admin_override, 10)
                       : null;
-                    const hasOverride = parsedOverride !== null && !isNaN(parsedOverride) && parsedOverride !== base;
+                    const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
                     const finalVal = hasOverride ? parsedOverride : base;
                     const price = getPartStockPrice(it);
                     const totalCost = finalVal * price;

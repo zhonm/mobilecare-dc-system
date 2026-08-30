@@ -377,53 +377,65 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setTextColor(15, 23, 42);
   doc.text('ID HERE', idBoxX + (idBoxWidth / 2), f1Y - 4 + (idBoxHeight / 2) + 2, { align: 'center' });
 
-  // Bottom Section
-  const bottomY = f4Y + 42;
+  // Bottom Section: Supervisor Signature & Verification
+  const bottomY = f4Y + 38;
 
-  // Left: MDC - SUPERVISOR
+  // 1. Left: MDC - SUPERVISOR
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
   doc.text('MDC - SUPERVISOR', decLeftColX, bottomY);
 
+  // Supervisor Signature Image (cleanly centered above the underline, never overlapping label)
   try {
     if (supervisorSig) {
-      doc.addImage(supervisorSig, 'PNG', decLeftColX + 10, bottomY - 5, 34, 18);
+      const sigWidth = 38;
+      const sigHeight = 14;
+      const sigX = decLeftColX + (decLeftColWidth - sigWidth) / 2;
+      const sigY = bottomY + 1.5;
+      doc.addImage(supervisorSig, 'PNG', sigX, sigY, sigWidth, sigHeight);
     }
   } catch (sigErr) {
     console.warn('Could not render supervisor signature in Declaration Form PDF:', sigErr);
   }
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.text(supervisorName.toUpperCase(), decLeftColX + 16, bottomY + 9);
+  // Supervisor Underline
   doc.setDrawColor(100, 116, 139);
   doc.setLineWidth(0.35);
-  doc.line(decLeftColX, bottomY + 11.5, decLeftColX + decLeftColWidth, bottomY + 11.5);
+  doc.line(decLeftColX, bottomY + 16, decLeftColX + decLeftColWidth, bottomY + 16);
 
-  // Right: GUARD ON DUTY & DATE PICKED UP
+  // Supervisor Printed Name (centered neatly under the signature line)
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(supervisorName.toUpperCase(), decLeftColX + (decLeftColWidth / 2), bottomY + 19.5, { align: 'center' });
+
+  // 2. Right: GUARD ON DUTY & DATE PICKED UP
   const rightBottomColX = idBoxX;
   const rightBottomWidth = idBoxWidth;
 
   // GUARD ON DUTY:
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
   doc.text('GUARD ON DUTY:', rightBottomColX, bottomY);
   if (guardOnDuty) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.text(guardOnDuty, rightBottomColX, bottomY + 7);
+    doc.text(guardOnDuty, rightBottomColX, bottomY + 12);
   }
-  doc.line(rightBottomColX, bottomY + 11.5, rightBottomColX + rightBottomWidth, bottomY + 11.5);
+  doc.line(rightBottomColX, bottomY + 16, rightBottomColX + rightBottomWidth, bottomY + 16);
 
   // DATE PICKED UP:
   const bottomDateY = bottomY + 24;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
   doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(pickupDate, rightBottomColX, bottomDateY + 7);
-  doc.line(rightBottomColX, bottomDateY + 11.5, rightBottomColX + rightBottomWidth, bottomDateY + 11.5);
+  doc.text(pickupDate, rightBottomColX, bottomDateY + 12);
+  doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
 
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;

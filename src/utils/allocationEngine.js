@@ -5,6 +5,12 @@ import {
   CANONICAL_BATTERY_DESCS,
   CANONICAL_BATTERY_SHARE_DESCS
 } from '../constants/config.js';
+
+// Number of Display rows in the canonical Excel block.
+// Excel layout: Displays at rows 3..(3+N_DISPLAY_ROWS-1), one subtotal row, then Batteries.
+// Used to offset rowIndex in calculateWeeklySplit so Battery items use the correct
+// ISEVEN(ROW()) parity (matching the live Excel workbook).
+const N_DISPLAY_ROWS = CANONICAL_DISPLAY_DESCS.length;
 import { displayShares, batteryShares } from '../data/canonicalShares.js';
 import { calculateForecastByModel, roundExcel } from './forecastEngine.js';
 
@@ -482,7 +488,7 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
           description: fi.description
         });
     const hasOverride = fi.admin_override !== null && fi.admin_override !== undefined && fi.admin_override !== '';
-    const fiQty = hasOverride ? parseInt(fi.admin_override, 10) : (fi.final_forecast !== undefined ? fi.final_forecast : computed);
+    const fiQty = hasOverride ? parseInt(fi.admin_override, 10) : computed;
     const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
 
     const existingAlloc = (existingAllocations || []).find(a =>
@@ -502,7 +508,14 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
     });
 
     const tCost = tAlloc * fiPrice;
-    const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + 3);
+    // Row parity offset matching Excel ISEVEN(ROW()):
+    //   Display block: Excel rows 3..(3+N_DISPLAY_ROWS-1)  → rowIndex = rIdx + 3
+    //   Battery block: Excel rows start at (3+N_DISPLAY_ROWS+1) due to a subtotal separator row
+    //                  → rowIndex = rIdx + 4 (the extra +1 skips the separator row)
+    const isDisplayItem = (fi.category_id === 'cat-display') ||
+      ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
+    const rowParityOffset = isDisplayItem ? 3 : 4;
+    const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + rowParityOffset);
 
     return {
       part_id: fi.part_id,

@@ -6,6 +6,7 @@ import {
   filterAnomaliesWinsorized
 } from '../utils/forecastEngine';
 import { exportForecastToExcel } from '../utils/excelParser';
+import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
@@ -65,10 +66,17 @@ export default function Forecasting() {
     : (maxHistoryLength > 0 ? maxHistoryLength : 8);
 
   const months = ALL_MONTH_NAMES.slice(0, historyMonthCount);
-  const targetMonthShort = activePeriod?.label 
-    ? activePeriod.label.split(' ')[0].substring(0, 3) 
-    : (ALL_MONTH_NAMES[historyMonthCount] || 'Sep');
-  const targetPeriodLabel = activePeriod?.label || `${ALL_MONTH_NAMES[historyMonthCount] || 'September'} 2026`;
+  const targetPeriodLabel = (() => {
+    if (activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')) {
+      return activePeriod.label;
+    }
+    const monthIdx = (activePeriod?.month && activePeriod.month >= 1 && activePeriod.month <= 12)
+      ? (activePeriod.month - 1)
+      : (historyMonthCount < 12 ? historyMonthCount : 8);
+    const mName = ALL_MONTH_NAMES[monthIdx] || 'September';
+    return `${mName} ${activePeriod?.year || 2026}`;
+  })();
+  const targetMonthShort = targetPeriodLabel.split(' ')[0].substring(0, 3);
 
   // Stock price resolver helper
   const getStockPrice = useCallback((item) => {
@@ -114,14 +122,13 @@ export default function Forecasting() {
       // Take exact historical monthly usage aligned with months
       const counts = months.map((_, idx) => (idx < rawCounts.length ? (Number(rawCounts[idx]) || 0) : 0));
       
-      // Calculate dynamic forecast based on active algorithm and history window
       const computed = calculateItemForecast(item, forecastingModel, months.length);
 
       const parsedOverride = (item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '')
         ? parseInt(item.admin_override, 10)
         : null;
-      // An override is only active if it is explicitly different from the algorithmic baseline forecast
-      const hasOverride = parsedOverride !== null && !isNaN(parsedOverride) && parsedOverride !== computed;
+      // An override is active if the user explicitly provided an admin override value
+      const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
       const finalVal = hasOverride ? parsedOverride : computed;
       const trendMetrics = calculateForecastTrendMetrics(counts);
       const stockPrice = getStockPrice(item);
@@ -257,7 +264,11 @@ export default function Forecasting() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Forecasting refresh button', isManual: true })}
+              onClick={async () => {
+                await clearOperationalLocalStorage({ keepSession: true });
+                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+                autoRefreshData({ force: true, silent: false, reason: 'Forecasting refresh button', isManual: true });
+              }}
               disabled={isAutoRefreshing}
               title="Revalidate forecast with latest cloud data"
             >
@@ -581,8 +592,8 @@ export default function Forecasting() {
                 }}
                 title="Choose mathematical forecasting algorithm (automatically syncs with Allocation Matrix)"
               >
-                <option value="wma">4-Mo WMA (Spike Filtered - Recommended)</option>
-                <option value="linear">Linear Regression (FORECAST.LINEAR)</option>
+                <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
+                <option value="wma">4-Mo WMA (Spike Filtered)</option>
               </select>
             </div>
 

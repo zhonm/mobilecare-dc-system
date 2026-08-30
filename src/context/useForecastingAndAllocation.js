@@ -20,7 +20,7 @@ export function useForecastingAndAllocation({
 
   const [forecastingModel, setForecastingModel] = useState(() => {
     try {
-      const saved = localStorage.getItem('mdc_forecasting_model');
+      const saved = localStorage.getItem('mdc_forecasting_model') || localStorage.getItem('mdc_default_forecasting_model');
       if (saved && ['wma', 'linear'].includes(saved)) {
         return saved;
       }
@@ -109,7 +109,11 @@ export function useForecastingAndAllocation({
     setForecastingModel(newModel);
     try {
       localStorage.setItem('mdc_forecasting_model', newModel);
+      localStorage.setItem('mdc_default_forecasting_model', newModel);
+      localStorage.setItem('mdc_last_override_time', Date.now().toString());
     } catch (e) {}
+    dbStorage.setItem('mdc_forecasting_model', newModel);
+    dbStorage.setItem('mdc_default_forecasting_model', newModel);
 
     const activeServiceSites = (sites || []).filter(s =>
       !s.is_dc &&
@@ -177,7 +181,9 @@ export function useForecastingAndAllocation({
       );
 
       const targetQty = fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0);
-      const stockingPrice = fi.stocking_price || existingAlloc?.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
+      const stockingPrice = (typeof fi.stocking_price === 'number' && fi.stocking_price > 0)
+        ? fi.stocking_price
+        : (existingAlloc?.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99));
 
       const allocatedResults = allocatePartToSites(targetQty, fi, activeServiceSites, existingAlloc);
       const newSiteQuantities = {};
@@ -190,7 +196,10 @@ export function useForecastingAndAllocation({
       });
 
       const totalCost = totalAlloc * stockingPrice;
-      const fiSplit = calculateWeeklySplit(totalAlloc, totalCost, rIdx + 3);
+      const isDisplayItem = (fi.category_id === 'cat-display') ||
+        ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
+      const rowParityOffset = isDisplayItem ? 3 : 4;
+      const fiSplit = calculateWeeklySplit(totalAlloc, totalCost, rIdx + rowParityOffset);
 
       return {
         part_id: fi.part_id,
@@ -228,7 +237,9 @@ export function useForecastingAndAllocation({
           await supabase.from('saved_records').upsert({
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
-            period_label: 'Master Operational Data',
+            period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
+              ? activePeriod.label
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: `Live state recalculated via ${newModel} model`,
@@ -239,10 +250,6 @@ export function useForecastingAndAllocation({
             },
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
-
-          if (broadcastCloudEvent) {
-            broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records', model: newModel });
-          }
         } catch (e) {
           console.warn('Sync model update to cloud error:', e);
         }
@@ -251,7 +258,6 @@ export function useForecastingAndAllocation({
 
     if (broadcastCloudEvent) {
       broadcastCloudEvent('CALCULATION_MODEL_CHANGED', { model: newModel });
-      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records', model: newModel });
     }
 
     const MODEL_NAMES = {
@@ -295,7 +301,9 @@ export function useForecastingAndAllocation({
         item.id === partId ||
         (item.description && partId && item.description.trim().toLowerCase() === String(partId).trim().toLowerCase())
       ) {
-        const computed = calculateItemForecast(item, forecastingModel);
+        const computed = (typeof item.computed_forecast === 'number' && Number.isFinite(item.computed_forecast))
+          ? item.computed_forecast
+          : calculateItemForecast(item, forecastingModel, (item.ytd_monthly_counts || []).length || 8);
         // If override matches computed baseline, clear override to null
         const isBackToCalculated = override !== null && override === computed;
         const effectiveOverride = isBackToCalculated ? null : override;
@@ -327,7 +335,9 @@ export function useForecastingAndAllocation({
 
     const partNum = targetItem?.part_number || targetPart?.part_number || partId;
     const desc = targetItem?.description || targetPart?.description || 'Service Replacement Part';
-    const stockingPrice = targetItem?.stocking_price || targetPart?.stocking_price || (desc.toLowerCase().includes('display') ? 279 : 99);
+    const stockingPrice = (typeof targetItem?.stocking_price === 'number' && targetItem.stocking_price > 0)
+      ? targetItem.stocking_price
+      : (targetPart?.stocking_price || (desc.toLowerCase().includes('display') ? 279 : 99));
     const categoryId = targetItem?.category_id || targetPart?.category_id || (desc.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery');
 
     let currentAllocations;
@@ -342,7 +352,9 @@ export function useForecastingAndAllocation({
     if (currentAllocations.length === 0 && updatedForecastItems.length > 0) {
       currentAllocations = updatedForecastItems.map((fi, rIdx) => {
         const fiQty = fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0);
-        const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
+        const fiPrice = (typeof fi.stocking_price === 'number' && fi.stocking_price > 0)
+          ? fi.stocking_price
+          : (fi.description?.toLowerCase().includes('display') ? 279 : 99);
         const fiResults = allocatePartToSites(fiQty, fi, activeServiceSites, null);
         const sq = {};
         let tAlloc = 0;
@@ -353,7 +365,10 @@ export function useForecastingAndAllocation({
           tAlloc += res.allocatedQty;
         });
         const tCost = tAlloc * fiPrice;
-        const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + 3);
+        const isDisplayItem = (fi.category_id === 'cat-display') ||
+          ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
+        const rowParityOffset = isDisplayItem ? 3 : 4;
+        const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + rowParityOffset);
         return {
           part_id: fi.part_id,
           part_number: fi.part_number,
@@ -479,13 +494,16 @@ export function useForecastingAndAllocation({
           await supabase.from('saved_records').upsert({
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
-            period_label: 'Master Operational Data',
+            period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
+              ? activePeriod.label
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state',
             snapshot_data: {
               forecastItems: updatedForecastItems,
-              allocations: updatedAllocations
+              allocations: updatedAllocations,
+              forecastingModel
             },
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
@@ -577,9 +595,14 @@ export function useForecastingAndAllocation({
         }, 0);
 
         targetPartTotalQty = newTotal;
-        const stockingPrice = item.stocking_price || (item.description?.toLowerCase().includes('display') ? 279 : 99);
+        const stockingPrice = (typeof item.stocking_price === 'number' && item.stocking_price > 0)
+          ? item.stocking_price
+          : (item.description?.toLowerCase().includes('display') ? 279 : 99);
         const totalCost = newTotal * stockingPrice;
-        const split = calculateWeeklySplit(newTotal, totalCost, rIdx + 3);
+        const isDisplayItem = (item.category_id === 'cat-display') ||
+          ((item.description || '').toLowerCase().includes('display') && !item.category_id?.includes('battery'));
+        const rowParityOffset = isDisplayItem ? 3 : 4;
+        const split = calculateWeeklySplit(newTotal, totalCost, rIdx + rowParityOffset);
 
         return {
           ...item,
@@ -621,7 +644,9 @@ export function useForecastingAndAllocation({
         (fi.description && targetPartDescription && fi.description.trim().toLowerCase() === targetPartDescription.trim().toLowerCase());
 
       if (matches) {
-        const computed = calculateItemForecast(fi, forecastingModel);
+        const computed = (typeof fi.computed_forecast === 'number' && Number.isFinite(fi.computed_forecast))
+          ? fi.computed_forecast
+          : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length || 8);
         // If the adjusted site allocation total returns to the original computed forecast,
         // clear the admin override (set to null), so it naturally returns to the original calculation!
         const isBackToCalculated = targetPartTotalQty === computed;
@@ -659,7 +684,9 @@ export function useForecastingAndAllocation({
           await supabase.from('saved_records').upsert({
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
-            period_label: 'Master Operational Data',
+            period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
+              ? activePeriod.label
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (site allocation updated)',
@@ -766,8 +793,14 @@ export function useForecastingAndAllocation({
       (cleanTargetId && String(fi.id || '').toLowerCase() === cleanTargetId)
     );
 
-    const computedQty = targetFi ? calculateItemForecast(targetFi, forecastingModel) : 0;
-    const targetPrice = targetFi?.stocking_price || (targetFi?.description?.toLowerCase().includes('display') ? 279 : 99);
+    const computedQty = targetFi
+      ? (typeof targetFi.computed_forecast === 'number' && Number.isFinite(targetFi.computed_forecast)
+          ? targetFi.computed_forecast
+          : calculateItemForecast(targetFi, forecastingModel, (targetFi.ytd_monthly_counts || []).length || 8))
+      : 0;
+    const targetPrice = (typeof targetFi?.stocking_price === 'number' && targetFi.stocking_price > 0)
+      ? targetFi.stocking_price
+      : (targetFi?.description?.toLowerCase().includes('display') ? 279 : 99);
 
     const allocatedResults = allocatePartToSites(computedQty, targetFi || { part_id: partId }, activeServiceSites, null);
     const newSiteQuantities = {};
@@ -819,7 +852,10 @@ export function useForecastingAndAllocation({
 
       if (matches) {
         const totalCost = totalAlloc * targetPrice;
-        const split = calculateWeeklySplit(totalAlloc, totalCost, rIdx + 3);
+        const isDisplayItem = (alloc.category_id === 'cat-display') ||
+          ((alloc.description || '').toLowerCase().includes('display') && !alloc.category_id?.includes('battery'));
+        const rowParityOffset = isDisplayItem ? 3 : 4;
+        const split = calculateWeeklySplit(totalAlloc, totalCost, rIdx + rowParityOffset);
         return {
           ...alloc,
           forecasted_qty: computedQty,
@@ -854,7 +890,9 @@ export function useForecastingAndAllocation({
           await supabase.from('saved_records').upsert({
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
-            period_label: 'Master Operational Data',
+            period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
+              ? activePeriod.label
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (part allocation reset)',
@@ -888,7 +926,9 @@ export function useForecastingAndAllocation({
     if (!currentForecasts || currentForecasts.length === 0) return;
 
     const updatedForecastItems = currentForecasts.map(fi => {
-      const computed = calculateItemForecast(fi, forecastingModel);
+      const computed = (typeof fi.computed_forecast === 'number' && Number.isFinite(fi.computed_forecast))
+        ? fi.computed_forecast
+        : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length || 8);
       return {
         ...fi,
         computed_forecast: computed,
@@ -915,7 +955,9 @@ export function useForecastingAndAllocation({
           await supabase.from('saved_records').upsert({
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
-            period_label: 'Master Operational Data',
+            period_label: activePeriod?.label && !activePeriod.label.toLowerCase().includes('master')
+              ? activePeriod.label
+              : `${['January','February','March','April','May','June','July','August','September','October','November','December'][(activePeriod?.month || 9) - 1]} ${activePeriod?.year || 2026}`,
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             notes: 'Active live warehouse operational state (all allocations reset)',

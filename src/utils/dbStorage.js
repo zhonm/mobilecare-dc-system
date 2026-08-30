@@ -132,6 +132,33 @@ class DbStorage {
     }
   }
 
+  async clearOperationalCache(preserveKeys = ['mdc_current_user', 'mdc_session_sig', 'mdc_users']) {
+    try {
+      const db = await this.getDb();
+      if (db) {
+        const tx = db.transaction(STORE_APP_STATE, 'readwrite');
+        const store = tx.objectStore(STORE_APP_STATE);
+        const req = store.openCursor();
+        req.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            const k = cursor.key;
+            if (!preserveKeys.includes(k) && !String(k).startsWith('sb-')) {
+              cursor.delete();
+            }
+            cursor.continue();
+          }
+        };
+        await new Promise((resolve) => {
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        });
+      }
+    } catch (err) {
+      console.warn('[IndexedDB] Clear operational cache error:', err);
+    }
+  }
+
   // --- SAVED PERIOD RECORDS (PERMANENT ARCHIVE) ---
 
   async getAllSavedRecords() {

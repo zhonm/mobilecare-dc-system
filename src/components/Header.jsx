@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Layers, ChevronDown, Filter } from 'lucide-react';
 
 export default function Header() {
@@ -30,8 +31,11 @@ export default function Header() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
+      // Clear any stale local storage cache while keeping session
+      await clearOperationalLocalStorage({ keepSession: true });
+      try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
       if (autoRefreshData) {
-        await autoRefreshData({ force: true, silent: false, reason: 'Header manual sync' });
+        await autoRefreshData({ force: true, silent: false, isManual: true, reason: 'Header manual sync' });
       }
     } catch (err) {
       console.error('Manual sync error:', err);
@@ -68,9 +72,18 @@ export default function Header() {
   // Dynamic Month & Auto-Updating System Year Display (e.g. August 2026, September 2026)
   const currentSystemYear = new Date().getFullYear();
   const currentMonthName = new Date().toLocaleString('en-US', { month: 'long' });
-  const displayPeriod = activePeriod?.label
-    ? (activePeriod.year ? `${activePeriod.label.split(' ')[0]} ${activePeriod.year}` : `${activePeriod.label.split(' ')[0]} ${currentSystemYear}`)
-    : `${currentMonthName} ${currentSystemYear}`;
+  const displayPeriod = (() => {
+    if (!activePeriod) return `${currentMonthName} ${currentSystemYear}`;
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const pYear = activePeriod.year || currentSystemYear;
+    if (activePeriod.label && !activePeriod.label.toLowerCase().includes('master')) {
+      return activePeriod.label;
+    }
+    if (activePeriod.month && activePeriod.month >= 1 && activePeriod.month <= 12) {
+      return `${monthNames[activePeriod.month - 1]} ${pYear}`;
+    }
+    return `${currentMonthName} ${pYear}`;
+  })();
 
   return (
     <header className="header-bar">

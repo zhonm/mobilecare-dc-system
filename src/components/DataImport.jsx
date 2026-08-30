@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
+import { clearOperationalLocalStorage, performHardRefresh } from '../utils/cacheManager';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   UploadCloud,
@@ -20,7 +21,7 @@ import {
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab } = useApp();
+  const { applyParsedDataset, resetToDefaultData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab, forecastingModel } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [parsedData, setParsedData] = useState(null);
@@ -36,9 +37,9 @@ export default function DataImport() {
 
   const [allocationMode, setAllocationMode] = useState(() => {
     try {
-      return localStorage.getItem('mdc_allocation_mode') || 'OPTION_A';
+      return localStorage.getItem('mdc_allocation_mode') || 'OPTION_B';
     } catch {
-      return 'OPTION_A';
+      return 'OPTION_B';
     }
   });
 
@@ -50,10 +51,10 @@ export default function DataImport() {
   const [selectedMonth, setSelectedMonth] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_selected_ingestion_month');
-      if (saved !== null && saved !== undefined && saved !== '') return saved;
-      if (activePeriod?.month) return String(activePeriod.month - 1);
-    } catch (e) {}
-    return '8'; // Default to September
+      return saved !== null ? saved : 'auto';
+    } catch {
+      return 'auto';
+    }
   });
 
   const [previewTab, setPreviewTab] = useState('forecast'); // 'forecast' | 'allocation' | 'raw'
@@ -88,10 +89,12 @@ export default function DataImport() {
   const processFile = async (file, scope, month, mode = allocationMode) => {
     setIsProcessing(true);
     try {
+      const activeModel = forecastingModel || (typeof window !== 'undefined' ? localStorage.getItem('mdc_forecasting_model') : null) || 'linear';
       const result = await parseUniversalExcel(file, sites, parts, {
         filterScope: scope,
         selectedMonth: month,
-        allocationMode: mode
+        allocationMode: mode,
+        forecastingModel: activeModel
       });
       if (result.success) {
         setParsedData(result);
@@ -206,12 +209,30 @@ export default function DataImport() {
       status: 'ACTIVE_ON_CLOUD'
     };
 
-    await applyParsedDataset(parsedData, auditMeta);
-    setParsedData(null);
-    setFileName('');
-    setLastFileObj(null);
-    setActiveTab('allocation');
-    showToast('Dataset imported and allocation matrix updated successfully!', 'success');
+    setIsProcessing(true);
+    try {
+      await applyParsedDataset(parsedData, auditMeta);
+      const targetPeriod = { month: periodMonth, year: periodYear, label: targetMonthName };
+      
+      // Systematically clear operational local storage cache and set target period/tab
+      await clearOperationalLocalStorage({
+        keepSession: true,
+        preservePeriod: targetPeriod,
+        targetTab: 'forecast'
+      });
+
+      setParsedData(null);
+      setFileName('');
+      setLastFileObj(null);
+      showToast('Master dataset applied! Cache cleared. Hard refreshing to display 100% synchronized data...', 'success');
+
+      // Hard refresh with cache-busting to ensure all views render with fresh data
+      performHardRefresh('forecast', 600);
+    } catch (err) {
+      console.error('Error during dataset import and cache clearance:', err);
+      showToast(`Error applying dataset: ${err.message}`, 'error');
+      setIsProcessing(false);
+    }
   };
 
   const handleDownloadTemplate = () => {
@@ -299,13 +320,13 @@ export default function DataImport() {
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-light)',
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
             gap: '16px',
             alignItems: 'center'
           }}
         >
           {/* Target Month Selector */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
               <Calendar size={15} color="var(--primary)" />
               <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
@@ -317,7 +338,7 @@ export default function DataImport() {
               value={selectedMonth}
               onChange={(e) => handleMonthChange(e.target.value)}
               disabled={!isSuperAdmin}
-              style={{ width: '100%', fontSize: '13px', padding: '7px 10px', background: '#fff' }}
+              style={{ width: '100%', fontSize: '12.5px', padding: '7px 10px', background: '#fff' }}
             >
               <option value="auto">Auto-Detect from Dates in File</option>
               <option value="0">January (Jan)</option>
@@ -336,29 +357,31 @@ export default function DataImport() {
           </div>
 
           {/* Part Filter Scope Selector */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
               <Smartphone size={15} color="var(--primary)" />
               <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
                 Hardware Filter Scope:
               </strong>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 type="button"
                 className={`btn btn-sm ${filterScope === 'IPHONE_13_PLUS_BATTERY_DISPLAY' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('IPHONE_13_PLUS_BATTERY_DISPLAY')}
                 disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title="Filter for iPhone 13 and newer (Battery & Display parts)"
               >
-                iPhone (Battery & Display)
+                iPhone (Batt & Disp)
               </button>
               <button
                 type="button"
                 className={`btn btn-sm ${filterScope === 'ALL_PARTS' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('ALL_PARTS')}
                 disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}
+                title="Include all hardware categories in the file"
               >
                 All Parts
               </button>
@@ -366,33 +389,33 @@ export default function DataImport() {
           </div>
 
           {/* Allocation Engine Mode Selector */}
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
               <Split size={15} color="var(--primary)" />
               <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
                 Allocation Mode:
               </strong>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${allocationMode === 'OPTION_A' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => handleAllocationModeChange('OPTION_A')}
-                disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
-                title="Option A: Bit-for-bit Excel workbook formula parity"
-              >
-                Option A (Excel Parity)
-              </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 type="button"
                 className={`btn btn-sm ${allocationMode === 'OPTION_B' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleAllocationModeChange('OPTION_B')}
                 disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
-                title="Option B: Corrected self-consistent 2D quota allocation"
+                style={{ fontSize: '12px', flex: 1.2, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title="Option B: 100% Exact Forecast Match (zero-drift proportional quota allocation across service sites)"
               >
-                Option B (Corrected)
+                Option B (Exact Match)
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${allocationMode === 'OPTION_A' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleAllocationModeChange('OPTION_A')}
+                disabled={!isSuperAdmin}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title="Option A: Bit-for-bit Excel workbook formula parity (2D cumulative column sum)"
+              >
+                Option A (Excel 2D)
               </button>
             </div>
           </div>

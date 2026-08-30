@@ -24,8 +24,28 @@ export const DEFAULT_ANOMALY_SIGMA_THRESHOLD = 1.5;
 export const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
 /**
- * Safe numeric rounding that replicates Excel's exact half-up rational rounding
- * and avoids binary floating-point representation artifacts (e.g. 97.49999999999999 -> 97.5 -> 98).
+ * Safe numeric rounding that replicates Excel's half-up rational rounding
+ * and achieves parity with Excel's 15-significant-digit arithmetic.
+ *
+ * ── Why toFixed(9) ────────────────────────────────────────────────────────
+ * IEEE 754 double precision represents some fractions imprecisely.  For example:
+ *   11 × (15/22)  =  165/22  =  7.5  exactly in mathematics
+ * but JavaScript's binary FP computes it as 7.4999999999999991.
+ * Excel operates with 15 significant decimal digits and obtains 7.5 → rounds to 8.
+ *
+ * toFixed(9) serialises the value to 9 decimal places, stripping the 10th-16th
+ * digit noise introduced by FP representation.  The result is then re-parsed
+ * and passed to Math.round:
+ *   7.4999999999999991 → '7.500000000' → 7.5 → Math.round → 8   ✓ matches Excel
+ *   3.0000000000000004 → '3.000000000' → 3.0 → Math.round → 3   ✓ strips residual
+ *   2.5                → '2.500000000' → 2.5 → Math.round → 3   ✓ half-up
+ *
+ * ── When NOT to use ───────────────────────────────────────────────────────
+ * Do NOT use roundExcel for values whose mathematical result is genuinely
+ * X.4999… (truly less than a half-integer).  In the allocation context all
+ * rounding is applied to products of integer qty × rational share, so the
+ * mathematical result is always rational and the toFixed(9) representation
+ * is reliable.
  *
  * @param {number} val
  * @returns {number}

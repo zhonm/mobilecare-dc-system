@@ -732,12 +732,14 @@ export default function ScanInReceiving() {
   const handleConfirmBatchImport = () => {
     if (!parsedBatch || !parsedBatch.items) return;
 
+    const effectiveDest = isPmgUser ? `${activeReceivingSite.code} Stock` : modalAssignment;
+
     const validItems = parsedBatch.items
       .filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY')
       .map(it => ({
         ...it,
-        intake_assignment: it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment,
-        notes: it.notes || modalAssignment,
+        intake_assignment: isPmgUser ? `${activeReceivingSite.code} Stock` : (it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment),
+        notes: isPmgUser ? `${activeReceivingSite.code} Stock` : (it.notes || modalAssignment),
         current_site_id: activeReceivingSite.id,
         site_code: activeReceivingSite.code,
         site_name: activeReceivingSite.name
@@ -750,8 +752,8 @@ export default function ScanInReceiving() {
 
     const res = batchAddScanInUnits(
       validItems,
-      modalPoId || selectedPoId || null,
-      modalAssignment,
+      isPmgUser ? null : (modalPoId || selectedPoId || null),
+      effectiveDest,
       activeReceivingSite.id,
       activeReceivingSite.code,
       activeReceivingSite.name
@@ -762,7 +764,7 @@ export default function ScanInReceiving() {
 
       setScanResult({
         type: 'success',
-        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts (${modalAssignment}) into ${activeReceivingSite.name} database!`
+        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts into ${activeReceivingSite.name} database!`
       });
 
       setActiveTableView('ALL_DC_STOCK');
@@ -801,16 +803,31 @@ export default function ScanInReceiving() {
     return set;
   }, [activePackDraft, shipments]);
 
-  // Filter for currently available IN-STOCK units in DC (normalized to ensure Apple P/N and exclude mislabeled/packed units)
+  // Filter for currently available IN-STOCK units in DC or Branch (normalized to ensure Apple P/N and exclude mislabeled/packed units)
   const availableInStockUnits = useMemo(() => {
     const raw = (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
-      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+      if (u.status !== 'in_stock' && u.status) return false;
+
+      if (isPmgUser) {
+        const uSite = u.current_site_id || u.site_id || u.siteId;
+        const uCode = u.site_code || u.siteCode;
+        const targetSiteId = activeReceivingSite.id;
+        const targetSiteCode = activeReceivingSite.code;
+        const userSiteId = currentUser?.siteId;
+
+        const isUserSite = (uSite && (uSite === targetSiteId || uSite === targetSiteCode || uSite === userSiteId)) ||
+                           (uCode && (uCode === targetSiteCode || uCode === targetSiteId)) ||
+                           (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id);
+        return isUserSite;
+      }
+
+      return u.status === 'in_stock' || (!u.status && (u.current_site_id === 'site-dc' || !u.current_site_id));
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, packedSerialsSet, parts]);
+  }, [inventoryUnits, packedSerialsSet, parts, isPmgUser, activeReceivingSite, currentUser]);
 
   // Normalized session scans
   const normalizedSessionScans = useMemo(() => {
@@ -1002,26 +1019,28 @@ export default function ScanInReceiving() {
             )}
           </div>
 
-          {/* Column 2: PO Selector */}
-          <div>
-            <label className="workstation-col-label">
-              <Building2 size={13} color="#38bdf8" />
-              <span>2. Linked Purchase Order</span>
-            </label>
-            <select
-              className="form-select"
-              style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
-              value={selectedPoId}
-              onChange={(e) => setSelectedPoId(e.target.value)}
-            >
-              <option value="">-- Direct Intake (No PO) --</option>
-              {purchaseOrders.map(po => (
-                <option key={po.id} value={po.id}>
-                  {po.po_number} ({po.status})
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Column 2: PO Selector (DC Only) */}
+          {!isPmgUser && (
+            <div>
+              <label className="workstation-col-label">
+                <Building2 size={13} color="#38bdf8" />
+                <span>2. Linked Purchase Order</span>
+              </label>
+              <select
+                className="form-select"
+                style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
+                value={selectedPoId}
+                onChange={(e) => setSelectedPoId(e.target.value)}
+              >
+                <option value="">-- Direct Intake (No PO) --</option>
+                {purchaseOrders.map(po => (
+                  <option key={po.id} value={po.id}>
+                    {po.po_number} ({po.status})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Column 3: Part Assignment Classification (CRBR vs Forecasting) - DC Central Warehouse Only */}
           {!isPmgUser && (
@@ -1682,57 +1701,59 @@ export default function ScanInReceiving() {
               </button>
             </div>
 
-            {/* Assignment Filter Switcher */}
-            <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-              <button
-                type="button"
-                onClick={() => setAssignmentFilter('ALL')}
-                style={{
-                  background: assignmentFilter === 'ALL' ? '#fff' : 'transparent',
-                  color: assignmentFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11.5px',
-                  fontWeight: assignmentFilter === 'ALL' ? 600 : 400,
-                  cursor: 'pointer'
-                }}
-              >
-                All Destinations
-              </button>
-              <button
-                type="button"
-                onClick={() => setAssignmentFilter('MDC - Forecasting')}
-                style={{
-                  background: assignmentFilter === 'MDC - Forecasting' ? '#0284c7' : 'transparent',
-                  color: assignmentFilter === 'MDC - Forecasting' ? '#fff' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11.5px',
-                  fontWeight: assignmentFilter === 'MDC - Forecasting' ? 600 : 400,
-                  cursor: 'pointer'
-                }}
-              >
-                MDC - Forecasting ({forecastingCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setAssignmentFilter('DC - CRBR')}
-                style={{
-                  background: assignmentFilter === 'DC - CRBR' ? '#d97706' : 'transparent',
-                  color: assignmentFilter === 'DC - CRBR' ? '#fff' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11.5px',
-                  fontWeight: assignmentFilter === 'DC - CRBR' ? 600 : 400,
-                  cursor: 'pointer'
-                }}
-              >
-                DC - CRBR ({crbrCount})
-              </button>
-            </div>
+            {/* Assignment Filter Switcher (DC Only) */}
+            {!isPmgUser && (
+              <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                <button
+                  type="button"
+                  onClick={() => setAssignmentFilter('ALL')}
+                  style={{
+                    background: assignmentFilter === 'ALL' ? '#fff' : 'transparent',
+                    color: assignmentFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: assignmentFilter === 'ALL' ? 600 : 400,
+                    cursor: 'pointer'
+                  }}
+                >
+                  All Destinations
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignmentFilter('MDC - Forecasting')}
+                  style={{
+                    background: assignmentFilter === 'MDC - Forecasting' ? '#0284c7' : 'transparent',
+                    color: assignmentFilter === 'MDC - Forecasting' ? '#fff' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: assignmentFilter === 'MDC - Forecasting' ? 600 : 400,
+                    cursor: 'pointer'
+                  }}
+                >
+                  MDC - Forecasting ({forecastingCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignmentFilter('DC - CRBR')}
+                  style={{
+                    background: assignmentFilter === 'DC - CRBR' ? '#d97706' : 'transparent',
+                    color: assignmentFilter === 'DC - CRBR' ? '#fff' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: assignmentFilter === 'DC - CRBR' ? 600 : 400,
+                    cursor: 'pointer'
+                  }}
+                >
+                  DC - CRBR ({crbrCount})
+                </button>
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1740,7 +1761,7 @@ export default function ScanInReceiving() {
               <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
-                placeholder="Filter P/N, S/N, destination..."
+                placeholder={isPmgUser ? "Filter P/N, S/N..." : "Filter P/N, S/N, destination..."}
                 value={tableSearch}
                 onChange={(e) => setTableSearch(e.target.value)}
                 className="form-input"
@@ -1748,15 +1769,17 @@ export default function ScanInReceiving() {
               />
             </div>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('intake-records')}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', height: '34px' }}
-              title="View all stock grouped by date in DC Intake Records"
-            >
-              <BookmarkPlus size={14} color="#0284c7" />
-              <span>Intake Records</span>
-            </button>
+            {!isPmgUser && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setActiveTab('intake-records')}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', height: '34px' }}
+                title="View all stock grouped by date in DC Intake Records"
+              >
+                <BookmarkPlus size={14} color="#0284c7" />
+                <span>Intake Records</span>
+              </button>
+            )}
 
             {sessionScans.length > 0 && activeTableView === 'SESSION_SCANS' && (
               <button className="btn btn-secondary btn-sm" onClick={handleClearSessionHistory} style={{ height: '34px' }}>
@@ -1769,11 +1792,11 @@ export default function ScanInReceiving() {
         {displayedUnits.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13.5px' }}>
             {tableSearch || assignmentFilter !== 'ALL' ? (
-              <span>No parts found matching current filters. Try resetting search or destination filters.</span>
+              <span>No parts found matching current filters. Try resetting search filters.</span>
             ) : activeTableView === 'ALL_DC_STOCK' ? (
-              <span>No parts currently in DC inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
+              <span>No parts currently in {isPmgUser ? activeReceivingSite.code : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
             ) : (
-              <span>No units in recent session view. Switch to "All DC Stock ({availableInStockUnits.length})" above to see all inventory.</span>
+              <span>No units in recent session view. Switch to "{isPmgUser ? 'All Branch Stock' : 'All DC Stock'} ({availableInStockUnits.length})" above to see all inventory.</span>
             )}
           </div>
         ) : (
@@ -1785,7 +1808,7 @@ export default function ScanInReceiving() {
                   <th>Part Number</th>
                   <th>Description</th>
                   <th>Serial Number</th>
-                  <th>Assignment / Note (Click to switch)</th>
+                  <th>{isPmgUser ? 'Receiving Branch / Stock' : 'Assignment / Note (Click to switch)'}</th>
                   <th>Intake Source</th>
                   <th>Timestamp</th>
                   <th>Status</th>
@@ -1804,34 +1827,55 @@ export default function ScanInReceiving() {
                       <td>{unit.description}</td>
                       <td className="font-mono">{unit.serial_number}</td>
                       <td>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newDest = isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
-                            updateUnitAssignment(unit.serial_number, newDest);
-                            setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest } : u));
-                          }}
-                          className="badge"
-                          style={{
-                            background: isCrbr ? '#fef3c7' : '#e0f2fe',
-                            color: isCrbr ? '#92400e' : '#0369a1',
-                            border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
-                            fontWeight: 700,
-                            fontSize: '11.5px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            cursor: 'pointer',
-                            padding: '3px 8px',
-                            borderRadius: '4px',
-                            transition: 'all 0.15s'
-                          }}
-                          title={`Click to toggle destination to ${isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
-                        >
-                          {isCrbr ? <Tag size={11} /> : <Layers size={11} />}
-                          <span>{isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
-                          <ArrowLeftRight size={10} style={{ opacity: 0.6, marginLeft: '2px' }} />
-                        </button>
+                        {isPmgUser ? (
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#f0fdf4',
+                              color: '#166534',
+                              border: '1px solid #bbf7d0',
+                              fontWeight: 600,
+                              fontSize: '11.5px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '3px 8px',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            <Building2 size={11} color="#16a34a" />
+                            <span>{unit.site_code || activeReceivingSite.code} Stock</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newDest = isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
+                              updateUnitAssignment(unit.serial_number, newDest);
+                              setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest } : u));
+                            }}
+                            className="badge"
+                            style={{
+                              background: isCrbr ? '#fef3c7' : '#e0f2fe',
+                              color: isCrbr ? '#92400e' : '#0369a1',
+                              border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                              fontWeight: 700,
+                              fontSize: '11.5px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              cursor: 'pointer',
+                              padding: '3px 8px',
+                              borderRadius: '4px',
+                              transition: 'all 0.15s'
+                            }}
+                            title={`Click to toggle destination to ${isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
+                          >
+                            {isCrbr ? <Tag size={11} /> : <Layers size={11} />}
+                            <span>{isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                            <ArrowLeftRight size={10} style={{ opacity: 0.6, marginLeft: '2px' }} />
+                          </button>
+                        )}
                       </td>
                       <td>
                         {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
@@ -1946,42 +1990,62 @@ export default function ScanInReceiving() {
                 </div>
               </div>
 
-              {/* Grid: PO Selector & Assignment Selector */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
-                    Default Purchase Order:
-                  </label>
-                  <select
-                    className="form-select"
-                    style={{ width: '100%' }}
-                    value={modalPoId}
-                    onChange={(e) => setModalPoId(e.target.value)}
-                  >
-                    <option value="">-- No PO (Direct Dispatch) --</option>
-                    {purchaseOrders.map(po => (
-                      <option key={po.id} value={po.id}>
-                        {po.po_number} ({po.status})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Grid: PO Selector & Assignment Selector (DC Only) */}
+              {!isPmgUser ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
+                      Default Purchase Order:
+                    </label>
+                    <select
+                      className="form-select"
+                      style={{ width: '100%' }}
+                      value={modalPoId}
+                      onChange={(e) => setModalPoId(e.target.value)}
+                    >
+                      <option value="">-- No PO (Direct Dispatch) --</option>
+                      {purchaseOrders.map(po => (
+                        <option key={po.id} value={po.id}>
+                          {po.po_number} ({po.status})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
-                    Intake Assignment / Destination:
-                  </label>
-                  <select
-                    className="form-select"
-                    style={{ width: '100%' }}
-                    value={modalAssignment}
-                    onChange={(e) => setModalAssignment(e.target.value)}
-                  >
-                    <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
-                    <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
-                  </select>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
+                      Intake Assignment / Destination:
+                    </label>
+                    <select
+                      className="form-select"
+                      style={{ width: '100%' }}
+                      value={modalAssignment}
+                      onChange={(e) => setModalAssignment(e.target.value)}
+                    >
+                      <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
+                      <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{
+                  padding: '10px 14px',
+                  background: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: 'var(--radius-md)',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  fontSize: '12.5px',
+                  color: '#15803d'
+                }}>
+                  <Building2 size={16} color="#16a34a" />
+                  <span>
+                    Receiving directly into Branch Stock: <strong style={{ color: '#166534' }}>{activeReceivingSite.name} ({activeReceivingSite.code})</strong>
+                  </span>
+                </div>
+              )}
 
               {/* Dropzone Area */}
               {!parsedBatch ? (
@@ -2110,7 +2174,7 @@ export default function ScanInReceiving() {
                           <th>Part Number</th>
                           <th>Description</th>
                           <th>Serial Number</th>
-                          <th>Destination</th>
+                          <th>{isPmgUser ? 'Receiving Site' : 'Destination'}</th>
                           <th>Status</th>
                         </tr>
                       </thead>
@@ -2123,11 +2187,12 @@ export default function ScanInReceiving() {
                             <td className="font-mono">{item.serialNumber}</td>
                             <td>
                               <span className="badge" style={{
-                                background: modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe',
-                                color: modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1',
+                                background: isPmgUser ? '#f0fdf4' : (modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe'),
+                                color: isPmgUser ? '#166534' : (modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1'),
+                                border: isPmgUser ? '1px solid #bbf7d0' : undefined,
                                 fontSize: '11px'
                               }}>
-                                {modalAssignment}
+                                {isPmgUser ? activeReceivingSite.code : modalAssignment}
                               </span>
                             </td>
                             <td>
@@ -2167,7 +2232,7 @@ export default function ScanInReceiving() {
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <CheckCircle2 size={16} />
-                  <span>Receive & Save {parsedBatch.summary.valid} Parts ({modalAssignment})</span>
+                  <span>Receive & Save {parsedBatch.summary.valid} Parts {isPmgUser ? `(${activeReceivingSite.code})` : `(${modalAssignment})`}</span>
                 </button>
               )}
             </div>

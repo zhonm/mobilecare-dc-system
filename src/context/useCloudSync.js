@@ -8,6 +8,7 @@ import { reconcileUnitsWithPackedDrafts, isUUID, formatShipmentForDb, formatShip
 import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import { clearOperationalLocalStorage } from '../utils/cacheManager';
 
 export function useCloudSync({
   currentUser,
@@ -249,17 +250,19 @@ export function useCloudSync({
         resParts,
         resSites,
         resCats,
-        resShipments
+        resShipments,
+        resPartsRequests
       ] = await Promise.all([
         shouldFetch('profiles') ? supabase.from('profiles').select('*').limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(25) : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(50) : Promise.resolve({ data: null }),
-        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*, parts:part_id(*)').limit(2000) : Promise.resolve({ data: null }),
+        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*, parts:part_id(*), sites:current_site_id(*)').limit(2000) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
-        shouldFetch('shipments') ? supabase.from('shipments').select('*').order('created_at', { ascending: false }).limit(50) : Promise.resolve({ data: null })
+        shouldFetch('shipments') ? supabase.from('shipments').select('*').order('created_at', { ascending: false }).limit(50) : Promise.resolve({ data: null }),
+        shouldFetch('parts_requests') ? supabase.from('parts_requests').select('*, parts:part_id(*), sites:site_id(*)').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: null })
       ]);
 
       const dbProfiles = resProfiles.data;
@@ -271,6 +274,7 @@ export function useCloudSync({
       const dbSites = resSites.data;
       const dbCats = resCats.data;
       const dbShipments = resShipments.data;
+      const dbPartsRequests = resPartsRequests.data;
 
       // 1. Process Profiles & User Page Permissions & Master Users Registry
       if (shouldFetch('profiles') || shouldFetch('saved_records') || shouldFetch('user_page_permissions')) {
@@ -512,15 +516,24 @@ export function useCloudSync({
             const isRecentlyModifiedLocally = (Date.now() - lastLocalOverrideTime) < 2500;
 
             if (!isRecentlyModifiedLocally) {
-              if (snap.activePeriod && setActivePeriod) {
-                setActivePeriod(snap.activePeriod);
-                try { localStorage.setItem('mdc_active_period', JSON.stringify(snap.activePeriod)); } catch (e) {}
-                dbStorage.setItem('mdc_active_period', snap.activePeriod);
+              const cloudPeriod = snap.activePeriod || (liveSnapshot.period_month && liveSnapshot.period_year ? {
+                month: liveSnapshot.period_month,
+                year: liveSnapshot.period_year,
+                label: (liveSnapshot.period_label || 'September 2026').replace(' Live Master State', '').trim()
+              } : null);
+
+              if (cloudPeriod && setActivePeriod) {
+                setActivePeriod(cloudPeriod);
+                try { localStorage.setItem('mdc_active_period', JSON.stringify(cloudPeriod)); } catch (e) {}
+                dbStorage.setItem('mdc_active_period', cloudPeriod);
               }
-              if (snap.forecastingModel && setForecastingModel) {
-                const validModel = ['wma', 'linear'].includes(snap.forecastingModel) ? snap.forecastingModel : 'linear';
-                setForecastingModel(validModel);
-                try { localStorage.setItem('mdc_forecasting_model', validModel); } catch (e) {}
+              if (setForecastingModel) {
+                const incomingModel = snap.forecastingModel || snap.forecastModel;
+                if (incomingModel && ['wma', 'linear', 'holt', 'croston'].includes(incomingModel)) {
+                  setForecastingModel(incomingModel);
+                  try { localStorage.setItem('mdc_forecasting_model', incomingModel); } catch (e) {}
+                  dbStorage.setItem('mdc_forecasting_model', incomingModel);
+                }
               }
               if (snap.forecastItems && snap.forecastItems.length > 0) {
                 setForecastItems(snap.forecastItems);
@@ -1030,6 +1043,7 @@ export function useCloudSync({
                 const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                 const assign = cloudAssign || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
 
+                const siteJoined = dbU.sites || (dbSites || sites || []).find(s => s.id === dbU.current_site_id || s.code === dbU.current_site_id) || null;
                 const partJoined = dbU.parts || null;
                 const rawPn = dbU.part_number || partJoined?.part_number;
                 const rawDesc = dbU.description || partJoined?.description;
@@ -1045,8 +1059,9 @@ export function useCloudSync({
                   serial_number: cleanSerial,
                   intake_assignment: assign,
                   notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
-                  current_site_id: dbU.current_site_id || 'site-dc',
-                  site_code: dbU.site_code || 'DC-MDC',
+                  current_site_id: siteJoined?.id || dbU.current_site_id || 'site-dc',
+                  site_code: siteJoined?.code || dbU.site_code || 'DC-MDC',
+                  site_name: siteJoined?.name || null,
                   po_id: dbU.po_id || null,
                   status: targetStatus,
                   box_number: dbU.box_number || 1,
@@ -1054,12 +1069,30 @@ export function useCloudSync({
                   received_by: dbU.received_by_name || dbU.received_by || 'Warehouse Staff',
                   allocated_at: dbU.allocated_at || null,
                   shipped_at: dbU.shipped_at || null,
+                  used_at: dbU.used_at || null,
+                  used_by: dbU.used_by || null,
+                  used_by_name: dbU.used_by_name || null,
+                  work_order_number: dbU.work_order_number || null,
+                  usage_notes: dbU.usage_notes || null,
                   intake_record_id: dbU.intake_record_id || null
                 });
               }
             });
-          } else {
-            // Offline fallback ONLY when Supabase query is completely unavailable
+          }
+
+          // Overlay Live Master Inventory Snapshot from saved_records for cross-client sync
+          const liveMasterInvDoc = dbSavedRecords?.find(r => r.id === 'live_master_dc_inventory');
+          if (liveMasterInvDoc?.snapshot_data?.units && Array.isArray(liveMasterInvDoc.snapshot_data.units)) {
+            liveMasterInvDoc.snapshot_data.units.forEach(u => {
+              const s = String(u.serial_number || '').trim().toUpperCase();
+              if (s && !deletedSerialsSet.has(s) && !map.has(s)) {
+                map.set(s, u);
+              }
+            });
+          }
+
+          // Offline fallback ONLY when Supabase query is completely unavailable
+          if (!dbUnits) {
             try {
               const localSaved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
               if (Array.isArray(localSaved)) {
@@ -1097,6 +1130,61 @@ export function useCloudSync({
         });
       }
 
+      // 8. Process Parts Requests
+      if (shouldFetch('parts_requests') || shouldFetch('saved_records')) {
+        const partsReqRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_parts_requests_registry');
+        const cloudRegistryRequests = Array.isArray(partsReqRegistryDoc?.snapshot_data?.requests)
+          ? partsReqRegistryDoc.snapshot_data.requests
+          : [];
+
+        if (setPartsRequests) {
+          setPartsRequests(prev => {
+            const reqMap = new Map();
+
+            // 1. Start with previous local requests
+            (prev || []).forEach(r => {
+              if (r.id) reqMap.set(r.id, r);
+            });
+
+            // 2. Merge cloud registry requests
+            cloudRegistryRequests.forEach(r => {
+              if (r.id) {
+                const existing = reqMap.get(r.id);
+                reqMap.set(r.id, { ...(existing || {}), ...r });
+              }
+            });
+
+            // 3. Merge direct Supabase table rows
+            if (Array.isArray(dbPartsRequests)) {
+              dbPartsRequests.forEach(dbR => {
+                if (dbR.id) {
+                  const partObj = dbR.parts || (dbParts || parts || []).find(p => p.id === dbR.part_id) || {};
+                  const siteObj = dbR.sites || (dbSites || sites || []).find(s => s.id === dbR.site_id) || {};
+                  const existing = reqMap.get(dbR.id);
+                  reqMap.set(dbR.id, {
+                    ...(existing || {}),
+                    ...dbR,
+                    part_number: partObj.part_number || dbR.part_number || existing?.part_number,
+                    part_description: partObj.description || dbR.part_description || existing?.part_description,
+                    site_code: siteObj.code || dbR.site_code || existing?.site_code,
+                    site_name: siteObj.name || dbR.site_name || existing?.site_name
+                  });
+                }
+              });
+            }
+
+            const merged = Array.from(reqMap.values()).sort(
+              (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+            );
+
+            try { localStorage.setItem('mdc_parts_requests', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_parts_requests', merged);
+
+            return merged;
+          });
+        }
+      }
+
       const syncNow = new Date();
       setLastSyncedAt(syncNow);
       setCloudSyncStatus({ isSaving: false, lastSaved: syncNow, isOnline: true });
@@ -1106,7 +1194,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, broadcastCloudEvent, currentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, broadcastCloudEvent, currentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1360,6 +1448,21 @@ export function useCloudSync({
                   return next;
                 });
               }
+            } else if (['DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(ev.data.type)) {
+              clearOperationalLocalStorage({
+                keepSession: true,
+                preservePeriod: ev.data.payload?.period || null
+              });
+              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              if (ev.data.payload?.period && setActivePeriod) {
+                setActivePeriod(ev.data.payload.period);
+              }
+              autoRefreshData({ force: true, silent: true, isManual: true, reason: `Local Broadcast [${ev.data.type}]` });
+            } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
+              const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
+              if (Date.now() - lastLocalTime >= 3000) {
+                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]' });
+              }
             }
             triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
           }
@@ -1422,6 +1525,16 @@ export function useCloudSync({
                   return next;
                 });
               }
+            } else if (['MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(bType)) {
+              clearOperationalLocalStorage({
+                keepSession: true,
+                preservePeriod: bPayload?.period || null
+              });
+              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              if (bPayload?.period && setActivePeriod) {
+                setActivePeriod(bPayload.period);
+              }
+              autoRefreshData({ force: true, silent: true, isManual: true, reason: `WebSocket Broadcast [${bType}]` });
             }
             triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });
@@ -1619,16 +1732,19 @@ export function useCloudSync({
       showToast('Syncing master data to Supabase cloud...', 'info');
 
       try {
+        const resolvedActivePeriod = activePeriod || { month: 9, year: 2026, label: 'September 2026' };
         const liveSnapshotPayload = {
           id: LIVE_MASTER_RECORD_ID,
           record_type: 'both',
-          period_label: `${activePeriod?.label || 'September 2026'} Live Master State`,
-          period_year: activePeriod?.year || 2026,
-          period_month: activePeriod?.month || 9,
+          period_label: `${resolvedActivePeriod.label || 'September 2026'} Live Master State`,
+          period_year: resolvedActivePeriod.year || 2026,
+          period_month: resolvedActivePeriod.month || 9,
           saved_by_name: currentUser?.fullName || 'Superadmin User',
           saved_by_user_id: null,
           notes: 'Real-time multi-user synchronized Distribution Center state',
           snapshot_data: {
+            activePeriod: resolvedActivePeriod,
+            forecastingModel: _forecastingModel || 'linear',
             forecastItems: currentForecast || [],
             allocations: currentAllocs || [],
             parts: currentParts || [],
@@ -2215,7 +2331,8 @@ export function useCloudSync({
       };
       await syncAllDataToCloud(fullSyncSnapshot);
       broadcastCloudEvent('AUDIT_UPLOAD_LOGGED', { log: uploadLogEntry });
-      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records' });
+      broadcastCloudEvent('DATASET_UPLOADED', { period: newPeriod, targetTab: 'forecast', timestamp: Date.now() });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records', period: newPeriod, timestamp: Date.now() });
     } catch (err) {
       console.error('Error applying parsed dataset:', err);
       showToast(`Error applying data: ${err.message}`, 'error');

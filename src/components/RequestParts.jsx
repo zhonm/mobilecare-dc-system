@@ -34,7 +34,12 @@ import {
   Lock,
   Unlock,
   Eye,
-  EyeOff
+  EyeOff,
+  MessageSquare,
+  Wrench,
+  History,
+  RotateCcw,
+  Zap
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -51,6 +56,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     currentUser,
     sites = [],
     parts = [],
+    inventoryUnits = [],
     partsRequests = [],
     submitPartsRequest,
     cancelPartsRequest,
@@ -58,6 +64,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     getStockOnHandForSite,
     getAllSitesStockSummary,
     getUsedPartsForSite,
+    getUsedUnitsLog,
+    markUnitAsUsed,
+    unmarkUnitAsUsed,
     fetchPartsRequests,
     isLoadingPartsRequests,
     showToast,
@@ -79,10 +88,13 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     if (!isSuperadmin && currentUser?.siteId) {
       return currentUser.siteId;
     }
-    return currentUser?.siteId || sites[0]?.id || 'site-dc';
+    return 'ALL';
   });
 
   const activeSiteObj = useMemo(() => {
+    if (selectedSiteId === 'ALL') {
+      return { id: 'ALL', code: 'ALL', name: 'All Branch Sites' };
+    }
     return sites.find(s => s.id === selectedSiteId || s.code === selectedSiteId) || userSiteObj;
   }, [sites, selectedSiteId, userSiteObj]);
 
@@ -105,6 +117,16 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [formNotes, setFormNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPartDropdown, setShowPartDropdown] = useState(false);
+
+  // Mark Part as Used Modal State (PMG Repair Consumption Feature)
+  const [isMarkUsedModalOpen, setIsMarkUsedModalOpen] = useState(false);
+  const [markUsedPartPn, setMarkUsedPartPn] = useState('');
+  const [markUsedSerial, setMarkUsedSerial] = useState('');
+  const [markUsedWorkOrder, setMarkUsedWorkOrder] = useState('');
+  const [markUsedNotes, setMarkUsedNotes] = useState('');
+  const [isSubmittingMarkUsed, setIsSubmittingMarkUsed] = useState(false);
+  const [usedHistorySubTab, setUsedHistorySubTab] = useState('live_log'); // 'live_log' | 'aggregated_data'
+  const [usedLogSearchQuery, setUsedLogSearchQuery] = useState('');
 
   // Table Search & Filter State
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -311,6 +333,103 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     showToast(`Exported ${rows.length} request records to ${fileName}`, 'success');
   };
 
+  // Available In-Stock serial numbers for the selected part in Mark as Used modal
+  const availableSerialsForMarkUsed = useMemo(() => {
+    if (!markUsedPartPn) return [];
+    const targetSiteId = isSuperadmin && selectedSiteId !== 'ALL' ? selectedSiteId : (currentUser?.siteId || userSiteObj.id);
+    const targetSiteCode = userSiteObj.code;
+
+    return (inventoryUnits || []).filter(u => {
+      const cleanPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+      if (cleanPN !== markUsedPartPn.toUpperCase()) return false;
+      if (String(u.status || 'in_stock').toLowerCase() !== 'in_stock') return false;
+
+      const uSiteId = u.current_site_id || u.siteId;
+      const uSiteCode = u.site_code || u.siteCode;
+      return (uSiteId && (uSiteId === targetSiteId || uSiteId === targetSiteCode)) ||
+             (uSiteCode && (uSiteCode === targetSiteCode || uSiteCode === targetSiteId));
+    });
+  }, [inventoryUnits, markUsedPartPn, isSuperadmin, selectedSiteId, currentUser, userSiteObj]);
+
+  // Open Mark as Used Modal
+  const openMarkUsedModal = (partNumber = '', prefillSerial = '') => {
+    setMarkUsedPartPn(partNumber);
+    setMarkUsedSerial(prefillSerial);
+    setMarkUsedWorkOrder('');
+    setMarkUsedNotes('');
+    setIsMarkUsedModalOpen(true);
+  };
+
+  // Submit Mark as Used Action
+  const handleConfirmMarkAsUsed = async (e) => {
+    if (e) e.preventDefault();
+    if (!markUsedSerial) {
+      showToast('Please select or enter the serial number of the used part.', 'error');
+      return;
+    }
+    setIsSubmittingMarkUsed(true);
+    try {
+      const res = await markUnitAsUsed({
+        serialNumber: markUsedSerial,
+        partNumber: markUsedPartPn,
+        siteId: userSiteObj.id || currentUser?.siteId,
+        workOrderNumber: markUsedWorkOrder,
+        notes: markUsedNotes
+      });
+      if (res && res.success) {
+        setIsMarkUsedModalOpen(false);
+        setMarkUsedSerial('');
+        setMarkUsedWorkOrder('');
+        setMarkUsedNotes('');
+      }
+    } finally {
+      setIsSubmittingMarkUsed(false);
+    }
+  };
+
+  // Live Used Units Log (status === 'used')
+  const liveUsedUnitsLog = useMemo(() => {
+    const siteFilter = selectedSiteId === 'ALL' && isSuperadmin ? 'ALL' : (selectedSiteId || userSiteObj.id || currentUser?.siteId);
+    const units = typeof getUsedUnitsLog === 'function' ? getUsedUnitsLog(siteFilter) : [];
+    if (!usedLogSearchQuery.trim()) return units;
+    const q = usedLogSearchQuery.toLowerCase().trim();
+    return units.filter(u => {
+      const pn = String(u.part_number || '').toLowerCase();
+      const desc = String(u.description || '').toLowerCase();
+      const sn = String(u.serial_number || '').toLowerCase();
+      const wo = String(u.work_order_number || '').toLowerCase();
+      const tech = String(u.used_by_name || u.used_by || '').toLowerCase();
+      const notes = String(u.usage_notes || u.notes || '').toLowerCase();
+      return pn.includes(q) || desc.includes(q) || sn.includes(q) || wo.includes(q) || tech.includes(q) || notes.includes(q);
+    });
+  }, [getUsedUnitsLog, selectedSiteId, isSuperadmin, userSiteObj, currentUser, usedLogSearchQuery]);
+
+  // Export Live Used Log to Excel
+  const handleExportLiveUsedLogToXlsx = () => {
+    if (liveUsedUnitsLog.length === 0) {
+      showToast('No used parts records found to export.', 'warning');
+      return;
+    }
+    const rows = liveUsedUnitsLog.map((u, idx) => ({
+      '#': idx + 1,
+      'Part Number': u.part_number,
+      'Description': u.description || 'Apple Replacement Part',
+      'Serial Number': u.serial_number,
+      'Work Order #': u.work_order_number || 'N/A',
+      'Used By (Technician)': u.used_by_name || u.used_by || 'Branch Specialist',
+      'Used Date': u.used_at ? new Date(u.used_at).toLocaleDateString() : 'N/A',
+      'Used Time': u.used_at ? new Date(u.used_at).toLocaleTimeString() : 'N/A',
+      'Branch Site': u.site_code || activeSiteObj.code,
+      'Usage Notes': u.usage_notes || u.notes || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Used Parts Log');
+    const fileName = `Used_Parts_Log_${activeSiteObj.code || 'BRANCH'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showToast(`Exported ${rows.length} used parts records to ${fileName}`, 'success');
+  };
+
   // Stock on Hand Table Filtered Rows
   const stockRows = useMemo(() => {
     const items = Object.values(siteStockData.partsSummary || {});
@@ -340,17 +459,27 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                           siteSummary.siteCode.toLowerCase().includes(q);
           if (!matches) return;
         }
+        const isUserSameSite = !!(
+          currentUser?.siteId && (
+            siteSummary.siteId === currentUser.siteId ||
+            siteSummary.siteCode === currentUser.siteId ||
+            siteSummary.siteCode === userSiteObj?.code ||
+            siteSummary.siteId === userSiteObj?.id
+          )
+        );
+
         all.push({
           ...partItem,
           siteId: siteSummary.siteId,
           siteCode: siteSummary.siteCode,
           siteName: siteSummary.siteName,
-          isOwnSite: siteSummary.isOwnSite
+          isOwnSite: siteSummary.isOwnSite,
+          isUserSameSite
         });
       });
     });
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [multiSiteStockData, allStocksSearchQuery]);
+  }, [multiSiteStockData, allStocksSearchQuery, currentUser?.siteId, userSiteObj]);
 
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
@@ -884,7 +1013,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     <th style={{ textAlign: 'center', width: '100px' }}>Quantity</th>
                     <th style={{ textAlign: 'center', width: '100px' }}>Priority</th>
                     <th style={{ minWidth: '160px' }}>Requester &amp; Branch</th>
-                    <th style={{ minWidth: '180px' }}>Reason &amp; Notes</th>
+                    <th style={{ minWidth: '220px' }}>Reason &amp; Admin Reply</th>
                     <th style={{ textAlign: 'center', width: '120px' }}>Status</th>
                     <th style={{ textAlign: 'center', minWidth: '130px' }}>Actions</th>
                   </tr>
@@ -909,9 +1038,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     const statusInfo = getStatusBadge(req.status);
 
                     const getPriorityBadge = (pr) => {
-                      if (pr === 'critical') return { bg: '#fee2e2', text: '#dc2626', icon: Flame };
-                      if (pr === 'urgent') return { bg: '#fef3c7', text: '#d97706', icon: AlertTriangle };
-                      return { bg: '#e0f2fe', text: '#0284c7', icon: Info };
+                      if (pr === 'critical') return { bg: '#fee2e2', text: '#dc2626', icon: Flame, label: 'CRITICAL' };
+                      if (pr === 'urgent') return { bg: '#fef3c7', text: '#d97706', icon: AlertTriangle, label: 'URGENT' };
+                      return { bg: '#e0f2fe', text: '#0284c7', icon: Info, label: 'NORMAL' };
                     };
                     const priorityInfo = getPriorityBadge(req.priority);
                     const PriorityIcon = priorityInfo.icon;
@@ -966,13 +1095,15 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                             }}
                           >
                             <PriorityIcon size={11} />
-                            {req.priority?.toUpperCase() || 'NORMAL'}
+                            <span>{priorityInfo.label}</span>
                           </span>
                         </td>
 
                         <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <User size={13} color="#64748b" />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0284c7', fontSize: '12px', fontWeight: 700 }}>
+                              {(req.requested_by_name || 'U')[0].toUpperCase()}
+                            </div>
                             <div>
                               <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0f172a' }}>
                                 {req.requested_by_name}
@@ -985,12 +1116,41 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         </td>
 
                         <td>
-                          <div style={{ fontSize: '12px', color: '#1e293b' }}>
-                            {req.reason}
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: req.notes ? '6px' : '0' }}>
+                            {req.reason || 'Branch Replenishment'}
                           </div>
                           {req.notes && (
-                            <div style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', marginTop: '2px' }}>
-                              “{req.notes}”
+                            <div style={{
+                              background: req.status === 'rejected' ? '#fef2f2' : req.status === 'approved' ? '#f0fdf4' : '#eff6ff',
+                              border: `1px solid ${req.status === 'rejected' ? '#fca5a5' : req.status === 'approved' ? '#86efac' : '#93c5fd'}`,
+                              borderLeft: `4px solid ${req.status === 'rejected' ? '#dc2626' : req.status === 'approved' ? '#16a34a' : '#0284c7'}`,
+                              borderRadius: '6px',
+                              padding: '6px 10px',
+                              marginTop: '4px',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+                            }}>
+                              <div style={{
+                                fontSize: '10.5px',
+                                fontWeight: 800,
+                                color: req.status === 'rejected' ? '#b91c1c' : req.status === 'approved' ? '#15803d' : '#1d4ed8',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                marginBottom: '2px',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.4px'
+                              }}>
+                                <MessageSquare size={11} />
+                                <span>{req.reviewed_by_name ? `Superadmin Reply (${req.reviewed_by_name})` : 'Superadmin Reply / Note'}:</span>
+                              </div>
+                              <div style={{
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                color: req.status === 'rejected' ? '#991b1b' : req.status === 'approved' ? '#166534' : '#1e40af',
+                                lineHeight: 1.35
+                              }}>
+                                “{req.notes}”
+                              </div>
                             </div>
                           )}
                         </td>
@@ -1100,6 +1260,15 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               <span style={{ fontSize: '12px', color: '#64748b' }}>
                 Showing stock for: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
               </span>
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}
+                onClick={() => openMarkUsedModal()}
+                title="Record part used/consumed in customer repair"
+              >
+                <Wrench size={13} />
+                <span>Record Part Used</span>
+              </button>
             </div>
           </div>
 
@@ -1122,58 +1291,163 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     <th style={{ textAlign: 'center', width: '130px' }}>Available Stock</th>
                     <th style={{ textAlign: 'center', width: '110px' }}>Allocated</th>
                     <th style={{ textAlign: 'center', width: '110px' }}>Packed</th>
-                    <th style={{ textAlign: 'center', width: '130px' }}>Actions</th>
+                    <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stockRows.map(row => (
-                    <tr key={row.partNumber}>
-                      <td>
-                        <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                          {row.partNumber}
-                        </strong>
-                      </td>
-                      <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
-                        {row.description}
-                      </td>
-                      <td>
-                        <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px' }}>
-                          {row.model}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span
-                          className="badge"
-                          style={{
-                            background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
-                            color: row.inStock > 0 ? '#059669' : '#dc2626',
-                            fontWeight: 800,
-                            fontSize: '12px',
-                            padding: '4px 10px'
-                          }}
-                        >
-                          {row.inStock} units
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                        {row.allocated || 0}
-                      </td>
-                      <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                        {row.packed || 0}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                          onClick={() => handleQuickRequestPart(row.partNumber)}
-                          title="Create replenishment request for this part"
-                        >
-                          <Plus size={12} />
-                          <span>Request</span>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {stockRows.map(row => {
+                    const isUserSameSite = !!(
+                      currentUser?.siteId && (
+                        selectedSiteId === currentUser.siteId ||
+                        selectedSiteId === userSiteObj?.id ||
+                        activeSiteObj?.code === userSiteObj?.code ||
+                        activeSiteObj?.id === userSiteObj?.id
+                      )
+                    );
+
+                    return (
+                      <tr key={row.partNumber}>
+                        <td>
+                          <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                            {row.partNumber}
+                          </strong>
+                        </td>
+                        <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
+                          {row.description}
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px' }}>
+                            {row.model}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            className="badge"
+                            style={{
+                              background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
+                              color: row.inStock > 0 ? '#059669' : '#dc2626',
+                              fontWeight: 800,
+                              fontSize: '12px',
+                              padding: '4px 10px'
+                            }}
+                          >
+                            {row.inStock} units
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
+                          {row.allocated || 0}
+                        </td>
+                        <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
+                          {row.packed || 0}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {isUserSameSite ? (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              {row.inStock > 0 ? (
+                                <>
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      background: '#f0fdf4',
+                                      color: '#166534',
+                                      border: '1px solid #bbf7d0',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                      padding: '3px 8px'
+                                    }}
+                                    title="This part is currently in your branch inventory"
+                                  >
+                                    <CheckCircle2 size={11} color="#16a34a" />
+                                    <span>In Stock</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '11px',
+                                      padding: '3px 8px',
+                                      color: '#059669',
+                                      borderColor: '#86efac',
+                                      background: '#f0fdf4',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                      fontWeight: 700
+                                    }}
+                                    onClick={() => openMarkUsedModal(row.partNumber)}
+                                    title={`Record #${row.partNumber} as used in a repair work order`}
+                                  >
+                                    <Wrench size={11} />
+                                    <span>Mark Used</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      background: '#fee2e2',
+                                      color: '#dc2626',
+                                      border: '1px solid #fecaca',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                      padding: '3px 8px'
+                                    }}
+                                    title={row.outOfStockDays != null ? `0 units in stock for ${row.outOfStockDays} day(s). The system automatically purges parts from branch list after 3 consecutive days of 0 stock.` : "Out of stock at this branch"}
+                                  >
+                                    <AlertTriangle size={11} color="#dc2626" />
+                                    <span>Out of Stock</span>
+                                  </span>
+                                  {row.daysUntilPurge != null && (
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        color: '#ef4444',
+                                        background: '#fff1f2',
+                                        padding: '2px 5px',
+                                        borderRadius: '4px',
+                                        border: '1px solid #ffe4e6',
+                                        fontWeight: 600
+                                      }}
+                                      title="Auto-cleans from active branch view after 3 consecutive days with 0 units. You can re-add it anytime via Receive Scan-In."
+                                    >
+                                      {row.daysUntilPurge <= 0 ? 'Purging today' : `Auto-cleans in ${row.daysUntilPurge}d`}
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                                    onClick={() => handleQuickRequestPart(row.partNumber)}
+                                    title="Create replenishment request for this out-of-stock part"
+                                  >
+                                    <Plus size={11} />
+                                    <span>Request</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                              onClick={() => handleQuickRequestPart(row.partNumber)}
+                              title="Create replenishment request for this part"
+                            >
+                              <Plus size={12} />
+                              <span>Request</span>
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -1340,15 +1614,68 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         </td>
 
                         <td style={{ textAlign: 'center' }}>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                            onClick={() => handleQuickRequestPart(row.partNumber, row.siteName)}
-                            title="Request replenishment for this part from DC"
-                          >
-                            <Send size={11} />
-                            <span>Request Part</span>
-                          </button>
+                          {row.isUserSameSite ? (
+                            row.inStock > 0 ? (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#f0fdf4',
+                                  color: '#166534',
+                                  border: '1px solid #bbf7d0',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  padding: '3px 8px'
+                                }}
+                                title="This part is already in your branch inventory"
+                              >
+                                <CheckCircle2 size={11} color="#16a34a" />
+                                <span>In Your Branch</span>
+                              </span>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    background: '#fee2e2',
+                                    color: '#dc2626',
+                                    border: '1px solid #fecaca',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    padding: '3px 8px'
+                                  }}
+                                  title="Out of stock in your branch"
+                                >
+                                  <AlertTriangle size={11} color="#dc2626" />
+                                  <span>Out of Stock</span>
+                                </span>
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                                  onClick={() => handleQuickRequestPart(row.partNumber, row.siteName)}
+                                  title={`Request replenishment for ${row.partNumber}`}
+                                >
+                                  <Send size={11} />
+                                  <span>Request</span>
+                                </button>
+                              </div>
+                            )
+                          ) : (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                              onClick={() => handleQuickRequestPart(row.partNumber, row.siteName)}
+                              title={`Request replenishment/transfer for ${row.partNumber} from ${row.siteName}`}
+                            >
+                              <Send size={11} />
+                              <span>Request Part</span>
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1360,91 +1687,312 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 8. TAB 4: Used Parts Historical Usage */}
+      {/* 8. TAB 4: Used Parts Historical Usage & Live Consumed Units Log */}
       {activeTab === 'usage_history' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', background: '#f8fafc' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
-                Historical Repair Consumption — {activeSiteObj.name}
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Wrench size={18} color="#059669" />
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
+                  Used Parts & Repair Consumption — {activeSiteObj.name}
+                </h3>
+              </div>
               <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
-                Aggregated actual parts consumed in repairs (GSX / Fixably usage datasets).
+                Live serialized tracking of parts consumed in branch repair work orders and historical consumption datasets.
               </p>
             </div>
-            <span className="badge badge-primary">{siteUsageData.summaryList.length} Consumed Parts</span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Sub-tab pills */}
+              <div style={{ display: 'flex', background: '#e2e8f0', borderRadius: '8px', padding: '3px', gap: '2px' }}>
+                <button
+                  type="button"
+                  onClick={() => setUsedHistorySubTab('live_log')}
+                  style={{
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '4px 10px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    background: usedHistorySubTab === 'live_log' ? '#ffffff' : 'transparent',
+                    color: usedHistorySubTab === 'live_log' ? '#0f172a' : '#64748b',
+                    boxShadow: usedHistorySubTab === 'live_log' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}
+                >
+                  <Zap size={12} color="#059669" />
+                  <span>Live Consumed Log ({liveUsedUnitsLog.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUsedHistorySubTab('aggregated_data')}
+                  style={{
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '4px 10px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    background: usedHistorySubTab === 'aggregated_data' ? '#ffffff' : 'transparent',
+                    color: usedHistorySubTab === 'aggregated_data' ? '#0f172a' : '#64748b',
+                    boxShadow: usedHistorySubTab === 'aggregated_data' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}
+                >
+                  <History size={12} color="#0284c7" />
+                  <span>Historical Summary ({siteUsageData.summaryList.length})</span>
+                </button>
+              </div>
+
+              {usedHistorySubTab === 'live_log' ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={handleExportLiveUsedLogToXlsx}
+                  title="Export Live Used Parts to Excel"
+                >
+                  <FileSpreadsheet size={13} />
+                  <span>Export Log (.xlsx)</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}
+                onClick={() => openMarkUsedModal()}
+                title="Record part used/consumed in repair"
+              >
+                <Wrench size={13} />
+                <span>Record Part Used</span>
+              </button>
+            </div>
           </div>
 
-          <div className="table-container" style={{ overflowX: 'auto' }}>
-            {siteUsageData.summaryList.length === 0 ? (
-              <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
-                <TrendingDown size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
-                <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Historical Usage Records</h4>
-                <p style={{ margin: 0, fontSize: '12.5px' }}>
-                  No repair usage records are associated with {activeSiteObj.name}.
-                </p>
+          {/* Sub-View 1: Live Used Units Log */}
+          {usedHistorySubTab === 'live_log' && (
+            <div>
+              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ paddingLeft: '32px', fontSize: '12.5px' }}
+                    placeholder="Search by serial #, part #, work order, technician..."
+                    value={usedLogSearchQuery}
+                    onChange={(e) => setUsedLogSearchQuery(e.target.value)}
+                  />
+                </div>
+                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                  Showing <strong>{liveUsedUnitsLog.length}</strong> consumed serialized parts
+                </span>
               </div>
-            ) : (
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    <th style={{ minWidth: '160px' }}>Part Number</th>
-                    <th style={{ minWidth: '260px' }}>Part Description</th>
-                    <th style={{ textAlign: 'center', width: '130px' }}>Total Consumed</th>
-                    <th style={{ minWidth: '220px' }}>Monthly Consumption Breakdown</th>
-                    <th style={{ textAlign: 'center', width: '120px' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {siteUsageData.summaryList.map(item => (
-                    <tr key={item.partNumber}>
-                      <td>
-                        <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                          {item.partNumber}
-                        </strong>
-                      </td>
-                      <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
-                        {item.description || 'Apple Replacement Part'}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span className="badge badge-primary" style={{ fontSize: '12px', fontWeight: 800 }}>
-                          {item.totalUsed} used
-                        </span>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                          {Object.entries(item.byMonth || {}).map(([mo, cnt]) => (
+
+              <div className="table-container" style={{ overflowX: 'auto' }}>
+                {liveUsedUnitsLog.length === 0 ? (
+                  <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                    <Wrench size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
+                    <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Parts Recorded as Used Yet</h4>
+                    <p style={{ margin: '0 0 16px', fontSize: '12.5px' }}>
+                      When PMG technicians consume parts during repair work orders, mark them here to update real-time stock levels.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      style={{ background: '#059669', borderColor: '#059669' }}
+                      onClick={() => openMarkUsedModal()}
+                    >
+                      <Wrench size={13} />
+                      <span>Record First Used Part</span>
+                    </button>
+                  </div>
+                ) : (
+                  <table className="data-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc' }}>
+                        <th style={{ width: '40px', textAlign: 'center' }}>#</th>
+                        <th style={{ minWidth: '150px' }}>Part Number</th>
+                        <th style={{ minWidth: '220px' }}>Part Description</th>
+                        <th style={{ minWidth: '180px' }}>Serial Number</th>
+                        <th style={{ minWidth: '150px' }}>Work Order / Repair #</th>
+                        <th style={{ minWidth: '150px' }}>Date & Time Used</th>
+                        <th style={{ minWidth: '140px' }}>Used By</th>
+                        <th style={{ minWidth: '180px' }}>Usage Notes</th>
+                        <th style={{ width: '110px', textAlign: 'center' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {liveUsedUnitsLog.map((u, idx) => (
+                        <tr key={u.id || u.serial_number || idx}>
+                          <td style={{ textAlign: 'center', fontSize: '11.5px', color: '#94a3b8' }}>
+                            {idx + 1}
+                          </td>
+                          <td>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                              {u.part_number}
+                            </strong>
+                          </td>
+                          <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
+                            {u.description || 'Apple Replacement Part'}
+                          </td>
+                          <td>
                             <span
-                              key={mo}
                               style={{
-                                fontSize: '11px',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 700,
+                                fontSize: '12px',
                                 background: '#f1f5f9',
-                                padding: '2px 6px',
+                                padding: '3px 7px',
                                 borderRadius: '4px',
-                                color: '#334155'
+                                color: '#0f172a',
+                                border: '1px solid #cbd5e1'
                               }}
                             >
-                              {mo}: <strong>{cnt}</strong>
+                              {u.serial_number}
                             </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                          onClick={() => handleQuickRequestPart(item.partNumber)}
-                        >
-                          <Plus size={12} />
-                          <span>Request</span>
-                        </button>
-                      </td>
+                          </td>
+                          <td>
+                            {u.work_order_number ? (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#e0f2fe',
+                                  color: '#0369a1',
+                                  border: '1px solid #bae6fd',
+                                  fontSize: '11.5px',
+                                  fontWeight: 700
+                                }}
+                              >
+                                {u.work_order_number}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '11.5px' }}>
+                                General Repair
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ fontSize: '12px', color: '#475569' }}>
+                            {u.used_at ? new Date(u.used_at).toLocaleString() : 'Recent'}
+                          </td>
+                          <td style={{ fontSize: '12px', color: '#0f172a', fontWeight: 600 }}>
+                            {u.used_by_name || u.used_by || 'Branch Specialist'}
+                          </td>
+                          <td style={{ fontSize: '12px', color: '#64748b' }}>
+                            {u.usage_notes || u.notes || '—'}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                fontSize: '11px',
+                                padding: '3px 8px',
+                                color: '#475569',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px'
+                              }}
+                              onClick={() => {
+                                if (window.confirm(`Restore serial ${u.serial_number} back to In-Stock status?`)) {
+                                  unmarkUnitAsUsed(u.serial_number);
+                                }
+                              }}
+                              title="Undo: Revert this part back to In-Stock inventory"
+                            >
+                              <RotateCcw size={11} />
+                              <span>Revert</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-View 2: Aggregated Historical Datasets */}
+          {usedHistorySubTab === 'aggregated_data' && (
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              {siteUsageData.summaryList.length === 0 ? (
+                <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                  <TrendingDown size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
+                  <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Historical Usage Records</h4>
+                  <p style={{ margin: 0, fontSize: '12.5px' }}>
+                    No repair usage records are associated with {activeSiteObj.name}.
+                  </p>
+                </div>
+              ) : (
+                <table className="data-table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc' }}>
+                      <th style={{ minWidth: '160px' }}>Part Number</th>
+                      <th style={{ minWidth: '260px' }}>Part Description</th>
+                      <th style={{ textAlign: 'center', width: '130px' }}>Total Consumed</th>
+                      <th style={{ minWidth: '220px' }}>Monthly Consumption Breakdown</th>
+                      <th style={{ textAlign: 'center', width: '120px' }}>Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+                  </thead>
+                  <tbody>
+                    {siteUsageData.summaryList.map(item => (
+                      <tr key={item.partNumber}>
+                        <td>
+                          <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                            {item.partNumber}
+                          </strong>
+                        </td>
+                        <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
+                          {item.description || 'Apple Replacement Part'}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span className="badge badge-primary" style={{ fontSize: '12px', fontWeight: 800 }}>
+                            {item.totalUsed} used
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            {Object.entries(item.byMonth || {}).map(([mo, cnt]) => (
+                              <span
+                                key={mo}
+                                style={{
+                                  fontSize: '11px',
+                                  background: '#f1f5f9',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  color: '#334155'
+                                }}
+                              >
+                                {mo}: <strong>{cnt}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                            onClick={() => handleQuickRequestPart(item.partNumber)}
+                          >
+                            <Plus size={12} />
+                            <span>Request</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1545,6 +2093,175 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 Confirm {actionTargetStatus === 'rejected' ? 'DENY' : actionTargetStatus.toUpperCase()}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. Record Used Part / Repair Consumption Modal */}
+      {isMarkUsedModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(6px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '16px'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isSubmittingMarkUsed) setIsMarkUsedModalOpen(false);
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: '520px',
+              width: '100%',
+              background: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              padding: '24px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ background: '#dcfce7', padding: '6px', borderRadius: '8px', display: 'flex' }}>
+                  <Wrench size={18} color="#059669" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
+                    Record Part as Used / Consumed
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>
+                    Branch: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMarkUsedModalOpen(false)}
+                disabled={isSubmittingMarkUsed}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmMarkAsUsed}>
+              {/* Part Number Selection */}
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label className="form-label">Apple Part Number *</label>
+                <select
+                  className="form-input"
+                  value={markUsedPartPn}
+                  onChange={(e) => {
+                    setMarkUsedPartPn(e.target.value);
+                    setMarkUsedSerial('');
+                  }}
+                  required
+                >
+                  <option value="">-- Select Part in Branch Stock --</option>
+                  {stockRows.filter(r => r.inStock > 0).map(r => (
+                    <option key={r.partNumber} value={r.partNumber}>
+                      {r.partNumber} — {r.description} ({r.inStock} in stock)
+                    </option>
+                  ))}
+                  {/* Also include all other parts in catalog in case of ad-hoc scan */}
+                  {parts.filter(p => !stockRows.some(r => r.partNumber === p.part_number && r.inStock > 0)).map(p => (
+                    <option key={p.id || p.part_number} value={p.part_number}>
+                      {p.part_number} — {p.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Serial Number Selection or Input */}
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Serial Number *</span>
+                  {availableSerialsForMarkUsed.length > 0 && (
+                    <span style={{ fontSize: '11px', color: '#059669', fontWeight: 600 }}>
+                      {availableSerialsForMarkUsed.length} available serials in branch
+                    </span>
+                  )}
+                </label>
+
+                {availableSerialsForMarkUsed.length > 0 ? (
+                  <select
+                    className="form-input"
+                    value={markUsedSerial}
+                    onChange={(e) => setMarkUsedSerial(e.target.value)}
+                    required
+                    style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+                  >
+                    <option value="">-- Choose Serial Number to Consume --</option>
+                    {availableSerialsForMarkUsed.map(u => (
+                      <option key={u.id || u.serial_number} value={u.serial_number}>
+                        {u.serial_number} (Box: {u.box_number || 1})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Scan or enter part serial number (e.g. C02..., G6T...)"
+                    value={markUsedSerial}
+                    onChange={(e) => setMarkUsedSerial(e.target.value.trim().toUpperCase())}
+                    required
+                    style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+                  />
+                )}
+              </div>
+
+              {/* Work Order / Repair Reference */}
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label className="form-label">Repair Work Order / GSX Reference #</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. WO-2026-8812 or GSX-994812"
+                  value={markUsedWorkOrder}
+                  onChange={(e) => setMarkUsedWorkOrder(e.target.value)}
+                />
+              </div>
+
+              {/* Usage Notes */}
+              <div className="form-group" style={{ marginBottom: '18px' }}>
+                <label className="form-label">Usage Notes / Repair Summary</label>
+                <textarea
+                  className="form-input"
+                  rows="2"
+                  placeholder="e.g. Rear camera replaced on iPhone 15 Pro, customer pickup completed"
+                  value={markUsedNotes}
+                  onChange={(e) => setMarkUsedNotes(e.target.value)}
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsMarkUsedModalOpen(false)}
+                  disabled={isSubmittingMarkUsed}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                  disabled={isSubmittingMarkUsed || !markUsedSerial}
+                >
+                  <Check size={14} />
+                  <span>{isSubmittingMarkUsed ? 'Recording...' : 'Confirm Part Used'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

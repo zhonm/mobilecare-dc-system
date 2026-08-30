@@ -156,7 +156,9 @@ export default function AllocationMatrix() {
 
     items.forEach((item, rIdx) => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const stockPrice = item.stocking_price || part?.stocking_price || fallbackPrice;
+      const stockPrice = (typeof item.stocking_price === 'number' && item.stocking_price > 0)
+        ? item.stocking_price
+        : (part?.stocking_price || fallbackPrice);
       const qty = item.total_allocated_qty || 0;
       const rowCost = qty * stockPrice;
       const split = calculateWeeklySplit(qty, rowCost, rIdx + rowOffset);
@@ -280,7 +282,9 @@ export default function AllocationMatrix() {
     const costs = {};
     (effectiveAllocations || []).forEach(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const price = item.stocking_price || part?.stocking_price || 0;
+      const price = (typeof item.stocking_price === 'number' && item.stocking_price > 0)
+        ? item.stocking_price
+        : (part?.stocking_price || 0);
       orderedServiceSites.forEach(s => {
         const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
         costs[s.id] = (costs[s.id] || 0) + (qty * price);
@@ -322,7 +326,9 @@ export default function AllocationMatrix() {
   const renderItemRow = (item, commodityLabel, index, excelRowNumber = 3) => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
     const fallbackPrice = commodityLabel === 'DISPLAY' ? 279 : 99;
-    const stockPrice = item.stocking_price || part?.stocking_price || fallbackPrice;
+    const stockPrice = (typeof item.stocking_price === 'number' && item.stocking_price > 0)
+      ? item.stocking_price
+      : (part?.stocking_price || fallbackPrice);
     const totalStockPrice = (item.total_allocated_qty || 0) * stockPrice;
     const split = calculateWeeklySplit(item.total_allocated_qty, totalStockPrice, excelRowNumber);
     const isOrderRequired = (item.total_allocated_qty || 0) > 0;
@@ -606,8 +612,8 @@ export default function AllocationMatrix() {
                 }}
                 title="Choose mathematical forecasting algorithm (automatically syncs with Demand Forecasting)"
               >
-                <option value="wma">4-Mo WMA (Spike Filtered - Recommended)</option>
-                <option value="linear">Linear Regression (FORECAST.LINEAR)</option>
+                <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
+                <option value="wma">4-Mo WMA (Spike Filtered)</option>
               </select>
             </div>
 
@@ -622,24 +628,6 @@ export default function AllocationMatrix() {
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
-
-            {/* Reset All to Calculation Model */}
-            {canEdit && (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  if (window.confirm('Reset all branch allocations and clear overrides back to the active mathematical calculation?')) {
-                    resetAllAllocationsToCalculation && resetAllAllocationsToCalculation();
-                  }
-                }}
-                disabled={filteredAllocations.length === 0}
-                title="Reset all branch quotas and clear all manual overrides back to mathematical calculation"
-                style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px', color: '#0369a1' }}
-              >
-                <RotateCcw size={13} />
-                <span>Reset to Calculation</span>
-              </button>
-            )}
 
             {canEdit && (
               <button

@@ -149,22 +149,16 @@ export function useInventory({
         defaultCatId = newCat?.id || null;
       }
 
+      // Fetch all sites to resolve UUIDs accurately
+      const { data: dbSites } = await supabase.from('sites').select('id, code, name, is_dc');
+      const siteList = dbSites || [];
+
       let dcSiteId = null;
-      const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+      const dcSite = siteList.find(s => s.is_dc || s.code === 'DC-MDC' || s.code === 'DC');
       if (dcSite?.id) {
         dcSiteId = dcSite.id;
-      } else {
-        const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
-        if (anySite?.id) {
-          dcSiteId = anySite.id;
-        } else {
-          const { data: newSite } = await supabase
-            .from('sites')
-            .insert({ code: 'DC-MDC', name: 'Mobile Care Distribution Center', is_dc: true })
-            .select('id')
-            .maybeSingle();
-          dcSiteId = newSite?.id || null;
-        }
+      } else if (siteList[0]?.id) {
+        dcSiteId = siteList[0].id;
       }
 
       const { data: existingParts } = await supabase.from('parts').select('id, part_number');
@@ -187,11 +181,21 @@ export function useInventory({
           if (pId) pMap.set(cleanPN, pId);
         }
 
-        if (pId && dcSiteId) {
-          const assign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+        // Resolve Target Site UUID: match against Supabase sites by ID, code, or name
+        const unitSiteKey = String(u.current_site_id || u.site_id || u.targetSiteId || '').trim();
+        const unitSiteCode = String(u.site_code || '').trim().toUpperCase();
+        const matchedSite = siteList.find(s =>
+          (unitSiteKey && (s.id === unitSiteKey || s.code.toUpperCase() === unitSiteKey.toUpperCase())) ||
+          (unitSiteCode && s.code.toUpperCase() === unitSiteCode)
+        );
+
+        const targetSiteId = matchedSite?.id || (isUUID(unitSiteKey) ? unitSiteKey : dcSiteId);
+
+        if (pId && targetSiteId) {
+          const assign = u.intake_assignment || u.notes || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
           unitRows.push({
             part_id: pId,
-            current_site_id: dcSiteId,
+            current_site_id: targetSiteId,
             serial_number: cleanSerial,
             status: u.status || 'in_stock',
             box_number: u.box_number || 1,
@@ -202,7 +206,10 @@ export function useInventory({
       }
 
       if (unitRows.length > 0) {
-        await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
+        const { error: upsertErr } = await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
+        if (upsertErr) {
+          console.warn('inventory_units upsert notice:', upsertErr.message);
+        }
       }
 
       try {
@@ -218,7 +225,7 @@ export function useInventory({
         units.forEach(u => {
           const s = String(u.serial_number || '').toUpperCase();
           if (s) {
-            const assign = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+            const assign = u.intake_assignment || u.notes || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
             mergedMap.set(s, {
               id: u.id || `unit-${u.serial_number}`,
               part_id: u.part_id || `part-${u.part_number}`,
@@ -227,12 +234,15 @@ export function useInventory({
               serial_number: u.serial_number,
               intake_assignment: assign,
               notes: assign,
-              current_site_id: 'site-dc',
-              site_code: 'DC-MDC',
+              current_site_id: u.current_site_id || 'site-dc',
+              site_code: u.site_code || 'DC-MDC',
+              site_name: u.site_name || null,
               status: u.status || 'in_stock',
               box_number: u.box_number || 1,
               received_at: u.received_at || new Date().toISOString(),
               received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff',
+              received_by_id: u.received_by_id || currentUser?.id || null,
+              added_by_user_id: u.added_by_user_id || currentUser?.id || null,
               shipped_at: u.shipped_at || null
             });
           }
@@ -245,7 +255,7 @@ export function useInventory({
           period_year: new Date().getFullYear(),
           period_month: new Date().getMonth() + 1,
           period_week: 1,
-          notes: 'Master DC In-Stock inventory pool across all accounts',
+          notes: 'Master In-Stock inventory pool across all accounts',
           saved_by_name: currentUser?.fullName || 'Warehouse Staff',
           snapshot_data: {
             units: allPoolUnits
