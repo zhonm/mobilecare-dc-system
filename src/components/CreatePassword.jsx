@@ -16,12 +16,13 @@ export default function CreatePassword() {
     return null;
   }
 
-  // Password Policy Rules
+  // Password Policy Rules (Enforcing strong case-sensitive passwords)
   const hasMinLength = password.length >= 8;
-  const hasLetter = /[a-zA-Z]/.test(password);
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
   const hasNumber = /[0-9]/.test(password);
   const isMatch = password.length > 0 && password === confirmPassword;
-  const isFormValid = hasMinLength && hasLetter && hasNumber && isMatch;
+  const isFormValid = hasMinLength && hasUpper && hasLower && hasNumber && isMatch;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -130,9 +131,9 @@ export default function CreatePassword() {
                 {hasMinLength ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
                 <span>8+ characters</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasLetter ? '#34d399' : '#94a3b8' }}>
-                {hasLetter ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
-                <span>At least 1 letter</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: (hasUpper && hasLower) ? '#34d399' : '#94a3b8' }}>
+                {(hasUpper && hasLower) ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
+                <span>Upper & lowercase letters (case-sensitive)</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasNumber ? '#34d399' : '#94a3b8' }}>
                 {hasNumber ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}

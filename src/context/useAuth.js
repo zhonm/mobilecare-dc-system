@@ -179,7 +179,7 @@ export function useAuth({
     if (!isAllowedCompanyEmail(email)) {
       return {
         success: false,
-        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel (@mobilecareph.com, @mobilecare.com.ph).'
+        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel.'
       };
     }
 

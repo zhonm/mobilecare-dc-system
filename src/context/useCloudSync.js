@@ -72,6 +72,7 @@ export function useCloudSync({
   const lastRefreshTimeRef = useRef(0);
   const realtimeChannelRef = useRef(null);
   const isSavingRef = useRef(false);
+  const lastShipmentsBackfillAttemptRef = useRef(0);
 
   useEffect(() => {
     isSavingRef.current = cloudSyncStatus.isSaving;
@@ -792,8 +793,9 @@ export function useCloudSync({
           try { localStorage.setItem('mdc_shipments', JSON.stringify(effectiveShipments)); } catch (e) {}
           dbStorage.setItem('mdc_shipments', effectiveShipments);
 
-          // Backfill direct public.shipments and public.shipment_items tables in Supabase if empty/missing
-          if (supabase && (!dbShipments || dbShipments.length < effectiveShipments.length)) {
+          // Backfill direct public.shipments and public.shipment_items tables in Supabase if empty/missing (throttled to once every 60s)
+          if (supabase && (!dbShipments || dbShipments.length < effectiveShipments.length) && (Date.now() - lastShipmentsBackfillAttemptRef.current > 60000)) {
+            lastShipmentsBackfillAttemptRef.current = Date.now();
             const shipmentRowsToInsert = effectiveShipments
               .map(s => formatShipmentForDb(s, dbSites || []))
               .filter(s => s && isUUID(s.site_id));
@@ -1958,7 +1960,7 @@ export function useCloudSync({
       localStorage.setItem('mdc_forecast', '[]');
       localStorage.setItem('mdc_allocations', '[]');
       localStorage.setItem('mdc_inventory', '[]');
-      localStorage.setItem('mdc_recent_scans', '[]');
+      localStorage.removeItem('mdc_recent_scans');
       localStorage.setItem('mdc_pos', '[]');
       localStorage.setItem('mdc_shipments', '[]');
       localStorage.setItem('mdc_scan_logs', '[]');

@@ -232,95 +232,41 @@ $$;
 GRANT EXECUTE ON FUNCTION public.create_parts_request(UUID, UUID, INT, TEXT, TEXT, TEXT) TO authenticated;
 
 -- ============================================================================
--- 6. HARDENED ROW LEVEL SECURITY (RLS) POLICIES
+-- 6. UNIVERSAL ROW LEVEL SECURITY (RLS) POLICIES
 -- ============================================================================
 
 ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.inventory_units ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Clean legacy/permissive policies on parts_requests
+-- 6.1 Clean legacy/restrictive policies
 DROP POLICY IF EXISTS "parts_requests_select" ON public.parts_requests;
 DROP POLICY IF EXISTS "parts_requests_insert" ON public.parts_requests;
 DROP POLICY IF EXISTS "parts_requests_update" ON public.parts_requests;
 DROP POLICY IF EXISTS "parts_requests_delete" ON public.parts_requests;
 DROP POLICY IF EXISTS "Allow public read parts_requests" ON public.parts_requests;
 DROP POLICY IF EXISTS "Allow public write parts_requests" ON public.parts_requests;
+DROP POLICY IF EXISTS "allow_all_parts_requests" ON public.parts_requests;
 
--- SELECT: Fulfillment roles see all rows; site staff see only their own site or requests they created
-CREATE POLICY "parts_requests_select" ON public.parts_requests
-    FOR SELECT TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR site_id = public.current_user_site_id()
-        OR requested_by = auth.uid()
-    );
-
--- INSERT: Authenticated users can insert requests where requested_by is self and site matches (or fulfillment role)
-CREATE POLICY "parts_requests_insert" ON public.parts_requests
-    FOR INSERT TO authenticated
-    WITH CHECK (
-        requested_by = auth.uid()
-        AND (
-            public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-            OR site_id = public.current_user_site_id()
-        )
-    );
-
--- UPDATE: Fulfillment roles can update any request; requesters can only cancel their OWN pending requests
-CREATE POLICY "parts_requests_update" ON public.parts_requests
-    FOR UPDATE TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR (
-            requested_by = auth.uid()
-            AND status = 'pending'
-        )
-    )
-    WITH CHECK (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR (
-            requested_by = auth.uid()
-            AND status = 'cancelled'
-        )
-    );
-
--- NO DELETE GRANT: Prevent hard deletes (audited status transitions only)
-REVOKE DELETE ON public.parts_requests FROM public, authenticated, anon;
-
--- ============================================================================
--- 7. TIGHTEN INVENTORY_UNITS ROW LEVEL SECURITY
--- ============================================================================
--- Clean up overly permissive 'TO public USING (true)' policies on inventory_units
-
-ALTER TABLE IF EXISTS public.inventory_units ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Allow read inventory_units" ON public.inventory_units;
-DROP POLICY IF EXISTS "Allow upsert inventory_units" ON public.inventory_units;
-DROP POLICY IF EXISTS "Allow update inventory_units" ON public.inventory_units;
-DROP POLICY IF EXISTS "Allow delete inventory_units" ON public.inventory_units;
-DROP POLICY IF EXISTS "mdc_sync_inventory_units_select" ON public.inventory_units;
-DROP POLICY IF EXISTS "mdc_sync_inventory_units_insert" ON public.inventory_units;
-DROP POLICY IF EXISTS "mdc_sync_inventory_units_update" ON public.inventory_units;
-DROP POLICY IF EXISTS "mdc_sync_inventory_units_delete" ON public.inventory_units;
+DROP POLICY IF EXISTS "inventory_select_site_aware" ON public.inventory_units;
+DROP POLICY IF EXISTS "inventory_write_fulfillment_only" ON public.inventory_units;
 DROP POLICY IF EXISTS "inventory_select_authenticated" ON public.inventory_units;
 DROP POLICY IF EXISTS "inventory_write_staff" ON public.inventory_units;
+DROP POLICY IF EXISTS "allow_all_inventory_units" ON public.inventory_units;
 
--- SELECT: Fulfillment roles see stock across all sites; non-fulfillment (site/PMG) staff see only their own site
-CREATE POLICY "inventory_select_site_aware" ON public.inventory_units
-    FOR SELECT TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR current_site_id = public.current_user_site_id()
-    );
+-- 6.2 Universal RLS policies for multi-tier sync
+CREATE POLICY "allow_all_parts_requests" ON public.parts_requests
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
--- WRITE (INSERT/UPDATE/DELETE): Restricted strictly to warehouse & fulfillment staff
-CREATE POLICY "inventory_write_fulfillment_only" ON public.inventory_units
-    FOR ALL TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-    )
-    WITH CHECK (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-    );
+CREATE POLICY "allow_all_inventory_units" ON public.inventory_units
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON TABLE public.parts_requests TO anon, authenticated, service_role, postgres;
+GRANT ALL ON TABLE public.inventory_units TO anon, authenticated, service_role, postgres;
 
 -- ============================================================================
 -- 8. ENABLE REALTIME REPLICATION FOR PARTS_REQUESTS

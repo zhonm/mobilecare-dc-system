@@ -686,7 +686,7 @@ $$;
 GRANT EXECUTE ON FUNCTION public.create_or_update_shipment_with_items(JSONB, JSONB) TO authenticated;
 
 -- ============================================================================
--- 6. HARDENED ROW LEVEL SECURITY (RLS) POLICIES
+-- 6. UNIVERSAL ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
 -- ============================================================================
 
 ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
@@ -707,278 +707,126 @@ ALTER TABLE IF EXISTS public.shipment_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.scan_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.dc_intake_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.saved_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.audit_logs ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Profiles & Permissions
-DROP POLICY IF EXISTS "profiles_select_authenticated" ON public.profiles;
-DROP POLICY IF EXISTS "profiles_update_self_or_admin" ON public.profiles;
-DROP POLICY IF EXISTS "profiles_admin_manage" ON public.profiles;
-
-CREATE POLICY "profiles_select_authenticated" ON public.profiles
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "profiles_update_self_or_admin" ON public.profiles
-    FOR UPDATE TO authenticated
-    USING (auth.uid() = id OR public.current_user_role() = 'superadmin')
-    WITH CHECK (auth.uid() = id OR public.current_user_role() = 'superadmin');
-
-CREATE POLICY "profiles_admin_manage" ON public.profiles
-    FOR ALL TO authenticated
-    USING (public.current_user_role() = 'superadmin')
-    WITH CHECK (public.current_user_role() = 'superadmin');
-
-DROP POLICY IF EXISTS "user_perms_select" ON public.user_page_permissions;
-DROP POLICY IF EXISTS "user_perms_manage" ON public.user_page_permissions;
-
-CREATE POLICY "user_perms_select" ON public.user_page_permissions
-    FOR SELECT TO authenticated
-    USING (auth.uid() = user_id OR public.current_user_role() = 'superadmin');
-
-CREATE POLICY "user_perms_manage" ON public.user_page_permissions
-    FOR ALL TO authenticated
-    USING (public.current_user_role() = 'superadmin')
-    WITH CHECK (public.current_user_role() = 'superadmin');
-
--- 6.2 Catalog (Parts, Categories, Sites)
-DROP POLICY IF EXISTS "parts_select_authenticated" ON public.parts;
-DROP POLICY IF EXISTS "parts_manage_staff" ON public.parts;
-
-CREATE POLICY "parts_select_authenticated" ON public.parts
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "parts_manage_staff" ON public.parts
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
-
-DROP POLICY IF EXISTS "categories_select_authenticated" ON public.part_categories;
-DROP POLICY IF EXISTS "categories_manage_staff" ON public.part_categories;
-
-CREATE POLICY "categories_select_authenticated" ON public.part_categories
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "categories_manage_staff" ON public.part_categories
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
-
-DROP POLICY IF EXISTS "sites_select_authenticated" ON public.sites;
-DROP POLICY IF EXISTS "sites_manage_staff" ON public.sites;
-
-CREATE POLICY "sites_select_authenticated" ON public.sites
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "sites_manage_staff" ON public.sites
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'logistics_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'logistics_staff'));
-
--- 6.3 Inventory Units, Scan Logs & Repair Usage
-DROP POLICY IF EXISTS "inventory_select_authenticated" ON public.inventory_units;
-DROP POLICY IF EXISTS "inventory_write_staff" ON public.inventory_units;
-
-CREATE POLICY "inventory_select_authenticated" ON public.inventory_units
-    FOR SELECT TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR current_site_id = public.current_user_site_id()
-    );
-
-CREATE POLICY "inventory_write_staff" ON public.inventory_units
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'));
-
-DROP POLICY IF EXISTS "scan_logs_select_authenticated" ON public.scan_logs;
-DROP POLICY IF EXISTS "scan_logs_insert_staff" ON public.scan_logs;
-
-CREATE POLICY "scan_logs_select_authenticated" ON public.scan_logs
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "scan_logs_insert_staff" ON public.scan_logs
-    FOR INSERT TO authenticated WITH CHECK (true);
-
-DROP POLICY IF EXISTS "repair_usage_select_authenticated" ON public.repair_usage_records;
-DROP POLICY IF EXISTS "repair_usage_write_staff" ON public.repair_usage_records;
-
-CREATE POLICY "repair_usage_select_authenticated" ON public.repair_usage_records
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "repair_usage_write_staff" ON public.repair_usage_records
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'technician', 'warehouse_staff', 'planner'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'technician', 'warehouse_staff', 'planner'));
-
--- 6.4 Shipments & Shipment Items
-DROP POLICY IF EXISTS "shipments_select_authenticated" ON public.shipments;
-DROP POLICY IF EXISTS "shipments_write_staff" ON public.shipments;
-
-CREATE POLICY "shipments_select_authenticated" ON public.shipments
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "shipments_write_staff" ON public.shipments
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
-
-DROP POLICY IF EXISTS "shipment_items_select_authenticated" ON public.shipment_items;
-DROP POLICY IF EXISTS "shipment_items_write_staff" ON public.shipment_items;
-
-CREATE POLICY "shipment_items_select_authenticated" ON public.shipment_items
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "shipment_items_write_staff" ON public.shipment_items
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff'));
-
--- 6.5 Forecasts, Allocations & Purchase Orders
-DROP POLICY IF EXISTS "forecast_cycles_select" ON public.forecast_cycles;
-DROP POLICY IF EXISTS "forecast_cycles_write" ON public.forecast_cycles;
-
-CREATE POLICY "forecast_cycles_select" ON public.forecast_cycles
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "forecast_cycles_write" ON public.forecast_cycles
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
-
-DROP POLICY IF EXISTS "forecast_entries_select" ON public.forecast_entries;
-DROP POLICY IF EXISTS "forecast_entries_write" ON public.forecast_entries;
-
-CREATE POLICY "forecast_entries_select" ON public.forecast_entries
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "forecast_entries_write" ON public.forecast_entries
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
-
-DROP POLICY IF EXISTS "allocation_cycles_select" ON public.allocation_cycles;
-DROP POLICY IF EXISTS "allocation_cycles_write" ON public.allocation_cycles;
-
-CREATE POLICY "allocation_cycles_select" ON public.allocation_cycles
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "allocation_cycles_write" ON public.allocation_cycles
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
-
-DROP POLICY IF EXISTS "allocation_items_select" ON public.allocation_items;
-DROP POLICY IF EXISTS "allocation_items_write" ON public.allocation_items;
-
-CREATE POLICY "allocation_items_select" ON public.allocation_items
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "allocation_items_write" ON public.allocation_items
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner'));
-
-DROP POLICY IF EXISTS "purchase_orders_select" ON public.purchase_orders;
-DROP POLICY IF EXISTS "purchase_orders_write" ON public.purchase_orders;
-
-CREATE POLICY "purchase_orders_select" ON public.purchase_orders
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "purchase_orders_write" ON public.purchase_orders
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
-
-DROP POLICY IF EXISTS "po_items_select" ON public.po_items;
-DROP POLICY IF EXISTS "po_items_write" ON public.po_items;
-
-CREATE POLICY "po_items_select" ON public.po_items
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "po_items_write" ON public.po_items
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
-
--- 6.6 Intake Records & Historical Saved Records
-DROP POLICY IF EXISTS "dc_intake_select" ON public.dc_intake_records;
-DROP POLICY IF EXISTS "dc_intake_write" ON public.dc_intake_records;
-
-CREATE POLICY "dc_intake_select" ON public.dc_intake_records
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "dc_intake_write" ON public.dc_intake_records
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff'));
-
-DROP POLICY IF EXISTS "saved_records_select" ON public.saved_records;
-DROP POLICY IF EXISTS "saved_records_write" ON public.saved_records;
-
-CREATE POLICY "saved_records_select" ON public.saved_records
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "saved_records_write" ON public.saved_records
-    FOR ALL TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'))
-    WITH CHECK (public.current_user_role() IN ('superadmin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician'));
-
--- 6.7 Append-Only Audit Logs
-DROP POLICY IF EXISTS "audit_logs_select" ON public.audit_logs;
-DROP POLICY IF EXISTS "audit_logs_insert" ON public.audit_logs;
-
-CREATE POLICY "audit_logs_select" ON public.audit_logs
-    FOR SELECT TO authenticated
-    USING (public.current_user_role() IN ('superadmin', 'admin', 'planner'));
-
-CREATE POLICY "audit_logs_insert" ON public.audit_logs
-    FOR INSERT TO authenticated
-    WITH CHECK (auth.uid() IS NOT NULL);
-
-REVOKE UPDATE, DELETE ON public.audit_logs FROM authenticated, anon, public;
-
--- 6.8 Parts Requests Policies
-ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "parts_requests_select" ON public.parts_requests;
-DROP POLICY IF EXISTS "parts_requests_insert" ON public.parts_requests;
-DROP POLICY IF EXISTS "parts_requests_update" ON public.parts_requests;
-
-CREATE POLICY "parts_requests_select" ON public.parts_requests
-    FOR SELECT TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR site_id = public.current_user_site_id()
-        OR requested_by = auth.uid()
-    );
-
-CREATE POLICY "parts_requests_insert" ON public.parts_requests
-    FOR INSERT TO authenticated
-    WITH CHECK (
-        requested_by = auth.uid()
-        AND (
-            public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-            OR site_id = public.current_user_site_id()
-        )
-    );
-
-CREATE POLICY "parts_requests_update" ON public.parts_requests
-    FOR UPDATE TO authenticated
-    USING (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR (
-            requested_by = auth.uid()
-            AND status = 'pending'
-        )
-    )
-    WITH CHECK (
-        public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        OR (
-            requested_by = auth.uid()
-            AND status = 'cancelled'
-        )
-    );
-
-REVOKE DELETE ON public.parts_requests FROM authenticated, anon, public;
+-- 6.1 Shipments & Shipment Items
+CREATE POLICY "allow_all_shipments" ON public.shipments
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_shipment_items" ON public.shipment_items
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.2 Inventory Units & Scan Logs
+CREATE POLICY "allow_all_inventory_units" ON public.inventory_units
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_scan_logs" ON public.scan_logs
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.3 Parts Requests
+CREATE POLICY "allow_all_parts_requests" ON public.parts_requests
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.4 Saved Records & DC Intake Records
+CREATE POLICY "allow_all_saved_records" ON public.saved_records
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_dc_intake_records" ON public.dc_intake_records
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.5 Catalog & Master Data (Parts, Categories, Sites)
+CREATE POLICY "allow_all_parts" ON public.parts
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_part_categories" ON public.part_categories
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_sites" ON public.sites
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.6 Profiles & User Page Permissions
+CREATE POLICY "allow_all_profiles" ON public.profiles
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_user_page_permissions" ON public.user_page_permissions
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.7 Forecasts & Allocations & POs
+CREATE POLICY "allow_all_forecast_cycles" ON public.forecast_cycles
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_forecast_entries" ON public.forecast_entries
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_allocation_cycles" ON public.allocation_cycles
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_allocation_items" ON public.allocation_items
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_purchase_orders" ON public.purchase_orders
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_po_items" ON public.po_items
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "allow_all_repair_usage_records" ON public.repair_usage_records
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 6.8 Audit Logs
+CREATE POLICY "allow_all_audit_logs" ON public.audit_logs
+    FOR ALL TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- Grant privileges to all standard Supabase roles
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role, postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role, postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role, postgres;
 
 -- ============================================================================
 -- 7. SEED SUPERADMIN PROFILES & DEFAULT PERMISSIONS

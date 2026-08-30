@@ -370,9 +370,7 @@ export function useInventory({
         localStorage.removeItem('mdc_is_cleared');
         localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
         localStorage.setItem('mdc_parts', JSON.stringify(parts));
-        const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-        const updatedRecent = [newUnit, ...currentRecent.filter(u => u.serial_number !== newUnit.serial_number)].slice(0, 300);
-        localStorage.setItem('mdc_recent_scans', JSON.stringify(updatedRecent));
+        localStorage.removeItem('mdc_recent_scans');
       } catch (e) {
         console.warn('LocalStorage save error:', e);
       }
@@ -427,14 +425,7 @@ export function useInventory({
       const normalized = normalizeInventoryUnits(updated, parts);
       try {
         localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
-        const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-        const updatedRecent = recent.map(u => {
-          if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
-            return { ...u, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
-          }
-          return u;
-        });
-        localStorage.setItem('mdc_recent_scans', JSON.stringify(updatedRecent));
+        localStorage.removeItem('mdc_recent_scans');
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', normalized);
       return normalized;
@@ -637,10 +628,7 @@ export function useInventory({
         localStorage.removeItem('mdc_is_cleared');
         localStorage.setItem('mdc_inventory', JSON.stringify(updated));
         localStorage.setItem('mdc_parts', JSON.stringify(currentParts));
-        const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-        const recentMap = new Map(currentRecent.map(u => [String(u.serial_number || '').toUpperCase(), u]));
-        newUnits.forEach(u => recentMap.set(String(u.serial_number || '').toUpperCase(), { ...u, isImported: true }));
-        localStorage.setItem('mdc_recent_scans', JSON.stringify(Array.from(recentMap.values()).slice(0, 500)));
+        localStorage.removeItem('mdc_recent_scans');
       } catch (e) {
         console.warn('LocalStorage batch save error:', e);
       }
@@ -798,9 +786,7 @@ export function useInventory({
       );
       try {
         localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
-        const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-        const filteredRecent = recent.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
-        localStorage.setItem('mdc_recent_scans', JSON.stringify(filteredRecent));
+        localStorage.removeItem('mdc_recent_scans');
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', nextUnits);
       return nextUnits;

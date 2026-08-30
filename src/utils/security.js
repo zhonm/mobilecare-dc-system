@@ -33,25 +33,23 @@ export async function hashPassword(password, customSalt = SALT_DEFAULT) {
  * 2. Secure Password Verification with Constant-Time Check & Legacy Backward Compatibility
  */
 export async function verifyPassword(inputPassword, storedHashOrPlain) {
-  if (!inputPassword || !storedHashOrPlain) return false;
-
-  // Handle standard initial placeholder
-  if (inputPassword === "Password123" && (storedHashOrPlain === "Password123" || !storedHashOrPlain)) {
-    return true;
+  if (!inputPassword || typeof inputPassword !== "string" || !storedHashOrPlain || typeof storedHashOrPlain !== "string") {
+    return false;
   }
 
-  // If already a cryptographic SHA-256 hash
-  if (typeof storedHashOrPlain === "string" && storedHashOrPlain.startsWith("sha256:")) {
+  // Handle standard initial placeholder with strict case sensitivity
+  if (storedHashOrPlain === "Password123" || !storedHashOrPlain) {
+    return inputPassword === "Password123";
+  }
+
+  // If already a cryptographic SHA-256 hash (strictly case-sensitive)
+  if (storedHashOrPlain.startsWith("sha256:")) {
     const computedHash = await hashPassword(inputPassword);
     return timingSafeEqual(computedHash, storedHashOrPlain);
   }
 
-  // Legacy plaintext match check
-  if (storedHashOrPlain === inputPassword) {
-    return true;
-  }
-
-  return false;
+  // Exact strict case-sensitive match
+  return storedHashOrPlain === inputPassword;
 }
 
 /**
@@ -338,6 +336,18 @@ export function clearStoredUserSession() {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.removeItem('mdc_current_user');
       window.localStorage.removeItem('mdc_session_sig');
+      window.localStorage.removeItem('mdc_recent_scans');
+      window.localStorage.removeItem('mdc_active_pack_draft');
+      
+      // Clean up any user-specific draft or scan keys
+      const keysToRemove = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && (k.startsWith('mdc_pack_draft_') || k.startsWith('mdc_recent_scans_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach(k => window.localStorage.removeItem(k));
     }
   } catch (e) {}
 
@@ -346,6 +356,7 @@ export function clearStoredUserSession() {
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.removeItem('mdc_current_user');
       window.sessionStorage.removeItem('mdc_session_sig');
+      window.sessionStorage.removeItem('mdc_recent_scans');
     }
   } catch (e) {}
 

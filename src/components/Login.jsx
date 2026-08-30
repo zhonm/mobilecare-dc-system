@@ -128,7 +128,7 @@ export default function Login() {
             MOBILE CARE SERVICES PHILS. INC.
           </h1>
           <p className="auth-subtitle">
-            Distribution Center Logistics & Allocation Platform
+            Distribution Center System
           </p>
         </div>
 
@@ -142,7 +142,7 @@ export default function Login() {
                 <input
                   type="email"
                   className="auth-input"
-                  placeholder="e.g. name@mobilecare.com.ph"
+                  placeholder="e.g. name@company.com"
                   value={emailInput}
                   onChange={(e) => {
                     setEmailInput(e.target.value);
@@ -325,7 +325,7 @@ export default function Login() {
         {/* Security Footer Notice */}
         <div className="auth-footer-notice">
           <ShieldCheck size={14} color="#64748b" />
-          <span>Authorized DC Employees Only • Encrypted Session</span>
+          <span>Authorized Employees Only • Encrypted Session</span>
         </div>
       </div>
 

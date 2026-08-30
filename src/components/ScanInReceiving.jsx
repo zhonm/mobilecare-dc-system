@@ -152,29 +152,17 @@ export default function ScanInReceiving() {
     } catch (e) {}
   }, [keepPartNumber]);
 
-  // Recent scans state for active intake session
-  const [sessionScans, setSessionScans] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mdc_recent_scans');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // In-memory scans state for current component lifecycle (cleared on unmount/session switch)
+  const [sessionScans, setSessionScans] = useState([]);
 
-  // Sync sessionScans to localStorage
+  // Ensure persistent cross-user session scans cache is thoroughly cleared
   useEffect(() => {
     try {
-      if (sessionScans.length > 0) {
-        localStorage.setItem('mdc_recent_scans', JSON.stringify(sessionScans));
-      } else {
-        localStorage.removeItem('mdc_recent_scans');
-      }
+      localStorage.removeItem('mdc_recent_scans');
     } catch (e) {}
-  }, [sessionScans]);
+  }, []);
 
-  // View & Filter States for Table (Defaults to All DC Stock)
-  const [activeTableView, setActiveTableView] = useState('ALL_DC_STOCK'); // 'ALL_DC_STOCK' | 'SESSION_SCANS'
+  // View & Filter States for Table (Defaults to All Authorized Stock)
   const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR'
   const [tableSearch, setTableSearch] = useState('');
 
@@ -811,11 +799,11 @@ export default function ScanInReceiving() {
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
       if (u.status !== 'in_stock' && u.status) return false;
 
-      if (isPmgUser) {
+      if (!isFulfillment || isPmgUser) {
         const uSite = u.current_site_id || u.site_id || u.siteId;
         const uCode = u.site_code || u.siteCode;
-        const targetSiteId = activeReceivingSite.id;
-        const targetSiteCode = activeReceivingSite.code;
+        const targetSiteId = activeReceivingSite?.id;
+        const targetSiteCode = activeReceivingSite?.code;
         const userSiteId = currentUser?.siteId;
 
         const isUserSite = (uSite && (uSite === targetSiteId || uSite === targetSiteCode || uSite === userSiteId)) ||
@@ -827,20 +815,11 @@ export default function ScanInReceiving() {
       return u.status === 'in_stock' || (!u.status && (u.current_site_id === 'site-dc' || !u.current_site_id));
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, packedSerialsSet, parts, isPmgUser, activeReceivingSite, currentUser]);
+  }, [inventoryUnits, packedSerialsSet, parts, isFulfillment, isPmgUser, activeReceivingSite, currentUser]);
 
-  // Normalized session scans
-  const normalizedSessionScans = useMemo(() => {
-    return normalizeInventoryUnits(sessionScans, parts);
-  }, [sessionScans, parts]);
-
-  // Table items calculation with Assignment Filter
+  // Table items calculation with Assignment Filter (Directly driven by authorized site stock)
   const displayedUnits = useMemo(() => {
-    let sourceList = activeTableView === 'ALL_DC_STOCK'
-      ? availableInStockUnits
-      : normalizedSessionScans;
-
-    if (!sourceList) sourceList = [];
+    let sourceList = availableInStockUnits || [];
 
     // Assignment filter
     if (assignmentFilter === 'MDC - Forecasting') {
@@ -859,13 +838,7 @@ export default function ScanInReceiving() {
       (u.intake_assignment && u.intake_assignment.toLowerCase().includes(q)) ||
       (u.notes && u.notes.toLowerCase().includes(q))
     );
-  }, [activeTableView, assignmentFilter, availableInStockUnits, normalizedSessionScans, tableSearch]);
-
-  const handleClearSessionHistory = () => {
-    setSessionScans([]);
-    localStorage.removeItem('mdc_recent_scans');
-    showToast('Cleared session view history (Stock inventory remains intact in Database)', 'info');
-  };
+  }, [assignmentFilter, availableInStockUnits, tableSearch]);
 
   const handleConfirmDeletePart = async () => {
     if (!unitToDelete) return;
@@ -881,9 +854,7 @@ export default function ScanInReceiving() {
     setIsAddingToStock(true);
     try {
       let targetUnits = [];
-      if (sessionScans && sessionScans.length > 0) {
-        targetUnits = sessionScans;
-      } else if (availableInStockUnits && availableInStockUnits.length > 0) {
+      if (availableInStockUnits && availableInStockUnits.length > 0) {
         targetUnits = availableInStockUnits;
       } else if (inventoryUnits && inventoryUnits.length > 0) {
         targetUnits = inventoryUnits;
@@ -901,15 +872,14 @@ export default function ScanInReceiving() {
       if (res.success) {
         setScanResult({
           type: 'success',
-          message: `[STOCK FINALIZED] Successfully added ${targetUnits.length} units to DC Stock! All parts are now in-stock, accessible to other users, and visible for packing list creation.`
+          message: `[STOCK FINALIZED] Successfully added ${targetUnits.length} units to ${isPmgUser ? activeReceivingSite?.name : 'DC'} Stock! All parts are now in-stock and confirmed in database.`
         });
         setSessionScans([]);
-        localStorage.removeItem('mdc_recent_scans');
-        setActiveTableView('ALL_DC_STOCK');
+        try { localStorage.removeItem('mdc_recent_scans'); } catch (e) {}
       }
     } catch (err) {
       console.error('Add to stock error:', err);
-      showToast('Error finalizing parts to DC stock', 'error');
+      showToast('Error finalizing parts to stock', 'error');
     } finally {
       setIsAddingToStock(false);
     }
@@ -917,14 +887,14 @@ export default function ScanInReceiving() {
 
   // Metric counts for assignment
   const forecastingCount = useMemo(() => {
-    const list = activeTableView === 'ALL_DC_STOCK' ? availableInStockUnits : normalizedSessionScans;
+    const list = availableInStockUnits || [];
     return list.filter(u => !u.intake_assignment?.includes('CRBR') && !u.notes?.includes('CRBR')).length;
-  }, [activeTableView, availableInStockUnits, normalizedSessionScans]);
+  }, [availableInStockUnits]);
 
   const crbrCount = useMemo(() => {
-    const list = activeTableView === 'ALL_DC_STOCK' ? availableInStockUnits : normalizedSessionScans;
+    const list = availableInStockUnits || [];
     return list.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR')).length;
-  }, [activeTableView, availableInStockUnits, normalizedSessionScans]);
+  }, [availableInStockUnits]);
 
   return (
     <div className="scanner-container">
@@ -1177,7 +1147,7 @@ export default function ScanInReceiving() {
                   type="button"
                   className="action-btn-emerald"
                   onClick={handleAddAllToStock}
-                  disabled={isAddingToStock || (sessionScans.length === 0 && availableInStockUnits.length === 0)}
+                  disabled={isAddingToStock || availableInStockUnits.length === 0}
                   style={{
                     background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
                     color: '#fff',
@@ -1193,7 +1163,7 @@ export default function ScanInReceiving() {
                   title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
                 >
                   {isAddingToStock ? <RefreshCw size={15} className="spin" /> : <PackageCheck size={16} />}
-                  <span>Add to Stock ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
+                  <span>Add to Stock ({availableInStockUnits.length})</span>
                 </button>
               )}
 
@@ -1662,44 +1632,23 @@ export default function ScanInReceiving() {
         {/* Table Header Controls */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <h3 style={{ margin: 0 }}>Received DC Stock & Intake History</h3>
-            {/* View Switcher: All DC Stock vs Current Session */}
-            <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-              <button
-                type="button"
-                onClick={() => setActiveTableView('ALL_DC_STOCK')}
-                style={{
-                  background: activeTableView === 'ALL_DC_STOCK' ? '#fff' : 'transparent',
-                  color: activeTableView === 'ALL_DC_STOCK' ? 'var(--text-main)' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '4px 10px',
-                  borderRadius: '4px',
-                  fontSize: '12px',
-                  fontWeight: activeTableView === 'ALL_DC_STOCK' ? 600 : 400,
-                  cursor: 'pointer',
-                  boxShadow: activeTableView === 'ALL_DC_STOCK' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
-                }}
-              >
-                All DC Stock ({availableInStockUnits.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTableView('SESSION_SCANS')}
-                style={{
-                  background: activeTableView === 'SESSION_SCANS' ? '#fff' : 'transparent',
-                  color: activeTableView === 'SESSION_SCANS' ? 'var(--text-main)' : 'var(--text-muted)',
-                  border: 'none',
-                  padding: '4px 10px',
-                  borderRadius: '4px',
-                  fontSize: '12px',
-                  fontWeight: activeTableView === 'SESSION_SCANS' ? 600 : 400,
-                  cursor: 'pointer',
-                  boxShadow: activeTableView === 'SESSION_SCANS' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
-                }}
-              >
-                Current Session ({normalizedSessionScans.length})
-              </button>
-            </div>
+            <h3 style={{ margin: 0 }}>
+              {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory History` : 'Received DC Stock & Intake History'}
+            </h3>
+            
+            <span
+              style={{
+                background: 'rgba(56, 189, 248, 0.1)',
+                color: '#0284c7',
+                padding: '4px 10px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                border: '1px solid rgba(56, 189, 248, 0.25)'
+              }}
+            >
+              {availableInStockUnits.length} In-Stock Units
+            </span>
 
             {/* Assignment Filter Switcher (DC Only) */}
             {!isPmgUser && (
@@ -1780,12 +1729,6 @@ export default function ScanInReceiving() {
                 <span>Intake Records</span>
               </button>
             )}
-
-            {sessionScans.length > 0 && activeTableView === 'SESSION_SCANS' && (
-              <button className="btn btn-secondary btn-sm" onClick={handleClearSessionHistory} style={{ height: '34px' }}>
-                Clear Session View
-              </button>
-            )}
           </div>
         </div>
 
@@ -1793,10 +1736,8 @@ export default function ScanInReceiving() {
           <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13.5px' }}>
             {tableSearch || assignmentFilter !== 'ALL' ? (
               <span>No parts found matching current filters. Try resetting search filters.</span>
-            ) : activeTableView === 'ALL_DC_STOCK' ? (
-              <span>No parts currently in {isPmgUser ? activeReceivingSite.code : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
             ) : (
-              <span>No units in recent session view. Switch to "{isPmgUser ? 'All Branch Stock' : 'All DC Stock'} ({availableInStockUnits.length})" above to see all inventory.</span>
+              <span>No parts currently in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
             )}
           </div>
         ) : (
@@ -2244,10 +2185,10 @@ export default function ScanInReceiving() {
       <SaveIntakeRecordModal
         isOpen={isSaveIntakeModalOpen}
         onClose={() => setIsSaveIntakeModalOpen(false)}
-        initialUnits={sessionScans.length > 0 ? sessionScans : availableInStockUnits}
+        initialUnits={availableInStockUnits}
         onSaved={(newRec) => {
           setSessionScans([]);
-          localStorage.removeItem('mdc_recent_scans');
+          try { localStorage.removeItem('mdc_recent_scans'); } catch (e) {}
           setScanResult({
             type: 'success',
             message: `[DISPATCHED RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
