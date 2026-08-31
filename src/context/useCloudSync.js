@@ -237,10 +237,7 @@ export function useCloudSync({
     if (!supabase) return false;
 
     try {
-      const isAuth = Boolean(currentUser?.id);
       const shouldFetch = (tbl) => {
-        // If unauthenticated, only public master catalog tables should be queried
-        if (!isAuth && !['parts', 'part_categories', 'sites'].includes(tbl)) return false;
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
       };
@@ -1717,6 +1714,18 @@ export function useCloudSync({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 1.5. Immediate forced auto-refresh when currentUser logs in or transitions
+  const prevUserIdRef = useRef(currentUser?.id);
+  useEffect(() => {
+    if (currentUser?.id && currentUser.id !== prevUserIdRef.current) {
+      prevUserIdRef.current = currentUser.id;
+      lastRefreshTimeRef.current = 0; // reset cooldown so login hydration is never throttled
+      autoRefreshData({ silent: true, force: true, isManual: true, reason: 'User session active / login transition' });
+    } else if (!currentUser?.id) {
+      prevUserIdRef.current = null;
+    }
+  }, [currentUser?.id, autoRefreshData]);
 
   // 2. Auto-Refresh on Page Navigation (Smart cache TTL: only re-fetch if > 3 mins since last sync)
   useEffect(() => {
