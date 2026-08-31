@@ -28,10 +28,11 @@ export function useUserManagement({
       } catch (e) {}
 
       if (saved) {
-        const parsed = JSON.parse(saved);
         const parsedEmails = new Set(parsed.map(u => u.email?.toLowerCase()).filter(Boolean));
         const parsedIds = new Set(parsed.map(u => u.id?.toLowerCase()).filter(Boolean));
-        const cleanDeleted = deletedIds.filter(id => !parsedEmails.has(id?.toLowerCase()) && !parsedIds.has(id?.toLowerCase()));
+        const activeKnownEmails = new Set([...parsedEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
+        const activeKnownIds = new Set([...parsedIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
+        const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
         try { localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted)); } catch (e) {}
 
         return parsed
@@ -73,7 +74,9 @@ export function useUserManagement({
           const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
           const activeEmails = new Set(dbUsers.map(u => u.email?.toLowerCase()).filter(Boolean));
           const activeIds = new Set(dbUsers.map(u => u.id?.toLowerCase()).filter(Boolean));
-          const cleanDeleted = deletedIds.filter(id => !activeEmails.has(id?.toLowerCase()) && !activeIds.has(id?.toLowerCase()));
+          const activeKnownEmails = new Set([...activeEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
+          const activeKnownIds = new Set([...activeIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
+          const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
 
           const filtered = dbUsers.filter(u =>
             !cleanDeleted.includes(u.id?.toLowerCase()) &&

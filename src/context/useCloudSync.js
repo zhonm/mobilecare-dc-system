@@ -301,14 +301,16 @@ export function useCloudSync({
           mergedDeletedUserIds = cloudDeletedUserIds.map(s => String(s).trim().toLowerCase());
         }
 
-        // Sanitize deleted IDs: any user actively in cloud registry or INITIAL_USERS MUST NOT be considered deleted
+        // Sanitize deleted IDs: any user actively in cloud registry, INITIAL_USERS, or dbProfiles MUST NOT be considered deleted
         const activeKnownEmails = new Set([
           ...cloudUsersList.map(u => u.email?.toLowerCase()),
-          ...INITIAL_USERS.map(u => u.email?.toLowerCase())
+          ...INITIAL_USERS.map(u => u.email?.toLowerCase()),
+          ...(dbProfiles || []).map(p => p.email?.toLowerCase())
         ].filter(Boolean));
         const activeKnownIds = new Set([
           ...cloudUsersList.map(u => u.id?.toLowerCase()),
-          ...INITIAL_USERS.map(u => u.id?.toLowerCase())
+          ...INITIAL_USERS.map(u => u.id?.toLowerCase()),
+          ...(dbProfiles || []).map(p => p.id?.toLowerCase())
         ].filter(Boolean));
 
         mergedDeletedUserIds = mergedDeletedUserIds.filter(delId => 

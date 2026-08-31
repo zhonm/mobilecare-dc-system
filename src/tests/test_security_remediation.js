@@ -100,6 +100,15 @@ async function runSecurityTests() {
     assert(u.hasSetPassword === false, `Initial user ${u.email} has hasSetPassword: false`);
   });
 
+  // 5. Verify Anjo Alcazar Account Configuration & Unblocking
+  const anjoUser = INITIAL_USERS.find(u => u.email === 'anjo.alcazar@mobilecareph.com');
+  assert(Boolean(anjoUser), 'Anjo Alcazar (anjo.alcazar@mobilecareph.com) is configured in INITIAL_USERS');
+  assert(anjoUser?.role === 'admin', 'Anjo Alcazar has role: admin');
+  assert(anjoUser?.rolePosition === 'DC Operations Lead', 'Anjo Alcazar has rolePosition: DC Operations Lead');
+
+  const { LEGACY_MOCK_EMAILS } = await import('../constants/roles.js');
+  assert(!LEGACY_MOCK_EMAILS.includes('anjo.alcazar@mobilecareph.com'), 'LEGACY_MOCK_EMAILS does NOT block anjo.alcazar@mobilecareph.com');
+
   console.log('====================================================');
   console.log(`RESULTS: ${passed} PASSED, ${failed} FAILED`);
   console.log('====================================================');

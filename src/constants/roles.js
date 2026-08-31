@@ -102,11 +102,22 @@ export const INITIAL_USERS = [
     passwordHash: null,
     isActive: true,
     permittedPages: ROLE_PRESETS.parts_management
+  },
+  {
+    id: 'usr-anjo-alcazar',
+    email: 'anjo.alcazar@mobilecareph.com',
+    fullName: 'Anjo Alcazar',
+    role: 'admin',
+    rolePosition: 'DC Operations Lead',
+    siteId: 'site-dc',
+    hasSetPassword: false,
+    passwordHash: null,
+    isActive: true,
+    permittedPages: ROLE_PRESETS.admin
   }
 ];
 
 export const LEGACY_MOCK_EMAILS = [
-  'anjo.alcazar@mobilecareph.com',
   'warehouse@mobilecareph.com',
   'npm.service@mobilecareph.com',
   'newuser@mobilecareph.com'

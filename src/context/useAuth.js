@@ -448,8 +448,52 @@ export function useAuth({
       } catch (e) {}
     }
 
+    if (!user && pendingFirstTimeUser && pendingFirstTimeUser.email?.toLowerCase() === cleanEmail) {
+      user = pendingFirstTimeUser;
+    }
+
+    if (!user && supabase) {
+      try {
+        const { data: regDoc } = await supabase
+          .from('saved_records')
+          .select('snapshot_data')
+          .eq('id', 'master_users_registry')
+          .maybeSingle();
+
+        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
+          user = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
+        }
+
+        if (!user) {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .ilike('email', cleanEmail)
+            .maybeSingle();
+
+          if (prof) {
+            const resolvedRole = prof.role || 'user';
+            user = {
+              id: prof.id,
+              email: prof.email,
+              fullName: prof.full_name || cleanEmail.split('@')[0],
+              role: resolvedRole,
+              rolePosition: prof.role_position || getDefaultRolePosition(resolvedRole),
+              siteId: prof.site_id || 'site-dc',
+              hasSetPassword: false,
+              passwordHash: null,
+              isActive: prof.is_active ?? true,
+              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('createFirstTimePassword Supabase lookup note:', e);
+      }
+    }
+
     if (!user) {
-      return { success: false, error: 'User profile not found' };
+      return { success: false, error: 'User profile not found. Please contact Superadmin.' };
     }
 
     const secureHash = await hashPassword(newPassword);
