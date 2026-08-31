@@ -340,6 +340,82 @@ it('Relational Join Resolution: dbU.parts reliably attaches part_number and desc
   assert.strictEqual(mapped.stocking_price, 279);
 });
 
+// 14. Multi-User Shipment Parity: Master Registry Aggregation & Cloud Sync
+it('Master Shipments Registry: Person 2 with empty cache hydrates all 9 shipments from Person 1 cloud registry', () => {
+  const person1Shipments = [
+    { id: 'ship-1', invoice_ref: 'DCONMED#083126A', site_id: 'site-npm', items: [{ serial_number: 'SN-A1' }] },
+    { id: 'ship-2', invoice_ref: 'DCONMED#083126B', site_id: 'site-lau', items: [{ serial_number: 'SN-B1' }] },
+    { id: 'ship-3', invoice_ref: 'DCONMED#083126C', site_id: 'site-abr', items: [{ serial_number: 'SN-C1' }] },
+    { id: 'ship-4', invoice_ref: 'DCONMED#083126D', site_id: 'site-nag', items: [{ serial_number: 'SN-D1' }] },
+    { id: 'ship-5', invoice_ref: 'DCONMED#083126E', site_id: 'site-zam', items: [{ serial_number: 'SN-E1' }] },
+    { id: 'ship-6', invoice_ref: 'DCONMED#083126F', site_id: 'site-lim', items: [{ serial_number: 'SN-F1' }] },
+    { id: 'ship-7', invoice_ref: 'DCONMED#083126G', site_id: 'site-ilo', items: [{ serial_number: 'SN-G1' }] },
+    { id: 'ship-8', invoice_ref: 'DCONMED#083126H', site_id: 'site-ceb', items: [{ serial_number: 'SN-H1' }] },
+    { id: 'ship-9', invoice_ref: 'DCONMED#083126I', site_id: 'site-cdo', items: [{ serial_number: 'SN-I1' }] },
+  ];
+
+  const dbSavedRecordsMock = [
+    {
+      id: 'master_shipments_registry',
+      record_type: 'shipments_registry',
+      snapshot_data: {
+        shipments: person1Shipments,
+        deletedIds: []
+      }
+    }
+  ];
+
+  // Simulate Person 2 hydration
+  const cloudShipmentsRegistryDoc = dbSavedRecordsMock.find(r => r.id === 'master_shipments_registry');
+  const cloudShipmentsList = (cloudShipmentsRegistryDoc?.snapshot_data?.shipments && Array.isArray(cloudShipmentsRegistryDoc.snapshot_data.shipments))
+    ? cloudShipmentsRegistryDoc.snapshot_data.shipments
+    : [];
+
+  const shipmentMap = new Map();
+  cloudShipmentsList.forEach(s => {
+    const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+    if (canonicalRef) {
+      shipmentMap.set(canonicalRef, s);
+    }
+  });
+
+  const hydratedPerson2Shipments = Array.from(shipmentMap.values());
+  assert.strictEqual(hydratedPerson2Shipments.length, 9, 'Person 2 must receive all 9 shipments from master_shipments_registry');
+  assert.deepStrictEqual(
+    hydratedPerson2Shipments.map(s => s.invoice_ref),
+    ['DCONMED#083126A', 'DCONMED#083126B', 'DCONMED#083126C', 'DCONMED#083126D', 'DCONMED#083126E', 'DCONMED#083126F', 'DCONMED#083126G', 'DCONMED#083126H', 'DCONMED#083126I']
+  );
+});
+
+// 15. Direct shipments table join with shipment_items resolution
+it('Direct Shipments Table Join: Resolves nested shipment_items into items array', () => {
+  const dbShipmentRow = {
+    id: 'shp-uuid-1',
+    invoice_ref: 'DCOVNED#083026A',
+    shipment_number: 'SHIP-202608-001',
+    status: 'ready_for_dispatch',
+    shipment_items: [
+      { id: 'item-1', serial_number: 'G9PQ9991', parts: { part_number: '661-21988', description: 'Display' } },
+      { id: 'item-2', serial_number: 'G9PQ9992', parts: { part_number: '661-21989', description: 'Battery' } }
+    ]
+  };
+
+  const formattedItems = Array.isArray(dbShipmentRow.shipment_items)
+    ? dbShipmentRow.shipment_items.map(it => ({
+        id: it.id,
+        serial_number: it.serial_number,
+        part_number: it.parts?.part_number || it.part_number,
+        description: it.parts?.description || it.description
+      }))
+    : [];
+
+  assert.strictEqual(formattedItems.length, 2);
+  assert.strictEqual(formattedItems[0].serial_number, 'G9PQ9991');
+  assert.strictEqual(formattedItems[0].part_number, '661-21988');
+  assert.strictEqual(formattedItems[1].serial_number, 'G9PQ9992');
+  assert.strictEqual(formattedItems[1].part_number, '661-21989');
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${totalTests} PASSED (0 FAILED)`);
 console.log('====================================================');

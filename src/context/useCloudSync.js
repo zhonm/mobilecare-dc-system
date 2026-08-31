@@ -256,13 +256,13 @@ export function useCloudSync({
       ] = await Promise.all([
         shouldFetch('profiles') ? supabase.from('profiles').select('*').limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
-        shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(25) : Promise.resolve({ data: null }),
-        shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(50) : Promise.resolve({ data: null }),
+        shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(500) : Promise.resolve({ data: null }),
+        shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*, parts:part_id(*), sites:current_site_id(*)').limit(2000) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
-        shouldFetch('shipments') ? supabase.from('shipments').select('*').order('created_at', { ascending: false }).limit(50) : Promise.resolve({ data: null }),
+        shouldFetch('shipments') ? supabase.from('shipments').select('*, shipment_items(*, parts:part_id(*)), sites:site_id(*)').order('created_at', { ascending: false }).limit(200) : Promise.resolve({ data: null }),
         shouldFetch('parts_requests') ? supabase.from('parts_requests').select('*, parts:part_id(*), sites:site_id(*)').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: null })
       ]);
 
@@ -787,35 +787,88 @@ export function useCloudSync({
           deletedShipmentIds = cloudDeletedShipments;
         }
 
-        const shipmentRecords = dbSavedRecords
-          .filter(r => (r.record_type === 'shipment' || (r.snapshot_data && r.snapshot_data.shipment_number)) && !deletedShipmentIds.includes(r.id) && r.notes !== '__DELETED__' && r.snapshot_data?.isDeleted !== true)
-          .map(r => r.snapshot_data || r);
+        const cloudShipmentsRegistryDoc = dbSavedRecords.find(r => r.id === 'master_shipments_registry');
+        const cloudShipmentsList = (cloudShipmentsRegistryDoc?.snapshot_data?.shipments && Array.isArray(cloudShipmentsRegistryDoc.snapshot_data.shipments))
+          ? cloudShipmentsRegistryDoc.snapshot_data.shipments
+          : [];
 
         const shipmentMap = new Map();
-        shipmentRecords.forEach(s => {
+
+        // 1. Ingest authoritative master_shipments_registry first
+        cloudShipmentsList.forEach(s => {
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
-          if (canonicalRef) {
+          if (canonicalRef && !deletedShipmentIds.includes(s.id)) {
             shipmentMap.set(canonicalRef, s);
           }
         });
 
+        // 2. Overlay individual saved_records shipment docs
+        const shipmentRecords = dbSavedRecords
+          .filter(r => (r.record_type === 'shipment' || (r.snapshot_data && r.snapshot_data.shipment_number)) && !deletedShipmentIds.includes(r.id) && r.notes !== '__DELETED__' && r.snapshot_data?.isDeleted !== true)
+          .map(r => r.snapshot_data || r);
+
+        shipmentRecords.forEach(s => {
+          const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+          if (canonicalRef) {
+            const existing = shipmentMap.get(canonicalRef);
+            shipmentMap.set(canonicalRef, {
+              ...(existing || {}),
+              ...s,
+              items: (s.items && s.items.length > 0) ? s.items : (existing?.items || [])
+            });
+          }
+        });
+
+        // 3. Overlay direct public.shipments table joined with shipment_items
         if (dbShipments && dbShipments.length > 0) {
           dbShipments.filter(s => !deletedShipmentIds.includes(s.id)).forEach(dbS => {
             const canonicalRef = String(dbS.invoice_ref || dbS.shipment_number || dbS.id || '').trim().toUpperCase();
             if (canonicalRef) {
               const existing = shipmentMap.get(canonicalRef);
-              if (existing) {
-                shipmentMap.set(canonicalRef, {
-                  ...dbS,
-                  ...existing,
-                  items: (existing.items && existing.items.length > 0) ? existing.items : (dbS.items || [])
-                });
-              } else if (dbS.items && dbS.items.length > 0) {
-                shipmentMap.set(canonicalRef, dbS);
-              }
+              const formattedItems = Array.isArray(dbS.items) && dbS.items.length > 0
+                ? dbS.items
+                : (Array.isArray(dbS.shipment_items) && dbS.shipment_items.length > 0
+                    ? dbS.shipment_items.map(it => ({
+                        id: it.id,
+                        serial_number: it.serial_number,
+                        part_number: it.parts?.part_number || it.part_number,
+                        description: it.parts?.description || it.description,
+                        box_number: it.box_number || 1,
+                        cost: it.unit_cost || 0
+                      }))
+                    : (existing?.items || []));
+
+              const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
+              const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
+
+              shipmentMap.set(canonicalRef, {
+                ...dbS,
+                ...(existing || {}),
+                destination_site_name: resolvedSiteName,
+                destination_site_code: resolvedSiteCode,
+                items: formattedItems
+              });
             }
           });
         }
+
+        // 4. Overlay local storage shipments if present
+        try {
+          const localShipments = JSON.parse(localStorage.getItem('mdc_shipments') || '[]');
+          if (Array.isArray(localShipments)) {
+            localShipments.forEach(s => {
+              const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+              if (canonicalRef && !deletedShipmentIds.includes(s.id)) {
+                const existing = shipmentMap.get(canonicalRef);
+                if (!existing) {
+                  shipmentMap.set(canonicalRef, s);
+                } else if (!existing.items || existing.items.length === 0) {
+                  shipmentMap.set(canonicalRef, { ...existing, ...s });
+                }
+              }
+            });
+          }
+        } catch (e) {}
 
         effectiveShipments = Array.from(shipmentMap.values())
           .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !deletedShipmentIds.includes(s.id))
@@ -839,6 +892,27 @@ export function useCloudSync({
           setShipments(effectiveShipments);
           try { localStorage.setItem('mdc_shipments', JSON.stringify(effectiveShipments)); } catch (e) {}
           dbStorage.setItem('mdc_shipments', effectiveShipments);
+
+          // Self-heal / Auto-seed master_shipments_registry in cloud if missing or has fewer records than merged list
+          if (supabase) {
+            if (!cloudShipmentsRegistryDoc || cloudShipmentsList.length < effectiveShipments.length) {
+              supabase.from('saved_records').upsert({
+                id: 'master_shipments_registry',
+                record_type: 'shipments_registry',
+                period_label: 'Master Shipments Registry',
+                period_year: new Date().getFullYear(),
+                period_month: new Date().getMonth() + 1,
+                notes: 'Master DC Outbound Shipments & Packing Lists',
+                saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+                snapshot_data: {
+                  shipments: effectiveShipments,
+                  deletedIds: deletedShipmentIds,
+                  updatedAt: new Date().toISOString()
+                },
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed master_shipments_registry notice:', e));
+            }
+          }
 
           // Backfill direct public.shipments and public.shipment_items tables in Supabase if empty/missing (throttled to once every 60s)
           if (supabase && (!dbShipments || dbShipments.length < effectiveShipments.length) && (Date.now() - lastShipmentsBackfillAttemptRef.current > 60000)) {
@@ -1500,7 +1574,7 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(ev.data.type)) {
+            } else if (['DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)) {
               if (ev.data.type === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
@@ -1511,7 +1585,7 @@ export function useCloudSync({
               if (ev.data.payload?.period && setActivePeriod) {
                 setActivePeriod(ev.data.payload.period);
               }
-              autoRefreshData({ force: false, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
               if (Date.now() - lastLocalTime >= 3000) {
@@ -1579,7 +1653,7 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(bType)) {
+            } else if (['MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(bType)) {
               if (bType === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
@@ -1590,7 +1664,7 @@ export function useCloudSync({
               if (bPayload?.period && setActivePeriod) {
                 setActivePeriod(bPayload.period);
               }
-              autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
             }
             triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });

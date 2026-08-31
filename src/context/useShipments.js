@@ -304,6 +304,26 @@ export function useShipments({
           updated_at: new Date().toISOString()
         }, { onConflict: 'id' });
 
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_shipments_registry',
+            record_type: 'shipments_registry',
+            period_label: 'Master Shipments Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master DC Outbound Shipments & Packing Lists',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              shipments: nextList,
+              deletedIds: updatedDeletedList,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (mErr) {
+          console.warn('master_shipments_registry delete note:', mErr.message);
+        }
+
         if (updatedInventory && updatedInventory.length > 0) {
           await supabase.from('saved_records').upsert({
             id: 'live_master_dc_inventory',
@@ -394,6 +414,26 @@ export function useShipments({
         }));
         const { error } = await supabase.from('saved_records').upsert(recordsToUpsert, { onConflict: 'id' });
         if (error) throw error;
+
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_shipments_registry',
+            record_type: 'shipments_registry',
+            period_label: 'Master Shipments Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master DC Outbound Shipments & Packing Lists',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              shipments: newShipmentsList,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (mErr) {
+          console.warn('master_shipments_registry batch import note:', mErr.message);
+        }
+
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('SHIPMENTS_IMPORTED', { count: newShipmentsList.length });
       } catch (dbErr) {
@@ -442,6 +482,22 @@ export function useShipments({
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         await supabase.from('saved_records').delete().eq('record_type', 'shipment');
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_shipments_registry',
+            record_type: 'shipments_registry',
+            period_label: 'Master Shipments Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master DC Outbound Shipments & Packing Lists',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              shipments: [],
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (mErr) {}
         try { await supabase.from('shipments').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         await supabase.from('inventory_units').update({ status: 'in_stock', current_site_id: 'site-dc', shipped_at: null }).neq('id', '00000000-0000-0000-0000-000000000000');
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -541,6 +597,27 @@ export function useShipments({
         }, { onConflict: 'id' });
 
         if (recErr) throw recErr;
+
+        // Channel 0: Upsert to authoritative master_shipments_registry
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_shipments_registry',
+            record_type: 'shipments_registry',
+            period_label: 'Master Shipments Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master DC Outbound Shipments & Packing Lists',
+            saved_by_name: resolvedPreparedBy,
+            saved_by_user_id: safeUUID(currentUser?.id),
+            snapshot_data: {
+              shipments: nextList,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (mErr) {
+          console.warn('master_shipments_registry save note:', mErr.message);
+        }
 
         // Channel 1: Upsert to direct shipments table in Supabase
         const directShipmentRow = formatShipmentForDb(newShipment);
