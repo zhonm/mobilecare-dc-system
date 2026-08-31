@@ -1,9 +1,8 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { generatePackingListPDF, printPackingListDirect } from '../utils/pdfGenerator';
+import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
   Download,
-  Printer,
   CheckCircle,
   Search,
   FileSpreadsheet,
@@ -94,8 +93,8 @@ export default function Shipments() {
   // Clear Confirmation Modal State
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
-  // Direct Print / PDF Request Handler
-  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'pdf') => {
+  // Direct Corporate PDF Request Handler
+  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf') => {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
@@ -104,12 +103,8 @@ export default function Shipments() {
       pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
     };
 
-    if (action === 'pdf') {
-      generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
-      showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
-    } else {
-      printPackingListDirect(shipmentObj, items || [], siteObj || {}, pdfOptions);
-    }
+    generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
+    showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
   };
 
   // Helper to normalize status
@@ -317,11 +312,7 @@ export default function Shipments() {
       pickupDate: updatedShipment.pickup_date
     };
 
-    if (trackingModalState.action === 'pdf') {
-      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
-    } else {
-      printPackingListDirect(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
-    }
+    generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
 
     setTrackingModalState(null);
   };
@@ -711,14 +702,6 @@ export default function Shipments() {
                             <span>PDF</span>
                           </button>
 
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'print')}
-                            title="Print Packing List Direct"
-                          >
-                            <Printer size={13} />
-                          </button>
-
                           {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
                           {normStatus === 'pending_pickup' && (
                             <button
@@ -1005,11 +988,11 @@ export default function Shipments() {
             <div className="modal-header" style={{ background: '#0f172a' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
-                  <Printer size={20} />
+                  <Download size={20} />
                 </div>
                 <div>
                   <h3 style={{ color: '#fff', fontSize: '15px', margin: 0 }}>
-                    Dispatch Details & Declaration Form Record
+                    Dispatch Details &amp; Declaration Form Record
                   </h3>
                   <p style={{ color: '#94a3b8', fontSize: '11.5px', margin: '2px 0 0 0' }}>
                     Manifest {trackingModalState.shipment?.invoice_ref || trackingModalState.shipment?.shipment_number || 'Shipment'} • Destination: {trackingModalState.site?.name || 'Service Hub'}
@@ -1147,8 +1130,8 @@ export default function Shipments() {
                   className="btn btn-primary"
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  {trackingModalState.action === 'pdf' ? <Download size={14} /> : <Printer size={14} />}
-                  <span>Save & {trackingModalState.action === 'pdf' ? 'Download PDF (2 Pages)' : 'Print Manifest'}</span>
+                  <Download size={14} />
+                  <span>Save &amp; Download PDF (2 Pages)</span>
                 </button>
               </div>
             </form>
