@@ -21,8 +21,7 @@ import {
   LogOut,
   Search,
   X,
-  Inbox,
-  Boxes
+  Inbox
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -35,7 +34,7 @@ export default function Sidebar() {
     purchaseOrders,
     shipments,
     partsRequests,
-    sites
+    sites = []
   } = useApp();
 
   const [navSearch, setNavSearch] = useState('');
@@ -58,7 +57,6 @@ export default function Sidebar() {
     // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)
     { id: 'request-parts', label: 'Parts Requests', icon: Inbox, badge: pendingRequestsCount, section: 'Operations & Logistics' },
     { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Operations & Logistics' },
-    { id: 'all-stocks', label: 'All Stocks & Inventory', icon: Boxes, section: 'Operations & Logistics' },
     { id: 'intake-records', label: 'DC Parts Stock Records', icon: BookmarkPlus, section: 'Operations & Logistics' },
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Operations & Logistics' },
     { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Operations & Logistics' },

@@ -4,6 +4,8 @@ import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { isUUID } from '../utils/appContextHelpers';
 
+const toValidUUID = (str) => (isUUID(str) ? str : null);
+
 const FULFILLMENT_ROLES = ['superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff'];
 
 export function usePartsRequests({
@@ -588,7 +590,8 @@ export function usePartsRequests({
       : sites.filter(s => s.id === targetSiteFilter || s.code === targetSiteFilter);
 
     return siteList.map(site => {
-      const isOwnSite = isSuper || (userSiteId && (site.id === userSiteId || site.code === userSiteId));
+      const isDcSite = site.id === 'site-dc' || site.code === 'DC-MDC' || site.code === 'DC';
+      const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
       const stock = getStockOnHandForSite(site.id);
 
       // Process parts summary with granular privacy
@@ -607,10 +610,19 @@ export function usePartsRequests({
             return {
               id: u.id,
               serialNumber: u.serial_number,
+              serial_number: u.serial_number,
+              part_number: u.part_number,
+              description: u.description,
               status: u.status,
               boxNumber: u.box_number || 1,
+              box_number: u.box_number || 1,
               receivedAt: u.received_at,
               receivedBy: u.received_by,
+              received_by_id: u.received_by_id,
+              added_by_user_id: u.added_by_user_id,
+              current_site_id: u.current_site_id || site.id,
+              site_code: u.site_code || site.code,
+              work_order_number: u.work_order_number,
               notes: u.notes,
               isMasked: false
             };
@@ -618,10 +630,19 @@ export function usePartsRequests({
             return {
               id: u.id,
               serialNumber: '••••••••••••••••',
+              serial_number: '••••••••••••••••',
+              part_number: u.part_number,
+              description: u.description,
               status: u.status,
               boxNumber: '—',
+              box_number: '—',
               receivedAt: null,
               receivedBy: 'Branch Staff',
+              received_by_id: null,
+              added_by_user_id: null,
+              current_site_id: site.id,
+              site_code: site.code,
+              work_order_number: null,
               notes: null,
               isMasked: true
             };

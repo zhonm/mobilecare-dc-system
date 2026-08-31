@@ -5,6 +5,7 @@ import {
   calculateOptionAAllocation,
   allocatePartToSites,
   calculateWeeklySplit,
+  getRowParityOffset,
   getOrderRemark
 } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
@@ -450,7 +451,8 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             filterScope,
             selectedMonth,
             fileName: file.name,
-            allocationMode: options.allocationMode || 'OPTION_B'
+            allocationMode: options.allocationMode || 'OPTION_B',
+            forecastingModel: options.forecastingModel || 'linear'
           });
 
           resolve({
@@ -898,7 +900,8 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           filterScope,
           selectedMonth,
           fileName: file.name,
-          allocationMode: options.allocationMode || 'OPTION_B'
+          allocationMode: options.allocationMode || 'OPTION_B',
+          forecastingModel: options.forecastingModel || 'linear'
         });
         resolve({
           success: true,
@@ -1322,7 +1325,7 @@ export function processRawUsageSheet(
   const selectedMonth = options.selectedMonth !== undefined ? options.selectedMonth : 'auto';
   const fileName = options.fileName || '';
   const allocationMode = options.allocationMode || 'OPTION_B';
-  const forecastingModel = options.forecastingModel || (typeof window !== 'undefined' ? localStorage.getItem('mdc_forecasting_model') : null) || 'linear';
+  const forecastingModel = options.forecastingModel || (typeof window !== 'undefined' ? (localStorage.getItem('mdc_forecasting_model') || localStorage.getItem('mdc_default_forecasting_model')) : null) || 'linear';
 
   // 1. Identify header row
   let headerIndex = 0;
@@ -1928,7 +1931,9 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
       const exchangePrice = item.exchange_price || 0;
       const totalQty = item.total_allocated_qty || 0;
       const totalCost = item.total_stock_cost || (totalQty * stockPrice);
-      const split = calculateWeeklySplit(totalQty, totalCost, idx + 3);
+      const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
+        ? { w1_qty: item.w1_qty, w2_qty: item.w2_qty, w3_qty: item.w3_qty, w4_qty: item.w4_qty, w1_cost: item.w1_cost, w2_cost: item.w2_cost, w3_cost: item.w3_cost, w4_cost: item.w4_cost }
+        : calculateWeeklySplit(totalQty, totalCost, idx + getRowParityOffset(item));
 
       subtotalQty += totalQty;
       subtotalCost += totalCost;
@@ -2257,7 +2262,10 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
       items.forEach((item, rIdx) => {
         const stockPrice = item.stocking_price || (catLabel === 'DISPLAY' ? 279 : 99);
         const exchPrice = item.exchange_price || (stockPrice * 0.84);
-        const split = calculateWeeklySplit(item.total_allocated_qty, (item.total_allocated_qty || 0) * stockPrice, rIdx + 3);
+        const offset = getRowParityOffset(item);
+        const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
+          ? { w1_qty: item.w1_qty, w2_qty: item.w2_qty, w3_qty: item.w3_qty, w4_qty: item.w4_qty, w1_cost: item.w1_cost, w2_cost: item.w2_cost, w3_cost: item.w3_cost, w4_cost: item.w4_cost }
+          : calculateWeeklySplit(item.total_allocated_qty, (item.total_allocated_qty || 0) * stockPrice, rIdx + offset);
         const rowWQty = split[`w${w}_qty`] || 0;
         subtotalWQty += rowWQty;
 
@@ -2272,7 +2280,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
 
         sites.forEach(s => {
           const bMonthly = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
-          const bSplit = calculateWeeklySplit(bMonthly, bMonthly * stockPrice, rIdx + 3);
+          const bSplit = calculateWeeklySplit(bMonthly, bMonthly * stockPrice, rIdx + offset);
           const bWQty = bSplit[`w${w}_qty`] || 0;
           subtotalWSites[s.id] = (subtotalWSites[s.id] || 0) + bWQty;
           rowValues.push(bWQty);
@@ -2626,7 +2634,14 @@ export function downloadScanInTemplate(format = 'xlsx', purchaseOrders = []) {
 /**
  * Parse an uploaded XLSX or CSV file for batch parts receiving into DC inventory
  */
-export async function parseScanInPartsFile(file, existingParts = [], existingUnits = [], purchaseOrders = []) {
+export async function parseScanInPartsFile(
+  file,
+  existingParts = [],
+  existingUnits = [],
+  purchaseOrders = [],
+  targetSiteId = 'site-dc',
+  targetSiteCode = 'DC-MDC'
+) {
   try {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
@@ -2713,9 +2728,17 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
       }
     });
 
+    const isDcTarget = targetSiteId === 'site-dc' || targetSiteCode === 'DC-MDC' || targetSiteCode === 'DC' || (!targetSiteId && !targetSiteCode);
+    const targetSiteUnits = (existingUnits || []).filter(u => {
+      if (isDcTarget) {
+        return (u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code)) && (u.status === 'in_stock' || !u.status);
+      }
+      return (u.current_site_id === targetSiteId || u.site_code === targetSiteCode) && (u.status === 'in_stock' || !u.status);
+    });
+
     const parsedItems = [];
     const seenSerialsInBatch = new Set();
-    const existingSerialsSet = new Set((existingUnits || []).map(u => String(u.serial_number || '').trim().toUpperCase()));
+    const existingSerialsSet = new Set(targetSiteUnits.map(u => String(u.serial_number || '').trim().toUpperCase()));
 
     for (let i = headerIdx + 1; i < rawRows.length; i++) {
       const row = rawRows[i];
@@ -2843,9 +2866,9 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
         status = 'DUPLICATE';
         statusMessage = 'Repeated serial in spreadsheet';
       } else if (existingSerialsSet.has(cleanSerial)) {
-        // Already registered in DC inventory: safe to re-import / update
+        // Already registered in this site's inventory: safe to re-import / update
         status = 'EXISTING_INVENTORY';
-        statusMessage = 'Already in DC Stock (Will re-sync/update details)';
+        statusMessage = isDcTarget ? 'Already in DC Stock (Will re-sync/update details)' : 'Already in Branch Stock (Will re-sync/update details)';
       } else if (!existingPart) {
         status = 'NEW_PART';
         statusMessage = 'New Part (will auto-register in catalog)';

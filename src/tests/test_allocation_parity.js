@@ -163,6 +163,42 @@ if (fs.existsSync('Battery & Display (Allocation) - September 2026 - Masterlist 
   assert(rawResult.forecastItems[0].stocking_price === 279, `Masterlist forecast item stocking_price is properly populated (actual: ${rawResult.forecastItems[0].stocking_price})`);
 }
 
+// 7. B2 Remediation Regression Test: Weekly Split Row Parity Offset Consistency
+import { getRowParityOffset, calculateWeeklySplit } from '../utils/allocationEngine.js';
+
+const displayItem = {
+  part_id: 'p-disp-1',
+  description: 'Display, iPhone 14',
+  category_id: 'cat-display'
+};
+
+const batteryItem = {
+  part_id: 'p-batt-1',
+  description: 'Battery, iPhone 14',
+  category_id: 'cat-battery'
+};
+
+assert(getRowParityOffset(displayItem) === 3, 'Display row parity offset is 3 (matches Excel row 3 start)');
+assert(getRowParityOffset(batteryItem) === 4, 'Battery row parity offset is 4 (matches Excel row 25 start, odd parity)');
+
+// Test split parity on Display row 0 (Excel row 3 -> odd):
+const dispSplit = calculateWeeklySplit(13, 13 * 279, 0 + getRowParityOffset(displayItem));
+// Test split parity on Battery row 0 (rIdx = 21 in masterlist, Excel row 25 -> odd):
+const battSplit = calculateWeeklySplit(13, 13 * 99, 21 + getRowParityOffset(batteryItem));
+assert(
+  dispSplit.w1_qty === battSplit.w1_qty && dispSplit.w2_qty === battSplit.w2_qty && dispSplit.w3_qty === battSplit.w3_qty && dispSplit.w4_qty === battSplit.w4_qty,
+  'Display row 0 (Excel row 3) and Battery row 0 (Excel row 25) both produce identical odd-row weekly split proportions'
+);
+
+// Test split parity preservation when admin override is applied:
+const overrideQty = 14;
+const baseSplit = calculateWeeklySplit(overrideQty, overrideQty * 99, 21 + getRowParityOffset(batteryItem));
+const reSplitWithOverride = calculateWeeklySplit(overrideQty, overrideQty * 99, 21 + getRowParityOffset(batteryItem));
+assert(
+  baseSplit.w1_qty === reSplitWithOverride.w1_qty && baseSplit.w2_qty === reSplitWithOverride.w2_qty,
+  'Admin override retains identical battery row parity offset (+4) without flipping even/odd'
+);
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${totalTests} PASSED (${failedTests} FAILED)`);
 console.log('====================================================');

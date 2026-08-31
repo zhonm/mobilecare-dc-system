@@ -585,10 +585,9 @@ export function useUserManagement({
 
     const target = usersList.find(u => u.id === userId);
     if (!target) return { success: false, error: 'User not found' };
-
-    const finalPassword = String(newPassword || '').trim() || 'Password123';
-    const hasSet = !requireNextLoginReset;
-    const secureHash = await hashPassword(finalPassword);
+    const finalPassword = String(newPassword || '').trim();
+    const hasSet = Boolean(finalPassword && !requireNextLoginReset);
+    const secureHash = finalPassword ? await hashPassword(finalPassword) : null;
 
     const updatedUser = {
       ...target,

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Layers, ChevronDown, Filter } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Layers, ChevronDown } from 'lucide-react';
 
 export default function Header() {
   const {

@@ -710,115 +710,212 @@ ALTER TABLE IF EXISTS public.saved_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.audit_logs ENABLE ROW LEVEL SECURITY;
 
--- 6.1 Shipments & Shipment Items
-CREATE POLICY "allow_all_shipments" ON public.shipments
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+-- 6.1 Profiles Policies
+CREATE POLICY "profiles_select_own_or_admin" ON public.profiles
+    FOR SELECT TO authenticated
+    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
-CREATE POLICY "allow_all_shipment_items" ON public.shipment_items
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "profiles_insert_own_or_superadmin" ON public.profiles
+    FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
--- 6.2 Inventory Units & Scan Logs
-CREATE POLICY "allow_all_inventory_units" ON public.inventory_units
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "profiles_update_own_or_superadmin" ON public.profiles
+    FOR UPDATE TO authenticated
+    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
+    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
-CREATE POLICY "allow_all_scan_logs" ON public.scan_logs
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "profiles_delete_superadmin_only" ON public.profiles
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
--- 6.3 Parts Requests
-CREATE POLICY "allow_all_parts_requests" ON public.parts_requests
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+-- 6.2 User Page Permissions Policies
+CREATE POLICY "user_page_permissions_select" ON public.user_page_permissions
+    FOR SELECT TO authenticated
+    USING (auth.uid() = user_id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
--- 6.4 Saved Records & DC Intake Records
-CREATE POLICY "allow_all_saved_records" ON public.saved_records
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "user_page_permissions_manage_superadmin" ON public.user_page_permissions
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
-CREATE POLICY "allow_all_dc_intake_records" ON public.dc_intake_records
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+-- 6.3 Catalog & Master Data (Parts, Categories, Sites)
+CREATE POLICY "parts_select_authenticated" ON public.parts
+    FOR SELECT TO authenticated
+    USING (true);
 
--- 6.5 Catalog & Master Data (Parts, Categories, Sites)
-CREATE POLICY "allow_all_parts" ON public.parts
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "parts_manage_admin" ON public.parts
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
-CREATE POLICY "allow_all_part_categories" ON public.part_categories
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "part_categories_select_authenticated" ON public.part_categories
+    FOR SELECT TO authenticated
+    USING (true);
 
-CREATE POLICY "allow_all_sites" ON public.sites
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "part_categories_manage_admin" ON public.part_categories
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
--- 6.6 Profiles & User Page Permissions
-CREATE POLICY "allow_all_profiles" ON public.profiles
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "sites_select_authenticated" ON public.sites
+    FOR SELECT TO authenticated
+    USING (true);
 
-CREATE POLICY "allow_all_user_page_permissions" ON public.user_page_permissions
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "sites_manage_admin" ON public.sites
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
--- 6.7 Forecasts & Allocations & POs
-CREATE POLICY "allow_all_forecast_cycles" ON public.forecast_cycles
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+-- 6.4 Forecasts, Allocations, Purchase Orders & Repair Usage
+CREATE POLICY "forecast_cycles_select_authenticated" ON public.forecast_cycles
+    FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "allow_all_forecast_entries" ON public.forecast_entries
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "forecast_cycles_manage_planner" ON public.forecast_cycles
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
 
-CREATE POLICY "allow_all_allocation_cycles" ON public.allocation_cycles
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "forecast_entries_select_authenticated" ON public.forecast_entries
+    FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "allow_all_allocation_items" ON public.allocation_items
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "forecast_entries_manage_planner" ON public.forecast_entries
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
 
-CREATE POLICY "allow_all_purchase_orders" ON public.purchase_orders
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "allocation_cycles_select_authenticated" ON public.allocation_cycles
+    FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "allow_all_po_items" ON public.po_items
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "allocation_cycles_manage_planner" ON public.allocation_cycles
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
 
-CREATE POLICY "allow_all_repair_usage_records" ON public.repair_usage_records
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "allocation_items_select_authenticated" ON public.allocation_items
+    FOR SELECT TO authenticated USING (true);
 
--- 6.8 Audit Logs
-CREATE POLICY "allow_all_audit_logs" ON public.audit_logs
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "allocation_items_manage_planner" ON public.allocation_items
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
 
--- Grant privileges to all standard Supabase roles
+CREATE POLICY "purchase_orders_select_authenticated" ON public.purchase_orders
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "purchase_orders_manage_planner" ON public.purchase_orders
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
+
+CREATE POLICY "po_items_select_authenticated" ON public.po_items
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "po_items_manage_planner" ON public.po_items
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
+
+CREATE POLICY "repair_usage_records_select_authenticated" ON public.repair_usage_records
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "repair_usage_records_manage_planner" ON public.repair_usage_records
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin', 'planner')));
+
+-- 6.5 Shipments & Shipment Items
+CREATE POLICY "shipments_select_authenticated" ON public.shipments
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "shipments_write_authenticated" ON public.shipments
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "shipments_update_authenticated" ON public.shipments
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "shipments_delete_admin" ON public.shipments
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+CREATE POLICY "shipment_items_select_authenticated" ON public.shipment_items
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "shipment_items_write_authenticated" ON public.shipment_items
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "shipment_items_update_authenticated" ON public.shipment_items
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "shipment_items_delete_admin" ON public.shipment_items
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+-- 6.6 Inventory Units & Scan Logs
+CREATE POLICY "inventory_units_select_authenticated" ON public.inventory_units
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "inventory_units_write_authenticated" ON public.inventory_units
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "inventory_units_update_authenticated" ON public.inventory_units
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "inventory_units_delete_admin" ON public.inventory_units
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+CREATE POLICY "scan_logs_select_authenticated" ON public.scan_logs
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "scan_logs_insert_authenticated" ON public.scan_logs
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+-- 6.7 Parts Requests
+CREATE POLICY "parts_requests_select_authenticated" ON public.parts_requests
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "parts_requests_insert_authenticated" ON public.parts_requests
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "parts_requests_delete_admin" ON public.parts_requests
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+-- 6.8 Saved Records & DC Intake Records (Accessible to authenticated & anon client)
+CREATE POLICY "saved_records_select" ON public.saved_records
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "saved_records_write" ON public.saved_records
+    FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+CREATE POLICY "saved_records_update" ON public.saved_records
+    FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "saved_records_delete" ON public.saved_records
+    FOR DELETE TO anon, authenticated USING (true);
+
+CREATE POLICY "dc_intake_records_select" ON public.dc_intake_records
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "dc_intake_records_write" ON public.dc_intake_records
+    FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+CREATE POLICY "dc_intake_records_update" ON public.dc_intake_records
+    FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "dc_intake_records_delete" ON public.dc_intake_records
+    FOR DELETE TO anon, authenticated USING (true);
+
+-- 6.9 Append-Only Audit Logs (Tamper-Proof)
+CREATE POLICY "audit_logs_select_admin" ON public.audit_logs
+    FOR SELECT TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+CREATE POLICY "audit_logs_insert_authenticated" ON public.audit_logs
+    FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() IS NOT NULL);
+
+-- Grant privileges (RLS strictly controls data access)
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role, postgres;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role, postgres;
@@ -840,9 +937,9 @@ EXCEPTION
 END $$;
 
 INSERT INTO public.profiles (id, email, full_name, role, has_set_password, is_active)
-SELECT u.id, u.email, 'Zhon Manaois', 'superadmin'::user_role, true, true
+SELECT u.id, u.email, 'Super Admin', 'superadmin'::user_role, true, true
 FROM auth.users u
-WHERE u.email = 'zhon@mobilecare.com.ph'
+WHERE u.email = 'superadmin@mobilecareph.com'
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     full_name = EXCLUDED.full_name,
@@ -852,9 +949,9 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = NOW();
 
 INSERT INTO public.profiles (id, email, full_name, role, has_set_password, is_active)
-SELECT u.id, u.email, 'Joshua Juvida', 'superadmin'::user_role, true, true
+SELECT u.id, u.email, 'System Admin', 'superadmin'::user_role, true, true
 FROM auth.users u
-WHERE u.email = 'joshua@mobilecare.com.ph'
+WHERE u.email = 'admin@mobilecareph.com'
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     full_name = EXCLUDED.full_name,

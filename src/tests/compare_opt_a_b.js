@@ -15,7 +15,7 @@ let fcastTotalQty = 0, fcastTotalCost = 0;
 console.log('--- Checking Displays Option A vs Option B ---');
 for (let r = 2; r <= 22; r++) {
   const row = allocRows[r];
-  const pn = row[5];
+  const _pn = row[5];
   const desc = row[6];
   const fcast = Number(row[2]) || 0;
   const price = Number(row[3]) || 0;
@@ -42,7 +42,7 @@ for (let r = 2; r <= 22; r++) {
 console.log('\n--- Checking Batteries Option A vs Option B ---');
 for (let r = 24; r <= 43; r++) {
   const row = allocRows[r];
-  const pn = row[5];
+  const _pn = row[5];
   const desc = row[6];
   const fcast = Number(row[2]) || 0;
   const price = Number(row[3]) || 0;

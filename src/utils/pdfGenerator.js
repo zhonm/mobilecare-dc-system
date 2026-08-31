@@ -2,7 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
-import { calculateWeeklySplit } from './allocationEngine.js';
+import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
 
 export { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 };
 
@@ -72,12 +72,17 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   const boxDisplay = shipment.box_number_label || (shipment.box_number ? `${shipment.box_number}/${shipment.total_boxes || 1}` : `1/${shipment.total_boxes || 1}`);
 
+  const createdDateStr = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));
+  const shipmentDateStr = shipment.shipment_date || '___________________';
+  const trackingNumberStr = shipment.tracking_number || shipment.booking_id || '___________________';
+
   const metaRows = [
     { label: 'INVOICE REF:', val: shipment.invoice_ref || `DCOWNED#082726A` },
-    { label: 'SHIPMENT DATE:', val: shipment.shipment_date || new Date().toLocaleDateString('en-US') },
+    { label: 'CREATED DATE:', val: createdDateStr },
+    { label: 'SHIPMENT DATE:', val: shipmentDateStr },
+    { label: 'TRACKING NUMBER:', val: trackingNumberStr },
     { label: 'BOX/S #:', val: boxDisplay },
     { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
-    { label: 'TRACKING NUMBER:', val: shipment.tracking_number || shipment.booking_id || 'N/A' },
     ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
   ];
 
@@ -529,6 +534,10 @@ export function printPackingListDirect(shipment, items = [], site = {}, options 
     if (extras.length > 0) courierDisplayHtml = courierDisplayHtml ? `${courierDisplayHtml} (${extras.join(' • ')})` : extras.join(' • ');
   }
 
+  const destSiteName = site.name || shipment.site_name || 'SERVICE HUB';
+  const courierType = shipment.carrier || shipment.courier || 'Lite Express';
+  const bookingId = shipment.tracking_number || shipment.booking_id || 'N/A';
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -582,10 +591,11 @@ export function printPackingListDirect(shipment, items = [], site = {}, options 
         <div>
           <table class="meta-table">
             <tr><td class="meta-label">INVOICE REF:</td><td class="meta-val">${shipment.invoice_ref || 'DCOWNED#082726A'}</td></tr>
-            <tr><td class="meta-label">SHIPMENT DATE:</td><td class="meta-val">${shipment.shipment_date || new Date().toLocaleDateString('en-US')}</td></tr>
+            <tr><td class="meta-label">CREATED DATE:</td><td class="meta-val">${shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'))}</td></tr>
+            <tr><td class="meta-label">SHIPMENT DATE:</td><td class="meta-val">${shipment.shipment_date ? shipment.shipment_date : '<span style="display:inline-block; width:120px; border-bottom:1px solid #0f172a;">&nbsp;</span>'}</td></tr>
+            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || shipment.booking_id ? (shipment.tracking_number || shipment.booking_id) : '<span style="display:inline-block; width:120px; border-bottom:1px solid #0f172a;">&nbsp;</span>'}</td></tr>
             <tr><td class="meta-label">BOX/S #:</td><td class="meta-val">${boxDisplay}</td></tr>
             <tr><td class="meta-label">COURIER:</td><td class="meta-val">${shipment.carrier || shipment.courier || 'Lite Express'}</td></tr>
-            <tr><td class="meta-label">TRACKING NUMBER:</td><td class="meta-val">${shipment.tracking_number || shipment.booking_id || 'N/A'}</td></tr>
             ${shipment.transfer_slip_number ? `<tr><td class="meta-label">TRANSFER SLIP #:</td><td class="meta-val">${shipment.transfer_slip_number}</td></tr>` : ''}
           </table>
         </div>
@@ -768,7 +778,9 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
       const price = it.stocking_price || 0;
       const q = it.total_allocated_qty || 0;
       const c = it.total_stock_cost || (q * price);
-      const split = calculateWeeklySplit(q, c, idx + 3);
+      const split = (it.w1_qty !== undefined && it.w1_cost !== undefined)
+        ? { w1_qty: it.w1_qty, w2_qty: it.w2_qty, w3_qty: it.w3_qty, w4_qty: it.w4_qty, w1_cost: it.w1_cost, w2_cost: it.w2_cost, w3_cost: it.w3_cost, w4_cost: it.w4_cost }
+        : calculateWeeklySplit(q, c, idx + getRowParityOffset(it));
       const isDisplay = catLabel === 'DISPLAY';
 
       const siteCells = sites.map(s => {
@@ -919,11 +931,13 @@ export function exportAllocationToPDF(allocations = [], sites = [], period = 'Au
   ];
 
   const tableData = allocations.map((item, idx) => {
-    const isDisplay = item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
+    const isDisplay = isDisplayCategoryOrDesc(item);
     const price = item.stocking_price || 0;
     const qty = item.total_allocated_qty || 0;
     const cost = item.total_stock_cost || (qty * price);
-    const split = calculateWeeklySplit(qty, cost, idx + 3);
+    const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
+      ? { w1_qty: item.w1_qty, w2_qty: item.w2_qty, w3_qty: item.w3_qty, w4_qty: item.w4_qty, w1_cost: item.w1_cost, w2_cost: item.w2_cost, w3_cost: item.w3_cost, w4_cost: item.w4_cost }
+      : calculateWeeklySplit(qty, cost, idx + getRowParityOffset(item));
 
     const row = [
       isDisplay ? 'DISPLAY' : 'BATTERY',
@@ -1372,7 +1386,9 @@ export function exportForecastingReportToPDF(forecastItems = [], metadata = {}) 
         const fVal = it.final_forecast ?? it.computed_forecast ?? 0;
         const price = resolveStockPrice(it);
         const cost = fVal * price;
-        const split = calculateWeeklySplit(fVal, cost, idx + 3);
+        const split = (it.w1_qty !== undefined && it.w1_cost !== undefined)
+          ? { w1_qty: it.w1_qty, w2_qty: it.w2_qty, w3_qty: it.w3_qty, w4_qty: it.w4_qty, w1_cost: it.w1_cost, w2_cost: it.w2_cost, w3_cost: it.w3_cost, w4_cost: it.w4_cost }
+          : calculateWeeklySplit(fVal, cost, idx + getRowParityOffset(it));
 
         return [
           idx + 1,

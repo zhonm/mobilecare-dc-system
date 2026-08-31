@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { ROLE_PRESETS, ROLE_OPTIONS, getDefaultRolePosition } from '../constants/roles.js';
+import { ROLE_PRESETS, ROLE_OPTIONS } from '../constants/roles.js';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation.js';
 
 console.log('====================================================');
@@ -478,7 +478,7 @@ it('Auto-purges part from branch after 3 consecutive days of 0 stock, allowing s
   assert.strictEqual(branchPartsSummary['661-21988'].status, 'in_stock', 'In stock part unaffected');
 
   // User adds 661-56050 again via Receive Scan-In page
-  const scanInNewUnit = {
+  const _scanInNewUnit = {
     serial_number: 'NEW-SN-999',
     part_number: '661-56050',
     current_site_id: 'site-ppm',
@@ -494,6 +494,121 @@ it('Auto-purges part from branch after 3 consecutive days of 0 stock, allowing s
 
   assert.strictEqual(branchPartsSummary['661-56050'].inStock, 1, 'Part successfully restored via Receive Scan-In');
   assert.strictEqual(branchPartsSummary['661-56050'].status, 'in_stock', 'Restored part has in_stock status');
+});
+
+// 16. DC STOCK ISOLATION TESTS
+it('Isolates PMG retail branch stock from DC Parts Stock Records, Scan-Out Packing, and Dashboard', () => {
+  const allInventoryPool = [
+    { id: 'u1', serial_number: 'SN-DC-001', part_number: '661-30461', current_site_id: 'site-dc', site_code: 'DC-MDC', status: 'in_stock' },
+    { id: 'u2', serial_number: 'SN-DC-002', part_number: '661-42843', current_site_id: 'site-dc', site_code: 'DC-MDC', status: 'in_stock' },
+    { id: 'u3', serial_number: 'SN-PPM-001', part_number: '661-56050', current_site_id: 'site-ppm', site_code: 'APP PPM', status: 'in_stock' },
+    { id: 'u4', serial_number: 'SN-PPM-002', part_number: '661-21988', current_site_id: 'site-ppm', site_code: 'APP PPM', status: 'in_stock' }
+  ];
+
+  // DC Warehouse Stock Filter (IntakeRecords, ScanOutPacking, Dashboard)
+  const dcStockUnits = allInventoryPool.filter(u => {
+    const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+    return (u.status === 'in_stock' || !u.status) && isDc;
+  });
+
+  assert.strictEqual(dcStockUnits.length, 2, 'DC Parts Stock Records contains exactly 2 DC units');
+  assert.ok(dcStockUnits.some(u => u.serial_number === 'SN-DC-001'), 'DC stock includes SN-DC-001');
+  assert.ok(dcStockUnits.some(u => u.serial_number === 'SN-DC-002'), 'DC stock includes SN-DC-002');
+  assert.strictEqual(dcStockUnits.some(u => u.serial_number === 'SN-PPM-001'), false, 'DC stock strictly excludes APP PPM unit SN-PPM-001');
+  assert.strictEqual(dcStockUnits.some(u => u.serial_number === 'SN-PPM-002'), false, 'DC stock strictly excludes APP PPM unit SN-PPM-002');
+});
+
+// 17. SUPERADMIN SITE IDENTITY & YOUR BRANCH BADGE
+it('Multi-Site Stock Summary does NOT flag Superadmin as owning branch site (isOwnSite is false for Superadmin on APP PPM)', () => {
+  const superadminUser = { id: 'usr-superadmin-zhon', role: 'superadmin', siteId: 'site-dc' };
+  const pmgUserPpm = { id: 'usr-pmg-jose', role: 'parts_management', siteId: 'site-ppm', siteCode: 'APP PPM' };
+  const ppmSite = { id: 'site-ppm', code: 'APP PPM', name: 'Power Plant Mall' };
+
+  // Helper matching usePartsRequests getAllSitesStockSummary logic
+  const checkIsOwnSite = (user, site) => {
+    const isSuper = user?.role === 'superadmin';
+    const userSiteId = user?.siteId;
+    return !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
+  };
+
+  assert.strictEqual(checkIsOwnSite(superadminUser, ppmSite), false, 'Superadmin is not marked as isOwnSite for APP PPM');
+  assert.strictEqual(checkIsOwnSite(pmgUserPpm, ppmSite), true, 'PMG user at APP PPM is marked as isOwnSite for APP PPM');
+});
+
+// 18. SITE-BASED DELETE AND UPDATE AUTHORITY
+it('Site-based authority: PMG user has delete & update authority for own branch units while cross-branch unauthorized delete is blocked', () => {
+  const pmgUserPpm = { id: 'usr-pmg-jose', role: 'parts_management', siteId: 'site-ppm', siteCode: 'APP PPM' };
+  const pmgUserCebu = { id: 'usr-pmg-maria', role: 'parts_management', siteId: 'site-cebu', siteCode: 'AYALA CEBU' };
+  const superadminUser = { id: 'usr-superadmin-zhon', role: 'superadmin', siteId: 'site-dc' };
+
+  const ppmUnit = {
+    id: 'unit-ppm-01',
+    serial_number: 'SN-PPM-001',
+    part_number: '661-56050',
+    current_site_id: 'site-ppm',
+    site_code: 'APP PPM',
+    received_by_id: 'usr-pmg-jose',
+    received_by: 'Jose Rizal'
+  };
+
+  // Authority check simulation from canUserDeleteRecord
+  const canUserDelete = (record, user) => {
+    const userRole = String(user.role || '').toLowerCase();
+    if (userRole === 'superadmin' || userRole === 'admin') return true;
+    if (record.received_by_id === user.id) return true;
+    const userSite = user.siteId || user.siteCode;
+    const recordSite = record.current_site_id || record.site_code;
+    if (userSite && (userSite === recordSite || userSite === record.current_site_id || userSite === record.site_code)) return true;
+    return false;
+  };
+
+  assert.strictEqual(canUserDelete(ppmUnit, pmgUserPpm), true, 'PMG user at PPM can delete PPM unit');
+  assert.strictEqual(canUserDelete(ppmUnit, superadminUser), true, 'Superadmin can delete any unit');
+  assert.strictEqual(canUserDelete(ppmUnit, pmgUserCebu), false, 'PMG user at Cebu cannot delete PPM unit');
+});
+
+// 19. BULK IMPORT SITE ISOLATION
+it('File bulk import and batch receive strictly isolate existing serial checks to the target site (DC imports do not falsely flag PMG branch parts as Already in DC Stock)', () => {
+  const existingInventoryPool = [
+    { id: 'u-dc-1', serial_number: 'G9PDC001', part_number: '661-30461', current_site_id: 'site-dc', site_code: 'DC-MDC', status: 'in_stock' },
+    { id: 'u-ppm-1', serial_number: 'G9PPPM001', part_number: '661-56050', current_site_id: 'site-ppm', site_code: 'APP PPM', status: 'in_stock' }
+  ];
+
+  // Helper simulating parseScanInPartsFile site filtering logic
+  const checkSerialStatusForSite = (serial, targetSiteId, targetSiteCode, existingUnits) => {
+    const isDcTarget = targetSiteId === 'site-dc' || targetSiteCode === 'DC-MDC' || targetSiteCode === 'DC' || (!targetSiteId && !targetSiteCode);
+    const targetSiteUnits = existingUnits.filter(u => {
+      if (isDcTarget) {
+        return (u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code)) && (u.status === 'in_stock' || !u.status);
+      }
+      return (u.current_site_id === targetSiteId || u.site_code === targetSiteCode) && (u.status === 'in_stock' || !u.status);
+    });
+    const siteSerialsSet = new Set(targetSiteUnits.map(u => String(u.serial_number || '').trim().toUpperCase()));
+    if (siteSerialsSet.has(serial)) {
+      return {
+        status: 'EXISTING_INVENTORY',
+        statusMessage: isDcTarget ? 'Already in DC Stock (Will re-sync/update details)' : 'Already in Branch Stock (Will re-sync/update details)'
+      };
+    }
+    return {
+      status: 'VALID',
+      statusMessage: 'Ready to Import'
+    };
+  };
+
+  // Case A: Superadmin receiving into DC uploads G9PPPM001 (which exists only at PPM branch)
+  const dcCheck = checkSerialStatusForSite('G9PPPM001', 'site-dc', 'DC-MDC', existingInventoryPool);
+  assert.strictEqual(dcCheck.status, 'VALID', 'Branch serial G9PPPM001 is VALID (Ready to Import) for DC, NOT falsely flagged as Already in DC Stock');
+
+  // Case B: Superadmin receiving into DC uploads G9PDC001 (which exists at DC)
+  const dcExistingCheck = checkSerialStatusForSite('G9PDC001', 'site-dc', 'DC-MDC', existingInventoryPool);
+  assert.strictEqual(dcExistingCheck.status, 'EXISTING_INVENTORY');
+  assert.strictEqual(dcExistingCheck.statusMessage, 'Already in DC Stock (Will re-sync/update details)');
+
+  // Case C: PMG user receiving into PPM branch uploads G9PPPM001
+  const ppmExistingCheck = checkSerialStatusForSite('G9PPPM001', 'site-ppm', 'APP PPM', existingInventoryPool);
+  assert.strictEqual(ppmExistingCheck.status, 'EXISTING_INVENTORY');
+  assert.strictEqual(ppmExistingCheck.statusMessage, 'Already in Branch Stock (Will re-sync/update details)');
 });
 
 console.log('====================================================');

@@ -41,18 +41,25 @@ const PAGE_ICONS = {
 
 export default function CommandPalette({ isOpen, onClose }) {
   const {
+    currentUser,
     setActiveTab,
     canAccess,
     inventoryUnits,
     parts,
     setSelectedCategory,
     autoRefreshData,
-    showToast
+    showToast,
+    setPmgSubTab,
+    sites = []
   } = useApp();
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);
+
+  const userSiteObj = useMemo(() => {
+    return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || {};
+  }, [sites, currentUser?.siteId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -90,7 +97,7 @@ export default function CommandPalette({ isOpen, onClose }) {
     const q = query.trim().toLowerCase();
     const list = [];
 
-    // 1. Navigation Pages
+    // 1. Navigation Pages (Strictly filtered by canAccess)
     accessiblePages.forEach(p => {
       if (!q || p.label.toLowerCase().includes(q) || p.section.toLowerCase().includes(q) || p.id.includes(q)) {
         list.push({
@@ -107,88 +114,121 @@ export default function CommandPalette({ isOpen, onClose }) {
       }
     });
 
-    // 2. Quick Actions
-    const quickActions = [
-      {
+    // 2. Quick Actions (Strictly filtered by user permission)
+    const quickActions = [];
+
+    if (canAccess('scan-in')) {
+      quickActions.push({
         id: 'action-f1',
         title: 'Receive Scan-In Terminal (F1)',
         subtitle: 'Quick switch to inbound barcode receiving',
         icon: Barcode,
         keywords: 'receive scan barcode f1 inbound',
         action: () => {
-          if (canAccess('scan-in')) {
-            setActiveTab('scan-in');
-            handleClose();
-          } else {
-            showToast('Access restricted to Receive Scan-In', 'error');
-          }
+          setActiveTab('scan-in');
+          handleClose();
         }
-      },
-      {
+      });
+    }
+
+    if (canAccess('scan-out')) {
+      quickActions.push({
         id: 'action-f2',
         title: 'Pack Scan-Out Terminal (F2)',
         subtitle: 'Quick switch to outbound branch packing list generator',
         icon: PackageCheck,
         keywords: 'pack scan out packing box shipment f2',
         action: () => {
-          if (canAccess('scan-out')) {
-            setActiveTab('scan-out');
-            handleClose();
-          } else {
-            showToast('Access restricted to Pack Scan-Out', 'error');
-          }
-        }
-      },
-      {
-        id: 'action-sync',
-        title: 'Synchronize Cloud Database',
-        subtitle: 'Force verify and refresh all operational tables from Supabase',
-        icon: Database,
-        keywords: 'sync refresh database reload cloud',
-        action: () => {
-          if (autoRefreshData) {
-            autoRefreshData({ force: true, silent: false, reason: 'Command palette sync' });
-          }
+          setActiveTab('scan-out');
           handleClose();
         }
-      },
-      {
-        id: 'action-cat-all',
-        title: 'Filter: All Categories',
-        subtitle: 'Show all parts (Batteries, Displays, Cameras, Back Glass)',
-        icon: Sparkles,
-        keywords: 'filter category all reset',
+      });
+    }
+
+    if (canAccess('request-parts')) {
+      quickActions.push({
+        id: 'action-request-new',
+        title: 'Submit New Part Request',
+        subtitle: 'Create a parts replenishment request for DC Superadmin',
+        icon: Package,
+        keywords: 'request part new replenishment order demand',
         action: () => {
-          setSelectedCategory('ALL');
-          showToast('Category filter set to All', 'info');
+          setActiveTab('request-parts');
+          if (setPmgSubTab) setPmgSubTab('requests_table');
+          setTimeout(() => window.dispatchEvent(new CustomEvent('mdc:open-request-form')), 50);
           handleClose();
         }
-      },
-      {
-        id: 'action-cat-disp',
-        title: 'Filter: Displays Only',
-        subtitle: 'Filter workspace to iPhone Screen / Display assemblies',
-        icon: Sparkles,
-        keywords: 'filter category display screen',
+      });
+
+      quickActions.push({
+        id: 'action-mark-used',
+        title: 'Mark Part as Used / Consumed',
+        subtitle: 'Record consumed repair part for work order',
+        icon: Barcode,
+        keywords: 'mark used consume repair work order parts consumption',
         action: () => {
-          setSelectedCategory('DISPLAY');
-          showToast('Category filter set to Displays', 'info');
+          setActiveTab('request-parts');
+          if (setPmgSubTab) setPmgSubTab('usage_history');
+          setTimeout(() => window.dispatchEvent(new CustomEvent('mdc:open-mark-used')), 50);
           handleClose();
         }
-      },
-      {
-        id: 'action-cat-batt',
-        title: 'Filter: Batteries Only',
-        subtitle: 'Filter workspace to iPhone Battery modules',
-        icon: Sparkles,
-        keywords: 'filter category battery',
-        action: () => {
-          setSelectedCategory('BATTERY');
-          showToast('Category filter set to Batteries', 'info');
-          handleClose();
+      });
+    }
+
+    quickActions.push({
+      id: 'action-sync',
+      title: 'Synchronize Cloud Database',
+      subtitle: 'Force verify and refresh all operational tables from Supabase',
+      icon: Database,
+      keywords: 'sync refresh database reload cloud',
+      action: () => {
+        if (autoRefreshData) {
+          autoRefreshData({ force: true, silent: false, reason: 'Command palette sync' });
         }
+        handleClose();
       }
-    ];
+    });
+
+    if (canAccess('forecast') || canAccess('allocation') || canAccess('dashboard')) {
+      quickActions.push(
+        {
+          id: 'action-cat-all',
+          title: 'Filter: All Categories',
+          subtitle: 'Show all parts (Batteries, Displays, Cameras, Back Glass)',
+          icon: Sparkles,
+          keywords: 'filter category all reset',
+          action: () => {
+            setSelectedCategory('ALL');
+            showToast('Category filter set to All', 'info');
+            handleClose();
+          }
+        },
+        {
+          id: 'action-cat-disp',
+          title: 'Filter: Displays Only',
+          subtitle: 'Filter workspace to iPhone Screen / Display assemblies',
+          icon: Sparkles,
+          keywords: 'filter category display screen',
+          action: () => {
+            setSelectedCategory('DISPLAY');
+            showToast('Category filter set to Displays', 'info');
+            handleClose();
+          }
+        },
+        {
+          id: 'action-cat-batt',
+          title: 'Filter: Batteries Only',
+          subtitle: 'Filter workspace to iPhone Battery modules',
+          icon: Sparkles,
+          keywords: 'filter category battery',
+          action: () => {
+            setSelectedCategory('BATTERY');
+            showToast('Category filter set to Batteries', 'info');
+            handleClose();
+          }
+        }
+      );
+    }
 
     quickActions.forEach(act => {
       if (!q || act.title.toLowerCase().includes(q) || act.keywords.includes(q)) {
@@ -207,52 +247,82 @@ export default function CommandPalette({ isOpen, onClose }) {
     if (q) {
       const matchedParts = (parts || []).filter(p =>
         p.part_number?.toLowerCase().includes(q) ||
-        p.description?.toLowerCase().includes(q)
+        p.description?.toLowerCase().includes(q) ||
+        p.iphone_model?.toLowerCase().includes(q)
       ).slice(0, 4);
 
       matchedParts.forEach(p => {
+        const hasFinancialAccess = canAccess('settings') || canAccess('forecast') || canAccess('orders');
         list.push({
           type: 'part',
           id: `part-${p.id}`,
           title: `${p.part_number} — ${p.description}`,
-          subtitle: `Stocking: $${p.stocking_price || 0} • Exchange: $${p.exchange_price || 0}`,
+          subtitle: hasFinancialAccess
+            ? `Stocking: $${p.stocking_price || 0} • Exchange: $${p.exchange_price || 0}`
+            : `Apple Replacement Part • ${p.iphone_model || 'Hardware Module'}`,
           icon: Package,
           action: () => {
             if (canAccess('settings')) {
               setActiveTab('settings');
             } else if (canAccess('forecast')) {
               setActiveTab('forecast');
+            } else if (canAccess('request-parts')) {
+              setActiveTab('request-parts');
+              if (setPmgSubTab) setPmgSubTab('stock_on_hand');
+            } else if (canAccess('all-stocks')) {
+              setActiveTab('all-stocks');
             }
             handleClose();
           }
         });
       });
 
-      // 4. In-Stock Serial Number Search
-      const matchedUnits = (inventoryUnits || []).filter(u =>
-        u.serial_number?.toLowerCase().includes(q) ||
-        u.part_number?.toLowerCase().includes(q)
-      ).slice(0, 3);
+      // 4. In-Stock Serial Number Search (Strictly restricted to permitted site scope)
+      if (canAccess('audit') || canAccess('scan-in') || canAccess('all-stocks') || canAccess('intake-records') || canAccess('request-parts')) {
+        const isSuper = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
+        const userSiteId = currentUser?.siteId;
 
-      matchedUnits.forEach(u => {
-        list.push({
-          type: 'serial',
-          id: `serial-${u.id}`,
-          title: `Serial: ${u.serial_number}`,
-          subtitle: `${u.part_number} • ${u.description || 'Part'} (Status: ${u.status || 'in_stock'})`,
-          icon: Barcode,
-          action: () => {
-            if (canAccess('audit')) {
-              setActiveTab('audit');
-            }
-            handleClose();
-          }
+        const permittedUnits = (inventoryUnits || []).filter(u => {
+          if (isSuper) return true;
+          // Site-restricted staff only search their own branch units
+          const uSiteId = u.current_site_id || u.siteId;
+          const uSiteCode = u.site_code || u.siteCode;
+          return (uSiteId && (uSiteId === userSiteId || uSiteId === userSiteObj.code)) ||
+                 (uSiteCode && (uSiteCode === userSiteObj.code || uSiteCode === userSiteId));
         });
-      });
+
+        const matchedUnits = permittedUnits.filter(u =>
+          u.serial_number?.toLowerCase().includes(q) ||
+          u.part_number?.toLowerCase().includes(q)
+        ).slice(0, 3);
+
+        matchedUnits.forEach(u => {
+          list.push({
+            type: 'serial',
+            id: `serial-${u.id}`,
+            title: `Serial: ${u.serial_number}`,
+            subtitle: `${u.part_number} • ${u.description || 'Part'} (Status: ${u.status || 'in_stock'})`,
+            icon: Barcode,
+            action: () => {
+              if (canAccess('audit')) {
+                setActiveTab('audit');
+              } else if (canAccess('scan-in')) {
+                setActiveTab('scan-in');
+              } else if (canAccess('request-parts')) {
+                setActiveTab('request-parts');
+                if (setPmgSubTab) setPmgSubTab('stock_on_hand');
+              } else if (canAccess('all-stocks')) {
+                setActiveTab('all-stocks');
+              }
+              handleClose();
+            }
+          });
+        });
+      }
     }
 
     return list;
-  }, [query, accessiblePages, parts, inventoryUnits, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose]);
+  }, [query, accessiblePages, parts, inventoryUnits, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose, currentUser, userSiteObj, setPmgSubTab]);
 
   const handleInputKeyDown = (e) => {
     if (e.key === 'ArrowDown') {

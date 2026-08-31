@@ -9,7 +9,6 @@ import {
   Filter,
   RefreshCw,
   CheckCircle2,
-  XCircle,
   Clock,
   AlertTriangle,
   Flame,
@@ -18,28 +17,20 @@ import {
   Package,
   Boxes,
   FileSpreadsheet,
-  Trash2,
-  ChevronDown,
-  ChevronRight,
   TrendingDown,
   Calendar,
-  User,
   Check,
   X,
-  Sparkles,
   Info,
-  DollarSign,
-  Layers,
-  ArrowRight,
   Lock,
   Unlock,
-  Eye,
-  EyeOff,
   MessageSquare,
   Wrench,
   History,
   RotateCcw,
-  Zap
+  Zap,
+  Trash2,
+  Edit3
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -67,21 +58,26 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     getUsedUnitsLog,
     markUnitAsUsed,
     unmarkUnitAsUsed,
+    deleteScanInUnit,
+    updateUnitDetails,
     fetchPartsRequests,
     isLoadingPartsRequests,
     showToast,
     isAutoRefreshing,
-    autoRefreshData
+    autoRefreshData,
+    pmgSubTab,
+    setPmgSubTab
   } = useApp();
 
   const isSuperadmin = currentUser?.role === 'superadmin';
-  const isAdmin = currentUser?.role === 'admin';
-  const isFulfillment = ['superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff'].includes(currentUser?.role);
 
-  // User site resolution
+  // User site resolution (Superadmin is explicitly Central DC, not retail branches)
   const userSiteObj = useMemo(() => {
+    if (isSuperadmin || currentUser?.siteId === 'site-dc') {
+      return sites.find(s => s.id === 'site-dc' || s.code === 'DC-MDC' || s.code === 'DC') || { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center (DC)' };
+    }
     return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
-  }, [sites, currentUser?.siteId]);
+  }, [sites, currentUser?.siteId, isSuperadmin]);
 
   // Selected site filter
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
@@ -99,13 +95,45 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   }, [sites, selectedSiteId, userSiteObj]);
 
   // Active Sub-Tab: 'requests_table' | 'stock_on_hand' | 'all_stocks' | 'usage_history'
-  const [activeTab, setActiveTab] = useState(defaultTab);
+  const [activeTab, setActiveTab] = useState(pmgSubTab || defaultTab);
 
   useEffect(() => {
-    if (defaultTab) {
+    if (pmgSubTab) {
+      setActiveTab(pmgSubTab);
+    } else if (defaultTab) {
       setActiveTab(defaultTab);
     }
-  }, [defaultTab]);
+  }, [pmgSubTab, defaultTab]);
+
+  const handleTabChange = (newTab) => {
+    setActiveTab(newTab);
+    if (setPmgSubTab) {
+      setPmgSubTab(newTab);
+    }
+  };
+
+  // Listen for quick action events triggered from PmgSidebar
+  useEffect(() => {
+    const handleOpenReq = () => {
+      setActiveTab('requests_table');
+      if (setPmgSubTab) setPmgSubTab('requests_table');
+      setIsFormOpen(true);
+    };
+
+    const handleOpenUsed = () => {
+      setActiveTab('usage_history');
+      if (setPmgSubTab) setPmgSubTab('usage_history');
+      setIsMarkUsedModalOpen(true);
+    };
+
+    window.addEventListener('mdc:open-request-form', handleOpenReq);
+    window.addEventListener('mdc:open-mark-used', handleOpenUsed);
+
+    return () => {
+      window.removeEventListener('mdc:open-request-form', handleOpenReq);
+      window.removeEventListener('mdc:open-mark-used', handleOpenUsed);
+    };
+  }, [setPmgSubTab]);
 
   // Form State for New Request
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -133,7 +161,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [stockSearchQuery, setStockSearchQuery] = useState('');
-  const [stockCategoryFilter, setStockCategoryFilter] = useState('ALL');
+  const [stockCategoryFilter, _setStockCategoryFilter] = useState('ALL');
 
   // Multi-Site All Stocks Tab State
   const [allStocksSiteFilter, setAllStocksSiteFilter] = useState('ALL');
@@ -145,6 +173,55 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [actionTargetStatus, setActionTargetStatus] = useState('');
   const [actionNotes, setActionNotes] = useState('');
   const [actionQtyFulfilled, setActionQtyFulfilled] = useState(1);
+
+  // Unit Delete & Edit Modal State (Branch & Multi-Site Parts Management)
+  const [unitToDelete, setUnitToDelete] = useState(null);
+  const [isDeletingUnit, setIsDeletingUnit] = useState(false);
+  const [unitToEdit, setUnitToEdit] = useState(null);
+  const [editBoxNumber, setEditBoxNumber] = useState(1);
+  const [editWorkOrder, setEditWorkOrder] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  const handleConfirmDeleteUnit = async () => {
+    if (!unitToDelete) return;
+    setIsDeletingUnit(true);
+    try {
+      const res = await deleteScanInUnit(unitToDelete);
+      if (res && res.success !== false) {
+        showToast(`Successfully deleted unit #${unitToDelete.serial_number || unitToDelete.serialNumber}`, 'success');
+        setUnitToDelete(null);
+      }
+    } finally {
+      setIsDeletingUnit(false);
+    }
+  };
+
+  const openEditUnitModal = (u) => {
+    setUnitToEdit(u);
+    setEditBoxNumber(u.box_number || u.boxNumber || 1);
+    setEditWorkOrder(u.work_order_number || '');
+    setEditNotes(u.notes || '');
+  };
+
+  const handleConfirmEditUnit = async (e) => {
+    if (e) e.preventDefault();
+    if (!unitToEdit) return;
+    setIsSubmittingEdit(true);
+    try {
+      const serial = unitToEdit.serial_number || unitToEdit.serialNumber;
+      const res = await updateUnitDetails(serial, {
+        box_number: parseInt(editBoxNumber, 10) || 1,
+        work_order_number: editWorkOrder,
+        notes: editNotes
+      });
+      if (res && res.success) {
+        setUnitToEdit(null);
+      }
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
 
   // Derive Stock On Hand for current site
   const siteStockData = useMemo(() => {
@@ -459,7 +536,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                           siteSummary.siteCode.toLowerCase().includes(q);
           if (!matches) return;
         }
-        const isUserSameSite = !!(
+        const isDc = isSuperadmin || currentUser?.siteId === 'site-dc' || userSiteObj?.code === 'DC-MDC' || userSiteObj?.code === 'DC';
+        const isUserSameSite = !isDc && Boolean(
           currentUser?.siteId && (
             siteSummary.siteId === currentUser.siteId ||
             siteSummary.siteCode === currentUser.siteId ||
@@ -479,7 +557,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       });
     });
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [multiSiteStockData, allStocksSearchQuery, currentUser?.siteId, userSiteObj]);
+  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj]);
 
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
@@ -890,7 +968,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button
             className={`btn btn-sm ${activeTab === 'requests_table' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('requests_table')}
+            onClick={() => handleTabChange('requests_table')}
             style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
           >
             <Inbox size={15} />
@@ -898,7 +976,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           </button>
           <button
             className={`btn btn-sm ${activeTab === 'stock_on_hand' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('stock_on_hand')}
+            onClick={() => handleTabChange('stock_on_hand')}
             style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
           >
             <Package size={15} />
@@ -906,7 +984,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           </button>
           <button
             className={`btn btn-sm ${activeTab === 'all_stocks' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('all_stocks')}
+            onClick={() => handleTabChange('all_stocks')}
             style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
           >
             <Boxes size={15} />
@@ -914,7 +992,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           </button>
           <button
             className={`btn btn-sm ${activeTab === 'usage_history' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('usage_history')}
+            onClick={() => handleTabChange('usage_history')}
             style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
           >
             <TrendingDown size={15} />
@@ -1296,7 +1374,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </thead>
                 <tbody>
                   {stockRows.map(row => {
-                    const isUserSameSite = !!(
+                    const isDc = isSuperadmin || currentUser?.siteId === 'site-dc' || userSiteObj?.code === 'DC-MDC' || userSiteObj?.code === 'DC';
+                    const isUserSameSite = !isDc && Boolean(
                       currentUser?.siteId && (
                         selectedSiteId === currentUser.siteId ||
                         selectedSiteId === userSiteObj?.id ||
@@ -1539,7 +1618,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                               </div>
                             </div>
                           </div>
-                          {row.isOwnSite && (
+                          {row.isOwnSite && !isSuperadmin && (
                             <span className="badge" style={{ fontSize: '10px', background: '#e0f2fe', color: '#0284c7', marginTop: '3px' }}>
                               Your Branch
                             </span>
@@ -1594,12 +1673,47 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
                               {isExpanded && row.serializedUnits && (
                                 <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
-                                  {row.serializedUnits.map(u => (
-                                    <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid #e2e8f0' }}>
-                                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{u.serialNumber}</span>
-                                      <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
-                                    </div>
-                                  ))}
+                                  {row.serializedUnits.map(u => {
+                                    const canManageUnit = isSuperadmin || row.isOwnSite || row.isUserSameSite || (currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
+                                    return (
+                                      <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
+                                          <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
+                                          {u.work_order_number && (
+                                            <span style={{ color: '#0284c7', background: '#e0f2fe', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>
+                                              WO: {u.work_order_number}
+                                            </span>
+                                          )}
+                                          {u.notes && <span style={{ color: '#64748b', fontStyle: 'italic' }}>({u.notes})</span>}
+                                        </div>
+                                        {canManageUnit && !u.isMasked && (
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              style={{ padding: '2px 6px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                              onClick={() => openEditUnitModal(u)}
+                                              title="Update box number or work order notes"
+                                            >
+                                              <Edit3 size={11} />
+                                              <span>Edit</span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-sm"
+                                              style={{ padding: '2px 6px', fontSize: '10.5px', color: '#ef4444', borderColor: '#fca5a5', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                              onClick={() => setUnitToDelete(u)}
+                                              title="Delete unit from this branch"
+                                            >
+                                              <Trash2 size={11} />
+                                              <span>Delete</span>
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -2259,6 +2373,164 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 >
                   <Check size={14} />
                   <span>{isSubmittingMarkUsed ? 'Recording...' : 'Confirm Part Used'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Delete Confirmation Modal for Branch Unit */}
+      {unitToDelete && (
+        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+          <div className="modal-content" style={{ maxWidth: '440px' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Trash2 size={18} color="#ef4444" />
+                <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>Delete Stock Unit</h3>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setUnitToDelete(null)}
+                disabled={isDeletingUnit}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ padding: '16px 0' }}>
+              <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#334155', lineHeight: 1.5 }}>
+                Are you sure you want to delete this part unit from branch stock? This action cannot be undone.
+              </p>
+
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '10px 12px', fontSize: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ color: '#64748b' }}>Serial Number:</span>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{unitToDelete.serial_number || unitToDelete.serialNumber}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ color: '#64748b' }}>Part Number:</span>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{unitToDelete.part_number || unitToDelete.partNumber}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#64748b' }}>Branch / Location:</span>
+                  <span style={{ fontWeight: 600 }}>{unitToDelete.site_code || unitToDelete.siteCode || 'Branch'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setUnitToDelete(null)}
+                disabled={isDeletingUnit}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ background: '#ef4444', borderColor: '#ef4444', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                onClick={handleConfirmDeleteUnit}
+                disabled={isDeletingUnit}
+              >
+                <Trash2 size={14} />
+                <span>{isDeletingUnit ? 'Deleting...' : 'Delete Unit'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Edit Unit Details Modal */}
+      {unitToEdit && (
+        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Edit3 size={18} color="#0284c7" />
+                <h3 style={{ margin: 0, fontSize: '16px', color: '#0f172a' }}>Edit Stock Unit Details</h3>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setUnitToEdit(null)}
+                disabled={isSubmittingEdit}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmEditUnit} style={{ padding: '16px 0 0' }}>
+              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', marginBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ color: '#0369a1' }}>Serial Number:</span>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{unitToEdit.serial_number || unitToEdit.serialNumber}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#0369a1' }}>Part Number:</span>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{unitToEdit.part_number || unitToEdit.partNumber}</strong>
+                </div>
+              </div>
+
+              {/* Box Number */}
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label className="form-label">Box / Bin Number</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="999"
+                  className="form-input"
+                  value={editBoxNumber}
+                  onChange={(e) => setEditBoxNumber(e.target.value)}
+                  required
+                />
+              </div>
+
+              {/* Repair Work Order Reference */}
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label className="form-label">Repair Work Order / GSX Reference #</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. WO-2026-9041"
+                  value={editWorkOrder}
+                  onChange={(e) => setEditWorkOrder(e.target.value)}
+                />
+              </div>
+
+              {/* Usage / Branch Notes */}
+              <div className="form-group" style={{ marginBottom: '18px' }}>
+                <label className="form-label">Unit Notes / Storage Location</label>
+                <textarea
+                  className="form-input"
+                  rows="2"
+                  placeholder="e.g. Assigned to Bay 2, awaiting customer pickup"
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setUnitToEdit(null)}
+                  disabled={isSubmittingEdit}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: '#0284c7', borderColor: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                  disabled={isSubmittingEdit}
+                >
+                  <Check size={14} />
+                  <span>{isSubmittingEdit ? 'Saving...' : 'Save Changes'}</span>
                 </button>
               </div>
             </form>

@@ -1583,14 +1583,394 @@
 }
 
 /* ==========================================================
-   Master Allocation Matrix & Weekly Batches Grid Styles
-/* ==========================================================
    MASTER ALLOCATION MATRIX STYLING & SPREADSHEET LAYOUT
    ========================================================== */
+
+/* Allocation Matrix Container Card */
+.allocation-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.matrix-header-card {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+}
+
+/* Header Top Section */
+.matrix-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.matrix-header-title-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.matrix-header-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  color: #0284c7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.15);
+  flex-shrink: 0;
+}
+
+.matrix-header-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.matrix-header-subtitle {
+  font-size: 12.5px;
+  color: #64748b;
+  margin: 4px 0 0 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.matrix-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Secondary Action Toolbar */
+.matrix-toolbar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.matrix-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.matrix-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Model Selector Pill */
+.matrix-model-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.matrix-model-selector:hover {
+  border-color: #94a3b8;
+  background: #ffffff;
+}
+
+.matrix-model-select {
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0284c7;
+  outline: none;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+/* Action Button Group */
+.matrix-btn-group {
+  display: inline-flex;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.matrix-btn-group .btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+
+.matrix-btn-group .btn:first-child {
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  margin-left: 0;
+}
+
+.matrix-btn-group .btn:last-child {
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+/* Modern Segmented Navigation Tabs */
+.matrix-segmented-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.matrix-segmented-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #64748b;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.matrix-segmented-tab:hover:not(.active) {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.matrix-segmented-tab.active {
+  background: #ffffff;
+  color: #0284c7;
+  border-color: #e2e8f0;
+  box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.08), 0 1px 4px -1px rgba(0, 0, 0, 0.04);
+  font-weight: 700;
+}
+
+.matrix-tab-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  transition: all 0.18s ease;
+}
+
+.matrix-segmented-tab.active .matrix-tab-badge {
+  background: #e0f2fe;
+  color: #0284c7;
+}
+
+/* Quick Search & Filter Toolbar */
+.matrix-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+}
+
+.matrix-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 280px;
+  max-width: 100%;
+}
+
+.matrix-search-icon {
+  position: absolute;
+  left: 10px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.matrix-search-input {
+  width: 100%;
+  padding: 6px 30px 6px 32px;
+  font-size: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f172a;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.matrix-search-input:focus {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.15);
+}
+
+.matrix-search-clear {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.matrix-search-clear:hover {
+  color: #475569;
+}
+
+.matrix-category-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.matrix-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.matrix-chip-btn:hover {
+  border-color: #cbd5e1;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.matrix-chip-btn.active {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.matrix-chip-count {
+  font-size: 10.5px;
+  padding: 0px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.matrix-chip-btn.active .matrix-chip-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+/* KPI Summary Cards */
+.matrix-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.matrix-kpi-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+}
+
+.matrix-kpi-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 8px -2px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.matrix-kpi-icon-wrap {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.matrix-kpi-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.matrix-kpi-label {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.matrix-kpi-val {
+  font-size: 21px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+  margin-top: 2px;
+}
+
+.matrix-kpi-sub {
+  font-size: 11.5px;
+  color: #64748b;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Allocation Matrix Spreadsheet Table Container */
 .allocation-matrix-container {
   width: 100%;
-  max-height: calc(100vh - 240px);
-  min-height: 540px;
+  max-height: calc(100vh - 280px);
+  min-height: 520px;
   overflow-x: auto;
   overflow-y: auto;
   position: relative;
@@ -1610,7 +1990,7 @@
 }
 
 .matrix-table th {
-  padding: 9px 6px;
+  padding: 8px 6px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -1620,7 +2000,7 @@
 }
 
 .matrix-table td {
-  padding: 5px 6px;
+  padding: 4px 6px;
   border-bottom: 1px solid #e2e8f0;
   border-right: 1px solid #f1f5f9;
   color: var(--text-main);
@@ -1636,14 +2016,14 @@
   position: sticky;
   left: 0;
   z-index: 8;
-  width: 80px;
-  min-width: 80px;
-  max-width: 80px;
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
 }
 
 .matrix-col-sticky-2 {
   position: sticky;
-  left: 80px;
+  left: 78px;
   z-index: 8;
   width: 95px;
   min-width: 95px;
@@ -1652,11 +2032,11 @@
 
 .matrix-col-sticky-3 {
   position: sticky;
-  left: 175px;
+  left: 173px;
   z-index: 8;
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
+  width: 225px;
+  min-width: 225px;
+  max-width: 225px;
   border-right: 2px solid #cbd5e1 !important;
   box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.1);
 }
@@ -1669,14 +2049,14 @@
   z-index: 35;
   background: #0f172a !important;
   color: #f8fafc;
-  width: 80px;
-  min-width: 80px;
+  width: 78px;
+  min-width: 78px;
 }
 
 .matrix-th-sticky-2 {
   position: sticky;
   top: 0;
-  left: 80px;
+  left: 78px;
   z-index: 35;
   background: #0f172a !important;
   color: #f8fafc;
@@ -1687,12 +2067,12 @@
 .matrix-th-sticky-3 {
   position: sticky;
   top: 0;
-  left: 175px;
+  left: 173px;
   z-index: 35;
   background: #0f172a !important;
   color: #f8fafc;
-  width: 220px;
-  min-width: 220px;
+  width: 225px;
+  min-width: 225px;
   border-right: 2px solid #475569 !important;
   box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.3);
 }
@@ -1758,35 +2138,6 @@
   background: #ffffff;
 }
 
-/* KPI Summary Card on Allocation Matrix */
-.matrix-kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-  margin-top: 16px;
-}
-
-.matrix-kpi-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: var(--radius-md);
-  padding: 14px 18px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
-}
-
-.matrix-kpi-icon-wrap {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
 /* Commodity Category Header Band */
 .matrix-category-header {
   background: #f1f5f9;
@@ -1795,9 +2146,9 @@
 }
 
 .matrix-category-header td {
-  padding: 8px 14px !important;
+  padding: 7px 12px !important;
   font-weight: 700;
-  font-size: 12.5px;
+  font-size: 12px;
   color: #0f172a;
   letter-spacing: 0.03em;
   background: #f1f5f9 !important;
@@ -1805,21 +2156,21 @@
 
 /* Subtotal Row Helpers */
 .matrix-subtotal-td {
-  padding: 7px 6px !important;
+  padding: 6px 6px !important;
   font-weight: 700 !important;
 }
 
 /* Table Footer - Sticky Bottom Styling */
 .matrix-footer-row-1 td {
   position: sticky;
-  bottom: 34px;
+  bottom: 33px;
   background: #0f172a !important;
   color: #ffffff;
   font-weight: 700;
   z-index: 20;
   border-top: 2px solid #38bdf8;
   border-bottom: 1px solid #1e293b;
-  padding: 8px 6px;
+  padding: 7px 6px;
 }
 
 .matrix-footer-row-2 td {
@@ -1831,20 +2182,20 @@
   font-size: 11px;
   z-index: 20;
   border-bottom: none;
-  padding: 7px 6px;
+  padding: 6px 6px;
 }
 
 .matrix-footer-sticky-1 {
   position: sticky;
   left: 0;
   z-index: 35 !important;
-  width: 80px;
-  min-width: 80px;
+  width: 78px;
+  min-width: 78px;
 }
 
 .matrix-footer-sticky-2 {
   position: sticky;
-  left: 80px;
+  left: 78px;
   z-index: 35 !important;
   width: 95px;
   min-width: 95px;
@@ -1852,10 +2203,10 @@
 
 .matrix-footer-sticky-3 {
   position: sticky;
-  left: 175px;
+  left: 173px;
   z-index: 35 !important;
-  width: 220px;
-  min-width: 220px;
+  width: 225px;
+  min-width: 225px;
   border-right: 2px solid #475569 !important;
   box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.3);
 }
@@ -2125,5 +2476,248 @@
   background: rgba(51, 65, 85, 0.75);
   color: #38bdf8;
   border-color: rgba(56, 189, 248, 0.3);
+}
+
+/* ==========================================================================
+   PMG (Parts Management Specialist) Dedicated Sidebar & Layout Styles
+   ========================================================================== */
+.pmg-sidebar {
+  background: linear-gradient(180deg, #090e1a 0%, #0c1527 50%, #060913 100%);
+  display: flex;
+  flex-direction: column;
+}
+
+.pmg-role-badge {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+
+/* Active Branch Identity Card */
+.pmg-branch-card {
+  margin: 10px 14px 6px;
+  padding: 10px 12px;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.pmg-branch-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pmg-branch-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(2, 132, 199, 0.2);
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pmg-branch-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.pmg-branch-code {
+  font-size: 12px;
+  font-weight: 800;
+  color: #f8fafc;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+
+.pmg-branch-name {
+  font-size: 10.5px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pmg-branch-badge-row {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pmg-aasp-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  letter-spacing: 0.02em;
+}
+
+/* Branch Live Telemetry Widget */
+.pmg-telemetry-widget {
+  margin: 6px 14px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.pmg-telemetry-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.pmg-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+  display: inline-block;
+}
+
+.pmg-telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.pmg-telemetry-stat {
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 6px 4px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pmg-telemetry-stat:hover {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: rgba(56, 189, 248, 0.3);
+  transform: translateY(-1px);
+}
+
+.pmg-stat-num {
+  font-size: 15px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+
+.pmg-stat-label {
+  font-size: 9.5px;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+/* PMG Quick Actions in Sidebar */
+.pmg-quick-actions {
+  margin: 6px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pmg-action-primary-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
+  transition: all 0.15s ease;
+}
+
+.pmg-action-primary-btn:hover {
+  background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
+  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.5);
+  transform: translateY(-1px);
+}
+
+.pmg-action-secondary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.pmg-action-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 6px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pmg-action-chip:hover {
+  background: rgba(51, 65, 85, 0.8);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+/* Branch Information Card */
+.pmg-info-card {
+  margin: auto 14px 10px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.pmg-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  margin-bottom: 4px;
+}
+
+.pmg-info-row:last-child {
+  margin-bottom: 0;
+}
+
+.pmg-info-label {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.pmg-info-val {
+  color: #cbd5e1;
+  font-weight: 600;
 }
 

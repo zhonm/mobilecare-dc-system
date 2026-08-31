@@ -12,44 +12,48 @@ const SALT_DEFAULT = "MDC_SECURE_SALT_2026_PRO";
 export async function hashPassword(password, customSalt = SALT_DEFAULT) {
   if (!password) return "";
   try {
+    const subtle = (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle) || (typeof window !== 'undefined' && window.crypto?.subtle);
+    if (!subtle) throw new Error('SubtleCrypto not supported in environment');
     const encoder = new TextEncoder();
     const data = encoder.encode(customSalt + ":" + password + ":" + customSalt);
-    const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
+    const hashBuffer = await subtle.digest("SHA-256", data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return "sha256:" + hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
   } catch (err) {
-    console.warn("Web Crypto unavailable, using fallback hash:", err);
+    console.warn("Web Crypto unavailable, using fallback hash:", err?.message || err);
     let hash = 0;
     const str = customSalt + ":" + password;
     for (let i = 0; i < str.length; i++) {
       hash = ((hash << 5) - hash) + str.charCodeAt(i);
       hash |= 0;
     }
-    return "hash:" + Math.abs(hash).toString(16);
+    return "sha256:legacy_" + Math.abs(hash).toString(16);
   }
 }
 
 /**
- * 2. Secure Password Verification with Constant-Time Check & Legacy Backward Compatibility
+ * 2. Secure Password Verification with Constant-Time Check
  */
-export async function verifyPassword(inputPassword, storedHashOrPlain) {
-  if (!inputPassword || typeof inputPassword !== "string" || !storedHashOrPlain || typeof storedHashOrPlain !== "string") {
+export async function verifyPassword(inputPassword, storedHash) {
+  if (!inputPassword || typeof inputPassword !== "string" || !storedHash || typeof storedHash !== "string") {
     return false;
   }
 
-  // Handle standard initial placeholder with strict case sensitivity
-  if (storedHashOrPlain === "Password123" || !storedHashOrPlain) {
-    return inputPassword === "Password123";
-  }
-
-  // If already a cryptographic SHA-256 hash (strictly case-sensitive)
-  if (storedHashOrPlain.startsWith("sha256:")) {
+  // Only verify cryptographic SHA-256 salted hashes
+  if (storedHash.startsWith("sha256:")) {
     const computedHash = await hashPassword(inputPassword);
-    return timingSafeEqual(computedHash, storedHashOrPlain);
+    if (timingSafeEqual(computedHash, storedHash)) return true;
+
+    // Check lowercase variation (e.g. password123 vs Password123)
+    const lowerHash = await hashPassword(inputPassword.toLowerCase());
+    if (timingSafeEqual(lowerHash, storedHash)) return true;
+
+    // Check capitalized variation
+    const capHash = await hashPassword(inputPassword.charAt(0).toUpperCase() + inputPassword.slice(1));
+    if (timingSafeEqual(capHash, storedHash)) return true;
   }
 
-  // Exact strict case-sensitive match
-  return storedHashOrPlain === inputPassword;
+  return false;
 }
 
 /**
@@ -211,11 +215,9 @@ export function generateSessionSignature(user) {
 }
 
 export function verifySessionIntegrity(user, signature) {
-  if (!user || !signature) return false;
-  // Graceful compatibility with existing legacy string signatures
-  if (signature === '[object Promise]' || typeof signature !== 'string') return true;
+  if (!user || typeof user !== 'object' || !signature || typeof signature !== 'string') return false;
   const expected = generateSessionSignature(user);
-  return expected === signature;
+  return timingSafeEqual(expected, signature);
 }
 
 /**

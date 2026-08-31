@@ -237,7 +237,10 @@ export function useCloudSync({
     if (!supabase) return false;
 
     try {
+      const isAuth = Boolean(currentUser?.id);
       const shouldFetch = (tbl) => {
+        // If unauthenticated, only public master catalog tables should be queried
+        if (!isAuth && !['parts', 'part_categories', 'sites'].includes(tbl)) return false;
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
       };
@@ -378,8 +381,8 @@ export function useCloudSync({
                   siteId: p.site_id || existing?.siteId || 'site-dc',
                   hasSetPassword: (p.has_set_password !== undefined && p.has_set_password !== null)
                     ? Boolean(p.has_set_password)
-                    : (existing?.hasSetPassword ?? (role === 'superadmin')),
-                  passwordHash: p.password_hash || existing?.passwordHash || (role === 'superadmin' ? 'Password123' : null),
+                    : (existing?.hasSetPassword ?? false),
+                  passwordHash: p.password_hash || existing?.passwordHash || null,
                   isActive: p.is_active ?? existing?.isActive ?? true,
                   permittedPages: role === 'superadmin'
                     ? ROLE_PRESETS.superadmin
@@ -417,7 +420,7 @@ export function useCloudSync({
                   updatedAt: new Date().toISOString()
                 },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
+              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
             }
           }
 
@@ -719,7 +722,7 @@ export function useCloudSync({
                   metadata: localSavedMeta
                 },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
+              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
             }
           } catch (e) {}
         }
@@ -799,17 +802,19 @@ export function useCloudSync({
             const shipmentRowsToInsert = effectiveShipments
               .map(s => formatShipmentForDb(s, dbSites || []))
               .filter(s => s && isUUID(s.site_id));
+            const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.id, r])).values());
 
-            if (shipmentRowsToInsert.length > 0) {
-              supabase.from('shipments').upsert(shipmentRowsToInsert, { onConflict: 'id' }).then(() => {
+            if (uniqueShipmentRows.length > 0) {
+              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'id' }).then(() => {
                 // Also backfill shipment_items
                 const allShipmentItemRows = [];
                 effectiveShipments.forEach(s => {
                   const itemRows = formatShipmentItemsForDb(s, dbUnits || [], dbParts || [], currentUser);
                   allShipmentItemRows.push(...itemRows);
                 });
-                if (allShipmentItemRows.length > 0) {
-                  supabase.from('shipment_items').upsert(allShipmentItemRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
+                const uniqueShipmentItemRows = Array.from(new Map(allShipmentItemRows.map(r => [r.id, r])).values());
+                if (uniqueShipmentItemRows.length > 0) {
+                  supabase.from('shipment_items').upsert(uniqueShipmentItemRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
                 }
               }).catch(() => {});
             }
@@ -931,8 +936,9 @@ export function useCloudSync({
             const rowsToInsert = effectiveIntakeRecords
               .map(r => formatDcIntakeRecordForDb(r))
               .filter(Boolean);
-            if (rowsToInsert.length > 0) {
-              supabase.from('dc_intake_records').upsert(rowsToInsert, { onConflict: 'id' }).then(() => {}).catch(() => {});
+            const uniqueIntakeRows = Array.from(new Map(rowsToInsert.map(r => [r.id, r])).values());
+            if (uniqueIntakeRows.length > 0) {
+              supabase.from('dc_intake_records').upsert(uniqueIntakeRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
             }
           }
 
@@ -1042,8 +1048,8 @@ export function useCloudSync({
                   ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
                   : (dbU.status || 'in_stock');
 
-                const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
-                const assign = cloudAssign || (dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
+                const assign = cloudAssign || (dbU.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
 
                 const siteJoined = dbU.sites || (dbSites || sites || []).find(s => s.id === dbU.current_site_id || s.code === dbU.current_site_id) || null;
                 const partJoined = dbU.parts || null;
@@ -1060,7 +1066,7 @@ export function useCloudSync({
                   stocking_price: partJoined?.stocking_price || partObj?.stocking_price || dbU.stocking_price || 99,
                   serial_number: cleanSerial,
                   intake_assignment: assign,
-                  notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
+                  notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('SVNR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
                   current_site_id: siteJoined?.id || dbU.current_site_id || 'site-dc',
                   site_code: siteJoined?.code || dbU.site_code || 'DC-MDC',
                   site_name: siteJoined?.name || null,
@@ -1196,7 +1202,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, broadcastCloudEvent, currentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, currentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1451,15 +1457,17 @@ export function useCloudSync({
                 });
               }
             } else if (['DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(ev.data.type)) {
-              clearOperationalLocalStorage({
-                keepSession: true,
-                preservePeriod: ev.data.payload?.period || null
-              });
-              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              if (ev.data.type === 'MASTER_DATA_CLEARED') {
+                clearOperationalLocalStorage({
+                  keepSession: true,
+                  preservePeriod: ev.data.payload?.period || null
+                });
+                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              }
               if (ev.data.payload?.period && setActivePeriod) {
                 setActivePeriod(ev.data.payload.period);
               }
-              autoRefreshData({ force: true, silent: true, isManual: true, reason: `Local Broadcast [${ev.data.type}]` });
+              autoRefreshData({ force: false, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
               if (Date.now() - lastLocalTime >= 3000) {
@@ -1528,15 +1536,17 @@ export function useCloudSync({
                 });
               }
             } else if (['MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED'].includes(bType)) {
-              clearOperationalLocalStorage({
-                keepSession: true,
-                preservePeriod: bPayload?.period || null
-              });
-              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              if (bType === 'MASTER_DATA_CLEARED') {
+                clearOperationalLocalStorage({
+                  keepSession: true,
+                  preservePeriod: bPayload?.period || null
+                });
+                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              }
               if (bPayload?.period && setActivePeriod) {
                 setActivePeriod(bPayload.period);
               }
-              autoRefreshData({ force: true, silent: true, isManual: true, reason: `WebSocket Broadcast [${bType}]` });
+              autoRefreshData({ force: false, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
             }
             triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });
@@ -1745,6 +1755,7 @@ export function useCloudSync({
           saved_by_user_id: null,
           notes: 'Real-time multi-user synchronized Distribution Center state',
           snapshot_data: {
+            isCleared: false,
             activePeriod: resolvedActivePeriod,
             forecastingModel: _forecastingModel || 'linear',
             forecastItems: currentForecast || [],
@@ -1804,8 +1815,11 @@ export function useCloudSync({
             has_imei: c.has_imei || false,
             is_serialized: c.is_serialized ?? true,
             sort_order: c.sort_order || i + 1
-          }));
-          await supabase.from('part_categories').upsert(catRows, { onConflict: 'code' });
+          })).filter(c => c.code);
+          const uniqueCatRows = Array.from(new Map(catRows.map(r => [r.code.trim().toUpperCase(), r])).values());
+          if (uniqueCatRows.length > 0) {
+            await supabase.from('part_categories').upsert(uniqueCatRows, { onConflict: 'code' });
+          }
         } catch (e) {}
       }
 
@@ -1820,8 +1834,11 @@ export function useCloudSync({
             contact_phone: s.contact_phone || '',
             is_dc: s.is_dc || false,
             is_active: s.is_active ?? true
-          }));
-          await supabase.from('sites').upsert(siteRows, { onConflict: 'code' });
+          })).filter(s => s.code);
+          const uniqueSiteRows = Array.from(new Map(siteRows.map(r => [r.code.trim().toUpperCase(), r])).values());
+          if (uniqueSiteRows.length > 0) {
+            await supabase.from('sites').upsert(uniqueSiteRows, { onConflict: 'code' });
+          }
         } catch (e) {}
       }
 
@@ -1842,8 +1859,11 @@ export function useCloudSync({
               is_active: p.is_active ?? true,
               ...(catId ? { category_id: catId } : {})
             };
-          });
-          await supabase.from('parts').upsert(partRows, { onConflict: 'part_number' });
+          }).filter(p => p.part_number);
+          const uniquePartRows = Array.from(new Map(partRows.map(r => [r.part_number.trim().toUpperCase(), r])).values());
+          if (uniquePartRows.length > 0) {
+            await supabase.from('parts').upsert(uniquePartRows, { onConflict: 'part_number' });
+          }
         } catch (e) {}
       }
 

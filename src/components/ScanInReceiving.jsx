@@ -32,7 +32,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
-import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
+import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 
@@ -56,7 +56,6 @@ export default function ScanInReceiving() {
     sites = []
   } = useApp();
 
-  const isSuperadmin = currentUser?.role === 'superadmin';
   const isPmgUser = currentUser?.role === 'parts_management';
   const isFulfillment = ['superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff'].includes(currentUser?.role);
 
@@ -64,16 +63,16 @@ export default function ScanInReceiving() {
     return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
   }, [sites, currentUser?.siteId]);
 
-  const [receivingSiteId, setReceivingSiteId] = useState(() => {
-    if (!isFulfillment && currentUser?.siteId) {
-      return currentUser.siteId;
-    }
-    return currentUser?.siteId || sites[0]?.id || 'site-dc';
-  });
+  const dcSiteObj = useMemo(() => {
+    return sites.find(s => s.is_dc || s.code === 'DC-MDC' || s.code === 'DC') || { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center' };
+  }, [sites]);
 
   const activeReceivingSite = useMemo(() => {
-    return sites.find(s => s.id === receivingSiteId || s.code === receivingSiteId) || userSiteObj;
-  }, [sites, receivingSiteId, userSiteObj]);
+    if (isPmgUser) return userSiteObj;
+    return dcSiteObj;
+  }, [isPmgUser, userSiteObj, dcSiteObj]);
+
+  const isProvincial = useMemo(() => isProvincialSite(activeReceivingSite), [activeReceivingSite]);
 
   const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
   const [partNumberInput, setPartNumberInput] = useState('');
@@ -102,7 +101,7 @@ export default function ScanInReceiving() {
     });
   };
 
-  // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR'
+  // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR' | 'SVNR - Service Non-Repair'
   const [intakeAssignment, setIntakeAssignment] = useState(() => {
     try {
       return localStorage.getItem('mdc_intake_assignment') || 'DC - CRBR';
@@ -228,8 +227,10 @@ export default function ScanInReceiving() {
   }, [partNumberInput, parts]);
 
   // Fast lookup map for any serial number already present in the system (Session, Inventory, Batch Archives, Shipments)
+  // Fast lookup map for serial numbers already present in the active site (Session, Inventory, Batch Archives)
   const systemSerialsMap = useMemo(() => {
     const map = new Map();
+    const isDcMode = activeReceivingSite.id === 'site-dc' || activeReceivingSite.code === 'DC-MDC' || activeReceivingSite.code === 'DC';
 
     // 1. Current Session Scans (highest priority / most immediate)
     (sessionScans || []).forEach((u, idx) => {
@@ -239,68 +240,74 @@ export default function ScanInReceiving() {
           serial_number: s,
           part_number: u.part_number,
           description: u.description || 'Genuine Apple Part',
-          assignment: u.intake_assignment || u.notes || 'MDC - Forecasting',
+          assignment: u.intake_assignment || u.notes || 'Received Stock',
           received_at: u.received_at || new Date().toISOString(),
           location: `Current Session (Item #${idx + 1})`
         });
       }
     });
 
-    // 2. DC Inventory Units
+    // 2. Active Site Inventory Units (Strict Site Isolation)
     (inventoryUnits || []).forEach(u => {
+      const unitIsDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      const isSiteMatch = isDcMode ? unitIsDc : (u.current_site_id === activeReceivingSite.id || u.site_code === activeReceivingSite.code);
+      if (!isSiteMatch) return; // Completely ignore other sites to avoid false cross-site conflicts
+
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && !map.has(s)) {
         map.set(s, {
           serial_number: s,
           part_number: u.part_number,
           description: u.description || 'Genuine Apple Part',
-          assignment: u.intake_assignment || u.notes || 'DC Warehouse Stock',
+          assignment: u.intake_assignment || u.notes || (isDcMode ? 'DC Warehouse Stock' : `${activeReceivingSite.code} Stock`),
           received_at: u.received_at || u.created_at,
-          location: u.status === 'packed' || u.status === 'shipped' ? 'Packed in Outbound Shipment' : 'DC Inventory Stock'
+          location: u.status === 'packed' || u.status === 'shipped' ? 'Packed in Outbound Shipment' : (isDcMode ? 'DC Inventory Stock' : `${activeReceivingSite.code} Stock`)
         });
       }
     });
 
-    // 3. DC Intake Batch Records (Historical Batches)
-    (dcIntakeRecords || []).forEach(rec => {
-      if (Array.isArray(rec.items)) {
-        rec.items.forEach(u => {
-          const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
-          if (s && !map.has(s)) {
-            map.set(s, {
-              serial_number: s,
-              part_number: u.part_number || u.partNumber,
-              description: u.description || 'Genuine Apple Part',
-              assignment: u.intake_assignment || rec.record_name || 'Historical Intake Batch',
-              received_at: u.received_at || rec.intake_date,
-              location: `Intake Batch "${rec.record_name || rec.id}"`
-            });
-          }
-        });
-      }
-    });
+    // 3. Historical Batch Records (Only relevant in DC mode)
+    if (isDcMode) {
+      (dcIntakeRecords || []).forEach(rec => {
+        if (Array.isArray(rec.items)) {
+          rec.items.forEach(u => {
+            const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
+            if (s && !map.has(s)) {
+              map.set(s, {
+                serial_number: s,
+                part_number: u.part_number || u.partNumber,
+                description: u.description || 'Genuine Apple Part',
+                assignment: u.intake_assignment || rec.record_name || 'Historical Intake Batch',
+                received_at: u.received_at || rec.intake_date,
+                location: `Intake Batch "${rec.record_name || rec.id}"`
+              });
+            }
+          });
+        }
+      });
 
-    // 4. Shipments / Packing Lists
-    (shipments || []).forEach(sh => {
-      if (Array.isArray(sh.items)) {
-        sh.items.forEach(u => {
-          const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
-          if (s && !map.has(s)) {
-            map.set(s, {
-              serial_number: s,
-              part_number: u.part_number || u.partNumber,
-              description: u.description || 'Genuine Apple Part',
-              assignment: sh.invoice_ref || 'Outbound Packing List',
-              received_at: sh.shipment_date || sh.created_at,
-              location: `Packing List "${sh.invoice_ref || sh.shipment_number}"`
-            });
-          }
-        });
-      }
-    });
+      // 4. DC Shipments / Outbound Packing Lists
+      (shipments || []).forEach(sh => {
+        if (Array.isArray(sh.items)) {
+          sh.items.forEach(u => {
+            const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
+            if (s && !map.has(s)) {
+              map.set(s, {
+                serial_number: s,
+                part_number: u.part_number || u.partNumber,
+                description: u.description || 'Genuine Apple Part',
+                assignment: sh.invoice_ref || 'Outbound Packing List',
+                received_at: sh.shipment_date || sh.created_at,
+                location: `Packing List "${sh.invoice_ref || sh.shipment_number}"`
+              });
+            }
+          });
+        }
+      });
+    }
 
     return map;
-  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments]);
+  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments, activeReceivingSite]);
 
   // Check if current serial input is already scanned / present in the system
   const duplicateSerialMatch = useMemo(() => {
@@ -677,7 +684,14 @@ export default function ScanInReceiving() {
     if (!file) return;
     setIsParsing(true);
     try {
-      const res = await parseScanInPartsFile(file, parts, inventoryUnits, purchaseOrders);
+      const res = await parseScanInPartsFile(
+        file,
+        parts,
+        inventoryUnits,
+        purchaseOrders,
+        activeReceivingSite?.id,
+        activeReceivingSite?.code
+      );
       if (res.success) {
         setParsedBatch(res);
         showToast(`Parsed ${res.summary.total} rows (${res.summary.valid} ready to import)`, 'info');
@@ -755,7 +769,6 @@ export default function ScanInReceiving() {
         message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts into ${activeReceivingSite.name} database!`
       });
 
-      setActiveTableView('ALL_DC_STOCK');
       setParsedBatch(null);
       setIsImportModalOpen(false);
       pnInputRef.current?.focus();
@@ -796,23 +809,28 @@ export default function ScanInReceiving() {
     const raw = (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
-      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
+      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated' || u.status === 'deleted' || u.is_deleted) return false;
       if (u.status !== 'in_stock' && u.status) return false;
 
-      if (!isFulfillment || isPmgUser) {
+      const targetSiteId = activeReceivingSite?.id;
+      const targetSiteCode = activeReceivingSite?.code;
+
+      if (isPmgUser || (targetSiteCode && targetSiteCode !== 'DC-MDC' && targetSiteCode !== 'DC')) {
         const uSite = u.current_site_id || u.site_id || u.siteId;
         const uCode = u.site_code || u.siteCode;
-        const targetSiteId = activeReceivingSite?.id;
-        const targetSiteCode = activeReceivingSite?.code;
-        const userSiteId = currentUser?.siteId;
-
-        const isUserSite = (uSite && (uSite === targetSiteId || uSite === targetSiteCode || uSite === userSiteId)) ||
-                           (uCode && (uCode === targetSiteCode || uCode === targetSiteId)) ||
-                           (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id);
+        const isUserSite = (
+          uSite === targetSiteId ||
+          uSite === targetSiteCode ||
+          uCode === targetSiteCode ||
+          uCode === targetSiteId ||
+          u.added_by_user_id === currentUser?.id ||
+          u.received_by_id === currentUser?.id
+        );
         return isUserSite;
       }
 
-      return u.status === 'in_stock' || (!u.status && (u.current_site_id === 'site-dc' || !u.current_site_id));
+      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      return (u.status === 'in_stock' || !u.status) && isDc;
     });
     return normalizeInventoryUnits(raw, parts);
   }, [inventoryUnits, packedSerialsSet, parts, isFulfillment, isPmgUser, activeReceivingSite, currentUser]);
@@ -823,9 +841,11 @@ export default function ScanInReceiving() {
 
     // Assignment filter
     if (assignmentFilter === 'MDC - Forecasting') {
-      sourceList = sourceList.filter(u => !u.intake_assignment?.includes('CRBR') && !u.notes?.includes('CRBR'));
+      sourceList = sourceList.filter(u => !u.intake_assignment?.includes('CRBR') && !u.intake_assignment?.includes('SVNR') && !u.notes?.includes('CRBR') && !u.notes?.includes('SVNR'));
     } else if (assignmentFilter === 'DC - CRBR') {
       sourceList = sourceList.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR'));
+    } else if (assignmentFilter === 'SVNR - Service Non-Repair') {
+      sourceList = sourceList.filter(u => u.intake_assignment?.includes('SVNR') || u.notes?.includes('SVNR'));
     }
 
     if (!tableSearch.trim()) return sourceList;
@@ -888,12 +908,17 @@ export default function ScanInReceiving() {
   // Metric counts for assignment
   const forecastingCount = useMemo(() => {
     const list = availableInStockUnits || [];
-    return list.filter(u => !u.intake_assignment?.includes('CRBR') && !u.notes?.includes('CRBR')).length;
+    return list.filter(u => !u.intake_assignment?.includes('CRBR') && !u.intake_assignment?.includes('SVNR') && !u.notes?.includes('CRBR') && !u.notes?.includes('SVNR')).length;
   }, [availableInStockUnits]);
 
   const crbrCount = useMemo(() => {
     const list = availableInStockUnits || [];
     return list.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR')).length;
+  }, [availableInStockUnits]);
+
+  const svnrCount = useMemo(() => {
+    const list = availableInStockUnits || [];
+    return list.filter(u => u.intake_assignment?.includes('SVNR') || u.notes?.includes('SVNR')).length;
   }, [availableInStockUnits]);
 
   return (
@@ -912,32 +937,17 @@ export default function ScanInReceiving() {
             </p>
           </div>
 
-          {/* System Telemetry Badges */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <div
-              className="telemetry-badge"
-              style={{
-                background: cloudSyncStatus?.isSaving ? 'rgba(56, 189, 248, 0.15)' : 'rgba(16, 185, 129, 0.12)',
-                borderColor: cloudSyncStatus?.isSaving ? '#38bdf8' : 'rgba(16, 185, 129, 0.4)'
-              }}
-              title="Real-time Direct Database Sync (Auto-Save on every scan)"
-            >
-              {cloudSyncStatus?.isSaving ? (
-                <>
-                  <RefreshCw size={13} className="spin" color="#38bdf8" />
-                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>Saving to Cloud DB...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 size={13} color="#34d399" />
-                  <span style={{ color: '#34d399', fontWeight: 600 }}>Cloud Auto-Save: Active</span>
-                </>
-              )}
+            <div className="telemetry-badge" title="Cloud Database Realtime Active">
+              <span className={`status-indicator ${cloudSyncStatus.isSaving ? 'syncing' : 'online'}`} />
+              <span>{cloudSyncStatus.isSaving ? 'Saving to Cloud...' : 'Cloud Auto-Save: Active'}</span>
             </div>
 
-            <div className="telemetry-badge" title="Total active parts in DC stock inventory">
-              <Database size={14} color="#38bdf8" />
-              <span>DC Stock: <strong>{availableInStockUnits.length} units</strong></span>
+            <div className="telemetry-badge" title="Current In-Stock Inventory in DB">
+              <Database size={13} color="#38bdf8" />
+              <span>
+                <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'}
+              </span>
             </div>
 
             <div className="telemetry-badge" title="Hardware Scanner Connection Status">
@@ -949,52 +959,12 @@ export default function ScanInReceiving() {
 
         {/* Workstation Controls & Actions Toolbar */}
         <div className="workstation-controls-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          {/* Column 1: Receiving Destination Branch */}
-          <div>
-            <label className="workstation-col-label">
-              <Building2 size={13} color="#38bdf8" />
-              <span>1. Receiving Destination Site</span>
-            </label>
-            {isFulfillment ? (
-              <select
-                className="form-select"
-                style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
-                value={receivingSiteId}
-                onChange={(e) => setReceivingSiteId(e.target.value)}
-              >
-                {sites.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.code} - {s.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div
-                style={{
-                  width: '100%',
-                  background: '#0f172a',
-                  color: '#38bdf8',
-                  border: '1px solid #334155',
-                  borderRadius: 'var(--radius-sm)',
-                  height: '42px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '0 12px',
-                  fontSize: '12.5px',
-                  fontWeight: 700
-                }}
-              >
-                {activeReceivingSite.name} ({activeReceivingSite.code})
-              </div>
-            )}
-          </div>
-
-          {/* Column 2: PO Selector (DC Only) */}
+          {/* Column 1: PO Selector (DC Only) */}
           {!isPmgUser && (
             <div>
               <label className="workstation-col-label">
                 <Building2 size={13} color="#38bdf8" />
-                <span>2. Linked Purchase Order</span>
+                <span>1. Linked Purchase Order</span>
               </label>
               <select
                 className="form-select"
@@ -1012,12 +982,12 @@ export default function ScanInReceiving() {
             </div>
           )}
 
-          {/* Column 3: Part Assignment Classification (CRBR vs Forecasting) - DC Central Warehouse Only */}
+          {/* Column 2: Part Assignment Classification - Forecasting, CRBR, SVNR */}
           {!isPmgUser && (
             <div>
               <label className="workstation-col-label">
                 <Layers size={13} color="#38bdf8" />
-                <span>3. Part Assignment Category</span>
+                <span>2. Part Assignment Category</span>
               </label>
               <div style={{
                 display: 'flex',
@@ -1045,14 +1015,15 @@ export default function ScanInReceiving() {
                     color: intakeAssignment === 'MDC - Forecasting' ? '#fff' : '#94a3b8',
                     border: intakeAssignment === 'MDC - Forecasting' ? '1px solid #38bdf8' : 'none',
                     borderRadius: '4px',
-                    fontSize: '11.5px',
+                    fontSize: '11px',
                     fontWeight: intakeAssignment === 'MDC - Forecasting' ? 700 : 500,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: '4px',
-                    transition: 'all 0.15s'
+                    transition: 'all 0.15s',
+                    whiteSpace: 'nowrap'
                   }}
                   title="Designated for Monthly Forecasting & Branch Stock Allocation"
                 >
@@ -1074,22 +1045,57 @@ export default function ScanInReceiving() {
                     color: intakeAssignment === 'DC - CRBR' ? '#fff' : '#94a3b8',
                     border: intakeAssignment === 'DC - CRBR' ? '1px solid #f59e0b' : 'none',
                     borderRadius: '4px',
-                    fontSize: '11.5px',
+                    fontSize: '11px',
                     fontWeight: intakeAssignment === 'DC - CRBR' ? 700 : 500,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: '4px',
-                    transition: 'all 0.15s'
+                    transition: 'all 0.15s',
+                    whiteSpace: 'nowrap'
                   }}
-                  title="Designated for Customer Return / Repair Buffer Returns (CRBR) — Separate from Forecasting"
+                  title="Designated for Customer Return / Repair Buffer Returns (CRBR)"
                 >
                   <span>DC - CRBR</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = 'SVNR - Service Non-Repair';
+                    setIntakeAssignment(next);
+                    intakeAssignmentRef.current = next;
+                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                    showToast('Part assignment set to "SVNR - Service Non-Repair"', 'info');
+                  }}
+                  style={{
+                    flex: 1,
+                    height: '32px',
+                    background: intakeAssignment === 'SVNR - Service Non-Repair' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : 'transparent',
+                    color: intakeAssignment === 'SVNR - Service Non-Repair' ? '#fff' : '#c084fc',
+                    border: intakeAssignment === 'SVNR - Service Non-Repair' ? '1px solid #a855f7' : 'none',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    fontWeight: intakeAssignment === 'SVNR - Service Non-Repair' ? 700 : 500,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '4px',
+                    transition: 'all 0.15s',
+                    whiteSpace: 'nowrap'
+                  }}
+                  title="Designated for Service Non-Repair (SVNR) — Provincial Sites"
+                >
+                  <span>SVNR</span>
+                </button>
               </div>
-              <span style={{ fontSize: '11px', color: intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
-                {intakeAssignment === 'DC - CRBR' ? '• Tagged: DC - CRBR (Customer Return & Buffer)' : '• Tagged: MDC - Forecasting (Stock Allocation)'}
+              <span style={{ fontSize: '11px', color: intakeAssignment === 'SVNR - Service Non-Repair' ? '#c084fc' : intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
+                {intakeAssignment === 'SVNR - Service Non-Repair'
+                  ? '• Tagged: SVNR - Service Non-Repair'
+                  : intakeAssignment === 'DC - CRBR'
+                  ? '• Tagged: DC - CRBR (Customer Return & Buffer)'
+                  : '• Tagged: MDC - Forecasting (Stock Allocation)'}
               </span>
             </div>
           )}
@@ -1098,7 +1104,7 @@ export default function ScanInReceiving() {
           <div>
             <label className="workstation-col-label">
               <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
-              <span>{isPmgUser ? '2. Barcode Auto-Receive' : '4. Scanner Intake Mode'}</span>
+              <span>{isPmgUser ? '1. Barcode Auto-Receive' : '3. Scanner Intake Mode'}</span>
             </label>
             <div
               className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
@@ -1139,7 +1145,7 @@ export default function ScanInReceiving() {
           <div>
             <label className="workstation-col-label">
               <Sparkles size={13} color="#38bdf8" />
-              <span>{isPmgUser ? '3. Bulk Import & Actions' : '5. Batch Actions'}</span>
+              <span>{isPmgUser ? '2. Bulk Import & Actions' : '4. Batch Actions'}</span>
             </label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {!isPmgUser && (
@@ -1650,9 +1656,9 @@ export default function ScanInReceiving() {
               {availableInStockUnits.length} In-Stock Units
             </span>
 
-            {/* Assignment Filter Switcher (DC Only) */}
+            {/* Assignment Filter Switcher (DC & Provincial) */}
             {!isPmgUser && (
-              <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '2px' }}>
                 <button
                   type="button"
                   onClick={() => setAssignmentFilter('ALL')}
@@ -1700,6 +1706,22 @@ export default function ScanInReceiving() {
                   }}
                 >
                   DC - CRBR ({crbrCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssignmentFilter('SVNR - Service Non-Repair')}
+                  style={{
+                    background: assignmentFilter === 'SVNR - Service Non-Repair' ? '#7c3aed' : 'transparent',
+                    color: assignmentFilter === 'SVNR - Service Non-Repair' ? '#fff' : 'var(--text-muted)',
+                    border: 'none',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11.5px',
+                    fontWeight: assignmentFilter === 'SVNR - Service Non-Repair' ? 600 : 400,
+                    cursor: 'pointer'
+                  }}
+                >
+                  SVNR ({svnrCount})
                 </button>
               </div>
             )}
@@ -1758,7 +1780,13 @@ export default function ScanInReceiving() {
               </thead>
               <tbody>
                 {displayedUnits.map((unit, idx) => {
-                  const isCrbr = unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR');
+                  const isSvnr = unit.intake_assignment?.includes('SVNR') || unit.notes?.includes('SVNR');
+                  const isCrbr = !isSvnr && (unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR'));
+                  const badgeBg = isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe';
+                  const badgeColor = isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1';
+                  const badgeBorder = isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
+                  const badgeLabel = isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
+
                   return (
                     <tr key={unit.id || `${unit.serial_number}-${idx}`}>
                       <td className="font-mono">{idx + 1}</td>
@@ -1791,15 +1819,22 @@ export default function ScanInReceiving() {
                           <button
                             type="button"
                             onClick={() => {
-                              const newDest = isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
+                              let newDest = 'MDC - Forecasting';
+                              if (isSvnr) {
+                                newDest = 'MDC - Forecasting';
+                              } else if (isCrbr) {
+                                newDest = isProvincial ? 'SVNR - Service Non-Repair' : 'MDC - Forecasting';
+                              } else {
+                                newDest = 'DC - CRBR';
+                              }
                               updateUnitAssignment(unit.serial_number, newDest);
                               setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest } : u));
                             }}
                             className="badge"
                             style={{
-                              background: isCrbr ? '#fef3c7' : '#e0f2fe',
-                              color: isCrbr ? '#92400e' : '#0369a1',
-                              border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                              background: badgeBg,
+                              color: badgeColor,
+                              border: badgeBorder,
                               fontWeight: 700,
                               fontSize: '11.5px',
                               display: 'inline-flex',
@@ -1810,10 +1845,10 @@ export default function ScanInReceiving() {
                               borderRadius: '4px',
                               transition: 'all 0.15s'
                             }}
-                            title={`Click to toggle destination to ${isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
+                            title={`Click to switch assignment (${badgeLabel})`}
                           >
-                            {isCrbr ? <Tag size={11} /> : <Layers size={11} />}
-                            <span>{isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                            {isSvnr ? <Layers size={11} color="#7e22ce" /> : isCrbr ? <Tag size={11} /> : <Layers size={11} />}
+                            <span>{badgeLabel}</span>
                             <ArrowLeftRight size={10} style={{ opacity: 0.6, marginLeft: '2px' }} />
                           </button>
                         )}
@@ -1931,12 +1966,12 @@ export default function ScanInReceiving() {
                 </div>
               </div>
 
-              {/* Grid: PO Selector & Assignment Selector (DC Only) */}
+              {/* Target Destination & Linked PO (DC Only) */}
               {!isPmgUser ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-main)' }}>
-                      Default Purchase Order:
+                      Linked Purchase Order:
                     </label>
                     <select
                       className="form-select"
@@ -1965,6 +2000,7 @@ export default function ScanInReceiving() {
                     >
                       <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
                       <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
+                      <option value="SVNR - Service Non-Repair">SVNR - Service Non-Repair</option>
                     </select>
                   </div>
                 </div>

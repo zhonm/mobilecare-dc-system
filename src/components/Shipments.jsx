@@ -51,26 +51,8 @@ export default function Shipments() {
   // Clear Confirmation Modal State
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
-  // Safe Print / PDF Request Handler (Requires Tracking Number)
+  // Direct Print / PDF Request Handler (Manual pen tracking number & shipment date)
   const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'pdf') => {
-    const trk = String(shipmentObj.tracking_number || shipmentObj.booking_id || '').trim();
-    if (!trk) {
-      setTrackingModalState({
-        shipment: shipmentObj,
-        items: items || [],
-        site: siteObj || {},
-        action,
-        trackingInput: '',
-        carrierInput: shipmentObj.carrier || (siteObj?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express'),
-        courierNameInput: shipmentObj.pickup_by_name || shipmentObj.courier_name || shipmentObj.rider_name || '',
-        pickupDateInput: shipmentObj.pickup_date || shipmentObj.shipment_date || new Date().toLocaleDateString('en-US'),
-        guardOnDutyInput: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty || '',
-        riderPhoneInput: shipmentObj.rider_phone || '',
-        vehiclePlateInput: shipmentObj.vehicle_plate || ''
-      });
-      return;
-    }
-
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
@@ -348,7 +330,7 @@ export default function Shipments() {
                           <button
                             className="btn btn-secondary btn-sm"
                             onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
-                            title="Download Corporate PDF Manifest (Requires Tracking #)"
+                            title="Download Corporate PDF Manifest"
                           >
                             <Download size={13} />
                             <span>PDF</span>
@@ -357,7 +339,7 @@ export default function Shipments() {
                           <button
                             className="btn btn-secondary btn-sm"
                             onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'print')}
-                            title="Print Packing List Direct (Requires Tracking #)"
+                            title="Print Packing List Direct"
                           >
                             <Printer size={13} />
                           </button>

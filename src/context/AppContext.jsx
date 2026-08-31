@@ -63,6 +63,7 @@ export function AppProvider({ children }) {
 
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [pmgSubTab, setPmgSubTab] = useState('requests_table');
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
@@ -387,6 +388,7 @@ export function AppProvider({ children }) {
         addScanInUnit: inventory.addScanInUnit,
         deleteScanInUnit: inventory.deleteScanInUnit,
         updateUnitAssignment: inventory.updateUnitAssignment,
+        updateUnitDetails: inventory.updateUnitDetails,
         batchAddScanInUnits: inventory.batchAddScanInUnits,
         commitUnitsToStock: inventory.commitUnitsToStock,
         addScanOutUnit: inventory.addScanOutUnit,
@@ -426,7 +428,9 @@ export function AppProvider({ children }) {
         activePackingStations: cloudSync.activePackingStations,
         broadcastPackingPresence: cloudSync.broadcastPackingPresence,
         isCommandPaletteOpen,
-        setIsCommandPaletteOpen
+        setIsCommandPaletteOpen,
+        pmgSubTab,
+        setPmgSubTab
       }}
     >
       {children}

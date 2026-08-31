@@ -265,9 +265,9 @@ export default function ForecastingReports() {
     }
   });
 
-  const historyMonthCount = (activePeriod?.month && activePeriod.month > 1)
-    ? (activePeriod.month - 1)
-    : (maxHistoryLength > 0 ? maxHistoryLength : 8);
+  const historyMonthCount = maxHistoryLength > 0
+    ? maxHistoryLength
+    : ((activePeriod?.month && activePeriod.month > 1) ? (activePeriod.month - 1) : 8);
 
   const historyMonths = ALL_MONTH_NAMES.slice(0, historyMonthCount);
   const currentPeriodLabel = (() => {
@@ -389,11 +389,11 @@ export default function ForecastingReports() {
       const counts = historyMonths.map((_, idx) => (idx < rawCounts.length ? (Number(rawCounts[idx]) || 0) : 0));
       counts.forEach((c, idx) => { monthlySum[idx] += c; });
 
-      const computed = calculateItemForecast(it, forecastingModel, historyMonths.length);
       const parsedOverride = (it.admin_override !== null && it.admin_override !== undefined && it.admin_override !== '')
         ? parseInt(it.admin_override, 10)
         : null;
       const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
+      const computed = calculateItemForecast(it, forecastingModel);
       const finalVal = hasOverride ? parsedOverride : computed;
       const price = getPartStockPrice(it);
 
@@ -1471,16 +1471,16 @@ export default function ForecastingReports() {
                 ) : (
                   paginatedItems.map((it, idx) => {
                     const globalIdx = (currentPage - 1) * pageSize + idx + 1;
-                    const monthly = it.ytd_monthly_counts || [];
-                    const base = calculateItemForecast(it, forecastingModel, historyMonths.length);
                     const parsedOverride = (it.admin_override !== null && it.admin_override !== undefined && it.admin_override !== '')
                       ? parseInt(it.admin_override, 10)
                       : null;
                     const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
+                    const base = calculateItemForecast(it, forecastingModel);
                     const finalVal = hasOverride ? parsedOverride : base;
                     const price = getPartStockPrice(it);
                     const totalCost = finalVal * price;
 
+                    const monthly = it.ytd_monthly_counts || [];
                     return (
                       <tr key={it.id || it.part_number} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{globalIdx}</td>

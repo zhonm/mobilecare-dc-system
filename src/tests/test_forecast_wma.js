@@ -99,6 +99,38 @@ const sumLinAlloc = linAlloc.reduce((s, a) => s + a.allocatedQty, 0);
 assert(sumWmaAlloc === wmaVal, `WMA model allocation sum (${sumWmaAlloc}) strictly matches forecast quantity (${wmaVal})`);
 assert(sumLinAlloc === linVal, `Linear model allocation sum (${sumLinAlloc}) strictly matches forecast quantity (${linVal})`);
 
+// 8. B1 Remediation Regression Test: Short History WMA & Single Source of Truth
+import { calculateItemForecast } from '../utils/forecastEngine.js';
+import { generateAllocationsFromForecasts } from '../utils/allocationEngine.js';
+
+const shortHistoryItem = {
+  part_id: 'part-short-1',
+  part_number: '661-00001',
+  description: 'Display, iPhone 16 Pro',
+  category_id: 'cat-display',
+  ytd_monthly_counts: [10, 20], // 2 months of history
+  stocking_price: 279
+};
+
+const forecastVal = calculateItemForecast(shortHistoryItem, 'wma', 8);
+shortHistoryItem.computed_forecast = forecastVal;
+shortHistoryItem.final_forecast = forecastVal;
+
+const testSites = [
+  { id: 'site-1', code: 'APP BHS', is_dc: false },
+  { id: 'site-2', code: 'ASP CEB', is_dc: false }
+];
+
+const generatedAlloc = generateAllocationsFromForecasts([shortHistoryItem], testSites, 'wma');
+assert(
+  generatedAlloc[0].forecasted_qty === forecastVal,
+  `Single Source of Truth: generateAllocationsFromForecasts forecast (${generatedAlloc[0].forecasted_qty}) matches calculateItemForecast (${forecastVal}) exactly for short history`
+);
+assert(
+  generatedAlloc[0].total_allocated_qty === forecastVal,
+  `Total allocated qty (${generatedAlloc[0].total_allocated_qty}) strictly matches forecast (${forecastVal})`
+);
+
 console.log('====================================================');
 console.log(`RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log('====================================================');

@@ -130,7 +130,7 @@ BEGIN
     END IF;
 
     -- 6. Enforce role boundary (Defense-in-depth on top of RLS)
-    v_is_fulfillment_role := v_caller_profile.role IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff');
+    v_is_fulfillment_role := v_caller_profile.role::text IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff');
     
     IF NOT v_is_fulfillment_role THEN
         IF v_caller_profile.site_id IS NULL OR v_caller_profile.site_id <> p_site_id THEN
@@ -253,20 +253,36 @@ DROP POLICY IF EXISTS "inventory_select_authenticated" ON public.inventory_units
 DROP POLICY IF EXISTS "inventory_write_staff" ON public.inventory_units;
 DROP POLICY IF EXISTS "allow_all_inventory_units" ON public.inventory_units;
 
--- 6.2 Universal RLS policies for multi-tier sync
-CREATE POLICY "allow_all_parts_requests" ON public.parts_requests
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+-- 6.2 Hardened RLS policies for authenticated users
+CREATE POLICY "parts_requests_select_authenticated" ON public.parts_requests
+    FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "allow_all_inventory_units" ON public.inventory_units
-    FOR ALL TO public, anon, authenticated
-    USING (true)
-    WITH CHECK (true);
+CREATE POLICY "parts_requests_insert_authenticated" ON public.parts_requests
+    FOR INSERT TO authenticated WITH CHECK (true);
 
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
-GRANT ALL ON TABLE public.parts_requests TO anon, authenticated, service_role, postgres;
-GRANT ALL ON TABLE public.inventory_units TO anon, authenticated, service_role, postgres;
+CREATE POLICY "parts_requests_update_authenticated" ON public.parts_requests
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "parts_requests_delete_admin" ON public.parts_requests
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+CREATE POLICY "inventory_units_select_authenticated" ON public.inventory_units
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "inventory_units_write_authenticated" ON public.inventory_units
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "inventory_units_update_authenticated" ON public.inventory_units
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+
+CREATE POLICY "inventory_units_delete_admin" ON public.inventory_units
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+GRANT USAGE ON SCHEMA public TO authenticated, service_role, postgres;
+GRANT ALL ON TABLE public.parts_requests TO authenticated, service_role, postgres;
+GRANT ALL ON TABLE public.inventory_units TO authenticated, service_role, postgres;
 
 -- ============================================================================
 -- 8. ENABLE REALTIME REPLICATION FOR PARTS_REQUESTS

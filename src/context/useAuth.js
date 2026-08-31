@@ -4,8 +4,6 @@ import dbStorage from '../utils/dbStorage';
 import {
   hashPassword,
   verifyPassword,
-  generateSessionSignature,
-  verifySessionIntegrity,
   getStoredUserSession,
   persistUserSession,
   clearStoredUserSession
@@ -53,22 +51,7 @@ export function useAuth({
         return;
       }
 
-      // 1. Recover from IndexedDB if LocalStorage/Cookie was delayed or wiped on localhost reload
-      try {
-        const dbUser = await dbStorage.getItem('mdc_current_user');
-        if (isMounted && dbUser && typeof dbUser === 'object' && dbUser.email) {
-          if (dbUser.role === 'parts_management') {
-            dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
-          }
-          persistUserSession(dbUser);
-          setCurrentUser(dbUser);
-          return;
-        }
-      } catch (e) {
-        console.debug('IndexedDB session recovery note:', e);
-      }
-
-      // 2. Recover from Supabase Auth active cloud session if available
+      // 1. Recover from Supabase Auth active cloud session if available
       if (supabase) {
         try {
           const { data: sessionData } = await supabase.auth.getSession();
@@ -79,11 +62,36 @@ export function useAuth({
               persistUserSession(matched);
               dbStorage.setItem('mdc_current_user', matched);
               setCurrentUser(matched);
+              return;
             }
           }
         } catch (e) {
           console.debug('Supabase session recovery note:', e);
         }
+      }
+
+      // 2. Recover from IndexedDB if in local mode or offline dev
+      try {
+        const dbUser = await dbStorage.getItem('mdc_current_user');
+        if (isMounted && dbUser && typeof dbUser === 'object' && dbUser.email) {
+          // If Supabase is connected, verify we have an active backend session before trusting stale local storage
+          if (supabase) {
+            const { data: sessionData } = await supabase.auth.getSession();
+            if (!sessionData?.session?.user) {
+              // Stale unauthenticated session; clear and require fresh login
+              clearStoredUserSession();
+              return;
+            }
+          }
+          if (dbUser.role === 'parts_management') {
+            dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
+          }
+          persistUserSession(dbUser);
+          setCurrentUser(dbUser);
+          return;
+        }
+      } catch (e) {
+        console.debug('IndexedDB session recovery note:', e);
       }
     };
 
@@ -92,6 +100,7 @@ export function useAuth({
     return () => {
       isMounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Sync currentUser session to LocalStorage, SessionStorage, Cookie, & IndexedDB
@@ -138,6 +147,7 @@ export function useAuth({
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usersList, currentUser?.id, currentUser?.email, currentUser?.role, currentUser?.isActive, currentUser?.rolePosition]);
 
   // Strict Permission Check Helper
@@ -246,8 +256,8 @@ export function useAuth({
                 role: resolvedRole,
                 rolePosition: resolvedPosition,
                 siteId: matchedDb.site_id || 'site-dc',
-                hasSetPassword: matchedDb.has_set_password ?? (resolvedRole === 'superadmin'),
-                passwordHash: matchedDb.password_hash || (resolvedRole === 'superadmin' ? 'Password123' : null),
+                hasSetPassword: Boolean(matchedDb.has_set_password),
+                passwordHash: matchedDb.password_hash || null,
                 isActive: matchedDb.is_active ?? true,
                 permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
               };
@@ -286,7 +296,8 @@ export function useAuth({
 
   // 2. Authenticate Returning User with Password
   const signInWithPassword = async (rawEmail, password, captchaToken = null) => {
-    const cleanEmail = rawEmail.trim().toLowerCase();
+    const cleanEmail = (rawEmail || '').trim().toLowerCase();
+    const cleanPassword = (password || '').trim();
     let user = matchUserByEmail(usersList, cleanEmail);
 
     if (!user) {
@@ -348,8 +359,8 @@ export function useAuth({
                 role: resolvedRole,
                 rolePosition: resolvedPosition,
                 siteId: matchedDb.site_id || 'site-dc',
-                hasSetPassword: matchedDb.has_set_password ?? (resolvedRole === 'superadmin'),
-                passwordHash: matchedDb.password_hash || (resolvedRole === 'superadmin' ? 'Password123' : null),
+                hasSetPassword: Boolean(matchedDb.has_set_password),
+                passwordHash: matchedDb.password_hash || null,
                 isActive: matchedDb.is_active ?? true,
                 permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
               };
@@ -371,32 +382,46 @@ export function useAuth({
       return { success: false, error: 'Account is deactivated' };
     }
 
-    try {
-      if (supabase) {
+    // 1. Authoritative Supabase Auth Verification
+    let authPassed = false;
+    let authErrorMessage = null;
+
+    if (supabase) {
+      try {
         const authPayload = {
           email: user.email,
-          password,
+          password: cleanPassword,
           ...(captchaToken ? { options: { captchaToken } } : {})
         };
-        await supabase.auth.signInWithPassword(authPayload);
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword(authPayload);
+        if (!authError && authData?.session) {
+          authPassed = true;
+        } else if (authError) {
+          authErrorMessage = authError.message;
+        }
+      } catch (e) {
+        authErrorMessage = e?.message;
       }
-    } catch (e) {
-      console.warn('Supabase Auth sign-in response:', e?.message || e);
     }
 
-    const isPasswordValid = await verifyPassword(password, user.passwordHash);
-    if (!isPasswordValid) {
+    // 2. Cryptographic Salted SHA-256 Hash Verification (checks user's configured passwordHash)
+    if (!authPassed) {
+      if (user.passwordHash) {
+        const isPasswordValid = (await verifyPassword(cleanPassword, user.passwordHash)) || (await verifyPassword(password, user.passwordHash));
+        if (isPasswordValid) {
+          authPassed = true;
+        }
+      }
+    }
+
+    if (!authPassed) {
       barcodeAudio.playError();
-      return { success: false, error: 'Incorrect password. Please try again or reset password.' };
-    }
-
-    if (!user.passwordHash?.startsWith('sha256:')) {
-      const secureHash = await hashPassword(password);
-      user.passwordHash = secureHash;
-      user.hasSetPassword = true;
-      if (supabase) {
-        supabase.from('profiles').update({ password_hash: secureHash, has_set_password: true }).eq('id', user.id).then(() => {}).catch(() => {});
-      }
+      return {
+        success: false,
+        error: authErrorMessage && !authErrorMessage.includes('schema') && !authErrorMessage.includes('credentials')
+          ? authErrorMessage
+          : 'Incorrect password. Please try again or reset password.'
+      };
     }
 
     // Persist immediately across all tiers (LocalStorage, SessionStorage, Cookies, and IndexedDB)

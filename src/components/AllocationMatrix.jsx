@@ -22,8 +22,13 @@ import {
   BookmarkPlus,
   RefreshCw,
   Calendar,
+  CalendarDays,
   RotateCcw,
-  Sliders
+  Sliders,
+  Search,
+  X,
+  Percent,
+  TableProperties
 } from 'lucide-react';
 
 export default function AllocationMatrix() {
@@ -36,7 +41,6 @@ export default function AllocationMatrix() {
     selectedCategory,
     updateSiteAllocation,
     resetPartAllocation,
-    resetAllAllocationsToCalculation,
     setActiveTab,
     isAutoRefreshing,
     lastSyncedAt,
@@ -73,6 +77,8 @@ export default function AllocationMatrix() {
   const [activeViewMode, setActiveViewMode] = useState('sheet');
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
+  const [tableSearch, setTableSearch] = useState('');
+  const [localCategory, setLocalCategory] = useState('ALL');
 
   const isWeeklyView = activeViewMode.startsWith('week-');
   const selectedWeekNum = isWeeklyView ? parseInt(activeViewMode.replace('week-', ''), 10) : 1;
@@ -99,21 +105,59 @@ export default function AllocationMatrix() {
     }).filter((s, idx, arr) => arr.findIndex(x => x.code === s.code) === idx);
   }, [nonDcSites]);
 
-  // Filter items by category
+  // Filter items by category and quick search
   const filteredAllocations = useMemo(() => {
     return (effectiveAllocations || []).filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
       const catId = (item.category_id || part?.category_id || '').toLowerCase();
       const desc = (item.description || part?.description || '').toLowerCase();
+      const partNum = (item.part_number || part?.part_number || '').toLowerCase();
 
-      if (selectedCategory === 'ALL') return true;
-      if (selectedCategory === 'BATTERY') return catId.includes('battery') || desc.includes('battery') || desc.includes('batt');
-      if (selectedCategory === 'DISPLAY') return catId.includes('display') || desc.includes('display') || desc.includes('screen');
-      if (selectedCategory === 'CAMERA') return catId.includes('camera') || desc.includes('camera') || desc.includes('cam');
-      if (selectedCategory === 'BACK_GLASS') return catId.includes('backglass') || desc.includes('back') || desc.includes('rear glass');
+      // Check category
+      const activeCat = localCategory !== 'ALL' ? localCategory : selectedCategory;
+      if (activeCat !== 'ALL') {
+        if (activeCat === 'BATTERY' && !(catId.includes('battery') || desc.includes('battery') || desc.includes('batt'))) return false;
+        if (activeCat === 'DISPLAY' && !(catId.includes('display') || desc.includes('display') || desc.includes('screen'))) return false;
+        if (activeCat === 'CAMERA' && !(catId.includes('camera') || desc.includes('camera') || desc.includes('cam'))) return false;
+        if (activeCat === 'BACK_GLASS' && !(catId.includes('backglass') || desc.includes('back') || desc.includes('rear glass'))) return false;
+        if (activeCat === 'OTHER') {
+          const isDisp = catId.includes('display') || desc.includes('display') || desc.includes('screen');
+          const isBatt = catId.includes('battery') || desc.includes('battery') || desc.includes('batt');
+          if (isDisp || isBatt) return false;
+        }
+      }
+
+      // Check search
+      if (tableSearch.trim()) {
+        const q = tableSearch.toLowerCase().trim();
+        if (!partNum.includes(q) && !desc.includes(q)) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [effectiveAllocations, parts, selectedCategory]);
+  }, [effectiveAllocations, parts, selectedCategory, localCategory, tableSearch]);
+
+  // Counts for category badges
+  const totalDisplayCount = useMemo(() => {
+    return (effectiveAllocations || []).filter(item => {
+      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
+      const catId = (item.category_id || part?.category_id || '').toLowerCase();
+      const desc = (item.description || part?.description || '').toLowerCase();
+      return catId.includes('display') || desc.includes('display') || desc.includes('screen');
+    }).length;
+  }, [effectiveAllocations, parts]);
+
+  const totalBatteryCount = useMemo(() => {
+    return (effectiveAllocations || []).filter(item => {
+      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
+      const catId = (item.category_id || part?.category_id || '').toLowerCase();
+      const desc = (item.description || part?.description || '').toLowerCase();
+      const isDisplay = catId.includes('display') || desc.includes('display') || desc.includes('screen');
+      return !isDisplay && (catId.includes('battery') || desc.includes('battery') || desc.includes('batt'));
+    }).length;
+  }, [effectiveAllocations, parts]);
 
   // Split into Displays, Batteries, and Other
   const displayItems = useMemo(() => {
@@ -161,7 +205,18 @@ export default function AllocationMatrix() {
         : (part?.stocking_price || fallbackPrice);
       const qty = item.total_allocated_qty || 0;
       const rowCost = qty * stockPrice;
-      const split = calculateWeeklySplit(qty, rowCost, rIdx + rowOffset);
+      const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
+        ? {
+            w1_qty: item.w1_qty || 0,
+            w2_qty: item.w2_qty || 0,
+            w3_qty: item.w3_qty || 0,
+            w4_qty: item.w4_qty || 0,
+            w1_cost: item.w1_cost || 0,
+            w2_cost: item.w2_cost || 0,
+            w3_cost: item.w3_cost || 0,
+            w4_cost: item.w4_cost || 0
+          }
+        : calculateWeeklySplit(qty, rowCost, rIdx + rowOffset);
 
       totalAlloc += qty;
       totalCost += rowCost;
@@ -330,7 +385,18 @@ export default function AllocationMatrix() {
       ? item.stocking_price
       : (part?.stocking_price || fallbackPrice);
     const totalStockPrice = (item.total_allocated_qty || 0) * stockPrice;
-    const split = calculateWeeklySplit(item.total_allocated_qty, totalStockPrice, excelRowNumber);
+    const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
+      ? {
+          w1_qty: item.w1_qty || 0,
+          w2_qty: item.w2_qty || 0,
+          w3_qty: item.w3_qty || 0,
+          w4_qty: item.w4_qty || 0,
+          w1_cost: item.w1_cost || 0,
+          w2_cost: item.w2_cost || 0,
+          w3_cost: item.w3_cost || 0,
+          w4_cost: item.w4_cost || 0
+        }
+      : calculateWeeklySplit(item.total_allocated_qty, totalStockPrice, excelRowNumber);
     const isOrderRequired = (item.total_allocated_qty || 0) > 0;
 
     // For Weekly view
@@ -527,162 +593,154 @@ export default function AllocationMatrix() {
   return (
     <div className="allocation-view" style={{ maxWidth: '100%' }}>
       {/* Header & Controls Card */}
-      <div className="card" style={{ marginBottom: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                background: '#e0f2fe',
-                color: '#0284c7',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}>
-                <Split size={18} />
+      <div className="matrix-header-card">
+        {/* Top Header Row: Title & Primary Actions */}
+        <div className="matrix-header-top">
+          <div className="matrix-header-title-group">
+            <div className="matrix-header-icon-box">
+              <TableProperties size={22} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h2 className="matrix-header-title">
+                  {isWeeklyView ? `Week ${selectedWeekNum} Allocation Matrix` : activeViewMode === 'shares' ? 'Site Share % Proportional Distribution' : 'Master Parts Allocation Matrix'}
+                </h2>
+                <span
+                  className="badge"
+                  style={{
+                    background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
+                    color: isAutoRefreshing ? '#0284c7' : '#047857',
+                    border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    fontWeight: 700,
+                    borderRadius: '999px'
+                  }}
+                  title={isAutoRefreshing ? "Auto-refreshing latest allocation matrix from database..." : "Allocation data is auto-refreshed on page visit and synchronized across all accounts"}
+                >
+                  {isAutoRefreshing ? (
+                    <>
+                      <RefreshCw size={11} className="spin" />
+                      <span>Syncing DB...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={11} />
+                      <span>Live Synced</span>
+                    </>
+                  )}
+                </span>
+                <span
+                  className="badge"
+                  style={{
+                    background: '#f8fafc',
+                    color: '#475569',
+                    border: '1px solid #e2e8f0',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    fontWeight: 600,
+                    borderRadius: '999px'
+                  }}
+                >
+                  {activePeriod?.label || 'September 2026'}
+                </span>
               </div>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
-                    {isWeeklyView ? `Week ${selectedWeekNum} Allocation Matrix` : 'Master Parts Allocation Matrix'}
-                  </h3>
-                  <span
-                    className="badge"
-                    style={{
-                      background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
-                      color: isAutoRefreshing ? '#0284c7' : '#047857',
-                      border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '11.5px',
-                      padding: '3px 8px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    title={isAutoRefreshing ? "Auto-refreshing latest allocation matrix from database..." : "Allocation data is auto-refreshed on page visit and synchronized across all accounts"}
-                  >
-                    {isAutoRefreshing ? (
-                      <>
-                        <RefreshCw size={11} className="spin" />
-                        <span>Auto-Refreshing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 size={11} />
-                        <span>Live Synced</span>
-                      </>
-                    )}
-                  </span>
-                </div>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '3px' }}>
-                  {isWeeklyView
-                    ? `Week ${selectedWeekNum} scheduled branch dispatches matching unified Master Allocation table layout.`
-                    : `Multi-site proportional distribution across 26 branches calculated via ${
-                        forecastingModel === 'linear' ? 'Linear Regression (FORECAST.LINEAR)' :
-                        '4-Mo Weighted Moving Average (WMA [0.10, 0.20, 0.30, 0.40] with Spike Filtering)'
-                      }.`}
-                  {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
-                </p>
-              </div>
+              <p className="matrix-header-subtitle">
+                <span>Multi-site proportional distribution across {orderedServiceSites.length} branches</span>
+                <span>•</span>
+                <span>Algorithm: <strong style={{ color: '#0f172a' }}>{forecastingModel === 'linear' ? 'Linear Regression' : '4-Mo WMA'}</strong></span>
+                {lastSyncedAt && (
+                  <>
+                    <span>•</span>
+                    <span style={{ opacity: 0.85 }}>Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  </>
+                )}
+              </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {/* Synchronized Calculation Model Engine Selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <span style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
-                <Sliders size={13} color="#0284c7" />
-                <span>Model:</span>
-              </span>
-              <select
-                value={forecastingModel}
-                onChange={(e) => changeForecastingModel(e.target.value)}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  borderRadius: '6px',
-                  border: '1px solid #0284c7',
-                  background: '#f0f9ff',
-                  color: '#0369a1',
-                  fontWeight: 600,
-                  outline: 'none',
-                  cursor: 'pointer'
-                }}
-                title="Choose mathematical forecasting algorithm (automatically syncs with Demand Forecasting)"
-              >
-                <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
-                <option value="wma">4-Mo WMA (Spike Filtered)</option>
-              </select>
-            </div>
-
+          {/* Top Right Primary Action Buttons */}
+          <div className="matrix-header-actions">
             {/* Quick Manual Refresh Button */}
             <button
+              type="button"
               className="btn btn-secondary btn-sm"
               onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AllocationMatrix manual refresh' })}
               disabled={isAutoRefreshing}
               title="Force reload latest allocation matrix from database"
-              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}
             >
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
 
+            {/* Save as Record (Primary) */}
             {canEdit && (
               <button
-                className="btn btn-secondary btn-sm"
+                type="button"
+                className="btn btn-primary btn-sm"
                 onClick={() => setShowSaveModal(true)}
-                disabled={filteredAllocations.length === 0}
+                disabled={effectiveAllocations.length === 0}
                 title="Save current allocation matrix as a dated historical record"
-                style={{ fontWeight: 600, padding: '6px 14px' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
               >
                 <BookmarkPlus size={14} />
                 <span>Save as Record</span>
               </button>
             )}
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleExport}
-              disabled={filteredAllocations.length === 0}
-              title="Download formatted Master Allocation Excel Spreadsheet (.xlsx)"
-              style={{ fontWeight: 700, padding: '6px 14px', color: '#15803d', borderColor: '#86efac' }}
-            >
-              <Download size={14} />
-              <span>Export Excel (Multi-Sheet XLSX)</span>
-            </button>
+            {/* Export Actions Group */}
+            <div className="matrix-btn-group">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExport}
+                disabled={effectiveAllocations.length === 0}
+                title="Download formatted Master Allocation Excel Spreadsheet (.xlsx)"
+                style={{ fontWeight: 700, color: '#15803d', display: 'flex', alignItems: 'center', gap: '5px' }}
+              >
+                <Download size={14} />
+                <span>Export XLSX</span>
+              </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleDownloadPDF}
-              disabled={filteredAllocations.length === 0}
-              title="Download landscape corporate PDF of Allocation Matrix"
-              style={{ fontWeight: 600, padding: '6px 14px', color: '#0284c7', borderColor: '#bae6fd' }}
-            >
-              <FileText size={14} />
-              <span>Download PDF</span>
-            </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleDownloadPDF}
+                disabled={effectiveAllocations.length === 0}
+                title="Download landscape corporate PDF of Allocation Matrix"
+                style={{ fontWeight: 600, color: '#0284c7', display: 'flex', alignItems: 'center', gap: '5px' }}
+              >
+                <FileText size={14} />
+                <span>PDF</span>
+              </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handlePrint}
-              disabled={filteredAllocations.length === 0}
-              title="Print formatted Allocation Matrix directly"
-              style={{ fontWeight: 600, padding: '6px 14px' }}
-            >
-              <Printer size={14} />
-              <span>Print Matrix</span>
-            </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handlePrint}
+                disabled={effectiveAllocations.length === 0}
+                title="Print formatted Allocation Matrix directly"
+                style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}
+              >
+                <Printer size={14} />
+                <span>Print</span>
+              </button>
+            </div>
 
+            {/* Clear Data (Danger) */}
             {canEdit && (
               <button
+                type="button"
                 className="btn btn-secondary btn-sm"
                 onClick={() => setShowClearModal(true)}
                 title="Clear all allocation and forecasting records to empty state"
-                style={{ fontWeight: 600, padding: '6px 14px', color: '#b91c1c' }}
+                style={{ fontWeight: 600, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', borderColor: '#fecaca' }}
               >
-                <RotateCcw size={14} />
+                <RotateCcw size={13} />
                 <span>Clear Data</span>
               </button>
             )}
@@ -705,165 +763,247 @@ export default function AllocationMatrix() {
           </div>
         </div>
 
-        {/* Multi-Tab View Switcher Matching Google Sheets Tabs (Master, Week 1, Week 2, Week 3, Week 4, Shares) */}
-        <div style={{
-          display: 'flex',
-          gap: '6px',
-          marginTop: '16px',
-          padding: '4px',
-          background: '#f1f5f9',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          flexWrap: 'wrap'
-        }}>
-          <button
-            className={`btn btn-sm ${activeViewMode === 'sheet' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('sheet')}
-            style={{ border: 'none', fontSize: '12px', padding: '6px 14px', fontWeight: 600 }}
-          >
-            📊 Master Allocation
-          </button>
+        {/* View Mode Navigation Tabs & Engine Selector */}
+        <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="matrix-segmented-nav">
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'sheet' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('sheet')}
+            >
+              <Layers size={14} />
+              <span>Master Allocation</span>
+              <span className="matrix-tab-badge">{totalAllocatedAllParts} u</span>
+            </button>
 
-          <button
-            className={`btn btn-sm ${activeViewMode === 'week-1' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('week-1')}
-            style={{
-              border: 'none',
-              fontSize: '12px',
-              padding: '6px 14px',
-              fontWeight: 600,
-              background: activeViewMode === 'week-1' ? '#0284c7' : '#ffffff',
-              color: activeViewMode === 'week-1' ? '#ffffff' : '#0f172a'
-            }}
-          >
-            📦 Week 1 <span style={{ fontSize: '11px', opacity: 0.85, marginLeft: '4px' }}>({grandGroupTotals.totalW1} units)</span>
-          </button>
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'week-1' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('week-1')}
+            >
+              <CalendarDays size={14} />
+              <span>Week 1</span>
+              <span className="matrix-tab-badge">{grandGroupTotals.totalW1} u</span>
+            </button>
 
-          <button
-            className={`btn btn-sm ${activeViewMode === 'week-2' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('week-2')}
-            style={{
-              border: 'none',
-              fontSize: '12px',
-              padding: '6px 14px',
-              fontWeight: 600,
-              background: activeViewMode === 'week-2' ? '#0284c7' : '#ffffff',
-              color: activeViewMode === 'week-2' ? '#ffffff' : '#0f172a'
-            }}
-          >
-            📦 Week 2 <span style={{ fontSize: '11px', opacity: 0.85, marginLeft: '4px' }}>({grandGroupTotals.totalW2} units)</span>
-          </button>
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'week-2' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('week-2')}
+            >
+              <CalendarDays size={14} />
+              <span>Week 2</span>
+              <span className="matrix-tab-badge">{grandGroupTotals.totalW2} u</span>
+            </button>
 
-          <button
-            className={`btn btn-sm ${activeViewMode === 'week-3' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('week-3')}
-            style={{
-              border: 'none',
-              fontSize: '12px',
-              padding: '6px 14px',
-              fontWeight: 600,
-              background: activeViewMode === 'week-3' ? '#0284c7' : '#ffffff',
-              color: activeViewMode === 'week-3' ? '#ffffff' : '#0f172a'
-            }}
-          >
-            📦 Week 3 <span style={{ fontSize: '11px', opacity: 0.85, marginLeft: '4px' }}>({grandGroupTotals.totalW3} units)</span>
-          </button>
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'week-3' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('week-3')}
+            >
+              <CalendarDays size={14} />
+              <span>Week 3</span>
+              <span className="matrix-tab-badge">{grandGroupTotals.totalW3} u</span>
+            </button>
 
-          <button
-            className={`btn btn-sm ${activeViewMode === 'week-4' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('week-4')}
-            style={{
-              border: 'none',
-              fontSize: '12px',
-              padding: '6px 14px',
-              fontWeight: 600,
-              background: activeViewMode === 'week-4' ? '#0284c7' : '#ffffff',
-              color: activeViewMode === 'week-4' ? '#ffffff' : '#0f172a'
-            }}
-          >
-            📦 Week 4 <span style={{ fontSize: '11px', opacity: 0.85, marginLeft: '4px' }}>({grandGroupTotals.totalW4} units)</span>
-          </button>
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'week-4' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('week-4')}
+            >
+              <CalendarDays size={14} />
+              <span>Week 4</span>
+              <span className="matrix-tab-badge">{grandGroupTotals.totalW4} u</span>
+            </button>
 
-          <button
-            className={`btn btn-sm ${activeViewMode === 'shares' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveViewMode('shares')}
-            style={{ border: 'none', fontSize: '12px', padding: '6px 14px', fontWeight: 600 }}
-          >
-            📈 Site Share %
-          </button>
+            <button
+              type="button"
+              className={`matrix-segmented-tab ${activeViewMode === 'shares' ? 'active' : ''}`}
+              onClick={() => setActiveViewMode('shares')}
+            >
+              <Percent size={14} />
+              <span>Site Share %</span>
+            </button>
+          </div>
+
+          {/* Model Engine Selector */}
+          <div className="matrix-model-selector" title="Choose forecasting algorithm (automatically synchronized with Demand Forecasting)">
+            <Sliders size={13} color="#0284c7" />
+            <span>Engine:</span>
+            <select
+              value={forecastingModel}
+              onChange={(e) => changeForecastingModel(e.target.value)}
+              className="matrix-model-select"
+            >
+              <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
+              <option value="wma">4-Mo WMA (Spike Filtered)</option>
+            </select>
+          </div>
         </div>
 
-        {/* Save Record Modal Dialog */}
-        {showSaveModal && (
-          <SaveRecordModal
-            isOpen={showSaveModal}
-            onClose={() => setShowSaveModal(false)}
-            defaultType="allocation"
-          />
-        )}
+        {/* Quick Search & Category Filter Bar */}
+        <div className="matrix-filter-bar" style={{ marginTop: '14px' }}>
+          <div className="matrix-search-box">
+            <Search size={14} className="matrix-search-icon" />
+            <input
+              type="text"
+              placeholder="Search parts by number or description..."
+              value={tableSearch}
+              onChange={(e) => setTableSearch(e.target.value)}
+              className="matrix-search-input"
+            />
+            {tableSearch && (
+              <button
+                type="button"
+                className="matrix-search-clear"
+                onClick={() => setTableSearch('')}
+                title="Clear search"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          <div className="matrix-category-chips">
+            <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Filter:</span>
+            <button
+              type="button"
+              className={`matrix-chip-btn ${localCategory === 'ALL' ? 'active' : ''}`}
+              onClick={() => setLocalCategory('ALL')}
+            >
+              <span>All Commodities</span>
+              <span className="matrix-chip-count">{effectiveAllocations.length}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`matrix-chip-btn ${localCategory === 'DISPLAY' ? 'active' : ''}`}
+              onClick={() => setLocalCategory('DISPLAY')}
+            >
+              <Smartphone size={12} />
+              <span>Displays</span>
+              <span className="matrix-chip-count">{totalDisplayCount}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`matrix-chip-btn ${localCategory === 'BATTERY' ? 'active' : ''}`}
+              onClick={() => setLocalCategory('BATTERY')}
+            >
+              <BatteryCharging size={12} />
+              <span>Batteries</span>
+              <span className="matrix-chip-count">{totalBatteryCount}</span>
+            </button>
+
+            {effectiveAllocations.length - totalDisplayCount - totalBatteryCount > 0 && (
+              <button
+                type="button"
+                className={`matrix-chip-btn ${localCategory === 'OTHER' ? 'active' : ''}`}
+                onClick={() => setLocalCategory('OTHER')}
+              >
+                <Layers size={12} />
+                <span>Other</span>
+                <span className="matrix-chip-count">{effectiveAllocations.length - totalDisplayCount - totalBatteryCount}</span>
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* High Contrast KPI Summary Bar */}
         {filteredAllocations.length > 0 && (
-          <div className="matrix-kpi-grid">
+          <div className="matrix-kpi-grid" style={{ marginTop: '14px' }}>
             <div className="matrix-kpi-card">
               <div className="matrix-kpi-icon-wrap" style={{ background: '#e0f2fe', color: '#0284c7' }}>
-                <Package size={22} />
+                <Package size={20} />
               </div>
-              <div>
-                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>
+              <div className="matrix-kpi-content">
+                <div className="matrix-kpi-label">
                   {isWeeklyView ? `Week ${selectedWeekNum} Allocated Units` : 'Total Parts Allocated'}
                 </div>
-                <div style={{ fontSize: '22px', fontWeight: 800, color: '#0369a1', fontFamily: 'var(--font-mono)' }}>
+                <div className="matrix-kpi-val" style={{ color: '#0369a1' }}>
                   {isWeeklyView
                     ? grandGroupTotals[`totalW${selectedWeekNum}`].toLocaleString()
                     : totalAllocatedAllParts.toLocaleString()}{' '}
                   <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>units</span>
+                </div>
+                <div className="matrix-kpi-sub">
+                  {isWeeklyView
+                    ? `${((grandGroupTotals[`totalW${selectedWeekNum}`] / (totalAllocatedAllParts || 1)) * 100).toFixed(1)}% of monthly total`
+                    : `${filteredAllocations.length} parts across 2 categories`}
                 </div>
               </div>
             </div>
 
             <div className="matrix-kpi-card">
               <div className="matrix-kpi-icon-wrap" style={{ background: '#f1f5f9', color: '#334155' }}>
-                <Building2 size={22} />
+                <Building2 size={20} />
               </div>
-              <div>
-                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>
+              <div className="matrix-kpi-content">
+                <div className="matrix-kpi-label">
                   Active Service Branches
                 </div>
-                <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                <div className="matrix-kpi-val" style={{ color: '#0f172a' }}>
                   {orderedServiceSites.length} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>sites</span>
+                </div>
+                <div className="matrix-kpi-sub">
+                  Nationwide Apple Authorized Network
                 </div>
               </div>
             </div>
 
             <div className="matrix-kpi-card">
               <div className="matrix-kpi-icon-wrap" style={{ background: '#dcfce7', color: '#15803d' }}>
-                <DollarSign size={22} />
+                <DollarSign size={20} />
               </div>
-              <div>
-                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>
-                  {isWeeklyView ? `Week ${selectedWeekNum} Stock Valuation` : 'Total Master Value'}
+              <div className="matrix-kpi-content">
+                <div className="matrix-kpi-label">
+                  {isWeeklyView ? `Week ${selectedWeekNum} Stock Valuation` : 'Total Master Valuation'}
                 </div>
-                <div style={{ fontSize: '22px', fontWeight: 800, color: '#15803d', fontFamily: 'var(--font-mono)' }}>
+                <div className="matrix-kpi-val" style={{ color: '#15803d' }}>
                   $
                   {isWeeklyView
                     ? grandGroupTotals[`totalW${selectedWeekNum}Cost`].toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                     : grandTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
+                <div className="matrix-kpi-sub">
+                  {isWeeklyView
+                    ? `Week ${selectedWeekNum} inventory commitment`
+                    : `Displays: $${displayTotals.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })} · Batt: $${batteryTotals.totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                </div>
               </div>
             </div>
 
-            {isWeeklyView && (
+            {isWeeklyView ? (
               <div className="matrix-kpi-card">
                 <div className="matrix-kpi-icon-wrap" style={{ background: '#ede9fe', color: '#7c3aed' }}>
-                  <Calendar size={22} />
+                  <Calendar size={20} />
                 </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>
+                <div className="matrix-kpi-content">
+                  <div className="matrix-kpi-label">
                     Scheduled Dispatch
                   </div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, color: '#6d28d9' }}>
-                    Week {selectedWeekNum} of {activePeriod?.label || 'September 2026'}
+                  <div className="matrix-kpi-val" style={{ fontSize: '17px', color: '#6d28d9' }}>
+                    Week {selectedWeekNum}
+                  </div>
+                  <div className="matrix-kpi-sub">
+                    {activePeriod?.label || 'September 2026'} Release
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="matrix-kpi-card">
+                <div className="matrix-kpi-icon-wrap" style={{ background: '#fef3c7', color: '#d97706' }}>
+                  <Smartphone size={20} />
+                </div>
+                <div className="matrix-kpi-content">
+                  <div className="matrix-kpi-label">
+                    Commodity Split
+                  </div>
+                  <div className="matrix-kpi-val" style={{ fontSize: '17px', color: '#b45309' }}>
+                    {displayItems.length} Display / {batteryItems.length} Batt
+                  </div>
+                  <div className="matrix-kpi-sub">
+                    {displayTotals.totalQty} displays · {batteryTotals.totalQty} batteries
                   </div>
                 </div>
               </div>
@@ -873,7 +1013,7 @@ export default function AllocationMatrix() {
       </div>
 
       {/* Empty State or Matrix Grid */}
-      {filteredAllocations.length === 0 ? (
+      {effectiveAllocations.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '60px 20px', border: '1px dashed var(--border-strong)' }}>
           <div
             style={{
@@ -900,6 +1040,44 @@ export default function AllocationMatrix() {
             <UploadCloud size={16} />
             <span>Go to Fixably / GSX Data Import</span>
           </button>
+        </div>
+      ) : filteredAllocations.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '48px 20px', border: '1px dashed #cbd5e1' }}>
+          <div
+            style={{
+              width: '52px',
+              height: '52px',
+              borderRadius: '50%',
+              background: '#f1f5f9',
+              color: '#64748b',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '12px'
+            }}
+          >
+            <Search size={24} />
+          </div>
+          <h3 style={{ fontSize: '16px', marginBottom: '6px', color: '#0f172a', fontWeight: 700 }}>
+            No Matching Parts Found
+          </h3>
+          <p style={{ fontSize: '13px', color: '#64748b', maxWidth: '400px', margin: '0 auto 16px' }}>
+            No allocation items matched your search &quot;{tableSearch}&quot; or category filter.
+          </p>
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+            {tableSearch && (
+              <button className="btn btn-secondary btn-sm" onClick={() => setTableSearch('')}>
+                <X size={13} />
+                <span>Clear Search</span>
+              </button>
+            )}
+            {localCategory !== 'ALL' && (
+              <button className="btn btn-secondary btn-sm" onClick={() => setLocalCategory('ALL')}>
+                <RotateCcw size={13} />
+                <span>Reset Category</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         /* -------------------------------------------------------------------------------- */

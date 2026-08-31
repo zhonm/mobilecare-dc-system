@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
 import Sidebar from './components/Sidebar';
+import PmgSidebar from './components/PmgSidebar';
 import Header from './components/Header';
 import CommandPalette from './components/CommandPalette';
 import Dashboard from './components/Dashboard';
@@ -93,7 +94,7 @@ function MainApp() {
 
   return (
     <div className="app-container">
-      <Sidebar />
+      {currentUser?.role === 'parts_management' ? <PmgSidebar /> : <Sidebar />}
       <div className="main-content">
         <Header />
         <main className="page-body">

@@ -203,7 +203,7 @@ async function runAugustParityTests() {
   console.log('TEST SUITE 2: August 2026 Reference Workbook');
   console.log('===============================================================');
 
-  const filePath = 'MDC Forecasting and Allocation/August 2026 Forecasting and Allocation/Battery & Display (Allocation) - August 2026.xlsx';
+  const filePath = 'Battery & Display (Allocation) - August 2026.xlsx';
   if (!fs.existsSync(filePath)) {
     console.log(`Note: '${filePath}' not found in workspace directory. Skipping Suite 2.`);
     return;
@@ -212,29 +212,99 @@ async function runAugustParityTests() {
   const wsM = wb.Sheets['Masterlist'];
   const mRows = XLSX.utils.sheet_to_json(wsM, { header: 1, defval: '' });
 
-  const result = processRawUsageSheet(mRows, CANONICAL_SITE_LIST, [], {
+  const resultOptionA = processRawUsageSheet(mRows, CANONICAL_SITE_LIST, [], {
     filterScope: 'IPHONE_13_PLUS_BATTERY_DISPLAY',
     selectedMonth: 'auto',
     fileName: filePath,
     allocationMode: 'OPTION_A'
   });
 
-  assert(result.detectedPeriod.month === 8, `Auto-detected August 2026 period (detected: ${result.detectedPeriod.label})`);
-  assert(result.forecastItems.length >= 39, `Extracted dynamic forecasts for August 2026 (parts: ${result.forecastItems.length})`);
+  assert(resultOptionA.detectedPeriod.month === 8, `Auto-detected August 2026 period (detected: ${resultOptionA.detectedPeriod.label})`);
+  assert(resultOptionA.records.length === 3838, `Step 2 Filter matched exactly 3,838 in-scope rows for August (actual: ${resultOptionA.records.length})`);
+  assert(resultOptionA.forecastItems.length === 41, `Extracted 41 iPhone parts for August (actual: ${resultOptionA.forecastItems.length})`);
 
-  // Check that linear regression evaluated over 7 months (Jan-Jul) gives correct forecasts
+  // Trailing Window & Forecasts Validation (7 months Jan-Jul, forecasting month 8)
   const wsF = wb.Sheets['Battery&Display Forecasting'];
   const fRows = XLSX.utils.sheet_to_json(wsF, { header: 1, defval: '' });
 
-  let augustFcastMatches = 0;
+  let monthlyCountMismatches = 0;
+  let forecastMismatches = 0;
+
+  // Validate Batteries (rows 3 to 20 in August Forecasting sheet -> 18 parts)
   for (let r = 2; r <= 19; r++) {
-    const desc = fRows[r][1];
-    const excelFcast = fRows[r][9];
-    const item = result.forecastItems.find(f => f.description === desc);
-    if (item && item.final_forecast === excelFcast) augustFcastMatches++;
+    const fDesc = fRows[r][1];
+    const excelHistory = fRows[r].slice(2, 9).map(Number); // Jan-Jul (7 months)
+    const excelForecast = Math.max(0, Number(fRows[r][9])); // Aug forecast (clamped to 0 if negative)
+    const parsedItem = resultOptionA.forecastItems.find(f => f.description === fDesc);
+
+    if (!parsedItem) {
+      forecastMismatches++;
+      continue;
+    }
+
+    const appHistory = (parsedItem.ytd_monthly_counts || []).slice(0, 7);
+    const histMatch = JSON.stringify(excelHistory) === JSON.stringify(appHistory);
+    if (!histMatch) monthlyCountMismatches++;
+
+    const fcastMatch = excelForecast === parsedItem.final_forecast;
+    if (!fcastMatch) forecastMismatches++;
   }
 
-  assert(augustFcastMatches >= 16, `August 2026 Battery forecasts match reference workbook (${augustFcastMatches}/18)`);
+  // Validate Displays (rows 28 to 48 in August Forecasting sheet -> rows 27..47 0-indexed, 21 parts)
+  for (let r = 27; r <= 47; r++) {
+    const fDesc = fRows[r][1];
+    const excelHistory = fRows[r].slice(2, 9).map(Number);
+    const excelForecast = Math.max(0, Number(fRows[r][9]));
+    const parsedItem = resultOptionA.forecastItems.find(f => f.description === fDesc);
+
+    if (!parsedItem) {
+      forecastMismatches++;
+      continue;
+    }
+
+    const appHistory = (parsedItem.ytd_monthly_counts || []).slice(0, 7);
+    const histMatch = JSON.stringify(excelHistory) === JSON.stringify(appHistory);
+    if (!histMatch) monthlyCountMismatches++;
+
+    const fcastMatch = excelForecast === parsedItem.final_forecast;
+    if (!fcastMatch) forecastMismatches++;
+  }
+
+  assert(monthlyCountMismatches === 0, `August monthly usage counts (Jan-Jul) match 100% across all 39 reference parts (mismatches: ${monthlyCountMismatches})`);
+  assert(forecastMismatches === 0, `Linear regression forecasts for August 2026 match 100% across all 39 reference parts (mismatches: ${forecastMismatches})`);
+
+  // Option B Sum Preservation Validation for August
+  const resultOptionB = processRawUsageSheet(mRows, CANONICAL_SITE_LIST, [], {
+    filterScope: 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+    selectedMonth: 'auto',
+    fileName: filePath,
+    allocationMode: 'OPTION_B'
+  });
+
+  let optionBSumPreservationErrors = 0;
+  resultOptionB.allocations.forEach(alloc => {
+    const sumAllocs = CANONICAL_SITE_LIST.reduce((sum, s) => sum + (alloc.site_quantities[s.code] ?? alloc.site_quantities[s.id] ?? 0), 0);
+    const expected = alloc.forecasted_qty;
+    if (sumAllocs !== expected) {
+      optionBSumPreservationErrors++;
+    }
+  });
+
+  assert(optionBSumPreservationErrors === 0, `Option B strictly preserves exact forecast sum across all 41 parts in August (errors: ${optionBSumPreservationErrors})`);
+
+  // 4-Week Split Balancing for August
+  let weeklySplitErrors = 0;
+  resultOptionA.allocations.forEach((alloc, idx) => {
+    const excelRow = idx < 21 ? idx + 3 : idx + 4;
+    const totalQty = alloc.total_allocated_qty;
+    const totalCost = alloc.total_stock_cost;
+    const split = calculateWeeklySplit(totalQty, totalCost, excelRow);
+
+    const sumQty = split.w1_qty + split.w2_qty + split.w3_qty + split.w4_qty;
+    if (sumQty !== totalQty) weeklySplitErrors++;
+  });
+
+  assert(weeklySplitErrors === 0, `August 4-week splits strictly balance to monthly totals for all 41 parts (errors: ${weeklySplitErrors})`);
 }
 
 async function main() {

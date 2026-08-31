@@ -10,9 +10,9 @@ import {
 // Excel layout: Displays at rows 3..(3+N_DISPLAY_ROWS-1), one subtotal row, then Batteries.
 // Used to offset rowIndex in calculateWeeklySplit so Battery items use the correct
 // ISEVEN(ROW()) parity (matching the live Excel workbook).
-const N_DISPLAY_ROWS = CANONICAL_DISPLAY_DESCS.length;
+const _N_DISPLAY_ROWS = CANONICAL_DISPLAY_DESCS.length;
 import { displayShares, batteryShares } from '../data/canonicalShares.js';
-import { calculateForecastByModel, roundExcel } from './forecastEngine.js';
+import { calculateItemForecast, roundExcel } from './forecastEngine.js';
 
 /**
  * Allocation Engine for Multi-Site Distribution
@@ -456,6 +456,30 @@ export function calculateAllocationTotalsAndRemarks(allocationItems = []) {
 }
 
 /**
+ * Helper to determine if an item belongs to the Display category
+ * @param {Object} item
+ * @returns {boolean}
+ */
+export function isDisplayCategoryOrDesc(item) {
+  if (!item) return false;
+  if (item.category_id === 'cat-display') return true;
+  const desc = (item.description || '').toLowerCase();
+  const cat = (item.category_id || '').toLowerCase();
+  return desc.includes('display') && !cat.includes('battery') && !desc.includes('battery');
+}
+
+/**
+ * Calculates Excel ISEVEN(ROW()) row parity offset based on commodity category.
+ * Display block starts at row 3 (offset +3).
+ * Battery block starts at row 25 (offset +4 due to subtotal separator row).
+ * @param {Object} item
+ * @returns {number}
+ */
+export function getRowParityOffset(item) {
+  return isDisplayCategoryOrDesc(item) ? 3 : 4;
+}
+
+/**
  * Generates or synchronizes allocations from an array of forecastItems across service sites
  * @param {Array} forecastList
  * @param {Array} sitesList
@@ -477,19 +501,14 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
   validateSiteSharesConsistency(sitesList);
 
   return forecastList.map((fi, rIdx) => {
-    const rawCounts = fi.ytd_monthly_counts || [];
-    const counts = rawCounts.slice(0, 8);
-    const targetX = (counts.length || 8) + 1;
-    const computed = counts.length === 0
-      ? (fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0))
-      : calculateForecastByModel(counts, activeModel, {
-          targetX,
-          categoryId: fi.category_id,
-          description: fi.description
-        });
-    const hasOverride = fi.admin_override !== null && fi.admin_override !== undefined && fi.admin_override !== '';
-    const fiQty = hasOverride ? parseInt(fi.admin_override, 10) : computed;
-    const fiPrice = fi.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99);
+    // Authoritative Single Source of Truth for forecast quantity:
+    // Read from final_forecast / computed_forecast directly, or compute using calculateItemForecast
+    const fiQty = fi.final_forecast !== undefined && fi.final_forecast !== null
+      ? fi.final_forecast
+      : (fi.computed_forecast !== undefined && fi.computed_forecast !== null
+          ? fi.computed_forecast
+          : calculateItemForecast(fi, activeModel));
+    const fiPrice = fi.stocking_price || (isDisplayCategoryOrDesc(fi) ? 279 : 99);
 
     const existingAlloc = (existingAllocations || []).find(a =>
       a.part_id === fi.part_id ||
@@ -508,20 +527,14 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
     });
 
     const tCost = tAlloc * fiPrice;
-    // Row parity offset matching Excel ISEVEN(ROW()):
-    //   Display block: Excel rows 3..(3+N_DISPLAY_ROWS-1)  → rowIndex = rIdx + 3
-    //   Battery block: Excel rows start at (3+N_DISPLAY_ROWS+1) due to a subtotal separator row
-    //                  → rowIndex = rIdx + 4 (the extra +1 skips the separator row)
-    const isDisplayItem = (fi.category_id === 'cat-display') ||
-      ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
-    const rowParityOffset = isDisplayItem ? 3 : 4;
+    const rowParityOffset = getRowParityOffset(fi);
     const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + rowParityOffset);
 
     return {
       part_id: fi.part_id,
       part_number: fi.part_number,
       description: fi.description,
-      category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
+      category_id: fi.category_id || (isDisplayCategoryOrDesc(fi) ? 'cat-display' : 'cat-battery'),
       forecasted_qty: fiQty,
       stocking_price: fiPrice,
       exchange_price: fi.exchange_price || existingAlloc?.exchange_price || 0,

@@ -118,7 +118,7 @@ export function useAuditLogs({
           user_email: currentUser?.email || '',
           metadata: newLog,
           created_at: newLog.timestamp
-        }]).catch(() => {});
+        }]);
 
         // Also persist to guaranteed saved_records deletion registry
         try {

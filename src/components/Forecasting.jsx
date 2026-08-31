@@ -60,10 +60,10 @@ export default function Forecasting() {
     }
   });
 
-  // Calculate the correct history month count based on activePeriod
-  const historyMonthCount = (activePeriod?.month && activePeriod.month > 1)
-    ? (activePeriod.month - 1)
-    : (maxHistoryLength > 0 ? maxHistoryLength : 8);
+  // Calculate the correct history month count based on actual loaded data, fallback to activePeriod
+  const historyMonthCount = maxHistoryLength > 0
+    ? maxHistoryLength
+    : ((activePeriod?.month && activePeriod.month > 1) ? (activePeriod.month - 1) : 8);
 
   const months = ALL_MONTH_NAMES.slice(0, historyMonthCount);
   const targetPeriodLabel = (() => {
@@ -122,13 +122,12 @@ export default function Forecasting() {
       // Take exact historical monthly usage aligned with months
       const counts = months.map((_, idx) => (idx < rawCounts.length ? (Number(rawCounts[idx]) || 0) : 0));
       
-      const computed = calculateItemForecast(item, forecastingModel, months.length);
-
       const parsedOverride = (item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '')
         ? parseInt(item.admin_override, 10)
         : null;
       // An override is active if the user explicitly provided an admin override value
       const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
+      const computed = calculateItemForecast(item, forecastingModel);
       const finalVal = hasOverride ? parsedOverride : computed;
       const trendMetrics = calculateForecastTrendMetrics(counts);
       const stockPrice = getStockPrice(item);

@@ -328,20 +328,20 @@ export function calculateForecastByModel(yValues = [], modelType = 'linear', opt
   if (!yValues || yValues.length === 0) return 0;
 
   switch (modelType) {
-    case 'linear':
-    case 'forecast_linear':
-      // Force filterAnomalies: false — linear model must match Google Sheet FORECAST.LINEAR
-      return calculateLinearRegressionForecast(yValues, options.targetX, {
-        ...options,
-        filterAnomalies: false
-      });
-
     case 'wma':
     case 'wma_4m':
-    default:
       return calculateWeightedMovingAverageForecast(yValues, options.weights || DEFAULT_WMA_WEIGHTS_4M, {
         ...options,
         filterAnomalies: options.filterAnomalies !== false
+      });
+
+    case 'linear':
+    case 'forecast_linear':
+    default:
+      // Default to Linear regression — matches Google Sheet FORECAST.LINEAR as the primary system baseline
+      return calculateLinearRegressionForecast(yValues, options.targetX, {
+        ...options,
+        filterAnomalies: false
       });
   }
 }
@@ -367,15 +367,15 @@ export function calculateForecastByModel(yValues = [], modelType = 'linear', opt
  *
  * @param {object} item - Forecast item containing ytd_monthly_counts, category_id, description
  * @param {string} modelType - Active model algorithm ('wma'|'linear')
- * @param {number} historyLength - History window length (default: 8) — used for WMA alignment only
+ * @param {number|null} [historyLength=null] - Optional history window length override. When omitted or null, dynamically uses full item history.
  * @returns {number} Integer forecast demand
  */
-export function calculateItemForecast(item, modelType = 'linear', historyLength = 8) {
+export function calculateItemForecast(item, modelType = 'linear', historyLength = null) {
   if (!item) return 0;
   const rawCounts = Array.isArray(item.ytd_monthly_counts) ? item.ytd_monthly_counts : [];
 
   // Slice historical counts according to active historyLength window if specified
-  const effectiveCounts = (historyLength && historyLength > 0 && historyLength < rawCounts.length)
+  const effectiveCounts = (typeof historyLength === 'number' && historyLength > 0 && historyLength < rawCounts.length)
     ? rawCounts.slice(0, historyLength)
     : rawCounts;
 
@@ -392,7 +392,9 @@ export function calculateItemForecast(item, modelType = 'linear', historyLength 
   }
 
   // ── WMA (and all other models): right-align with leading zeros + Winsorization ──
-  const targetLen = historyLength || (effectiveCounts.length > 0 ? effectiveCounts.length : 8);
+  const targetLen = (typeof historyLength === 'number' && historyLength > 0)
+    ? historyLength
+    : (effectiveCounts.length > 0 ? effectiveCounts.length : 4);
   const offset = targetLen - effectiveCounts.length;
   const counts = Array.from({ length: targetLen }, (_, idx) => {
     const dataIdx = idx - offset;

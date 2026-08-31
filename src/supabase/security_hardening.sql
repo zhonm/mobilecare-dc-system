@@ -16,89 +16,95 @@ ALTER TABLE IF EXISTS dc_intake_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS inventory_units ENABLE ROW LEVEL SECURITY;
 
 -- 2. Clean up legacy overly permissive policies
-DROP POLICY IF EXISTS "Allow public delete of saved_records" ON saved_records;
-DROP POLICY IF EXISTS "Allow public delete of dc_intake_records" ON dc_intake_records;
-DROP POLICY IF EXISTS "Allow public delete of profiles" ON profiles;
+DO $$
+DECLARE
+    pol RECORD;
+BEGIN
+    FOR pol IN 
+        SELECT schemaname, tablename, policyname 
+        FROM pg_policies 
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I;', pol.policyname, pol.schemaname, pol.tablename);
+    END LOOP;
+END $$;
 
 -- 3. Hardened Policies for Profiles & User Permissions
-DO $$ BEGIN
-    CREATE POLICY "Allow authenticated read profiles" ON profiles
-        FOR SELECT TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "profiles_select_own_or_admin" ON public.profiles
+    FOR SELECT TO authenticated
+    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
-DO $$ BEGIN
-    CREATE POLICY "Allow authenticated upsert profiles" ON profiles
-        FOR INSERT TO public WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "profiles_insert_own_or_superadmin" ON public.profiles
+    FOR INSERT TO authenticated
+    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
-DO $$ BEGIN
-    CREATE POLICY "Allow authenticated update profiles" ON profiles
-        FOR UPDATE TO public USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "profiles_update_own_or_superadmin" ON public.profiles
+    FOR UPDATE TO authenticated
+    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
+    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
-DO $$ BEGIN
-    CREATE POLICY "Allow authenticated delete profiles" ON profiles
-        FOR DELETE TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "profiles_delete_superadmin_only" ON public.profiles
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
+
+CREATE POLICY "user_page_permissions_select" ON public.user_page_permissions
+    FOR SELECT TO authenticated
+    USING (auth.uid() = user_id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
+
+CREATE POLICY "user_page_permissions_manage_superadmin" ON public.user_page_permissions
+    FOR ALL TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
+    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
 
 -- 4. Hardened Policies for Saved Period Records & Intake Records
-DO $$ BEGIN
-    CREATE POLICY "Allow read saved_records" ON saved_records
-        FOR SELECT TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "saved_records_select_authenticated" ON public.saved_records
+    FOR SELECT TO authenticated USING (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow insert saved_records" ON saved_records
-        FOR INSERT TO public WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "saved_records_write_authenticated" ON public.saved_records
+    FOR INSERT TO authenticated WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow update saved_records" ON saved_records
-        FOR UPDATE TO public USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "saved_records_update_authenticated" ON public.saved_records
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow delete saved_records" ON saved_records
-        FOR DELETE TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "saved_records_delete_admin" ON public.saved_records
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
-DO $$ BEGIN
-    CREATE POLICY "Allow read dc_intake_records" ON dc_intake_records
-        FOR SELECT TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "dc_intake_records_select_authenticated" ON public.dc_intake_records
+    FOR SELECT TO authenticated USING (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow insert dc_intake_records" ON dc_intake_records
-        FOR INSERT TO public WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "dc_intake_records_write_authenticated" ON public.dc_intake_records
+    FOR INSERT TO authenticated WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow update dc_intake_records" ON dc_intake_records
-        FOR UPDATE TO public USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "dc_intake_records_update_authenticated" ON public.dc_intake_records
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow delete dc_intake_records" ON dc_intake_records
-        FOR DELETE TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "dc_intake_records_delete_admin" ON public.dc_intake_records
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
 
 -- 5. Inventory Units Security
-DO $$ BEGIN
-    CREATE POLICY "Allow read inventory_units" ON inventory_units
-        FOR SELECT TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "inventory_units_select_authenticated" ON public.inventory_units
+    FOR SELECT TO authenticated USING (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow upsert inventory_units" ON inventory_units
-        FOR INSERT TO public WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "inventory_units_write_authenticated" ON public.inventory_units
+    FOR INSERT TO authenticated WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow update inventory_units" ON inventory_units
-        FOR UPDATE TO public USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "inventory_units_update_authenticated" ON public.inventory_units
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
 
-DO $$ BEGIN
-    CREATE POLICY "Allow delete inventory_units" ON inventory_units
-        FOR DELETE TO public USING (true);
-EXCEPTION WHEN duplicate_object THEN null; END $$;
+CREATE POLICY "inventory_units_delete_admin" ON public.inventory_units
+    FOR DELETE TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+
+-- 6. Grant schema and table permissions (RLS strictly controls data access)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated, service_role, postgres;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role, postgres;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon, authenticated, service_role, postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated, service_role, postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role, postgres;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role, postgres;

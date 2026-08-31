@@ -245,8 +245,37 @@ export function resolvePartInfo(rawInput, partsCatalog = []) {
 }
 
 /**
- * Normalizes all inventory units to ensure part_number is always a genuine Apple 661-xxxxx Part Number
- * Automatically heals corrupted units (e.g. 660-30373 -> 661-30373 Battery, iPhone 14)
+ * Detects whether a site object is a provincial service branch
+ * (i.e. not the DC Central Warehouse and not a Metro Manila ASP site).
+ */
+export function isProvincialSite(site) {
+  if (!site) return false;
+  if (site.is_dc || site.code === 'DC-MDC' || site.code === 'DC') return false;
+  const region = (site.region || '').trim().toLowerCase();
+  if (region === 'metro manila' || region === 'ncr') return false;
+  if (region && region !== 'metro manila' && region !== 'ncr') return true;
+
+  const name = (site.name || '').toLowerCase();
+  const code = (site.code || '').toUpperCase().trim();
+  const isMM = (
+    code.includes('BHS') || name.includes('bonifacio') || name.includes('high street') ||
+    code.includes('GB3') || name.includes('greenbelt') ||
+    code.includes('PPM') || name.includes('power plant') || name.includes('rockwell') ||
+    code.includes('GL5') || code.includes('GLS') || name.includes('glorietta') ||
+    code.includes('SMS') || name.includes("s'maison") || name.includes('smaison') ||
+    code.includes('MOA') || name.includes('mall of asia') ||
+    code.includes('POD') || name.includes('podium') ||
+    code.includes('MEG') || name.includes('megamall') ||
+    code.includes('ANX') || name.includes('annex') ||
+    code.includes('TRI') || name.includes('trinoma') ||
+    code.includes('VN') || name.includes('vertis')
+  );
+  return !isMM;
+}
+
+/**
+ * Standardizes raw inventory units imported from local storage, CSV/Excel, or Supabase,
+ * resolves genuine Apple parts metadata, enforces strict canonical schema,
  * AND purges invalid units where serial number was erroneously saved as a part number.
  */
 export function normalizeInventoryUnits(units = [], partsCatalog = []) {
@@ -268,10 +297,14 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       const rawPn = u.part_number || '';
       const rawDesc = u.description || '';
       const rawNotes = u.notes || '';
-      const rawAssignment = u.intake_assignment || (rawNotes.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-      const intakeAssignment = String(rawAssignment).includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting';
+      const rawAssignment = u.intake_assignment || (rawNotes.includes('SVNR') ? 'SVNR - Service Non-Repair' : rawNotes.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const intakeAssignment = String(rawAssignment).includes('SVNR')
+        ? 'SVNR - Service Non-Repair'
+        : String(rawAssignment).includes('CRBR')
+        ? 'DC - CRBR'
+        : 'MDC - Forecasting';
       const notes = u.intake_assignment
-        ? (rawNotes && !rawNotes.includes('CRBR') && !rawNotes.includes('Forecasting') ? `${intakeAssignment} | ${rawNotes}` : intakeAssignment)
+        ? (rawNotes && !rawNotes.includes('CRBR') && !rawNotes.includes('SVNR') && !rawNotes.includes('Forecasting') ? `${intakeAssignment} | ${rawNotes}` : intakeAssignment)
         : (rawNotes || intakeAssignment);
 
       // 0. Primary Resolution: Match by part_id in catalog (e.g., from relational Supabase inventory_units)

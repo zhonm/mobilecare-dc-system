@@ -146,8 +146,9 @@ export default function IntakeRecords() {
       if (u.is_deleted || u.status === 'deleted') return false;
       // Exclude items marked with status packed, shipped, dispatched, or allocated
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
-      // Must be in_stock in DC warehouse
-      return u.status === 'in_stock' || (!u.status && (u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC'));
+      // Must be in_stock in DC warehouse (strictly exclude PMG retail branch stock)
+      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      return (u.status === 'in_stock' || !u.status) && isDc;
     });
 
     const normalizedUnits = normalizeInventoryUnits(rawInStock, parts || []);
@@ -171,9 +172,10 @@ export default function IntakeRecords() {
 
       const price = u.stocking_price || partPriceMap.get(pn) || (isDisplay ? 329 : isBattery ? 99 : 50);
 
-      const rawAssignment = u.intake_assignment || (u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-      const isCrbr = rawAssignment.includes('CRBR');
-      const assignment = isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
+      const rawAssignment = u.intake_assignment || (u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const isSvnr = rawAssignment.includes('SVNR');
+      const isCrbr = !isSvnr && rawAssignment.includes('CRBR');
+      const assignment = isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
 
       // Parse date key (YYYY-MM-DD)
       let dateKey = todayDateStr;
@@ -196,8 +198,9 @@ export default function IntakeRecords() {
         category,
         price,
         intake_assignment: assignment,
-        notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('Forecasting') ? `${assignment} | ${u.notes}` : assignment,
+        notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('SVNR') && !u.notes.includes('Forecasting') ? `${assignment} | ${u.notes}` : assignment,
         isCrbr,
+        isSvnr,
         dateKey,
         timeStr,
         received_at: u.received_at || new Date().toISOString()
@@ -241,10 +244,13 @@ export default function IntakeRecords() {
         return false;
       }
       // Assignment filter
-      if (assignmentFilter === 'MDC - Forecasting' && u.isCrbr) {
+      if (assignmentFilter === 'MDC - Forecasting' && (u.isCrbr || u.isSvnr)) {
         return false;
       }
       if (assignmentFilter === 'DC - CRBR' && !u.isCrbr) {
+        return false;
+      }
+      if (assignmentFilter === 'SVNR - Service Non-Repair' && !u.isSvnr) {
         return false;
       }
       // Search query
@@ -293,7 +299,8 @@ export default function IntakeRecords() {
         const displaysCount = items.filter(i => i.category === 'Display').length;
         const batteriesCount = items.filter(i => i.category === 'Battery').length;
         const crbrCount = items.filter(i => i.isCrbr).length;
-        const forecastingCount = items.length - crbrCount;
+        const svnrCount = items.filter(i => i.isSvnr).length;
+        const forecastingCount = items.length - crbrCount - svnrCount;
         const otherCount = items.length - displaysCount - batteriesCount;
         const groupValuation = items.reduce((acc, i) => acc + (i.price || 0), 0);
 
@@ -305,6 +312,7 @@ export default function IntakeRecords() {
           displaysCount,
           batteriesCount,
           crbrCount,
+          svnrCount,
           forecastingCount,
           otherCount,
           valuation: groupValuation
@@ -459,7 +467,7 @@ export default function IntakeRecords() {
 
           <div class="meta-grid">
             <div><strong>Receipt Date:</strong><br>${dateGroup.dateKey}</div>
-            <div><strong>Breakdown:</strong><br>${dateGroup.forecastingCount} Forecasting • ${dateGroup.crbrCount} CRBR • ${dateGroup.displaysCount} Displays • ${dateGroup.batteriesCount} Batteries</div>
+            <div><strong>Breakdown:</strong><br>${dateGroup.forecastingCount} Forecasting • ${dateGroup.crbrCount} CRBR${dateGroup.svnrCount > 0 ? ` • ${dateGroup.svnrCount} SVNR` : ''} • ${dateGroup.displaysCount} Displays • ${dateGroup.batteriesCount} Batteries</div>
             <div><strong>Total Stock Valuation:</strong><br><span style="font-size: 15px; font-weight: bold; color: #0284c7;">$${dateGroup.valuation.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
           </div>
 
@@ -874,6 +882,7 @@ export default function IntakeRecords() {
                   <option value="ALL">All Destinations</option>
                   <option value="MDC - Forecasting">MDC - Forecasting Only</option>
                   <option value="DC - CRBR">DC - CRBR Only</option>
+                  <option value="SVNR - Service Non-Repair">SVNR - Service Non-Repair Only</option>
                 </select>
               </div>
             )}
@@ -1094,6 +1103,11 @@ export default function IntakeRecords() {
                                 {group.crbrCount} CRBR
                               </span>
                             )}
+                            {group.svnrCount > 0 && (
+                              <span className="badge" style={{ background: '#f3e8ff', color: '#7e22ce', fontSize: '11px', padding: '2px 6px' }}>
+                                {group.svnrCount} SVNR
+                              </span>
+                            )}
                             <span style={{ color: 'var(--text-subtle)' }}>•</span>
                             <span style={{ color: '#0369a1', fontWeight: 600 }}>{group.displaysCount} Displays</span>
                             <span style={{ color: 'var(--text-subtle)' }}>•</span>
@@ -1173,7 +1187,7 @@ export default function IntakeRecords() {
                                       <span
                                         className="badge font-mono"
                                         style={{
-                                          background: '#f1f5f9',
+                                           background: '#f1f5f9',
                                           color: '#0f172a',
                                           border: '1px solid #cbd5e1',
                                           fontWeight: 600,
@@ -1195,14 +1209,21 @@ export default function IntakeRecords() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const nextDest = u.isCrbr ? 'MDC - Forecasting' : 'DC - CRBR';
+                                        let nextDest = 'MDC - Forecasting';
+                                        if (u.isSvnr) {
+                                          nextDest = 'MDC - Forecasting';
+                                        } else if (u.isCrbr) {
+                                          nextDest = 'SVNR - Service Non-Repair';
+                                        } else {
+                                          nextDest = 'DC - CRBR';
+                                        }
                                         if (updateUnitAssignment) updateUnitAssignment(u.serial_number, nextDest);
                                       }}
                                       className="badge"
                                       style={{
-                                        background: u.isCrbr ? '#fef3c7' : '#e0f2fe',
-                                        color: u.isCrbr ? '#92400e' : '#0369a1',
-                                        border: u.isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                                        background: u.isSvnr ? '#f3e8ff' : u.isCrbr ? '#fef3c7' : '#e0f2fe',
+                                        color: u.isSvnr ? '#7e22ce' : u.isCrbr ? '#92400e' : '#0369a1',
+                                        border: u.isSvnr ? '1px solid #e9d5ff' : u.isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
                                         fontWeight: 700,
                                         fontSize: '11px',
                                         display: 'inline-flex',
@@ -1212,10 +1233,10 @@ export default function IntakeRecords() {
                                         padding: '3px 8px',
                                         borderRadius: '4px'
                                       }}
-                                      title={`Click to switch assignment to ${u.isCrbr ? 'MDC - Forecasting' : 'DC - CRBR'}`}
+                                      title={`Click to switch assignment to ${u.isSvnr ? 'MDC - Forecasting' : u.isCrbr ? 'SVNR - Service Non-Repair' : 'DC - CRBR'}`}
                                     >
-                                      {u.isCrbr ? <Tag size={10} /> : <Layers size={10} />}
-                                      <span>{u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                                      {u.isSvnr ? <Layers size={10} color="#7e22ce" /> : u.isCrbr ? <Tag size={10} /> : <Layers size={10} />}
+                                      <span>{u.isSvnr ? 'SVNR - Service Non-Repair' : u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
                                     </button>
                                   </td>
                                   <td>
@@ -1532,7 +1553,8 @@ export default function IntakeRecords() {
                   </thead>
                   <tbody>
                     {filteredInspectItems.map((it, idx) => {
-                      const isCrbr = it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR');
+                      const isSvnr = it.intake_assignment?.includes('SVNR') || it.notes?.includes('SVNR');
+                      const isCrbr = !isSvnr && (it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR'));
                       const resolvedDesc = it.description || partDescMap.get(it.part_number?.toUpperCase()) || 'Apple Genuine Service Part';
                       return (
                         <tr key={it.id || idx}>
@@ -1551,7 +1573,11 @@ export default function IntakeRecords() {
                             </div>
                           </td>
                           <td>
-                            {isCrbr ? (
+                            {isSvnr ? (
+                              <span className="badge" style={{ background: '#f3e8ff', color: '#7e22ce', fontSize: '10.5px' }}>
+                                SVNR - Service Non-Repair
+                              </span>
+                            ) : isCrbr ? (
                               <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10.5px' }}>
                                 DC - CRBR
                               </span>

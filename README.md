@@ -255,3 +255,8 @@ Database schemas and migrations are located in `src/supabase/`:
 - `schema.sql`: Complete PostgreSQL schema with authentication, RBAC, inventory, and period snapshots.
 - `saved_records_migration.sql`: Dedicated migration script for the `saved_records` JSONB table and RLS policies.
 
+---
+
+## 📚 Supplementary Documentation
+- **[Forecasting & Allocation Calculation Parity Guide](file:///Users/zhonmns/Documents/mobilecare-dc-system/CALCULATION_PARITY_README.md)**: In-depth mathematical explanation of calculation parity, the $90,273.00 vs $91,199.00 September workbook reconciliation, Excel formula analysis, and test suites.
+

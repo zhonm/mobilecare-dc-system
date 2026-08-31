@@ -214,7 +214,7 @@ export default function SaveIntakeRecordModal({
             <div style={{ marginBottom: '18px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                 <label className="form-label" style={{ margin: 0 }}>Dispatched Notes / Batch Remarks</label>
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   <button
                     type="button"
                     onClick={() => setNotes(prev => prev ? `${prev} | MDC - Forecasting` : 'MDC - Forecasting')}
@@ -230,6 +230,14 @@ export default function SaveIntakeRecordModal({
                     style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', cursor: 'pointer', padding: '2px 8px' }}
                   >
                     + Tag "DC - CRBR"
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNotes(prev => prev ? `${prev} | SVNR - Service Non-Repair` : 'SVNR - Service Non-Repair')}
+                    className="badge"
+                    style={{ background: '#f3e8ff', color: '#7e22ce', border: '1px solid #e9d5ff', cursor: 'pointer', padding: '2px 8px' }}
+                  >
+                    + Tag "SVNR - Service Non-Repair"
                   </button>
                 </div>
               </div>

@@ -55,9 +55,9 @@ END $$;
 -- profiles.id MUST equal auth.users.id (foreign key: profiles_id_fkey)
 
 INSERT INTO profiles (id, email, full_name, role, has_set_password, is_active, created_at, updated_at)
-SELECT u.id, u.email, 'Zhon Manaois', 'superadmin', true, true, NOW(), NOW()
+SELECT u.id, u.email, 'Super Admin', 'superadmin', true, true, NOW(), NOW()
 FROM auth.users u
-WHERE u.email = 'zhon@mobilecare.com.ph'
+WHERE u.email = 'superadmin@mobilecareph.com'
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     full_name = EXCLUDED.full_name,
@@ -67,9 +67,9 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = NOW();
 
 INSERT INTO profiles (id, email, full_name, role, has_set_password, is_active, created_at, updated_at)
-SELECT u.id, u.email, 'Joshua Juvida', 'superadmin', true, true, NOW(), NOW()
+SELECT u.id, u.email, 'System Admin', 'superadmin', true, true, NOW(), NOW()
 FROM auth.users u
-WHERE u.email = 'joshua@mobilecare.com.ph'
+WHERE u.email = 'admin@mobilecareph.com'
 ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     full_name = EXCLUDED.full_name,

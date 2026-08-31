@@ -10,6 +10,7 @@ import {
   calculateWeightedMovingAverageForecast,
   calculateLinearRegressionForecast,
   calculateForecastByModel,
+  calculateItemForecast,
   filterAnomaliesWinsorized,
   calculateFourWeekFinancialAllocation,
   DEFAULT_WMA_WEIGHTS_4M
@@ -35,7 +36,7 @@ function assert(condition, label, detail) {
   }
 }
 
-function near(a, b, eps) { eps = eps || 1e-9; return Math.abs(a - b) <= eps; }
+function _near(a, b, eps) { eps = eps || 1e-9; return Math.abs(a - b) <= eps; }
 
 console.log('\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550');
 console.log(' COMPREHENSIVE FORMULA AUDIT \u2014 Linear Regression + 4MO WMA');
@@ -461,6 +462,82 @@ console.log('\u2500\u2500 Section 9: 4-Week Financial Allocation \u2500\u2500');
     if(r.w1_qty+r.w2_qty+r.w3_qty+r.w4_qty !== p) { allOk=false; break; }
   }
   assert(allOk, '4-week financial qty sum invariant for p in [0..100]');
+})();
+
+// ── Section 10: Dynamic History Window Length in calculateItemForecast ─────────
+console.log('\n── Section 10: Dynamic History Window Length in calculateItemForecast ──');
+
+(function() {
+  // 5-month series: [10, 12, 14, 16, 18] -> next month x=6 should forecast 20
+  const item5 = {
+    part_id: 'test-5m',
+    description: 'Test 5-Month Part',
+    ytd_monthly_counts: [10, 12, 14, 16, 18]
+  };
+  const f5 = calculateItemForecast(item5, 'linear');
+  assert(f5 === 20, '5-month history dynamically evaluates target x=6 (forecast: ' + f5 + ' === 20)');
+
+  // 7-month series (August window): [49, 44, 46, 33, 25, 34, 17] -> x=8 should forecast 16
+  const item7 = {
+    part_id: 'test-7m',
+    description: 'Display, iPhone 13 (Aug)',
+    ytd_monthly_counts: [49, 44, 46, 33, 25, 34, 17]
+  };
+  const f7 = calculateItemForecast(item7, 'linear');
+  assert(f7 === 16, '7-month history dynamically evaluates target x=8 (forecast: ' + f7 + ' === 16)');
+
+  // 8-month series (September window): [49, 44, 46, 33, 25, 34, 27, 33] -> x=9 should forecast 23
+  const item8 = {
+    part_id: 'test-8m',
+    description: 'Display, iPhone 13 (Sep)',
+    ytd_monthly_counts: [49, 44, 46, 33, 25, 34, 27, 33]
+  };
+  const f8 = calculateItemForecast(item8, 'linear');
+  assert(f8 === 23, '8-month history dynamically evaluates target x=9 (forecast: ' + f8 + ' === 23)');
+
+  // 9-month series (October window): must NOT be truncated to 8 months!
+  // [10, 10, 10, 10, 10, 10, 10, 10, 20]
+  // 9-point regression: slope > 0, forecast at x=10 will be higher than 8-point flat line (10)
+  const item9 = {
+    part_id: 'test-9m',
+    description: 'Test 9-Month Part',
+    ytd_monthly_counts: [10, 10, 10, 10, 10, 10, 10, 10, 20]
+  };
+  const f9 = calculateItemForecast(item9, 'linear');
+  const expected9 = calculateLinearRegressionForecast([10, 10, 10, 10, 10, 10, 10, 10, 20], 10);
+  assert(f9 === expected9 && f9 > 10, '9-month history uses full 9-month window without truncation to 8 (forecast: ' + f9 + ')');
+
+  // Null/Empty series
+  assert(calculateItemForecast(null, 'linear') === 0, 'Null item returns 0');
+  assert(calculateItemForecast({ ytd_monthly_counts: [] }, 'linear') === 0, 'Empty counts returns 0');
+})();
+
+// ── Section 11: Option B & Proportional Allocation Zero-Drift Invariant ─────────
+console.log('\n── Section 11: Option B & Proportional Allocation Zero-Drift Invariant ──');
+
+(function() {
+  let allBalancesHold = true;
+  const testDemands = [
+    [10, 20, 30, 40, 50],
+    [1, 1, 1, 1, 1, 1, 1],
+    [120, 45, 0, 88, 12, 34, 95, 201, 15, 60],
+    new Array(27).fill(0).map((_, idx) => (idx * 7 + 3) % 29)
+  ];
+
+  for (const dList of testDemands) {
+    const siteDemands = dList.map((d, idx) => ({ siteId: 'site-' + idx, historicalDemand: d }));
+    for (let targetQty = 0; targetQty <= 200; targetQty++) {
+      const res = calculateProportionalAllocation(targetQty, siteDemands);
+      const allocatedSum = res.reduce((s, r) => s + r.allocatedQty, 0);
+      if (allocatedSum !== targetQty) {
+        allBalancesHold = false;
+        console.error('Invariant failed at targetQty=' + targetQty + ': allocatedSum=' + allocatedSum);
+        break;
+      }
+    }
+  }
+
+  assert(allBalancesHold, 'calculateProportionalAllocation strictly preserves sum(allocations) === targetQty across all test distributions (targetQty 0..200)');
 })();
 
 console.log('');

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
-import { clearOperationalLocalStorage, performHardRefresh } from '../utils/cacheManager';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   UploadCloud,
@@ -212,24 +211,16 @@ export default function DataImport() {
     setIsProcessing(true);
     try {
       await applyParsedDataset(parsedData, auditMeta);
-      const targetPeriod = { month: periodMonth, year: periodYear, label: targetMonthName };
-      
-      // Systematically clear operational local storage cache and set target period/tab
-      await clearOperationalLocalStorage({
-        keepSession: true,
-        preservePeriod: targetPeriod,
-        targetTab: 'forecast'
-      });
-
       setParsedData(null);
       setFileName('');
       setLastFileObj(null);
-      showToast('Master dataset applied! Cache cleared. Hard refreshing to display 100% synchronized data...', 'success');
-
-      // Hard refresh with cache-busting to ensure all views render with fresh data
-      performHardRefresh('forecast', 600);
+      setIsProcessing(false);
+      showToast('Master dataset applied and synced to cloud successfully!', 'success');
+      if (typeof setActiveTab === 'function') {
+        setActiveTab('forecast');
+      }
     } catch (err) {
-      console.error('Error during dataset import and cache clearance:', err);
+      console.error('Error during dataset import:', err);
       showToast(`Error applying dataset: ${err.message}`, 'error');
       setIsProcessing(false);
     }

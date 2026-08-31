@@ -73,7 +73,7 @@ export default function UserAccessManagement() {
   
   // Password Reset Modal State
   const [passwordResetUser, setPasswordResetUser] = useState(null);
-  const [newPasswordInput, setNewPasswordInput] = useState('Password123');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
   const [requireNextLogin, setRequireNextLogin] = useState(false);
   const [showPasswordText, setShowPasswordText] = useState(false);
   const [copiedNotice, setCopiedNotice] = useState(false);
@@ -116,9 +116,14 @@ export default function UserAccessManagement() {
 
   const openPasswordResetModal = (user) => {
     setPasswordResetUser(user);
-    setNewPasswordInput('Password123');
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+    let res = '';
+    for (let i = 0; i < 10; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setNewPasswordInput(res);
     setRequireNextLogin(false);
-    setShowPasswordText(false);
+    setShowPasswordText(true);
     setCopiedNotice(false);
   };
 
@@ -420,8 +425,6 @@ export default function UserAccessManagement() {
             <tbody>
               {usersList.map(user => {
                 const isSuper = user.role === 'superadmin';
-                const isAdm = user.role === 'admin';
-                const isPmg = user.role === 'parts_management';
                 const isSelf = user.id === currentUser?.id || user.email?.toLowerCase() === currentUser?.email?.toLowerCase();
                 const siteObj = sites.find(s => s.id === user.siteId) || {};
                 const canEditFull = isSuperadmin;
@@ -1119,24 +1122,7 @@ export default function UserAccessManagement() {
                         gap: '3px'
                       }}
                     >
-                      <RefreshCw size={11} /> Generate
-                    </button>
-                    <span style={{ color: '#cbd5e1' }}>•</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNewPasswordInput('Password123');
-                        setShowPasswordText(true);
-                      }}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#64748b',
-                        fontSize: '11.5px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Default (Password123)
+                      <RefreshCw size={11} /> Generate New
                     </button>
                   </div>
                 </label>

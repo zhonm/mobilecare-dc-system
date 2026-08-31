@@ -26,7 +26,6 @@ import {
   ShieldCheck,
   FileText
 } from 'lucide-react';
-import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
 
 export default function SettingsCatalog() {
   const {

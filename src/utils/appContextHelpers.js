@@ -175,6 +175,15 @@ export function canUserDeleteRecord(record, user) {
   // Match by Full Name
   if (savedByName && userName && (savedByName === userName || savedByName.includes(userName) || userName.includes(savedByName))) return true;
 
+  // Match by Assigned Branch Site
+  const userSiteId = String(user.siteId || user.site_id || '').trim().toLowerCase();
+  const userSiteCode = String(user.siteCode || user.site_code || '').trim().toLowerCase();
+  const recordSiteId = String(record.current_site_id || record.site_id || record.siteId || '').trim().toLowerCase();
+  const recordSiteCode = String(record.site_code || record.siteCode || '').trim().toLowerCase();
+
+  if (userSiteId && (userSiteId === recordSiteId || userSiteId === recordSiteCode)) return true;
+  if (userSiteCode && (userSiteCode === recordSiteCode || userSiteCode === recordSiteId)) return true;
+
   // Fallback: If record was created without creator info or generic warehouse staff, allow
   if (!savedById && !savedByName && !savedByEmail) return true;
   if (savedByName === 'warehouse staff' || savedByName === 'dc warehouse' || savedByName === 'system') return true;

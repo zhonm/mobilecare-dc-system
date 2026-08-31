@@ -101,6 +101,8 @@ export default function ScanOutPacking() {
           const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
           return {
             ...parsed,
+            created_date: parsed.created_date || (parsed.created_at ? new Date(parsed.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
+            shipment_date: parsed.status === 'draft' ? '' : (parsed.shipment_date || ''),
             carrier: parsed.carrier || parsed.courier || initialCourier,
             courier: parsed.carrier || parsed.courier || initialCourier,
             transfer_slip_number: parsed.transfer_slip_number || parsed.transfer_slip || '',
@@ -119,6 +121,8 @@ export default function ScanOutPacking() {
       const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
       return {
         ...existing,
+        created_date: existing.created_date || (existing.created_at ? new Date(existing.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
+        shipment_date: '',
         carrier: existing.carrier || existing.courier || initialCourier,
         courier: existing.carrier || existing.courier || initialCourier,
         transfer_slip_number: existing.transfer_slip_number || existing.transfer_slip || '',
@@ -133,7 +137,8 @@ export default function ScanOutPacking() {
       invoice_ref: generateNextInvoiceRef(shipments),
       site_id: serviceSites[0]?.id,
       week_number: 1,
-      shipment_date: new Date().toLocaleDateString('en-US'),
+      created_date: new Date().toLocaleDateString('en-US'),
+      shipment_date: '',
       carrier: initialCourier,
       courier: initialCourier,
       tracking_number: '',
@@ -394,7 +399,8 @@ export default function ScanOutPacking() {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (packedSerialsSet.has(cleanSerial)) return false;
-      return u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      return (u.status === 'in_stock' || !u.status) && isDc;
     });
   }, [inventoryUnits, packedSerialsSet]);
 
@@ -686,7 +692,8 @@ export default function ScanOutPacking() {
       invoice_ref: newInvoiceRef,
       site_id: selectedSiteId,
       week_number: 1,
-      shipment_date: new Date().toLocaleDateString('en-US'),
+      created_date: new Date().toLocaleDateString('en-US'),
+      shipment_date: '',
       carrier: autoCourier,
       courier: autoCourier,
       tracking_number: '',
@@ -739,23 +746,19 @@ export default function ScanOutPacking() {
       // 1. Permanently save to Database History and Cloud DB (AWAITED)
       await saveShipment(finalized);
 
-      // 2. Automatically generate and download formatted corporate PDF ONLY if tracking number is provided
-      if (cleanTracking) {
-        try {
-          generatePackingListPDF(finalized, finalized.items || [], selectedSite, {
-            supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
-            supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-            supervisorSignature: supervisorSettings?.signature_image,
-            guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
-            pickupDate: finalized.pickup_date || finalized.shipment_date
-          });
-          showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database with PDF downloaded!`, 'success');
-        } catch (pdfErr) {
-          console.warn('PDF generation note:', pdfErr);
-          showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database!`, 'success');
-        }
-      } else {
-        showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database! (Tracking # is blank — PDF download skipped until tracking # is provided).`, 'success');
+      // 2. Automatically generate and download formatted corporate PDF
+      try {
+        generatePackingListPDF(finalized, finalized.items || [], selectedSite, {
+          supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+          supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+          supervisorSignature: supervisorSettings?.signature_image,
+          guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
+          pickupDate: finalized.pickup_date || finalized.shipment_date
+        });
+        showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database with PDF downloaded!`, 'success');
+      } catch (pdfErr) {
+        console.warn('PDF generation note:', pdfErr);
+        showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database!`, 'success');
       }
       
       // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
@@ -771,54 +774,34 @@ export default function ScanOutPacking() {
         id: `ship-${Date.now()}`,
         shipment_number: nextShipmentNumber,
         invoice_ref: nextInvoiceRef,
-        site_id: selectedSiteId,
-        week_number: 1,
+        site_id: selectedSite.id,
+        carrier: isMM ? 'Lalamove' : 'Lite Express',
+        courier: isMM ? 'Lalamove' : 'Lite Express',
         shipment_date: new Date().toLocaleDateString('en-US'),
-        carrier: autoCourier,
-        courier: autoCourier,
-        tracking_number: '',
-        transfer_slip_number: '',
+        box_number: 1,
         total_boxes: 1,
+        tracking_number: '',
         status: 'draft',
-        prepared_by_name: currentUser?.fullName || '',
-        verified_by_name: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
-        pickup_by_name: autoCourier === 'Utility' ? 'Utility' : '',
-        receiving_signature: selectedSite?.code || 'ASP NPM',
-        remarks: 'KGB PARTS',
         items: []
       });
-      setTotalBoxes(1);
-      setBoxNumber(1);
-
-      setScanResult(null);
+      setPackedScans([]);
+      setScanError(null);
+      setLastAction({
+        type: 'finalized',
+        message: `Finalized Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) sent to ${selectedSite.name}! Next packing list initialized.`
+      });
+      setIsFinalizeModalOpen(false);
+      showToast(`Workstation ready for next shipment! (${nextInvoiceRef})`, 'info');
     } catch (err) {
-      console.error('Finalize shipment error:', err);
-      showToast('Error saving and finalizing packing list: ' + err.message, 'error');
+      console.error('Finalize error:', err);
+      showToast('Error saving packing list to database', 'error');
+    } finally {
+      setIsFinalizing(false);
     }
   };
 
-  // --- Safe Print / PDF Request Handler (Requires Tracking Number) ---
-  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'print', isDraft = false) => {
-    const trk = String(shipmentObj.tracking_number || shipmentObj.booking_id || '').trim();
-    if (!trk) {
-      // Prompt user to provide tracking number and declaration details before printing/downloading PDF
-      setTrackingModalState({
-        shipment: shipmentObj,
-        items: items || [],
-        site: siteObj || {},
-        action,
-        isDraft,
-        trackingInput: '',
-        carrierInput: shipmentObj.carrier || (siteObj?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express'),
-        courierNameInput: shipmentObj.pickup_by_name || shipmentObj.courier_name || shipmentObj.rider_name || '',
-        pickupDateInput: shipmentObj.pickup_date || shipmentObj.shipment_date || new Date().toLocaleDateString('en-US'),
-        guardOnDutyInput: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty || '',
-        riderPhoneInput: shipmentObj.rider_phone || '',
-        vehiclePlateInput: shipmentObj.vehicle_plate || ''
-      });
-      return;
-    }
-
+  // --- Direct Print / PDF Request Handler (Manual pen entry for tracking number & shipment date) ---
+  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, action = 'print', _isDraft = false) => {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
@@ -1643,7 +1626,8 @@ export default function ScanOutPacking() {
               <tbody>
                 {filteredStockUnits.map((unit, idx) => {
                   const catBadge = getCategoryBadgeStyle(unit.category_code);
-                  const isCrbr = unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR');
+                  const isSvnr = unit.intake_assignment?.includes('SVNR') || unit.notes?.includes('SVNR');
+                  const isCrbr = !isSvnr && (unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR'));
                   return (
                     <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
@@ -1683,16 +1667,16 @@ export default function ScanOutPacking() {
                         <span
                           className="badge"
                           style={{
-                            background: isCrbr ? '#fef3c7' : '#e0f2fe',
-                            color: isCrbr ? '#92400e' : '#0369a1',
-                            border: isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                            background: isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe',
+                            color: isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1',
+                            border: isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
                             fontSize: '10.5px',
                             fontWeight: 600,
                             padding: '2px 6px',
                             borderRadius: '4px'
                           }}
                         >
-                          {isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}
+                          {isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}
                         </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
@@ -1762,7 +1746,7 @@ export default function ScanOutPacking() {
               className="btn btn-secondary btn-sm"
               onClick={() => handleRequestPrintOrPDF(currentShipment, currentShipment.items, selectedSite, 'print', true)}
               style={{ height: '34px' }}
-              title="Preview and print packing list (Requires Tracking #)"
+              title="Preview and print corporate packing list"
             >
               <Printer size={14} />
               <span>Print Preview</span>
@@ -1826,7 +1810,7 @@ export default function ScanOutPacking() {
                 <input
                   type="text"
                   className="packing-inline-input font-mono"
-                  style={{ width: '220px', fontWeight: 700 }}
+                  style={{ width: '200px', fontWeight: 700 }}
                   value={currentShipment.invoice_ref ?? `DCOWNED#082726A`}
                   placeholder="DCOWNED#082726A"
                   title="Click to edit Invoice Reference"
@@ -1834,14 +1818,38 @@ export default function ScanOutPacking() {
                 />
               </div>
               <div className="packing-invoice-meta-row">
-                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>SHIPMENT DATE:</strong>
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>CREATED DATE:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
                   style={{ width: '120px' }}
-                  value={currentShipment.shipment_date ?? new Date().toLocaleDateString('en-US')}
-                  title="Click to edit Shipment Date"
+                  value={currentShipment.created_date ?? (currentShipment.created_at ? new Date(currentShipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'))}
+                  title="Created Date"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, created_date: e.target.value }))}
+                />
+              </div>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>SHIPMENT DATE:</strong>
+                <input
+                  type="text"
+                  className="packing-inline-input"
+                  style={{ width: '130px', borderBottom: '1px solid #94a3b8' }}
+                  value={currentShipment.shipment_date || ''}
+                  placeholder="— (Manual Pen Entry) —"
+                  title="Shipment Date (To be written manually with pen)"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, shipment_date: e.target.value }))}
+                />
+              </div>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>TRACKING NUMBER:</strong>
+                <input
+                  type="text"
+                  className="packing-inline-input font-mono"
+                  style={{ width: '140px', borderBottom: '1px solid #94a3b8' }}
+                  value={currentShipment.tracking_number || ''}
+                  placeholder="— (Manual Pen Entry) —"
+                  title="Tracking Number (To be written manually with pen)"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
                 />
               </div>
               <div className="packing-invoice-meta-row">
@@ -1858,18 +1866,6 @@ export default function ScanOutPacking() {
                   placeholder="Lalamove / Lite Express"
                   title="Click to edit Courier"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value, courier: e.target.value }))}
-                />
-              </div>
-              <div className="packing-invoice-meta-row">
-                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>TRACKING NUMBER:</strong>
-                <input
-                  type="text"
-                  className="packing-inline-input font-mono"
-                  style={{ width: '140px' }}
-                  value={currentShipment.tracking_number || ''}
-                  placeholder="Enter Tracking #"
-                  title="Click to edit Tracking Number"
-                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
                 />
               </div>
               {currentShipment.transfer_slip_number && (
@@ -2161,7 +2157,7 @@ export default function ScanOutPacking() {
                             <button
                               className="btn btn-secondary btn-sm"
                               onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'pdf', false)}
-                              title="Download PDF (Requires Tracking #)"
+                              title="Download Corporate PDF Manifest"
                               style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                             >
                               <Download size={12} />
@@ -2170,7 +2166,7 @@ export default function ScanOutPacking() {
                             <button
                               className="btn btn-secondary btn-sm"
                               onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'print', false)}
-                              title="Print Manifest (Requires Tracking #)"
+                              title="Print Packing List Direct"
                               style={{ padding: '4px 8px', fontSize: '11.5px' }}
                             >
                               <Printer size={12} />

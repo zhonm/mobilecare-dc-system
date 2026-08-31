@@ -50,8 +50,8 @@ export const INITIAL_USERS = [
     role: 'superadmin',
     rolePosition: 'Parts Management Specialist',
     siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
+    hasSetPassword: false,
+    passwordHash: null,
     isActive: true,
     permittedPages: ROLE_PRESETS.superadmin
   },
@@ -62,8 +62,8 @@ export const INITIAL_USERS = [
     role: 'superadmin',
     rolePosition: 'DC Operations Lead & Superadmin',
     siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
+    hasSetPassword: false,
+    passwordHash: null,
     isActive: true,
     permittedPages: ROLE_PRESETS.superadmin
   }

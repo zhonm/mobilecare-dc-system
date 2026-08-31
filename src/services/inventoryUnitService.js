@@ -117,7 +117,11 @@ export const executeUpdateUnitAssignment = async ({
 
   if (!targetSerial) return;
 
-  const validAssignment = newAssignment === 'DC - CRBR' ? 'DC - CRBR' : 'MDC - Forecasting';
+  const validAssignment = newAssignment === 'SVNR - Service Non-Repair' || String(newAssignment).includes('SVNR')
+    ? 'SVNR - Service Non-Repair'
+    : newAssignment === 'DC - CRBR' || String(newAssignment).includes('CRBR')
+    ? 'DC - CRBR'
+    : 'MDC - Forecasting';
 
   let updatedUnits = [];
   setInventoryUnits(prev => {

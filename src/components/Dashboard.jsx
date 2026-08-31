@@ -97,8 +97,8 @@ export default function Dashboard() {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
-      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
-      const isStock = u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc');
+      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      const isStock = (u.status === 'in_stock' || !u.status) && isDc;
       if (!isStock) return false;
       if (isUnfiltered) return true;
       const cleanPN = String(u.part_number || '').trim().toUpperCase();

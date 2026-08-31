@@ -5,14 +5,16 @@ import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import {
   calculateWeeklySplit,
   generateAllocationsFromForecasts,
-  allocatePartToSites
+  allocatePartToSites,
+  getRowParityOffset
 } from '../utils/allocationEngine';
-import { calculateForecastByModel, calculateItemForecast } from '../utils/forecastEngine';
+import { calculateItemForecast } from '../utils/forecastEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';
 
 export function useForecastingAndAllocation({
   parts = [],
   sites = [],
+  activePeriod = null,
   showToast,
   broadcastCloudEvent
 }) {
@@ -115,12 +117,6 @@ export function useForecastingAndAllocation({
     dbStorage.setItem('mdc_forecasting_model', newModel);
     dbStorage.setItem('mdc_default_forecasting_model', newModel);
 
-    const activeServiceSites = (sites || []).filter(s =>
-      !s.is_dc &&
-      !s.code?.toUpperCase().includes('DC') &&
-      s.code !== 'DC-MDC'
-    );
-
     let currentForecasts = forecastItems || [];
     if (currentForecasts.length === 0) {
       try {
@@ -134,24 +130,7 @@ export function useForecastingAndAllocation({
 
     // 1. Synchronously re-compute all forecast items using the selected mathematical model
     const updatedForecastItems = currentForecasts.map(item => {
-      const rawCounts = item.ytd_monthly_counts || [];
-      const counts = rawCounts.slice(0, 8);
-      const targetX = (counts.length || 8) + 1;
-
-      let computed;
-      if (counts.length === 0) {
-        computed = item.final_forecast !== undefined ? item.final_forecast : (item.computed_forecast || 0);
-      } else {
-        computed = calculateForecastByModel(counts, newModel, {
-          targetX,
-          // Linear model must NOT use Winsorization — it must match Google Sheet FORECAST.LINEAR.
-          // WMA keeps Winsorization ON because the 4-month window is spike-sensitive.
-          filterAnomalies: newModel !== 'linear',
-          categoryId: item.category_id,
-          description: item.description
-        });
-      }
-
+      const computed = calculateItemForecast(item, newModel, (item.ytd_monthly_counts || []).length);
       const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
       const finalVal = hasOverride ? parseInt(item.admin_override, 10) : computed;
 
@@ -163,7 +142,7 @@ export function useForecastingAndAllocation({
       };
     });
 
-    // 2. Synchronously re-compute all allocations across active branches
+    // 2. Synchronously re-compute all allocations across active branches using authoritative generateAllocationsFromForecasts
     let currentAllocations = allocations || [];
     if (currentAllocations.length === 0) {
       try {
@@ -173,55 +152,7 @@ export function useForecastingAndAllocation({
       }
     }
 
-    const updatedAllocations = updatedForecastItems.map((fi, rIdx) => {
-      const existingAlloc = currentAllocations.find(a =>
-        a.part_id === fi.part_id ||
-        a.part_number === fi.part_number ||
-        (a.description && fi.description && a.description.trim().toLowerCase() === fi.description.trim().toLowerCase())
-      );
-
-      const targetQty = fi.final_forecast !== undefined ? fi.final_forecast : (fi.computed_forecast || 0);
-      const stockingPrice = (typeof fi.stocking_price === 'number' && fi.stocking_price > 0)
-        ? fi.stocking_price
-        : (existingAlloc?.stocking_price || (fi.description?.toLowerCase().includes('display') ? 279 : 99));
-
-      const allocatedResults = allocatePartToSites(targetQty, fi, activeServiceSites, existingAlloc);
-      const newSiteQuantities = {};
-      let totalAlloc = 0;
-      allocatedResults.forEach(res => {
-        newSiteQuantities[res.siteId] = res.allocatedQty;
-        const siteObj = activeServiceSites.find(s => s.id === res.siteId);
-        if (siteObj?.code) newSiteQuantities[siteObj.code] = res.allocatedQty;
-        totalAlloc += res.allocatedQty;
-      });
-
-      const totalCost = totalAlloc * stockingPrice;
-      const isDisplayItem = (fi.category_id === 'cat-display') ||
-        ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
-      const rowParityOffset = isDisplayItem ? 3 : 4;
-      const fiSplit = calculateWeeklySplit(totalAlloc, totalCost, rIdx + rowParityOffset);
-
-      return {
-        part_id: fi.part_id,
-        part_number: fi.part_number,
-        description: fi.description,
-        category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
-        forecasted_qty: targetQty,
-        stocking_price: stockingPrice,
-        exchange_price: fi.exchange_price || existingAlloc?.exchange_price || 0,
-        total_allocated_qty: totalAlloc,
-        total_stock_cost: totalCost,
-        w1_qty: fiSplit.w1_qty,
-        w2_qty: fiSplit.w2_qty,
-        w3_qty: fiSplit.w3_qty,
-        w4_qty: fiSplit.w4_qty,
-        w1_cost: fiSplit.w1_cost,
-        w2_cost: fiSplit.w2_cost,
-        w3_cost: fiSplit.w3_cost,
-        w4_cost: fiSplit.w4_cost,
-        site_quantities: newSiteQuantities
-      };
-    });
+    const updatedAllocations = generateAllocationsFromForecasts(updatedForecastItems, sites, newModel, currentAllocations);
 
     setForecastItems(updatedForecastItems);
     try { localStorage.setItem('mdc_forecast', JSON.stringify(updatedForecastItems)); } catch (e) {}
@@ -268,7 +199,7 @@ export function useForecastingAndAllocation({
     if (!options.silent && showToast) {
       showToast(`Calculation model updated to ${MODEL_NAMES[newModel] || newModel}. Forecasts and branch allocations synchronized.`, 'success');
     }
-  }, [allocations, broadcastCloudEvent, forecastItems, showToast, sites]);
+  }, [activePeriod, allocations, broadcastCloudEvent, forecastItems, showToast, sites]);
 
   const updateForecastOverride = (partId, overrideVal) => {
     const rawVal = String(overrideVal).trim();
@@ -303,7 +234,7 @@ export function useForecastingAndAllocation({
       ) {
         const computed = (typeof item.computed_forecast === 'number' && Number.isFinite(item.computed_forecast))
           ? item.computed_forecast
-          : calculateItemForecast(item, forecastingModel, (item.ytd_monthly_counts || []).length || 8);
+          : calculateItemForecast(item, forecastingModel, (item.ytd_monthly_counts || []).length);
         // If override matches computed baseline, clear override to null
         const isBackToCalculated = override !== null && override === computed;
         const effectiveOverride = isBackToCalculated ? null : override;
@@ -415,7 +346,8 @@ export function useForecastingAndAllocation({
           });
 
           const totalCost = totalAlloc * stockingPrice;
-          const split = calculateWeeklySplit(totalAlloc, totalCost, idx + 3);
+          const rowParityOffset = getRowParityOffset(alloc);
+          const split = calculateWeeklySplit(totalAlloc, totalCost, idx + rowParityOffset);
 
           return {
             ...alloc,
@@ -448,7 +380,8 @@ export function useForecastingAndAllocation({
       });
 
       const totalCost = totalAlloc * stockingPrice;
-      const split = calculateWeeklySplit(totalAlloc, totalCost, currentAllocations.length + 3);
+      const rowParityOffset = getRowParityOffset({ category_id: categoryId, description: desc });
+      const split = calculateWeeklySplit(totalAlloc, totalCost, currentAllocations.length + rowParityOffset);
 
       const newAllocObj = {
         part_id: targetItem?.part_id || targetPart?.id || partId,
@@ -646,7 +579,7 @@ export function useForecastingAndAllocation({
       if (matches) {
         const computed = (typeof fi.computed_forecast === 'number' && Number.isFinite(fi.computed_forecast))
           ? fi.computed_forecast
-          : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length || 8);
+          : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length);
         // If the adjusted site allocation total returns to the original computed forecast,
         // clear the admin override (set to null), so it naturally returns to the original calculation!
         const isBackToCalculated = targetPartTotalQty === computed;
@@ -732,7 +665,8 @@ export function useForecastingAndAllocation({
 
     const totalCost = availableStock * (part.stocking_price || 0);
     const idx = allocations.findIndex(a => a.part_id === partId || a.part_number === partId);
-    const split = calculateWeeklySplit(availableStock, totalCost, (idx >= 0 ? idx : allocations.length) + 3);
+    const rowParityOffset = getRowParityOffset(part);
+    const split = calculateWeeklySplit(availableStock, totalCost, (idx >= 0 ? idx : allocations.length) + rowParityOffset);
 
     setAllocations(prev => {
       const exists = prev.some(a => a.part_id === partId || a.part_number === partId);
@@ -796,7 +730,7 @@ export function useForecastingAndAllocation({
     const computedQty = targetFi
       ? (typeof targetFi.computed_forecast === 'number' && Number.isFinite(targetFi.computed_forecast)
           ? targetFi.computed_forecast
-          : calculateItemForecast(targetFi, forecastingModel, (targetFi.ytd_monthly_counts || []).length || 8))
+          : calculateItemForecast(targetFi, forecastingModel, (targetFi.ytd_monthly_counts || []).length))
       : 0;
     const targetPrice = (typeof targetFi?.stocking_price === 'number' && targetFi.stocking_price > 0)
       ? targetFi.stocking_price
@@ -928,7 +862,7 @@ export function useForecastingAndAllocation({
     const updatedForecastItems = currentForecasts.map(fi => {
       const computed = (typeof fi.computed_forecast === 'number' && Number.isFinite(fi.computed_forecast))
         ? fi.computed_forecast
-        : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length || 8);
+        : calculateItemForecast(fi, forecastingModel, (fi.ytd_monthly_counts || []).length);
       return {
         ...fi,
         computed_forecast: computed,
