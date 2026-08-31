@@ -370,11 +370,12 @@ export function useCloudSync({
               !LEGACY_MOCK_IDS.includes(u.id)
             ) {
               const prevEntry = profileMap.get(cleanEmail) || {};
+              const passHash = u.passwordHash || prevEntry.passwordHash || null;
               profileMap.set(cleanEmail, {
                 ...prevEntry,
                 ...u,
-                passwordHash: u.passwordHash || prevEntry.passwordHash || null,
-                hasSetPassword: u.hasSetPassword !== undefined ? Boolean(u.hasSetPassword) : (prevEntry.hasSetPassword ?? false)
+                passwordHash: passHash,
+                hasSetPassword: Boolean(u.hasSetPassword || prevEntry.hasSetPassword || passHash)
               });
             }
           });
@@ -395,6 +396,8 @@ export function useCloudSync({
                 const customPerms = permsMap.get(p.id);
                 const role = p.role || existing?.role || 'user';
                 const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(role);
+                const passHash = p.password_hash || existing?.passwordHash || null;
+                const isPasswordSet = Boolean(p.has_set_password || passHash || existing?.hasSetPassword);
 
                 profileMap.set(cleanEmail, {
                   id: p.id || existing?.id || `usr-${Date.now()}`,
@@ -403,10 +406,8 @@ export function useCloudSync({
                   role: role,
                   rolePosition: resolvedPosition,
                   siteId: p.site_id || existing?.siteId || 'site-dc',
-                  hasSetPassword: (p.has_set_password !== undefined && p.has_set_password !== null)
-                    ? Boolean(p.has_set_password)
-                    : (existing?.hasSetPassword ?? false),
-                  passwordHash: p.password_hash || existing?.passwordHash || null,
+                  hasSetPassword: isPasswordSet,
+                  passwordHash: passHash,
                   isActive: p.is_active ?? existing?.isActive ?? true,
                   permittedPages: role === 'superadmin'
                     ? ROLE_PRESETS.superadmin

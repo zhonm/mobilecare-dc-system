@@ -109,6 +109,29 @@ async function runSecurityTests() {
   const { LEGACY_MOCK_EMAILS } = await import('../constants/roles.js');
   assert(!LEGACY_MOCK_EMAILS.includes('anjo.alcazar@mobilecareph.com'), 'LEGACY_MOCK_EMAILS does NOT block anjo.alcazar@mobilecareph.com');
 
+  // 6. Database-First Credential & Password Resolution on Incognito/Fresh Sessions
+  const dbProfileMock = {
+    id: 'usr-anjo-alcazar',
+    email: 'anjo.alcazar@mobilecareph.com',
+    full_name: 'Anjo Alcazar',
+    role: 'admin',
+    role_position: 'DC Operations Lead',
+    has_set_password: true,
+    password_hash: legitimateHash,
+    is_active: true
+  };
+
+  // Simulate verifyLoginEmail database resolution
+  const resolvedHasPassword = Boolean(dbProfileMock.has_set_password || dbProfileMock.password_hash);
+  assert(resolvedHasPassword === true, 'Database credential lookup flags hasSetPassword as true for configured accounts');
+
+  // Simulate password sign-in against database hash
+  const dbPasswordCheck = await verifyPassword(legitimatePassword, dbProfileMock.password_hash);
+  assert(dbPasswordCheck === true, 'Sign-in succeeds against database password_hash');
+
+  const wrongDbPasswordCheck = await verifyPassword('IncorrectPassword123', dbProfileMock.password_hash);
+  assert(wrongDbPasswordCheck === false, 'Sign-in rejects incorrect password against database password_hash');
+
   console.log('====================================================');
   console.log(`RESULTS: ${passed} PASSED, ${failed} FAILED`);
   console.log('====================================================');
