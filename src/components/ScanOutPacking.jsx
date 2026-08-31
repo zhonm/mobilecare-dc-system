@@ -32,7 +32,8 @@ import {
   Lock,
   Users,
   ShieldAlert,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Clock
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 import { isLockedConfirmedShipment, generateNextInvoiceRef } from '../utils/appContextHelpers';
@@ -102,13 +103,13 @@ export default function ScanOutPacking() {
           return {
             ...parsed,
             created_date: parsed.created_date || (parsed.created_at ? new Date(parsed.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
-            shipment_date: parsed.status === 'draft' ? '' : (parsed.shipment_date || ''),
+            shipment_date: (parsed.status === 'draft' || parsed.status === 'pending_pickup') ? '' : (parsed.shipment_date || ''),
             carrier: parsed.carrier || parsed.courier || initialCourier,
             courier: parsed.carrier || parsed.courier || initialCourier,
             transfer_slip_number: parsed.transfer_slip_number || parsed.transfer_slip || '',
             pickup_by_name: parsed.pickup_by_name || (parsed.carrier === 'Utility' ? 'Utility' : ''),
             tracking_number: cleanTrk,
-            prepared_by_name: currentUser?.fullName || parsed.prepared_by_name || ''
+            prepared_by_name: parsed.prepared_by_name?.trim() && parsed.prepared_by_name !== 'Warehouse Staff' ? parsed.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois')
           };
         }
       }
@@ -128,7 +129,7 @@ export default function ScanOutPacking() {
         transfer_slip_number: existing.transfer_slip_number || existing.transfer_slip || '',
         pickup_by_name: existing.pickup_by_name || (existing.carrier === 'Utility' ? 'Utility' : ''),
         tracking_number: cleanTrk,
-        prepared_by_name: currentUser?.fullName || existing.prepared_by_name || ''
+        prepared_by_name: existing.prepared_by_name?.trim() && existing.prepared_by_name !== 'Warehouse Staff' ? existing.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois')
       };
     }
     return {
@@ -145,7 +146,7 @@ export default function ScanOutPacking() {
       transfer_slip_number: '',
       total_boxes: 1,
       status: 'draft',
-      prepared_by_name: currentUser?.fullName || '',
+      prepared_by_name: currentUser?.fullName || 'Zhon Manaois',
       verified_by_name: 'Anjo Alcazar',
       pickup_by_name: '',
       receiving_signature: serviceSites[0]?.code || 'ASP NPM',
@@ -160,13 +161,17 @@ export default function ScanOutPacking() {
 
   // Automatically synchronize Prepared By with currently logged-in user's full name
   useEffect(() => {
-    if (currentUser?.fullName) {
-      setCurrentShipment(prev => ({
-        ...prev,
-        prepared_by_name: currentUser.fullName
-      }));
-    }
-  }, [currentUser?.fullName, currentUser?.id]);
+    const activeUserName = currentUser?.fullName || currentUser?.name || 'Zhon Manaois';
+    setCurrentShipment(prev => {
+      if (!prev.prepared_by_name || prev.prepared_by_name === 'Warehouse Staff' || prev.prepared_by_name === 'Joshua Juvida') {
+        return {
+          ...prev,
+          prepared_by_name: activeUserName
+        };
+      }
+      return prev;
+    });
+  }, [currentUser?.fullName, currentUser?.name, currentUser?.id]);
 
   // Ref to track timestamp of local workstation edits
   const lastLocalEditTimeRef = useRef(0);
@@ -177,7 +182,7 @@ export default function ScanOutPacking() {
 
   // Keep active user draft persisted to user-scoped LocalStorage
   useEffect(() => {
-    const isSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved'));
+    const isSaved = currentShipment?.id && shipments.some(s => s.id === currentShipment.id && (s.status === 'shipped' || s.status === 'delivered' || s.status === 'saved' || s.status === 'pending_pickup' || s.status === 'received_confirmed'));
     if (isSaved) return;
 
     if (currentShipment?.items && currentShipment.items.length > 0) {
@@ -193,7 +198,12 @@ export default function ScanOutPacking() {
     }
   }, [currentShipment, shipments, userDraftStorageKey]);
 
-  // Live Packing Presence Heartbeat: broadcast current user's active packing station to peers
+  // Live Packing Presence Heartbeat: broadcast current user's active packing station to peers (throttled)
+  const currentItemCountRef = useRef((currentShipment?.items || []).length);
+  useEffect(() => {
+    currentItemCountRef.current = (currentShipment?.items || []).length;
+  }, [(currentShipment?.items || []).length]);
+
   useEffect(() => {
     if (!currentUser || !broadcastPackingPresence) return;
 
@@ -205,7 +215,7 @@ export default function ScanOutPacking() {
         siteId: selectedSiteId,
         siteCode: selectedSite?.code || '',
         siteName: selectedSite?.name || '',
-        itemCount: (currentShipment?.items || []).length,
+        itemCount: currentItemCountRef.current,
         isPacking
       });
     };
@@ -213,13 +223,13 @@ export default function ScanOutPacking() {
     sendPresence(true);
     const heartbeatInterval = setInterval(() => {
       sendPresence(true);
-    }, 10000);
+    }, 15000);
 
     return () => {
       clearInterval(heartbeatInterval);
       sendPresence(false);
     };
-  }, [currentUser, selectedSiteId, selectedSite, currentShipment, broadcastPackingPresence]);
+  }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, broadcastPackingPresence]);
 
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
@@ -669,7 +679,7 @@ export default function ScanOutPacking() {
 
     // If the active draft has items not yet saved to the database, restore them to DC stock
     if (currentShipment.items && currentShipment.items.length > 0) {
-      const isAlreadySaved = shipments.some(s => s.id === currentShipment.id && (s.status === 'saved' || s.status === 'shipped'));
+      const isAlreadySaved = shipments.some(s => s.id === currentShipment.id && (s.status === 'saved' || s.status === 'shipped' || s.status === 'pending_pickup' || s.status === 'received_confirmed'));
       if (!isAlreadySaved) {
         await clearShipmentDraftItems(currentShipment.id, currentShipment.items);
       }
@@ -729,6 +739,10 @@ export default function ScanOutPacking() {
       const isMM = selectedSite?.region === 'Metro Manila';
       const autoCourier = currentShipment.carrier || (isMM ? 'Lalamove' : 'Lite Express');
 
+      const activeUserName = currentShipment.prepared_by_name?.trim() && currentShipment.prepared_by_name !== 'Warehouse Staff'
+        ? currentShipment.prepared_by_name.trim()
+        : (currentUser?.fullName || currentUser?.name || 'Zhon Manaois');
+
       const finalized = {
         ...currentShipment,
         id: currentShipment.id || `ship-${Date.now()}`,
@@ -738,7 +752,10 @@ export default function ScanOutPacking() {
         box_number: boxNumber,
         box_number_label: `${boxNumber}/${totalBoxes}`,
         tracking_number: cleanTracking,
-        status: 'shipped',
+        status: 'pending_pickup',
+        prepared_by_name: activeUserName,
+        saved_by_name: activeUserName,
+        shipment_date: currentShipment.shipment_date || '',
         created_at: currentShipment.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -777,11 +794,16 @@ export default function ScanOutPacking() {
         site_id: selectedSite.id,
         carrier: isMM ? 'Lalamove' : 'Lite Express',
         courier: isMM ? 'Lalamove' : 'Lite Express',
-        shipment_date: new Date().toLocaleDateString('en-US'),
+        shipment_date: '',
         box_number: 1,
         total_boxes: 1,
         tracking_number: '',
         status: 'draft',
+        prepared_by_name: activeUserName,
+        verified_by_name: 'Anjo Alcazar',
+        pickup_by_name: '',
+        receiving_signature: selectedSite?.code || 'ASP NPM',
+        remarks: 'KGB PARTS',
         items: []
       });
       setPackedScans([]);
@@ -2001,8 +2023,8 @@ export default function ScanOutPacking() {
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
                 style={{ width: '170px', fontWeight: 600 }}
-                value={currentShipment.prepared_by_name ?? (currentUser?.fullName || 'Joshua Juvida')}
-                placeholder="Joshua Juvida"
+                value={currentShipment.prepared_by_name ?? (currentUser?.fullName || currentUser?.name || 'Zhon Manaois')}
+                placeholder={currentUser?.fullName || currentUser?.name || 'Zhon Manaois'}
                 title="Click to edit Prepared By"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
               />
@@ -2076,34 +2098,37 @@ export default function ScanOutPacking() {
             </p>
           </div>
         ) : (
-          <div className="table-container" style={{ overflowX: 'auto' }}>
-            <table className="data-table" style={{ fontSize: '12.5px' }}>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Invoice Reference</th>
-                  <th>Destination Branch</th>
-                  <th>Total Parts</th>
-                  <th>Courier & Tracking</th>
-                  <th>Prepared / Verified</th>
-                  <th>Status</th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shipments
-                  .filter(s => s.items && s.items.length > 0)
-                  .map(s => {
-                    const destSite = sites.find(st => st.id === s.site_id) || { code: s.site_code || 'HUB', name: s.site_name || 'Branch' };
-                    const formattedDate = s.shipment_date || (s.created_at ? new Date(s.created_at).toLocaleDateString('en-US') : 'N/A');
-                    return (
-                      <tr key={s.id}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: '#334155' }}>
-                            <Calendar size={13} color="var(--primary)" />
-                            <span>{formattedDate}</span>
-                          </div>
-                        </td>
+          <div className="table-container">
+            <table className="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Invoice Reference</th>
+                <th>Destination Branch</th>
+                <th>Total Parts</th>
+                <th>Courier & Tracking</th>
+                <th>Prepared / Verified</th>
+                <th>Status</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shipments
+                .filter(s => s.items && s.items.length > 0)
+                .map(s => {
+                  const destSite = sites.find(st => st.id === s.site_id) || { code: s.site_code || 'HUB', name: s.site_name || 'Branch' };
+                  const isPending = s.status === 'pending_pickup' || s.status === 'draft';
+                  const formattedDate = (s.pickup_date || (!isPending && s.shipment_date))
+                    ? (s.pickup_date || s.shipment_date)
+                    : 'Pending Dispatch';
+                  return (
+                    <tr key={s.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: isPending && formattedDate === 'Pending Dispatch' ? '#b45309' : '#334155' }}>
+                          {isPending && formattedDate === 'Pending Dispatch' ? <Clock size={13} color="#d97706" /> : <Calendar size={13} color="var(--primary)" />}
+                          <span>{formattedDate}</span>
+                        </div>
+                      </td>
                         <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
                           {s.invoice_ref || s.shipment_number}
                         </td>
@@ -2134,13 +2159,14 @@ export default function ScanOutPacking() {
                           <span
                             className="badge"
                             style={{
-                              background: s.status === 'shipped' ? '#dcfce7' : s.status === 'delivered' ? '#e0e7ff' : '#fef3c7',
-                              color: s.status === 'shipped' ? '#15803d' : s.status === 'delivered' ? '#4338ca' : '#b45309',
+                              background: s.status === 'received_confirmed' ? '#dcfce7' : (s.status === 'shipped' || s.status === 'in_transit') ? '#e0e7ff' : s.status === 'pending_pickup' ? '#fef3c7' : '#f1f5f9',
+                              color: s.status === 'received_confirmed' ? '#15803d' : (s.status === 'shipped' || s.status === 'in_transit') ? '#4338ca' : s.status === 'pending_pickup' ? '#b45309' : '#475569',
                               textTransform: 'uppercase',
-                              fontSize: '10.5px'
+                              fontSize: '10.5px',
+                              fontWeight: 600
                             }}
                           >
-                            {s.status}
+                            {s.status === 'pending_pickup' ? 'Pending Pickup' : s.status === 'received_confirmed' ? 'Received Confirmed' : s.status}
                           </span>
                         </td>
                         <td style={{ textAlign: 'right' }}>

@@ -426,7 +426,7 @@ export default function UserAccessManagement() {
               {usersList.map(user => {
                 const isSuper = user.role === 'superadmin';
                 const isSelf = user.id === currentUser?.id || user.email?.toLowerCase() === currentUser?.email?.toLowerCase();
-                const siteObj = sites.find(s => s.id === user.siteId) || {};
+                const siteObj = sites.find(s => s.id === user.siteId || s.code === user.siteId || s.id === user.site_id || s.code === user.siteCode) || {};
                 const canEditFull = isSuperadmin;
                 const canEditPosition = isSuperadmin || (isAdmin && user.role === 'user');
 
@@ -523,7 +523,7 @@ export default function UserAccessManagement() {
 
                     <td style={{ textAlign: 'center' }}>
                       {isSuper ? (
-                        <span className="badge badge-primary" style={{ fontSize: '11px' }}>All 14 Pages</span>
+                        <span className="badge badge-primary" style={{ fontSize: '11px' }}>All {ROLE_PRESETS.superadmin?.length || 17} Pages</span>
                       ) : (
                         <span className="badge" style={{ background: '#f1f5f9', color: '#334155', fontSize: '11px' }}>
                           {user.permittedPages?.length || 0} Pages

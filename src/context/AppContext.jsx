@@ -402,6 +402,7 @@ export function AppProvider({ children }) {
         batchImportShipments: shipmentsDomain.batchImportShipments,
         clearAllShipmentsData: shipmentsDomain.clearAllShipmentsData,
         saveShipment: shipmentsDomain.saveShipment,
+        confirmSiteReceive: shipmentsDomain.confirmSiteReceive,
         updateForecastOverride: forecastingAndAllocation.updateForecastOverride,
         updateSiteAllocation: forecastingAndAllocation.updateSiteAllocation,
         runAutoAllocation: forecastingAndAllocation.runAutoAllocation,

@@ -37,7 +37,7 @@ async function runSecurityTests() {
   const plainComparisonResult = await verifyPassword('SecretPass123', 'SecretPass123');
   assert(plainComparisonResult === false, 'verifyPassword rejects plaintext stored hashes (requires sha256: prefix)');
 
-  // 2. Cryptographic Salted SHA-256 Verification
+  // 2. Cryptographic Salted SHA-256 Verification & Strict Single Password
   const legitimatePassword = 'ValidSecurePassword!2026';
   const legitimateHash = await hashPassword(legitimatePassword);
   assert(legitimateHash.startsWith('sha256:'), 'hashPassword produces salted sha256: prefix hash');
@@ -47,6 +47,20 @@ async function runSecurityTests() {
 
   const wrongPasswordVerification = await verifyPassword('WrongPassword', legitimateHash);
   assert(wrongPasswordVerification === false, 'verifyPassword rejects incorrect password against valid hash');
+
+  // Critical: Enforce strict case-sensitivity (no multiple passwords via lower/upper mutations)
+  const lowerCaseMismatch = await verifyPassword(legitimatePassword.toLowerCase(), legitimateHash);
+  assert(lowerCaseMismatch === false, 'verifyPassword strictly rejects lowercase password variation');
+
+  const upperCaseMismatch = await verifyPassword(legitimatePassword.toUpperCase(), legitimateHash);
+  assert(upperCaseMismatch === false, 'verifyPassword strictly rejects uppercase password variation');
+
+  const joseTestPassword = 'MySecretPassword123';
+  const joseTestHash = await hashPassword(joseTestPassword);
+  const joseLowerAttempt = await verifyPassword('mysecretpassword123', joseTestHash);
+  assert(joseLowerAttempt === false, 'verifyPassword strictly rejects lowercase variant on Jose account');
+  const joseExactAttempt = await verifyPassword('MySecretPassword123', joseTestHash);
+  assert(joseExactAttempt === true, 'verifyPassword accepts only exact case password');
 
   // 3. Session Integrity & [object Promise] Bypass Removal
   const user = {

@@ -39,18 +39,10 @@ export async function verifyPassword(inputPassword, storedHash) {
     return false;
   }
 
-  // Only verify cryptographic SHA-256 salted hashes
+  // Only verify cryptographic SHA-256 salted hashes strictly with constant-time check
   if (storedHash.startsWith("sha256:")) {
     const computedHash = await hashPassword(inputPassword);
-    if (timingSafeEqual(computedHash, storedHash)) return true;
-
-    // Check lowercase variation (e.g. password123 vs Password123)
-    const lowerHash = await hashPassword(inputPassword.toLowerCase());
-    if (timingSafeEqual(lowerHash, storedHash)) return true;
-
-    // Check capitalized variation
-    const capHash = await hashPassword(inputPassword.charAt(0).toUpperCase() + inputPassword.slice(1));
-    if (timingSafeEqual(capHash, storedHash)) return true;
+    return timingSafeEqual(computedHash, storedHash);
   }
 
   return false;

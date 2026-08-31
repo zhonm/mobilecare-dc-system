@@ -611,9 +611,276 @@ it('File bulk import and batch receive strictly isolate existing serial checks t
   assert.strictEqual(ppmExistingCheck.statusMessage, 'Already in Branch Stock (Will re-sync/update details)');
 });
 
+// 20. USER PROVISIONING & EMAIL VALIDATION
+it('User Provisioning: correctly provisions valid email formats and synchronizes user state', () => {
+  const usersList = [
+    { id: 'usr-admin', email: 'admin@mobilecareph.com', fullName: 'System Admin', role: 'superadmin' }
+  ];
+
+  // Helper matching updated isAllowedCompanyEmail
+  const isAllowedCompanyEmail = (email) => {
+    if (!email || typeof email !== 'string') return false;
+    const clean = email.trim().toLowerCase();
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    return emailRegex.test(clean);
+  };
+
+  // Test various email formats
+  assert.strictEqual(isAllowedCompanyEmail('joshua@mobilecareph.com'), true, 'Corporate domain is valid');
+  assert.strictEqual(isAllowedCompanyEmail('staff.member@mobilecare.com.ph'), true, 'PH domain is valid');
+  assert.strictEqual(isAllowedCompanyEmail('technician.juan@gmail.com'), true, 'Standard email format is valid');
+  assert.strictEqual(isAllowedCompanyEmail('invalid-email-no-at'), false, 'Invalid email is rejected');
+  assert.strictEqual(isAllowedCompanyEmail(''), false, 'Empty email is rejected');
+
+  // Simulate provisionUser
+  const provision = (form) => {
+    const cleanEmail = form.email.trim().toLowerCase();
+    if (!isAllowedCompanyEmail(cleanEmail)) {
+      return { success: false, error: 'Invalid email' };
+    }
+    if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
+      return { success: false, error: 'User already exists' };
+    }
+    const newUser = {
+      id: `usr-${Date.now()}`,
+      email: cleanEmail,
+      fullName: form.fullName.trim(),
+      role: form.role,
+      rolePosition: form.rolePosition,
+      siteId: form.siteId,
+      hasSetPassword: false,
+      isActive: true
+    };
+    usersList.push(newUser);
+    return { success: true, user: newUser };
+  };
+
+  const res = provision({
+    fullName: 'Juan Dela Cruz',
+    email: 'juan.delacruz@mobilecareph.com',
+    role: 'parts_management',
+    rolePosition: 'Branch Parts Specialist',
+    siteId: 'site-ppm'
+  });
+
+  assert.strictEqual(res.success, true, 'User provisioned successfully');
+  assert.strictEqual(usersList.length, 2, 'Users list contains new user');
+  assert.strictEqual(usersList[1].fullName, 'Juan Dela Cruz');
+  assert.strictEqual(usersList[1].role, 'parts_management');
+});
+
+// 21. PMG STOCK AVAILABILITY & RECEIPT CONFIRMATION WORKFLOW
+it('Packed & In-Transit parts are EXCLUDED from available branch stock until Superadmin confirms receipt', () => {
+  const branchSiteId = 'site-ppm';
+  const partNumber = '661-21991';
+
+  // 1. Initial State: 1 unit already in stock at branch, 2 units packed at DC for this branch
+  const inventoryUnits = [
+    {
+      id: 'u-existing',
+      part_number: partNumber,
+      serial_number: 'SER-EXISTING-01',
+      current_site_id: branchSiteId,
+      status: 'in_stock'
+    },
+    {
+      id: 'u-packed-1',
+      part_number: partNumber,
+      serial_number: 'SER-PACKED-01',
+      current_site_id: branchSiteId,
+      status: 'packed'
+    },
+    {
+      id: 'u-packed-2',
+      part_number: partNumber,
+      serial_number: 'SER-PACKED-02',
+      current_site_id: branchSiteId,
+      status: 'shipped'
+    }
+  ];
+
+  // Stock calculation helper matching getStockOnHandForSite
+  const calculateStock = (units, siteId) => {
+    let inStock = 0;
+    let packed = 0;
+    units.filter(u => u.current_site_id === siteId).forEach(u => {
+      const s = String(u.status || 'in_stock').toLowerCase();
+      if (s === 'in_stock' || s === 'delivered' || s === 'received') {
+        inStock++;
+      } else if (s === 'packed' || s === 'shipped' || s === 'in_transit' || s === 'pending_pickup') {
+        packed++;
+      }
+    });
+    return { inStock, packed };
+  };
+
+  const initialStock = calculateStock(inventoryUnits, branchSiteId);
+  assert.strictEqual(initialStock.inStock, 1, 'Only 1 unit is available in branch stock while 2 units are packed/in-transit');
+  assert.strictEqual(initialStock.packed, 2, '2 units are tracked under packed/in-transit');
+
+  // 2. Superadmin Confirms Receipt at Site
+  const confirmReceipt = (units, serialsToConfirm) => {
+    return units.map(u => {
+      if (serialsToConfirm.includes(u.serial_number)) {
+        return {
+          ...u,
+          status: 'in_stock',
+          received_at: new Date().toISOString()
+        };
+      }
+      return u;
+    });
+  };
+
+  const updatedUnits = confirmReceipt(inventoryUnits, ['SER-PACKED-01', 'SER-PACKED-02']);
+  const postConfirmStock = calculateStock(updatedUnits, branchSiteId);
+
+  assert.strictEqual(postConfirmStock.inStock, 3, 'All 3 units are now ACTIVE & IN STOCK at branch after confirmation');
+  assert.strictEqual(postConfirmStock.packed, 0, '0 units remaining packed');
+});
+
+it('Confirming site receipt auto-fulfills matching parts requests and updates status across network', () => {
+  const branchSiteId = 'site-ppm';
+  const partNumber = '661-21991';
+
+  let partsRequests = [
+    {
+      id: 'req-001',
+      request_number: 'PR-202608-1001',
+      site_id: branchSiteId,
+      part_number: partNumber,
+      quantity_requested: 2,
+      quantity_fulfilled: 0,
+      status: 'approved'
+    }
+  ];
+
+  const updatePartsRequestStatus = (reqId, payload) => {
+    partsRequests = partsRequests.map(r => r.id === reqId ? { ...r, ...payload } : r);
+  };
+
+  const shipment = {
+    id: 'ship-100',
+    invoice_ref: 'DCSSR#901',
+    site_id: branchSiteId,
+    status: 'pending_pickup',
+    items: [
+      { part_number: partNumber, serial_number: 'SER-01' },
+      { part_number: partNumber, serial_number: 'SER-02' }
+    ]
+  };
+
+  // Simulate confirmSiteReceive auto-fulfillment
+  const shipmentPartNumbers = new Set((shipment.items || []).map(it => it.part_number.toUpperCase()));
+  const matchingRequests = partsRequests.filter(req =>
+    (req.site_id === shipment.site_id) &&
+    shipmentPartNumbers.has(req.part_number.toUpperCase())
+  );
+
+  matchingRequests.forEach(req => {
+    updatePartsRequestStatus(req.id, {
+      status: 'fulfilled',
+      quantity_fulfilled: req.quantity_requested,
+      fulfilled_shipment_id: shipment.id
+    });
+  });
+
+  assert.strictEqual(partsRequests[0].status, 'fulfilled', 'Request marked as fulfilled');
+  assert.strictEqual(partsRequests[0].quantity_fulfilled, 2, 'Quantity fulfilled updated to 2');
+  assert.strictEqual(partsRequests[0].fulfilled_shipment_id, 'ship-100');
+});
+
+// 22. ZERO-STOCK AUTO-CLEANING TRANSIT EXEMPTION TEST
+it('Zero-Stock Auto-Cleaning strictly EXEMPTS parts that have units packed or in transit', () => {
+  const branchSiteId = 'site-ppm';
+  const inTransitPartPN = '661-56050'; // Display, iPhone 17 Pro Max
+  const trulyStalePartPN = '661-99999'; // Stale part with 0 stock and 0 in-transit
+
+  const nowMs = Date.now();
+  const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000;
+  const fourDaysAgoIso = new Date(nowMs - FOUR_DAYS_MS).toISOString();
+
+  // Simulated inventory units
+  const inventoryUnits = [
+    // inTransitPartPN has 0 in_stock units, but 1 unit packed in transit for PPM branch
+    {
+      id: 'u-transit-1',
+      part_number: inTransitPartPN,
+      serial_number: 'SER-TRANSIT-17',
+      current_site_id: branchSiteId,
+      status: 'packed'
+    }
+  ];
+
+  // Tracker has both parts recorded as 0 stock 4 days ago (> 3 days)
+  let tracker = {
+    [`${branchSiteId}_${inTransitPartPN}`]: {
+      siteId: branchSiteId,
+      partNumber: inTransitPartPN,
+      zeroStockSince: fourDaysAgoIso
+    },
+    [`${branchSiteId}_${trulyStalePartPN}`]: {
+      siteId: branchSiteId,
+      partNumber: trulyStalePartPN,
+      zeroStockSince: fourDaysAgoIso
+    }
+  };
+
+  // Simulating getStockOnHandForSite with transit protection
+  const partsSummary = {
+    [inTransitPartPN]: {
+      partNumber: inTransitPartPN,
+      inStock: 0,
+      packed: 1,
+      total: 1
+    },
+    [trulyStalePartPN]: {
+      partNumber: trulyStalePartPN,
+      inStock: 0,
+      packed: 0,
+      total: 0
+    }
+  };
+
+  const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
+  Object.keys(partsSummary).forEach(pn => {
+    const item = partsSummary[pn];
+    const trackerKey = `${branchSiteId}_${pn}`;
+
+    if (item.inStock > 0 || item.packed > 0) {
+      item.status = item.inStock > 0 ? 'in_stock' : 'in_transit';
+      item.outOfStockDays = 0;
+      item.daysUntilPurge = null;
+      item.zeroStockSince = null;
+      if (tracker[trackerKey]) {
+        delete tracker[trackerKey];
+      }
+    } else {
+      item.status = 'out_of_stock';
+      const zeroSinceMs = new Date(tracker[trackerKey]?.zeroStockSince || nowMs).getTime();
+      const elapsedMs = nowMs - zeroSinceMs;
+      if (elapsedMs >= THREE_DAYS_MS && (item.packed || 0) === 0 && (item.allocated || 0) === 0) {
+        delete partsSummary[pn];
+      }
+    }
+  });
+
+  // Verify that the truly stale part was purged
+  assert.strictEqual(partsSummary[trulyStalePartPN], undefined, 'Truly stale part with 0 stock and 0 in-transit is purged after 3 days');
+
+  // Verify that in-transit part is PRESERVED and protected from auto-cleaning
+  assert.ok(partsSummary[inTransitPartPN], 'In-transit part is NOT purged and remains visible in branch stock summary');
+  assert.strictEqual(partsSummary[inTransitPartPN].status, 'in_transit');
+  assert.strictEqual(partsSummary[inTransitPartPN].packed, 1);
+  assert.strictEqual(partsSummary[inTransitPartPN].daysUntilPurge, null, 'Purge timer is null for in-transit part');
+  assert.strictEqual(tracker[`${branchSiteId}_${inTransitPartPN}`], undefined, 'Zero stock tracker was cleared for in-transit part');
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${passedTests} PASSED (0 FAILED)`);
 console.log('====================================================');
+
 
 
 

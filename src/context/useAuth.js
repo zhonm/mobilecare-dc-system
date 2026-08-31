@@ -407,7 +407,7 @@ export function useAuth({
     // 2. Cryptographic Salted SHA-256 Hash Verification (checks user's configured passwordHash)
     if (!authPassed) {
       if (user.passwordHash) {
-        const isPasswordValid = (await verifyPassword(cleanPassword, user.passwordHash)) || (await verifyPassword(password, user.passwordHash));
+        const isPasswordValid = await verifyPassword(cleanPassword, user.passwordHash);
         if (isPasswordValid) {
           authPassed = true;
         }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw } from 'lucide-react';
+import { Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw, ArrowUp } from 'lucide-react';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function CreatePassword() {
@@ -9,12 +9,20 @@ export default function CreatePassword() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [isCapsLockOn, setIsCapsLockOn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   if (!pendingFirstTimeUser) {
     return null;
   }
+
+  const handleCapsLockCheck = (e) => {
+    if (e?.getModifierState) {
+      setIsCapsLockOn(e.getModifierState('CapsLock'));
+    }
+  };
 
   // Password Policy Rules (Enforcing strong case-sensitive passwords)
   const hasMinLength = password.length >= 8;
@@ -86,8 +94,15 @@ export default function CreatePassword() {
                 style={{ paddingRight: '48px' }}
                 placeholder="Create a secure password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoFocus
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  handleCapsLockCheck(e);
+                }}
+                onKeyDown={handleCapsLockCheck}
+                onKeyUp={handleCapsLockCheck}
+                onFocus={handleCapsLockCheck}
+                onBlur={() => setIsCapsLockOn(false)}
+                autoComplete="new-password"
                 required
               />
               <button
@@ -103,6 +118,13 @@ export default function CreatePassword() {
                 {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
+
+            {isCapsLockOn && (
+              <div className="auth-capslock-warning">
+                <ArrowUp size={13} />
+                <span>Caps Lock is ON — password is case sensitive</span>
+              </div>
+            )}
           </div>
 
           {/* Confirm Password */}
@@ -111,13 +133,34 @@ export default function CreatePassword() {
             <div className="auth-input-wrapper">
               <Lock size={18} className="auth-input-icon" />
               <input
-                type={showPassword ? 'text' : 'password'}
+                type={showConfirmPassword ? 'text' : 'password'}
                 className="auth-input"
+                style={{ paddingRight: '48px' }}
                 placeholder="Re-enter your password"
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  handleCapsLockCheck(e);
+                }}
+                onKeyDown={handleCapsLockCheck}
+                onKeyUp={handleCapsLockCheck}
+                onFocus={handleCapsLockCheck}
+                onBlur={() => setIsCapsLockOn(false)}
+                autoComplete="new-password"
                 required
               />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                className="auth-eye-btn"
+                style={{
+                  color: showConfirmPassword ? '#38bdf8' : '#94a3b8'
+                }}
+              >
+                {showConfirmPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
             </div>
           </div>
 

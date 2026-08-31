@@ -44,7 +44,7 @@ export const getDefaultRolePosition = (role) => {
 
 export const INITIAL_USERS = [
   {
-    id: 'usr-superadmin-zhon',
+    id: '1b0e9f43-c2d5-4eb4-acef-2ea5d9d21280',
     email: 'zhon.manaois@mobilecareph.com',
     fullName: 'Zhon Manaois',
     role: 'superadmin',
@@ -56,16 +56,52 @@ export const INITIAL_USERS = [
     permittedPages: ROLE_PRESETS.superadmin
   },
   {
-    id: 'usr-superadmin-joshua',
+    id: 'a703ae69-187d-4711-9f7f-c44da1d0177e',
     email: 'joshua.juvida@mobilecareph.com',
     fullName: 'Joshua Juvida',
     role: 'superadmin',
-    rolePosition: 'DC Operations Lead & Superadmin',
+    rolePosition: 'Inventory Planner',
     siteId: 'site-dc',
     hasSetPassword: false,
     passwordHash: null,
     isActive: true,
     permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: 'usr-1787831250805',
+    email: 'daphneclaire.bascuguin@mobilecareph.com',
+    fullName: 'Daphne Bascuguin',
+    role: 'superadmin',
+    rolePosition: 'Area Manager',
+    siteId: 'site-dc',
+    hasSetPassword: false,
+    passwordHash: null,
+    isActive: true,
+    permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: 'usr-1788085932974',
+    email: 'andres@mobilecareph.com',
+    fullName: 'Andres Bonifacio',
+    role: 'parts_management',
+    rolePosition: 'Parts Management Analyst',
+    siteId: 'site-5',
+    hasSetPassword: false,
+    passwordHash: null,
+    isActive: true,
+    permittedPages: ROLE_PRESETS.parts_management
+  },
+  {
+    id: 'usr-1788162524515-g5pbk',
+    email: 'joserizal@mobilecareph.com',
+    fullName: 'Jose Rizal',
+    role: 'parts_management',
+    rolePosition: 'Parts Management Specialist',
+    siteId: 'site-3',
+    hasSetPassword: false,
+    passwordHash: null,
+    isActive: true,
+    permittedPages: ROLE_PRESETS.parts_management
   }
 ];
 

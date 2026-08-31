@@ -30,7 +30,9 @@ import {
   RotateCcw,
   Zap,
   Trash2,
-  Edit3
+  Edit3,
+  Truck,
+  PackageCheck
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -49,6 +51,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     parts = [],
     inventoryUnits = [],
     partsRequests = [],
+    shipments = [],
+    confirmSiteReceive,
     submitPartsRequest,
     cancelPartsRequest,
     updatePartsRequestStatus,
@@ -182,6 +186,66 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [editWorkOrder, setEditWorkOrder] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  // Superadmin Site Receipt Confirmation Modal State
+  const [receiveModalState, setReceiveModalState] = useState(null);
+  const [isSubmittingReceive, setIsSubmittingReceive] = useState(false);
+
+  const handleOpenReceiveModal = (shipment) => {
+    const destSite = sites.find(st => st.id === shipment.site_id || st.code === shipment.site_code) || activeSiteObj;
+    setReceiveModalState({
+      shipment,
+      site: destSite,
+      receivedByName: currentUser?.fullName || 'Superadmin',
+      receivedDate: new Date().toISOString().split('T')[0],
+      receivedCondition: 'Good Condition (All parts intact & verified)',
+      receivingNotes: `Confirmed physical receipt of shipment manifest #${shipment.invoice_ref || shipment.shipment_number} at ${destSite.name || 'Branch'}.`
+    });
+  };
+
+  const handleConfirmSiteReceiveSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!receiveModalState) return;
+    setIsSubmittingReceive(true);
+
+    try {
+      if (typeof confirmSiteReceive === 'function') {
+        await confirmSiteReceive(
+          receiveModalState.shipment.id,
+          {
+            receivedByName: receiveModalState.receivedByName,
+            receivedDate: receiveModalState.receivedDate,
+            receivedCondition: receiveModalState.receivedCondition,
+            receivingNotes: receiveModalState.receivingNotes
+          },
+          { partsRequests, updatePartsRequestStatus }
+        );
+      }
+      setReceiveModalState(null);
+    } catch (err) {
+      console.error('Error confirming site receipt:', err);
+    } finally {
+      setIsSubmittingReceive(false);
+    }
+  };
+
+  // Derive Incoming & In-Transit Shipments for this branch (Awaiting Superadmin confirmation)
+  const incomingShipments = useMemo(() => {
+    const targetSiteId = isSuperadmin && selectedSiteId !== 'ALL' ? selectedSiteId : (currentUser?.siteId || userSiteObj.id);
+    const targetSiteCode = activeSiteObj?.code || userSiteObj?.code;
+
+    return (shipments || []).filter(sh => {
+      if (!sh.items || sh.items.length === 0) return false;
+      const isPending = sh.status === 'pending_pickup' || sh.status === 'shipped' || sh.status === 'in_transit' || sh.status === 'draft';
+      if (!isPending) return false;
+
+      if (selectedSiteId === 'ALL' && isSuperadmin) return true;
+
+      const matchesSite = (sh.site_id && (sh.site_id === targetSiteId || sh.site_id === targetSiteCode)) ||
+                          (sh.site_code && (sh.site_code === targetSiteCode || sh.site_code === targetSiteId));
+      return matchesSite;
+    });
+  }, [shipments, isSuperadmin, selectedSiteId, currentUser?.siteId, userSiteObj, activeSiteObj]);
 
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;
@@ -1350,6 +1414,117 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             </div>
           </div>
 
+          {/* Incoming / In-Transit Shipments Banner (Awaiting Superadmin Site Receipt Confirmation) */}
+          {incomingShipments.length > 0 && (
+            <div
+              style={{
+                margin: '16px 18px',
+                padding: '16px 20px',
+                borderRadius: '8px',
+                background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)',
+                border: '1px solid #bfdbfe',
+                boxShadow: '0 2px 6px rgba(2, 132, 199, 0.06)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ padding: '6px', background: '#0284c7', color: '#fff', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Truck size={16} />
+                  </div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                      Incoming Shipments ({incomingShipments.length} Manifest{incomingShipments.length > 1 ? 's' : ''} • {incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} Parts)
+                    </h4>
+                    <p style={{ margin: 0, fontSize: '11.5px', color: '#475569' }}>
+                      Parts are packed and in-transit / ready for pickup. They only become active stock in branch inventory after the Superadmin confirms physical receipt.
+                    </p>
+                  </div>
+                </div>
+
+                <span className="badge" style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', fontWeight: 700, fontSize: '11px' }}>
+                  Awaiting Receipt Confirmation
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+                {incomingShipments.map(sh => {
+                  const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || activeSiteObj;
+                  const itemCount = sh.items?.length || 0;
+                  return (
+                    <div
+                      key={sh.id}
+                      style={{
+                        background: '#ffffff',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '10px'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                              {sh.invoice_ref || sh.shipment_number}
+                            </strong>
+                            <span className="badge" style={{ fontSize: '10px', background: sh.status === 'shipped' ? '#e0f2fe' : '#fef3c7', color: sh.status === 'shipped' ? '#0369a1' : '#b45309' }}>
+                              {sh.status === 'shipped' ? 'In Transit' : 'Packed / Ready for Pickup'}
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0f172a' }}>
+                            {itemCount} item{itemCount !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+
+                        <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div>Destination: <strong style={{ color: '#334155' }}>{destSite.name} ({destSite.code})</strong></div>
+                          <div>Courier / Tracking: <strong style={{ color: '#334155' }}>{sh.carrier || sh.courier || 'Lite Express'} {sh.tracking_number ? `• #${sh.tracking_number}` : ''}</strong></div>
+                          <div>Packed by: <span style={{ color: '#334155' }}>{sh.prepared_by_name || 'Warehouse Staff'}</span></div>
+                        </div>
+
+                        {/* Part numbers preview */}
+                        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                          {(sh.items || []).slice(0, 4).map((it, idx) => (
+                            <span key={idx} style={{ fontSize: '10.5px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                              {it.part_number}
+                            </span>
+                          ))}
+                          {itemCount > 4 && (
+                            <span style={{ fontSize: '10.5px', color: '#64748b', alignSelf: 'center' }}>
+                              +{itemCount - 4} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px' }}>
+                        {isSuperadmin ? (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
+                            onClick={() => handleOpenReceiveModal(sh)}
+                            title="Confirm physical receipt of this package and make stock available at this branch"
+                          >
+                            <PackageCheck size={13} />
+                            <span>Confirm Site Receipt</span>
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: '11px', color: '#d97706', fontStyle: 'italic', fontWeight: 600 }}>
+                            Awaiting Superadmin confirmation
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="table-container" style={{ overflowX: 'auto' }}>
             {stockRows.length === 0 ? (
               <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
@@ -1465,46 +1640,69 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                 </>
                               ) : (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                                  <span
-                                    className="badge"
-                                    style={{
-                                      background: '#fee2e2',
-                                      color: '#dc2626',
-                                      border: '1px solid #fecaca',
-                                      fontSize: '11px',
-                                      fontWeight: 700,
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                      padding: '3px 8px'
-                                    }}
-                                    title={row.outOfStockDays != null ? `0 units in stock for ${row.outOfStockDays} day(s). The system automatically purges parts from branch list after 3 consecutive days of 0 stock.` : "Out of stock at this branch"}
-                                  >
-                                    <AlertTriangle size={11} color="#dc2626" />
-                                    <span>Out of Stock</span>
-                                  </span>
-                                  {row.daysUntilPurge != null && (
+                                  {row.packed > 0 ? (
                                     <span
+                                      className="badge"
                                       style={{
-                                        fontSize: '10px',
-                                        color: '#ef4444',
-                                        background: '#fff1f2',
-                                        padding: '2px 5px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #ffe4e6',
-                                        fontWeight: 600
+                                        background: '#eff6ff',
+                                        color: '#0284c7',
+                                        border: '1px solid #bfdbfe',
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '3px',
+                                        padding: '3px 8px'
                                       }}
-                                      title="Auto-cleans from active branch view after 3 consecutive days with 0 units. You can re-add it anytime via Receive Scan-In."
+                                      title={`${row.packed} unit(s) are packed / in transit for this branch. Protected from zero-stock auto-cleaning.`}
                                     >
-                                      {row.daysUntilPurge <= 0 ? 'Purging today' : `Auto-cleans in ${row.daysUntilPurge}d`}
+                                      <Truck size={11} color="#0284c7" />
+                                      <span>{row.packed} In Transit</span>
                                     </span>
+                                  ) : (
+                                    <>
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          background: '#fee2e2',
+                                          color: '#dc2626',
+                                          border: '1px solid #fecaca',
+                                          fontSize: '11px',
+                                          fontWeight: 700,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '3px',
+                                          padding: '3px 8px'
+                                        }}
+                                        title={row.outOfStockDays != null ? `0 units in stock for ${row.outOfStockDays} day(s). The system automatically purges parts from branch list after 3 consecutive days of 0 stock.` : "Out of stock at this branch"}
+                                      >
+                                        <AlertTriangle size={11} color="#dc2626" />
+                                        <span>Out of Stock</span>
+                                      </span>
+                                      {row.daysUntilPurge != null && (
+                                        <span
+                                          style={{
+                                            fontSize: '10px',
+                                            color: '#ef4444',
+                                            background: '#fff1f2',
+                                            padding: '2px 5px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #ffe4e6',
+                                            fontWeight: 600
+                                          }}
+                                          title="Auto-cleans from active branch view after 3 consecutive days with 0 units. You can re-add it anytime via Receive Scan-In."
+                                        >
+                                          {row.daysUntilPurge <= 0 ? 'Purging today' : `Auto-cleans in ${row.daysUntilPurge}d`}
+                                        </span>
+                                      )}
+                                    </>
                                   )}
                                   <button
                                     type="button"
                                     className="btn btn-secondary btn-sm"
                                     style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
                                     onClick={() => handleQuickRequestPart(row.partNumber)}
-                                    title="Create replenishment request for this out-of-stock part"
+                                    title="Create replenishment request for this part"
                                   >
                                     <Plus size={11} />
                                     <span>Request</span>
@@ -2531,6 +2729,159 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 >
                   <Check size={14} />
                   <span>{isSubmittingEdit ? 'Saving...' : 'Save Changes'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 10. Superadmin Site Receipt Confirmation Modal */}
+      {receiveModalState && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: '580px', width: '100%' }}>
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', color: '#fff', padding: '16px 20px', borderRadius: '8px 8px 0 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <PackageCheck size={20} color="#38bdf8" />
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#fff' }}>
+                  Confirm Site Receipt &amp; Activate Stock
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setReceiveModalState(null)}
+                disabled={isSubmittingReceive}
+                style={{ color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmSiteReceiveSubmit} style={{ padding: '20px' }}>
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '12px 14px', fontSize: '12.5px', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#166534', fontWeight: 600 }}>Manifest Reference:</span>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                    {receiveModalState.shipment.invoice_ref || receiveModalState.shipment.shipment_number}
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#166534', fontWeight: 600 }}>Destination Branch:</span>
+                  <strong style={{ color: '#0f172a' }}>
+                    {receiveModalState.site?.name} ({receiveModalState.site?.code})
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#166534', fontWeight: 600 }}>Courier / Booking:</span>
+                  <span style={{ color: '#334155' }}>
+                    {receiveModalState.shipment.carrier || receiveModalState.shipment.courier || 'Lite Express'} {receiveModalState.shipment.tracking_number ? `(#${receiveModalState.shipment.tracking_number})` : ''}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#166534', fontWeight: 600 }}>Total Parts in Package:</span>
+                  <strong style={{ color: '#059669' }}>
+                    {receiveModalState.shipment.items?.length || 0} units
+                  </strong>
+                </div>
+              </div>
+
+              {/* Items in Package */}
+              <div style={{ marginBottom: '16px' }}>
+                <label className="form-label" style={{ fontWeight: 700, fontSize: '12px', color: '#475569', marginBottom: '6px' }}>
+                  Parts Included in Manifest ({receiveModalState.shipment.items?.length || 0})
+                </label>
+                <div style={{ maxHeight: '140px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '6px 10px', background: '#f8fafc', fontSize: '11.5px' }}>
+                  {(receiveModalState.shipment.items || []).map((it, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: idx < (receiveModalState.shipment.items.length - 1) ? '1px solid #e2e8f0' : 'none' }}>
+                      <div>
+                        <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{it.part_number}</strong>
+                        <span style={{ color: '#64748b', marginLeft: '6px' }}>{it.description}</span>
+                      </div>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: '#0f172a', fontWeight: 600 }}>
+                        {it.serial_number || it.serialNumber || 'Serialized Unit'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Received By Staff Name */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
+                  Confirmed Received By
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={receiveModalState.receivedByName}
+                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
+                  required
+                />
+              </div>
+
+              {/* Receipt Date */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
+                  Physical Receipt Date
+                </label>
+                <input
+                  type="date"
+                  className="form-input"
+                  value={receiveModalState.receivedDate}
+                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedDate: e.target.value }))}
+                  required
+                />
+              </div>
+
+              {/* Package Condition */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
+                  Package Condition &amp; Security Seal
+                </label>
+                <select
+                  className="form-select"
+                  value={receiveModalState.receivedCondition}
+                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedCondition: e.target.value }))}
+                >
+                  <option value="Good Condition (All parts intact & verified)">Good Condition (All parts intact &amp; verified)</option>
+                  <option value="Minor Box Crease / Parts Intact">Minor Box Crease / Parts Intact</option>
+                  <option value="Security Seal Verified & Complete">Security Seal Verified &amp; Complete</option>
+                  <option value="Discrepancy / Inspected with Logistics">Discrepancy / Inspected with Logistics</option>
+                </select>
+              </div>
+
+              {/* Receiving Notes */}
+              <div className="form-group" style={{ marginBottom: '20px' }}>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
+                  Receiving Confirmation Notes
+                </label>
+                <textarea
+                  className="form-input"
+                  rows="2"
+                  value={receiveModalState.receivingNotes}
+                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivingNotes: e.target.value }))}
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setReceiveModalState(null)}
+                  disabled={isSubmittingReceive}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800 }}
+                  disabled={isSubmittingReceive}
+                >
+                  <PackageCheck size={16} />
+                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Receipt & Activate Stock'}</span>
                 </button>
               </div>
             </form>

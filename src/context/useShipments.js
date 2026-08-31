@@ -19,7 +19,26 @@ export function useShipments({
       const saved = localStorage.getItem('mdc_shipments');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.map(s => {
+            if (!s) return s;
+            const cleanPreparedBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois');
+            if (!isLockedConfirmedShipment(s) && s.status !== 'received_confirmed') {
+              return { 
+                ...s, 
+                status: 'pending_pickup',
+                prepared_by_name: cleanPreparedBy,
+                saved_by_name: cleanPreparedBy,
+                shipment_date: ''
+              };
+            }
+            return {
+              ...s,
+              prepared_by_name: cleanPreparedBy,
+              saved_by_name: cleanPreparedBy
+            };
+          });
+        }
       }
       return [];
     } catch {
@@ -442,12 +461,23 @@ export function useShipments({
   const saveShipment = async (shipmentData) => {
     if (!shipmentData) return;
     const isUpdate = shipmentData.id && shipments.some(s => s.id === shipmentData.id);
+    const resolvedPreparedBy = (shipmentData.prepared_by_name && shipmentData.prepared_by_name !== 'Warehouse Staff')
+      ? shipmentData.prepared_by_name
+      : (currentUser?.fullName || currentUser?.name || 'Zhon Manaois');
+
+    const cleanShipmentDate = (shipmentData.status === 'pending_pickup' || shipmentData.status === 'draft')
+      ? (shipmentData.shipment_date || '')
+      : (shipmentData.shipment_date || shipmentData.pickup_date || '');
+
     const newShipment = {
       ...shipmentData,
       id: shipmentData.id || `ship-${Date.now()}`,
       shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`,
       invoice_ref: shipmentData.invoice_ref || generateNextInvoiceRef(shipments),
-      status: shipmentData.status || 'shipped',
+      status: shipmentData.status || 'pending_pickup',
+      prepared_by_name: resolvedPreparedBy,
+      saved_by_name: resolvedPreparedBy,
+      shipment_date: cleanShipmentDate,
       created_at: shipmentData.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -465,7 +495,9 @@ export function useShipments({
     let updatedInv = [];
     if (newShipment.items && newShipment.items.length > 0 && setInventoryUnits) {
       const serialsInShipment = new Set(newShipment.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean));
-      const targetUnitStatus = newShipment.status === 'shipped' || newShipment.status === 'delivered' ? 'shipped' : 'packed';
+      const targetUnitStatus = (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') 
+        ? 'in_stock' 
+        : ((newShipment.status === 'shipped' || newShipment.status === 'in_transit') ? 'shipped' : 'packed');
       
       setInventoryUnits(prev => {
         updatedInv = (prev || []).map(u => {
@@ -477,7 +509,9 @@ export function useShipments({
               box_number: u.box_number || 1,
               current_site_id: newShipment.site_id || u.current_site_id,
               shipped_at: newShipment.shipment_date || new Date().toISOString(),
-              shipped_by: newShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff'
+              shipped_by: resolvedPreparedBy,
+              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : u.received_at,
+              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || currentUser?.fullName || 'Superadmin') : u.received_by
             };
           }
           return u;
@@ -499,7 +533,7 @@ export function useShipments({
           period_month: new Date().getMonth() + 1,
           period_week: newShipment.week_number || 1,
           notes: newShipment.remarks || '',
-          saved_by_name: newShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+          saved_by_name: resolvedPreparedBy,
           saved_by_user_id: safeUUID(currentUser?.id),
           snapshot_data: newShipment,
           created_at: newShipment.created_at || new Date().toISOString(),
@@ -559,7 +593,9 @@ export function useShipments({
         }
 
         if (newShipment.items && newShipment.items.length > 0) {
-          const targetUnitStatus = newShipment.status === 'shipped' || newShipment.status === 'delivered' ? 'shipped' : 'packed';
+          const targetUnitStatus = (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') 
+            ? 'in_stock' 
+            : ((newShipment.status === 'shipped' || newShipment.status === 'in_transit') ? 'shipped' : 'packed');
           
           const rowsToUpsert = newShipment.items.map(it => {
             const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
@@ -573,7 +609,8 @@ export function useShipments({
               status: targetUnitStatus,
               box_number: it.box_number || 1,
               ...(siteId ? { current_site_id: siteId } : {}),
-              shipped_at: new Date().toISOString()
+              shipped_at: newShipment.shipment_date || new Date().toISOString(),
+              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : null
             };
           }).filter(r => r.serial_number);
 
@@ -590,6 +627,9 @@ export function useShipments({
         if (broadcastCloudEvent) {
           broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
           broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+          if (newShipment.status === 'received_confirmed') {
+            broadcastCloudEvent('SHIPMENT_RECEIVED', { shipmentId: newShipment.id, siteId: newShipment.site_id });
+          }
         }
       } catch (dbErr) {
         console.error('Supabase save shipment error:', dbErr.message);
@@ -613,17 +653,82 @@ export function useShipments({
         if (broadcastCloudEvent) {
           broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
           broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+          if (newShipment.status === 'received_confirmed') {
+            broadcastCloudEvent('SHIPMENT_RECEIVED', { shipmentId: newShipment.id, siteId: newShipment.site_id });
+          }
         }
       }
     } else {
       if (broadcastCloudEvent) {
         broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: newShipment.id });
         broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+        if (newShipment.status === 'received_confirmed') {
+          broadcastCloudEvent('SHIPMENT_RECEIVED', { shipmentId: newShipment.id, siteId: newShipment.site_id });
+        }
       }
     }
 
     showToast(isUpdate ? `Shipment ${newShipment.invoice_ref || newShipment.shipment_number} updated` : `Created Packing List Manifest: ${newShipment.invoice_ref || newShipment.shipment_number}`, 'success');
     return newShipment;
+  };
+
+  // Dedicated Superadmin Site Receipt Confirmation Handler
+  const confirmSiteReceive = async (shipmentId, receiveDetails = {}, { partsRequests = [], updatePartsRequestStatus = null } = {}) => {
+    const target = shipments.find(s => s.id === shipmentId || s.shipment_number === shipmentId || s.invoice_ref === shipmentId);
+    if (!target) {
+      showToast?.('Shipment manifest not found.', 'error');
+      return { success: false, error: 'Shipment not found' };
+    }
+
+    const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || 'Superadmin';
+    const cleanDate = String(receiveDetails.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
+    const cleanCondition = receiveDetails.receivedCondition || 'Good Condition (All parts intact & verified)';
+    const cleanNotes = receiveDetails.receivingNotes || 'Confirmed physical receipt of package and parts at branch.';
+
+    const updatedShipment = {
+      ...target,
+      status: 'received_confirmed',
+      received_at: new Date().toISOString(),
+      received_date: cleanDate,
+      received_by_name: cleanReceiver,
+      receiving_signature: cleanReceiver,
+      receiving_condition: cleanCondition,
+      receiving_notes: cleanNotes,
+      updated_at: new Date().toISOString()
+    };
+
+    await saveShipment(updatedShipment);
+
+    // Automatically fulfill linked parts requests for this destination site and parts
+    if (typeof updatePartsRequestStatus === 'function' && Array.isArray(partsRequests) && partsRequests.length > 0) {
+      const shipmentPartNumbers = new Set((target.items || []).map(it => String(it.part_number || '').trim().toUpperCase()).filter(Boolean));
+      const targetSiteId = target.site_id;
+
+      const matchingRequests = partsRequests.filter(req => {
+        if (req.status === 'fulfilled' || req.status === 'cancelled' || req.status === 'rejected') return false;
+        const matchesSite = req.site_id === targetSiteId || req.site_code === target.site_code;
+        const reqPN = String(req.part_number || '').trim().toUpperCase();
+        const matchesPart = !reqPN || shipmentPartNumbers.has(reqPN);
+        return matchesSite && matchesPart;
+      });
+
+      for (const req of matchingRequests) {
+        try {
+          await updatePartsRequestStatus(req.id, {
+            status: 'fulfilled',
+            quantityFulfilled: req.quantity_requested || 1,
+            reviewedBy: cleanReceiver,
+            notes: `Auto-fulfilled via confirmed shipment ${target.invoice_ref || target.shipment_number}`,
+            fulfilledShipmentId: target.id
+          });
+        } catch (reqErr) {
+          console.warn('Auto fulfill parts request note:', reqErr.message);
+        }
+      }
+    }
+
+    showToast?.(`Confirmed Receipt at site! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} parts are now ACTIVE & IN STOCK at branch.`, 'success');
+    return { success: true, shipment: updatedShipment };
   };
 
   return {
@@ -636,6 +741,7 @@ export function useShipments({
     deleteShipment,
     batchImportShipments,
     clearAllShipmentsData,
-    saveShipment
+    saveShipment,
+    confirmSiteReceive
   };
 }

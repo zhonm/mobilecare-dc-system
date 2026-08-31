@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck } from 'lucide-react';
+import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import { loginRateLimiter } from '../utils/security';
@@ -13,12 +13,19 @@ export default function Login() {
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isCapsLockOn, setIsCapsLockOn] = useState(false);
   const [step, setStep] = useState('email'); // 'email' | 'password'
   const [verifiedUser, setVerifiedUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
+
+  const handleCapsLockCheck = (e) => {
+    if (e?.getModifierState) {
+      setIsCapsLockOn(e.getModifierState('CapsLock'));
+    }
+  };
 
   // Handle Email Verification Step
   const handleEmailSubmit = async (e) => {
@@ -252,7 +259,13 @@ export default function Login() {
                   onChange={(e) => {
                     setPasswordInput(e.target.value);
                     if (errorMessage) setErrorMessage('');
+                    handleCapsLockCheck(e);
                   }}
+                  onKeyDown={handleCapsLockCheck}
+                  onKeyUp={handleCapsLockCheck}
+                  onFocus={handleCapsLockCheck}
+                  onBlur={() => setIsCapsLockOn(false)}
+                  autoComplete="current-password"
                   autoFocus
                   required
                 />
@@ -269,6 +282,13 @@ export default function Login() {
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
+
+              {isCapsLockOn && (
+                <div className="auth-capslock-warning">
+                  <ArrowUp size={13} />
+                  <span>Caps Lock is ON — password is case sensitive</span>
+                </div>
+              )}
             </div>
 
             {/* Cloudflare Turnstile Verification Widget */}

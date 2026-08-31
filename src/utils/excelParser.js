@@ -3307,9 +3307,15 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
       const carrier = row['Courier'] || row['Carrier'] || 'Lite Express';
       const tracking = row['Tracking Number'] || row['Tracking'] || 'N/A';
       const transferSlip = row['Transfer Slip #'] || row['Transfer Slip'] || row['Transfer Slip Number'] || row['transfer_slip_number'] || '';
-      const pickupBy = row['Pickup By'] || row['pickup_by_name'] || (carrier === 'Utility' ? 'Utility' : '');
-      const status = (row['Status'] || 'shipped').toLowerCase();
-      const prepBy = row['Prepared By'] || 'Warehouse Staff';
+      const rawStatusStr = String(row['Status'] || '').toLowerCase().trim();
+      let status = 'pending_pickup';
+      if (rawStatusStr.includes('confirm') || rawStatusStr === 'received_confirmed' || rawStatusStr === 'delivered' || rawStatusStr === 'received') {
+        status = 'received_confirmed';
+      } else if (rawStatusStr === 'shipped' || rawStatusStr === 'in_transit' || rawStatusStr === 'dispatched') {
+        status = 'shipped';
+      } else if (rawStatusStr === 'draft' || rawStatusStr === 'packing') {
+        status = rawStatusStr;
+      }
       const verBy = row['Verified By'] || 'Admin Staff';
       const shipDate = row['Shipment Date'] || new Date().toISOString().split('T')[0];
       const pn = row['Part Number'] || row['Part #'] || row['P/N'] || '';

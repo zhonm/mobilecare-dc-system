@@ -297,10 +297,26 @@ export function useCloudSync({
             ...localDeletedUserIds,
             ...cloudDeletedUserIds
           ].map(s => String(s).trim().toLowerCase())));
-          localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
         } catch (e) {
           mergedDeletedUserIds = cloudDeletedUserIds.map(s => String(s).trim().toLowerCase());
         }
+
+        // Sanitize deleted IDs: any user actively in cloud registry or INITIAL_USERS MUST NOT be considered deleted
+        const activeKnownEmails = new Set([
+          ...cloudUsersList.map(u => u.email?.toLowerCase()),
+          ...INITIAL_USERS.map(u => u.email?.toLowerCase())
+        ].filter(Boolean));
+        const activeKnownIds = new Set([
+          ...cloudUsersList.map(u => u.id?.toLowerCase()),
+          ...INITIAL_USERS.map(u => u.id?.toLowerCase())
+        ].filter(Boolean));
+
+        mergedDeletedUserIds = mergedDeletedUserIds.filter(delId => 
+          !activeKnownEmails.has(delId) && !activeKnownIds.has(delId)
+        );
+        try {
+          localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
+        } catch (e) {}
 
         const permsMap = new Map();
         if (dbPerms && dbPerms.length > 0) {
@@ -351,7 +367,13 @@ export function useCloudSync({
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
               !LEGACY_MOCK_IDS.includes(u.id)
             ) {
-              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
+              const prevEntry = profileMap.get(cleanEmail) || {};
+              profileMap.set(cleanEmail, {
+                ...prevEntry,
+                ...u,
+                passwordHash: u.passwordHash || prevEntry.passwordHash || null,
+                hasSetPassword: u.hasSetPassword !== undefined ? Boolean(u.hasSetPassword) : (prevEntry.hasSetPassword ?? false)
+              });
             }
           });
 
@@ -392,9 +414,11 @@ export function useCloudSync({
             });
           }
 
-          // Clean up any deleted users
+          // Clean up any genuinely deleted users (that are not active in profileMap)
           mergedDeletedUserIds.forEach(delId => {
-            profileMap.delete(delId);
+            if (!activeKnownEmails.has(delId) && !activeKnownIds.has(delId)) {
+              profileMap.delete(delId);
+            }
           });
 
           const merged = Array.from(profileMap.values());
@@ -407,6 +431,11 @@ export function useCloudSync({
           // Self-heal: If cloud registry is missing or has fewer users, auto-seed it without self-triggering broadcasts
           if (merged.length > 0 && supabase) {
             if (!cloudUsersRegistryDoc || cloudUsersList.length < merged.length) {
+              const activeMergedEmails = new Set(merged.map(u => u.email?.toLowerCase()).filter(Boolean));
+              const activeMergedIds = new Set(merged.map(u => u.id?.toLowerCase()).filter(Boolean));
+              const sanitizedDeleted = mergedDeletedUserIds.filter(delId => 
+                !activeMergedEmails.has(delId) && !activeMergedIds.has(delId)
+              );
               supabase.from('saved_records').upsert({
                 id: 'master_users_registry',
                 record_type: 'users_registry',
@@ -416,7 +445,7 @@ export function useCloudSync({
                 notes: 'Master Provisioned Accounts & Permissions Registry',
                 snapshot_data: {
                   users: merged,
-                  deletedUserIds: mergedDeletedUserIds,
+                  deletedUserIds: sanitizedDeleted,
                   updatedAt: new Date().toISOString()
                 },
                 updated_at: new Date().toISOString()
@@ -789,7 +818,22 @@ export function useCloudSync({
         }
 
         effectiveShipments = Array.from(shipmentMap.values())
-          .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !deletedShipmentIds.includes(s.id));
+          .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !deletedShipmentIds.includes(s.id))
+          .map(s => {
+            if (!s) return s;
+            const cleanPrepBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff')
+              ? s.prepared_by_name
+              : (s.saved_by_name && s.saved_by_name !== 'Warehouse Staff' ? s.saved_by_name : (currentUser?.fullName || 'Zhon Manaois'));
+
+            const isPending = !isLockedConfirmedShipment(s) && s.status !== 'received_confirmed' && !s.received_at && !s.received_date;
+            return {
+              ...s,
+              status: isPending ? 'pending_pickup' : s.status,
+              prepared_by_name: cleanPrepBy,
+              saved_by_name: cleanPrepBy,
+              shipment_date: isPending ? '' : (s.shipment_date || s.pickup_date || '')
+            };
+          });
 
         if (effectiveShipments.length > 0) {
           setShipments(effectiveShipments);

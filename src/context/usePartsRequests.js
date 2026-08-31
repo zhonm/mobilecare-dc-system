@@ -498,13 +498,13 @@ export function usePartsRequests({
       }
 
       const status = String(u.status || 'in_stock').toLowerCase();
-      if (status === 'in_stock') {
+      if (status === 'in_stock' || status === 'delivered' || status === 'received') {
         partsSummary[cleanPN].inStock += 1;
         totalInStock += 1;
       } else if (status === 'allocated') {
         partsSummary[cleanPN].allocated += 1;
         totalAllocated += 1;
-      } else if (status === 'packed' || status === 'shipped') {
+      } else if (status === 'packed' || status === 'shipped' || status === 'in_transit' || status === 'pending_pickup') {
         partsSummary[cleanPN].packed += 1;
         totalPacked += 1;
       }
@@ -525,10 +525,12 @@ export function usePartsRequests({
       const item = partsSummary[pn];
       const trackerKey = `${siteId}_${pn}`;
 
-      if (item.inStock > 0) {
-        item.status = 'in_stock';
+      // In-transit / packed parts or parts with in-stock inventory are actively protected from zero-stock auto-cleaning
+      if (item.inStock > 0 || item.packed > 0) {
+        item.status = item.inStock > 0 ? 'in_stock' : 'in_transit';
         item.outOfStockDays = 0;
         item.daysUntilPurge = null;
+        item.zeroStockSince = null;
         if (zeroStockTracker[trackerKey]) {
           delete zeroStockTracker[trackerKey];
           trackerModified = true;
@@ -554,8 +556,8 @@ export function usePartsRequests({
         item.daysUntilPurge = daysUntilPurge;
         item.zeroStockSince = zeroStockTracker[trackerKey].zeroStockSince;
 
-        // Auto-purge rule: if 0 units for 3 consecutive days, delete from branch table
-        if (elapsedMs >= THREE_DAYS_MS) {
+        // Auto-purge rule: if 0 units for 3 consecutive days AND no units in transit/allocated, delete from branch table
+        if (elapsedMs >= THREE_DAYS_MS && (item.packed || 0) === 0 && (item.allocated || 0) === 0) {
           delete partsSummary[pn];
         }
       }
@@ -973,32 +975,56 @@ export function usePartsRequests({
 
     Object.entries(tracker).forEach(([key, val]) => {
       if (val && val.zeroStockSince) {
+        const valPN = String(val.partNumber || '').toUpperCase();
+        
+        // Active Transit & Allocation Protection: If any units for this part and site are packed, shipped, or in-transit, DO NOT purge!
+        const hasActiveTransitOrAllocated = (inventoryUnits || []).some(u => {
+          const uSiteId = u.current_site_id || u.siteId;
+          const uSiteCode = u.site_code || u.siteCode;
+          const uPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+          const matchesPart = uPN === valPN;
+          const matchesSite = (uSiteId === val.siteId || uSiteId === val.siteCode || uSiteCode === val.siteCode || uSiteCode === val.siteId);
+          const status = String(u.status || '').toLowerCase();
+          const isTransitOrAllocated = status === 'packed' || status === 'shipped' || status === 'in_transit' || status === 'pending_pickup' || status === 'allocated';
+          return matchesPart && matchesSite && isTransitOrAllocated;
+        });
+
+        if (hasActiveTransitOrAllocated) {
+          // Remove from countdown tracker so it resets while parts are on their way
+          expiredKeys.push(key);
+          return;
+        }
+
         const elapsed = now - new Date(val.zeroStockSince).getTime();
         if (elapsed >= THREE_DAYS_MS) {
           expiredKeys.push(key);
           expiredPartSites.push({
             siteId: val.siteId,
             siteCode: val.siteCode,
-            partNumber: String(val.partNumber).toUpperCase()
+            partNumber: valPN
           });
         }
       }
     });
 
-    if (expiredPartSites.length === 0) return;
+    if (expiredPartSites.length === 0 && expiredKeys.length === 0) return;
 
     let nextUnits = [];
-    if (setInventoryUnits) {
+    if (setInventoryUnits && expiredPartSites.length > 0) {
       setInventoryUnits(prev => {
         nextUnits = (prev || []).filter(u => {
           const uSiteId = u.current_site_id || u.siteId;
           const uSiteCode = u.site_code || u.siteCode;
           const uPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+          const status = String(u.status || '').toLowerCase();
+          const isTransitOrAllocated = status === 'packed' || status === 'shipped' || status === 'in_transit' || status === 'pending_pickup' || status === 'allocated' || status === 'in_stock';
+
+          // Never purge in-transit, in-stock, or allocated units
+          if (isTransitOrAllocated) return true;
 
           const isExpired = expiredPartSites.some(exp =>
             uPN === exp.partNumber &&
-            (uSiteId === exp.siteId || uSiteId === exp.siteCode || uSiteCode === exp.siteCode || uSiteCode === exp.siteId) &&
-            String(u.status || '').toLowerCase() !== 'in_stock'
+            (uSiteId === exp.siteId || uSiteId === exp.siteCode || uSiteCode === exp.siteCode || uSiteCode === exp.siteId)
           );
           return !isExpired;
         });

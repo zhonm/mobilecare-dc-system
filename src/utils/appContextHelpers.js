@@ -265,8 +265,17 @@ export function formatShipmentForDb(s, sitesList = []) {
 
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
   const rawStatus = String(s.status || 'draft').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  const allowedStatuses = ['draft', 'ready_for_dispatch', 'shipped', 'in_transit', 'delivered', 'received_confirmed'];
-  const validStatus = allowedStatuses.includes(rawStatus) ? rawStatus : (rawStatus.includes('confirm') ? 'received_confirmed' : 'draft');
+  const allowedStatuses = ['draft', 'packing', 'ready_for_dispatch', 'pending_pickup', 'shipped', 'in_transit', 'delivered', 'received_confirmed'];
+  let validStatus = 'draft';
+  if (rawStatus === 'pending_pickup' || rawStatus === 'pending_for_pickup' || rawStatus === 'pending') {
+    validStatus = 'ready_for_dispatch';
+  } else if (rawStatus.includes('confirm') || rawStatus === 'received_confirmed' || rawStatus === 'delivered') {
+    validStatus = 'received_confirmed';
+  } else if (rawStatus === 'shipped' || rawStatus === 'in_transit') {
+    validStatus = 'shipped';
+  } else if (allowedStatuses.includes(rawStatus)) {
+    validStatus = rawStatus;
+  }
 
   return {
     id: shipmentId,
@@ -280,7 +289,7 @@ export function formatShipmentForDb(s, sitesList = []) {
     tracking_number: s.tracking_number || null,
     total_boxes: parseInt(s.total_boxes || s.box_count || 1, 10) || 1,
     status: validStatus,
-    prepared_by_name: s.prepared_by_name || 'Warehouse Staff',
+    prepared_by_name: (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (s.saved_by_name || 'Zhon Manaois'),
     verified_by_name: s.verified_by_name || 'Anjo Alcazar',
     receiving_signature: s.receiving_signature || null,
     remarks: s.remarks || 'KGB PARTS',

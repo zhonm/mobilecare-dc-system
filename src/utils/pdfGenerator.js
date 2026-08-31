@@ -256,7 +256,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFont('helvetica', 'bold');
   doc.text('Prepared and Counted by:', margin, sigRow1Y);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.prepared_by_name || 'Joshua Juvida', margin + 42, sigRow1Y);
+  doc.text(shipment.prepared_by_name || 'Zhon Manaois', margin + 42, sigRow1Y);
 
   // Row 1 - Right: Verified by
   const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
@@ -649,7 +649,7 @@ export function printPackingListDirect(shipment, items = [], site = {}, options 
 
       <div class="signatures-grid">
         <div>
-          <strong>Prepared and Counted by:</strong> <span style="margin-left: 8px;">${shipment.prepared_by_name || 'Joshua Juvida'}</span>
+          <strong>Prepared and Counted by:</strong> <span style="margin-left: 8px;">${shipment.prepared_by_name || 'Zhon Manaois'}</span>
         </div>
         <div>
           <strong>Verified by:</strong> <span style="margin-left: 8px;">${supervisorName}</span>

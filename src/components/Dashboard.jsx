@@ -782,7 +782,18 @@ export default function Dashboard() {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span className="badge badge-success" style={{ fontSize: '11px' }}>{sh.status}</span>
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '10.5px',
+                          fontWeight: 600,
+                          background: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#ecfdf5' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#f0f9ff' : (sh.status === 'pending_pickup' ? '#fffbeb' : '#f1f5f9'),
+                          color: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#047857' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#0369a1' : (sh.status === 'pending_pickup' ? '#b45309' : '#475569'),
+                          border: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '1px solid #a7f3d0' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '1px solid #bae6fd' : (sh.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0')
+                        }}
+                      >
+                        {sh.status === 'pending_pickup' ? 'Pending Pickup' : (sh.status === 'received_confirmed' ? 'Received' : (sh.status ? sh.status.replace('_', ' ') : 'Draft'))}
+                      </span>
                       <button
                         className="btn btn-secondary btn-sm"
                         style={{ padding: '4px 8px', fontSize: '11.5px' }}

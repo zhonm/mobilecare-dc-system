@@ -164,22 +164,40 @@ export function useInventory({
       const { data: existingParts } = await supabase.from('parts').select('id, part_number');
       const pMap = new Map((existingParts || []).map(p => [p.part_number.toUpperCase(), p.id]));
 
+      // Batch create any missing parts in a single query
+      const missingPartsMap = new Map();
+      for (const u of units) {
+        const cleanPN = String(u.part_number || '').trim().toUpperCase();
+        if (cleanPN && !pMap.has(cleanPN) && !missingPartsMap.has(cleanPN)) {
+          missingPartsMap.set(cleanPN, {
+            part_number: cleanPN,
+            description: u.description || `Part ${cleanPN}`,
+            ...(defaultCatId ? { category_id: defaultCatId } : {})
+          });
+        }
+      }
+
+      if (missingPartsMap.size > 0) {
+        try {
+          const { data: createdParts } = await supabase.from('parts').upsert(
+            Array.from(missingPartsMap.values()),
+            { onConflict: 'part_number' }
+          ).select('id, part_number');
+          (createdParts || []).forEach(p => {
+            if (p.part_number && p.id) pMap.set(p.part_number.toUpperCase(), p.id);
+          });
+        } catch (err) {
+          console.warn('Batch parts upsert notice:', err.message);
+        }
+      }
+
       const unitRows = [];
       for (const u of units) {
         const cleanPN = String(u.part_number || '').trim().toUpperCase();
         const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
         if (!cleanPN || !cleanSerial) continue;
 
-        let pId = pMap.get(cleanPN);
-        if (!pId) {
-          const { data: createdPart } = await supabase.from('parts').upsert({
-            part_number: cleanPN,
-            description: u.description || `Part ${cleanPN}`,
-            ...(defaultCatId ? { category_id: defaultCatId } : {})
-          }, { onConflict: 'part_number' }).select('id').maybeSingle();
-          pId = createdPart?.id;
-          if (pId) pMap.set(cleanPN, pId);
-        }
+        const pId = pMap.get(cleanPN);
 
         // Resolve Target Site UUID: match against Supabase sites by ID, code, or name
         const unitSiteKey = String(u.current_site_id || u.site_id || u.targetSiteId || '').trim();

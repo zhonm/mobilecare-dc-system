@@ -29,10 +29,15 @@ export function useUserManagement({
 
       if (saved) {
         const parsed = JSON.parse(saved);
+        const parsedEmails = new Set(parsed.map(u => u.email?.toLowerCase()).filter(Boolean));
+        const parsedIds = new Set(parsed.map(u => u.id?.toLowerCase()).filter(Boolean));
+        const cleanDeleted = deletedIds.filter(id => !parsedEmails.has(id?.toLowerCase()) && !parsedIds.has(id?.toLowerCase()));
+        try { localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted)); } catch (e) {}
+
         return parsed
           .filter(u =>
-            !deletedIds.includes(u.id) &&
-            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !cleanDeleted.includes(u.id?.toLowerCase()) &&
+            !cleanDeleted.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_IDS.includes(u.id)
           )
@@ -47,7 +52,7 @@ export function useUserManagement({
           });
       }
       return INITIAL_USERS.filter(u =>
-        !deletedIds.includes(u.id) &&
+        !deletedIds.includes(u.id?.toLowerCase()) &&
         !deletedIds.includes(u.email?.toLowerCase()) &&
         !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
         !LEGACY_MOCK_IDS.includes(u.id)
@@ -66,9 +71,13 @@ export function useUserManagement({
         const dbUsers = await dbStorage.getItem('mdc_users');
         if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
           const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+          const activeEmails = new Set(dbUsers.map(u => u.email?.toLowerCase()).filter(Boolean));
+          const activeIds = new Set(dbUsers.map(u => u.id?.toLowerCase()).filter(Boolean));
+          const cleanDeleted = deletedIds.filter(id => !activeEmails.has(id?.toLowerCase()) && !activeIds.has(id?.toLowerCase()));
+
           const filtered = dbUsers.filter(u =>
-            !deletedIds.includes(u.id) &&
-            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !cleanDeleted.includes(u.id?.toLowerCase()) &&
+            !cleanDeleted.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_IDS.includes(u.id)
           );
@@ -80,6 +89,7 @@ export function useUserManagement({
             try {
               localStorage.setItem('mdc_users', JSON.stringify(filtered));
               sessionStorage.setItem('mdc_users', JSON.stringify(filtered));
+              localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted));
             } catch (e) {}
           }
         }
@@ -97,7 +107,15 @@ export function useUserManagement({
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
     if (!supabase) return;
     try {
-      const deleted = deletedIdsToSync || JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const rawDeleted = deletedIdsToSync || JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const activeEmails = new Set((usersListToSync || []).map(u => u.email?.toLowerCase()).filter(Boolean));
+      const activeIds = new Set((usersListToSync || []).map(u => u.id?.toLowerCase()).filter(Boolean));
+      const deleted = rawDeleted.filter(id => !activeEmails.has(id?.toLowerCase()) && !activeIds.has(id?.toLowerCase()));
+
+      try {
+        localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deleted));
+      } catch (e) {}
+
       await supabase.from('saved_records').upsert({
         id: 'master_users_registry',
         record_type: 'users_registry',
@@ -131,27 +149,27 @@ export function useUserManagement({
       return { success: false, error: 'User already exists' };
     }
 
-    try {
-      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-      const filteredDeleted = deletedIds.filter(id => id !== cleanEmail);
-      localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
-    } catch (e) {}
-
-    const defaultPages = customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.user;
-    const finalRolePosition = String(rolePosition || '').trim() || getDefaultRolePosition(role);
-
     const newUser = {
       id: `usr-${Date.now()}`,
       email: cleanEmail,
       fullName: fullName.trim(),
       role,
-      rolePosition: finalRolePosition,
+      rolePosition: String(rolePosition || '').trim() || getDefaultRolePosition(role),
       siteId: siteId || 'site-dc',
       hasSetPassword: false,
       passwordHash: null,
       isActive: true,
-      permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : defaultPages
+      permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : (customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.user)
     };
+
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const filteredDeleted = deletedIds.filter(id => id?.toLowerCase() !== cleanEmail && id?.toLowerCase() !== newUser.id.toLowerCase());
+      localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
+    } catch (e) {}
+
+    const defaultPages = newUser.permittedPages;
+    const finalRolePosition = newUser.rolePosition;
 
     const nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
     setUsersList(nextList);
@@ -172,7 +190,6 @@ export function useUserManagement({
             email: cleanEmail,
             full_name: fullName.trim(),
             role: role,
-            role_position: finalRolePosition,
             has_set_password: false,
             is_active: true,
             created_at: new Date().toISOString(),
@@ -180,7 +197,7 @@ export function useUserManagement({
           }, { onConflict: 'email' })
           .select();
 
-        if (profErr) throw profErr;
+        if (profErr) console.warn('Supabase profile upsert warning:', profErr.message);
 
         const effectiveUserId = inserted?.[0]?.id || newUser.id;
         if (defaultPages && defaultPages.length > 0 && effectiveUserId) {
@@ -202,7 +219,6 @@ export function useUserManagement({
             email: cleanEmail,
             full_name: fullName.trim(),
             role,
-            role_position: finalRolePosition,
             has_set_password: false,
             is_active: true,
             updated_at: new Date().toISOString()
@@ -464,7 +480,6 @@ export function useUserManagement({
           email: cleanEmail,
           full_name: fullName.trim(),
           role: resolvedRole,
-          role_position: resolvedPosition,
           updated_at: new Date().toISOString()
         };
 
@@ -499,12 +514,11 @@ export function useUserManagement({
               email: cleanEmail,
               full_name: fullName.trim(),
               role: resolvedRole,
-              role_position: resolvedPosition,
               has_set_password: target.hasSetPassword ?? true,
               is_active: target.isActive ?? true,
               updated_at: new Date().toISOString()
             }, { onConflict: 'email' });
-          if (upsertErr) throw upsertErr;
+          if (upsertErr) console.warn('Supabase profile upsert note:', upsertErr.message);
         }
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -517,7 +531,6 @@ export function useUserManagement({
             email: cleanEmail,
             full_name: fullName.trim(),
             role: resolvedRole,
-            role_position: resolvedPosition,
             updated_at: new Date().toISOString()
           });
         }
@@ -554,20 +567,8 @@ export function useUserManagement({
     await syncMasterUsersRegistry(nextList);
 
     if (supabase) {
-      if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-      try {
-        const { error } = await supabase
-          .from('profiles')
-          .update({ role_position: pos, updated_at: new Date().toISOString() })
-          .or(`id.eq.${userId},email.ilike.${target.email}`);
-        if (error) throw error;
-        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
-      } catch (e) {
-        console.error('Supabase role position sync error:', e.message);
-        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
-      }
+      if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
     } else {
       if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, rolePosition: pos, table: 'saved_records' });
     }
