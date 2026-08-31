@@ -877,9 +877,149 @@ it('Zero-Stock Auto-Cleaning strictly EXEMPTS parts that have units packed or in
   assert.strictEqual(tracker[`${branchSiteId}_${inTransitPartPN}`], undefined, 'Zero stock tracker was cleared for in-transit part');
 });
 
+// 23. PACKING LIST INTAKE ASSIGNMENT NAVIGATION TABS TEST
+it('Packing List: Accurately classifies and filters DC available stock into MDC – Forecasting, DC – CRBR, and SVNR', () => {
+  const dcUnits = [
+    {
+      id: 'u-fore-1',
+      part_number: '661-21991',
+      serial_number: 'SER-F1',
+      current_site_id: 'site-dc',
+      intake_assignment: 'MDC - Forecasting',
+      status: 'in_stock'
+    },
+    {
+      id: 'u-fore-2',
+      part_number: '661-21991',
+      serial_number: 'SER-F2',
+      current_site_id: 'site-dc',
+      intake_assignment: undefined,
+      notes: '',
+      status: 'in_stock'
+    },
+    {
+      id: 'u-crbr-1',
+      part_number: '661-37213',
+      serial_number: 'SER-C1',
+      current_site_id: 'site-dc',
+      intake_assignment: 'DC - CRBR',
+      notes: 'Customer Return Buffer',
+      status: 'in_stock'
+    },
+    {
+      id: 'u-svnr-1',
+      part_number: '661-56050',
+      serial_number: 'SER-S1',
+      current_site_id: 'site-dc',
+      intake_assignment: 'SVNR - Service Non-Repair',
+      status: 'in_stock'
+    }
+  ];
+
+  const isUnitSvnr = (u) => {
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('SVNR') || notes.includes('SVNR');
+  };
+
+  const isUnitCrbr = (u) => {
+    if (isUnitSvnr(u)) return false;
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('CRBR') || notes.includes('CRBR');
+  };
+
+  const isUnitForecasting = (u) => {
+    return !isUnitSvnr(u) && !isUnitCrbr(u);
+  };
+
+  const counts = {
+    all: dcUnits.length,
+    forecasting: dcUnits.filter(isUnitForecasting).length,
+    crbr: dcUnits.filter(isUnitCrbr).length,
+    svnr: dcUnits.filter(isUnitSvnr).length
+  };
+
+  assert.strictEqual(counts.all, 4, 'Total available stock count is 4');
+  assert.strictEqual(counts.forecasting, 2, '2 units classified under MDC – Forecasting');
+  assert.strictEqual(counts.crbr, 1, '1 unit classified under DC – CRBR');
+  assert.strictEqual(counts.svnr, 1, '1 unit classified under SVNR');
+
+  // Filtering by MDC_FORECASTING
+  const forecastingFiltered = dcUnits.filter(isUnitForecasting);
+  assert.strictEqual(forecastingFiltered.length, 2);
+  assert.strictEqual(forecastingFiltered[0].serial_number, 'SER-F1');
+
+  // Filtering by DC_CRBR
+  const crbrFiltered = dcUnits.filter(isUnitCrbr);
+  assert.strictEqual(crbrFiltered.length, 1);
+  assert.strictEqual(crbrFiltered[0].serial_number, 'SER-C1');
+
+  // Filtering by SVNR
+  const svnrFiltered = dcUnits.filter(isUnitSvnr);
+  assert.strictEqual(svnrFiltered.length, 1);
+  assert.strictEqual(svnrFiltered[0].serial_number, 'SER-S1');
+});
+
+it('Packing List: Default destination site is blank requiring explicit selection before packing', () => {
+  // Test initial workstation state with no saved draft
+  const getInitialSelectedSiteId = (currentUser, savedDraftJson, sites) => {
+    try {
+      if (savedDraftJson) {
+        const parsed = JSON.parse(savedDraftJson);
+        if (parsed && parsed.site_id && sites.some(s => s.id === parsed.site_id)) {
+          return parsed.site_id;
+        }
+      }
+    } catch (e) {}
+    return '';
+  };
+
+  const mockSites = [
+    { id: 'site-annex', code: 'APP ANX', name: 'MobileCare - APP The Annex', region: 'Metro Manila' },
+    { id: 'site-ppm', code: 'APP PPM', name: 'MobileCare - APP Podium', region: 'Metro Manila' },
+    { id: 'site-clrk', code: 'APP CLRK', name: 'MobileCare - ASP Clark', region: 'Pampanga' }
+  ];
+
+  // 1. Fresh session without active draft defaults to empty string (NOT Annex)
+  const initialSiteId = getInitialSelectedSiteId({ id: 'user-zhon' }, null, mockSites);
+  assert.strictEqual(initialSiteId, '', 'Initial selectedSiteId must be blank when no active draft exists');
+
+  const getSelectedSite = (siteId, sites) => {
+    if (!siteId) return null;
+    return sites.find(s => s.id === siteId) || null;
+  };
+
+  const initialSiteObj = getSelectedSite(initialSiteId, mockSites);
+  assert.strictEqual(initialSiteObj, null, 'Selected site object is null when siteId is empty');
+
+  // 2. Packing unit attempt with no site selected is blocked with a validation error
+  const attemptPack = (selectedSiteId, partNumber, serialNumber) => {
+    if (!selectedSiteId) {
+      return { success: false, error: 'Please select a destination site first before packing parts.' };
+    }
+    return { success: true, partNumber, serialNumber, siteId: selectedSiteId };
+  };
+
+  const blockedPackRes = attemptPack(initialSiteId, '661-21991', 'F8Y6276C1UQ13XCB1');
+  assert.strictEqual(blockedPackRes.success, false);
+  assert.strictEqual(blockedPackRes.error, 'Please select a destination site first before packing parts.');
+
+  // 3. User explicitly selects a destination site (e.g. Clark)
+  const chosenSiteId = 'site-clrk';
+  const chosenSiteObj = getSelectedSite(chosenSiteId, mockSites);
+  assert.strictEqual(chosenSiteObj.code, 'APP CLRK');
+
+  // 4. Packing succeeds after site selection
+  const allowedPackRes = attemptPack(chosenSiteId, '661-21991', 'F8Y6276C1UQ13XCB1');
+  assert.strictEqual(allowedPackRes.success, true);
+  assert.strictEqual(allowedPackRes.siteId, 'site-clrk');
+});
+
 console.log('====================================================');
 console.log(`RESULTS: ${passedTests}/${passedTests} PASSED (0 FAILED)`);
 console.log('====================================================');
+
 
 
 

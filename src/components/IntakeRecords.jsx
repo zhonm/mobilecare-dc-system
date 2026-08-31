@@ -89,6 +89,27 @@ export default function IntakeRecords() {
     setTimeout(() => setCopiedSerial(null), 2000);
   };
 
+  // Helper to check if any filter is active
+  const isAnyFilterActive = useMemo(() => {
+    return (
+      Boolean(searchQuery.trim()) ||
+      assignmentFilter !== 'ALL' ||
+      dateFilter !== 'ALL' ||
+      categoryFilter !== 'ALL' ||
+      yearFilter !== 'ALL'
+    );
+  }, [searchQuery, assignmentFilter, dateFilter, categoryFilter, yearFilter]);
+
+  // Helper to clear all search queries and active filter dropdowns
+  const handleClearAllFilters = () => {
+    setSearchQuery('');
+    setAssignmentFilter('ALL');
+    setDateFilter('ALL');
+    setCategoryFilter('ALL');
+    setYearFilter('ALL');
+    showToast('All filters cleared', 'info');
+  };
+
   // Date strings
   const todayDateStr = new Date().toISOString().split('T')[0];
 
@@ -640,18 +661,22 @@ export default function IntakeRecords() {
               className="btn btn-secondary btn-sm"
               onClick={() => setActiveTab('scan-in')}
               style={{
-                background: '#1e293b',
-                color: '#38bdf8',
-                borderColor: '#38bdf8',
-                fontWeight: 600,
+                background: '#0284c7',
+                color: '#ffffff',
+                borderColor: '#0284c7',
+                fontWeight: 700,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                height: '36px'
+                height: '36px',
+                padding: '0 14px',
+                borderRadius: '6px',
+                boxShadow: '0 1px 3px rgba(2,132,199,0.3)'
               }}
+              title="Return to Receive Scan-In Station"
             >
               <Barcode size={16} />
-              <span>Scan-In Station (F1)</span>
+              <span>← Back to Receive Scan-In (F1)</span>
             </button>
           )}
 
@@ -939,6 +964,30 @@ export default function IntakeRecords() {
                 ))}
               </select>
             )}
+
+            {/* Clear All Filters Button */}
+            {isAnyFilterActive && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleClearAllFilters}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  color: '#ef4444',
+                  borderColor: '#fca5a5',
+                  background: '#fff',
+                  fontWeight: 600,
+                  height: '34px',
+                  fontSize: '12px'
+                }}
+                title="Clear search and reset all active filter dropdowns"
+              >
+                <X size={14} />
+                <span>Clear Filters</span>
+              </button>
+            )}
           </div>
 
           <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
@@ -998,17 +1047,38 @@ export default function IntakeRecords() {
                     <Boxes size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
                     <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Stock Parts Found</h4>
                     <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
-                      {searchQuery || categoryFilter !== 'ALL' || dateFilter !== 'ALL' || assignmentFilter !== 'ALL'
-                        ? 'No stock parts match your active filters. Try clearing your search or filters.'
+                      {isAnyFilterActive
+                        ? 'No stock parts match your active filters. Click Clear Filters below to view all stock.'
                         : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In (F1) to receive inventory.'}
                     </p>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => setActiveTab('scan-in')}
-                    >
-                      <Barcode size={14} />
-                      <span>Go to Receive Scan-In (F1)</span>
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      {isAnyFilterActive && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleClearAllFilters}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: '#ef4444',
+                            borderColor: '#fca5a5',
+                            background: '#fff',
+                            fontWeight: 600
+                          }}
+                        >
+                          <X size={14} />
+                          <span>Clear Filters ({totalStockUnitsCount} available)</span>
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setActiveTab('scan-in')}
+                      >
+                        <Barcode size={14} />
+                        <span>Go to Receive Scan-In (F1)</span>
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
@@ -1312,22 +1382,43 @@ export default function IntakeRecords() {
                 <BookmarkPlus size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
                 <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Dispatched Records Found</h4>
                 <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
-                  {searchQuery
-                    ? `No batch records matching "${searchQuery}". Try clearing search.`
+                  {isAnyFilterActive
+                    ? `No batch records matching your active filters. Click Clear Filters below to reset.`
                     : 'Save currently scanned stock parts into permanent dispatched batch records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
                 </p>
-                {enrichedStockUnits.length > 0 && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
-                      setIsSaveModalOpen(true);
-                    }}
-                  >
-                    <Plus size={14} />
-                    <span>Save New Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {isAnyFilterActive && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleClearAllFilters}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        color: '#ef4444',
+                        borderColor: '#fca5a5',
+                        background: '#fff',
+                        fontWeight: 600
+                      }}
+                    >
+                      <X size={14} />
+                      <span>Clear Filters ({totalBatchesCount} available)</span>
+                    </button>
+                  )}
+                  {enrichedStockUnits.length > 0 && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => {
+                        setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
+                        setIsSaveModalOpen(true);
+                      }}
+                    >
+                      <Plus size={14} />
+                      <span>Save New Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="table-container" style={{ maxHeight: '560px', overflowY: 'auto' }}>

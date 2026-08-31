@@ -65,11 +65,24 @@ export default function ScanOutPacking() {
     return (sites || []).filter(s => !s.is_dc);
   }, [sites]);
 
-  const [selectedSiteId, setSelectedSiteId] = useState(() => serviceSites[0]?.id || '');
+  const [selectedSiteId, setSelectedSiteId] = useState(() => {
+    const userKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
+    try {
+      const saved = localStorage.getItem(userKey) || localStorage.getItem('mdc_active_pack_draft');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.site_id && sites.some(s => s.id === parsed.site_id)) {
+          return parsed.site_id;
+        }
+      }
+    } catch (e) {}
+    return '';
+  });
 
   const selectedSite = useMemo(() => {
-    return sites.find(s => s.id === selectedSiteId) || serviceSites[0] || {};
-  }, [sites, selectedSiteId, serviceSites]);
+    if (!selectedSiteId) return null;
+    return sites.find(s => s.id === selectedSiteId) || null;
+  }, [sites, selectedSiteId]);
 
   // Pop-up Site Selection Modal State
   const [isSiteModalOpen, setIsSiteModalOpen] = useState(false);
@@ -89,8 +102,6 @@ export default function ScanOutPacking() {
   // Active Shipment Draft with user-scoped LocalStorage persistence
   const [currentShipment, setCurrentShipment] = useState(() => {
     const userKey = currentUser?.id ? `mdc_pack_draft_${currentUser.id}` : 'mdc_pack_draft_default';
-    const isFirstSiteMM = serviceSites[0]?.region === 'Metro Manila';
-    const initialCourier = isFirstSiteMM ? 'Lalamove' : 'Lite Express';
 
     try {
       const saved = localStorage.getItem(userKey) || localStorage.getItem('mdc_active_pack_draft');
@@ -99,6 +110,8 @@ export default function ScanOutPacking() {
         if (parsed && parsed.id && Array.isArray(parsed.items) && parsed.items.length > 0) {
           const rawTrk = parsed.tracking_number;
           const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
+          const draftSite = sites.find(s => s.id === parsed.site_id);
+          const initialCourier = draftSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express';
           return {
             ...parsed,
             created_date: parsed.created_date || (parsed.created_at ? new Date(parsed.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
@@ -115,32 +128,16 @@ export default function ScanOutPacking() {
     } catch (e) {
       console.warn('Could not read user pack draft:', e);
     }
-    const existing = shipments.find(s => s.site_id === serviceSites[0]?.id && s.status === 'draft');
-    if (existing && Array.isArray(existing.items) && existing.items.length > 0) {
-      const rawTrk = existing.tracking_number;
-      const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
-      return {
-        ...existing,
-        created_date: existing.created_date || (existing.created_at ? new Date(existing.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
-        shipment_date: '',
-        carrier: existing.carrier || existing.courier || initialCourier,
-        courier: existing.carrier || existing.courier || initialCourier,
-        transfer_slip_number: existing.transfer_slip_number || existing.transfer_slip || '',
-        pickup_by_name: existing.pickup_by_name || (existing.carrier === 'Utility' ? 'Utility' : ''),
-        tracking_number: cleanTrk,
-        prepared_by_name: existing.prepared_by_name?.trim() && existing.prepared_by_name !== 'Warehouse Staff' ? existing.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois')
-      };
-    }
     return {
       id: `ship-${Date.now()}`,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
       invoice_ref: generateNextInvoiceRef(shipments),
-      site_id: serviceSites[0]?.id,
+      site_id: '',
       week_number: 1,
       created_date: new Date().toLocaleDateString('en-US'),
       shipment_date: '',
-      carrier: initialCourier,
-      courier: initialCourier,
+      carrier: 'Lalamove',
+      courier: 'Lalamove',
       tracking_number: '',
       transfer_slip_number: '',
       total_boxes: 1,
@@ -148,7 +145,7 @@ export default function ScanOutPacking() {
       prepared_by_name: currentUser?.fullName || 'Zhon Manaois',
       verified_by_name: 'Anjo Alcazar',
       pickup_by_name: '',
-      receiving_signature: serviceSites[0]?.code || 'ASP NPM',
+      receiving_signature: '',
       remarks: 'KGB PARTS',
       items: []
     };
@@ -351,6 +348,12 @@ export default function ScanOutPacking() {
   };
 
   const executePackScan = () => {
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site first before packing parts.', 'warning');
+      setIsSiteModalOpen(true);
+      return;
+    }
+
     const cleanPN = partNumberInput.trim().toUpperCase();
     const cleanSerial = serialInput.trim().toUpperCase();
 
@@ -415,6 +418,7 @@ export default function ScanOutPacking() {
 
   // State for upgraded Available Stock Verification UI
   const [stockSearch, setStockSearch] = useState('');
+  const [stockAssignmentTab, setStockAssignmentTab] = useState('ALL'); // 'ALL' | 'MDC_FORECASTING' | 'DC_CRBR' | 'SVNR'
   const [stockCategoryTab, setStockCategoryTab] = useState('ALL'); // 'ALL' | category code
   const [stockInspectUnit, setStockInspectUnit] = useState(null); // unit for detail modal
   const [copiedSerial, setCopiedSerial] = useState(null);
@@ -438,6 +442,44 @@ export default function ScanOutPacking() {
     if (code.includes('MID') || code.includes('REAR')) return { background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca' };
     return { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' };
   };
+
+  // Helper functions for Part Intake Assignment Classification
+  const isUnitSvnr = (u) => {
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('SVNR') || notes.includes('SVNR');
+  };
+
+  const isUnitCrbr = (u) => {
+    if (isUnitSvnr(u)) return false;
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('CRBR') || notes.includes('CRBR');
+  };
+
+  const isUnitForecasting = (u) => {
+    return !isUnitSvnr(u) && !isUnitCrbr(u);
+  };
+
+  // Assignment counts for Available DC Stock Units
+  const assignmentCounts = useMemo(() => {
+    let forecasting = 0;
+    let crbr = 0;
+    let svnr = 0;
+
+    (availableStockUnits || []).forEach(u => {
+      if (isUnitSvnr(u)) svnr++;
+      else if (isUnitCrbr(u)) crbr++;
+      else forecasting++;
+    });
+
+    return {
+      all: availableStockUnits.length,
+      forecasting,
+      crbr,
+      svnr
+    };
+  }, [availableStockUnits]);
 
   // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedStockUnits = useMemo(() => {
@@ -497,10 +539,15 @@ export default function ScanOutPacking() {
     });
   }, [availableStockUnits, parts, categories]);
 
-  // Filtered Stock Units based on search & category
+  // Filtered Stock Units based on Assignment, Category & Search
   const filteredStockUnits = useMemo(() => {
     return enrichedStockUnits.filter(u => {
-      // Category filter
+      // 1. Assignment Tab Filter
+      if (stockAssignmentTab === 'MDC_FORECASTING' && !isUnitForecasting(u)) return false;
+      if (stockAssignmentTab === 'DC_CRBR' && !isUnitCrbr(u)) return false;
+      if (stockAssignmentTab === 'SVNR' && !isUnitSvnr(u)) return false;
+
+      // 2. Sub-Category filter
       if (stockCategoryTab !== 'ALL') {
         const targetCode = stockCategoryTab.toUpperCase();
         const uCode = (u.category_code || '').toUpperCase();
@@ -509,7 +556,8 @@ export default function ScanOutPacking() {
           return false;
         }
       }
-      // Search filter
+
+      // 3. Search filter
       if (stockSearch.trim()) {
         const q = stockSearch.toLowerCase().trim();
         const matchesPn = (u.part_number || '').toLowerCase().includes(q);
@@ -517,11 +565,12 @@ export default function ScanOutPacking() {
         const matchesDesc = (u.description || '').toLowerCase().includes(q);
         const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
         const matchesCat = (u.category_name || '').toLowerCase().includes(q);
-        if (!matchesPn && !matchesSn && !matchesDesc && !matchesModel && !matchesCat) return false;
+        const matchesAssign = (u.intake_assignment || '').toLowerCase().includes(q);
+        if (!matchesPn && !matchesSn && !matchesDesc && !matchesModel && !matchesCat && !matchesAssign) return false;
       }
       return true;
     });
-  }, [enrichedStockUnits, stockCategoryTab, stockSearch]);
+  }, [enrichedStockUnits, stockAssignmentTab, stockCategoryTab, stockSearch]);
 
   const uniquePartTypesCount = useMemo(() => {
     const set = new Set(availableStockUnits.map(u => (u.part_number || '').toUpperCase()));
@@ -532,6 +581,12 @@ export default function ScanOutPacking() {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
     if (!unit || !unit.serial_number) return;
+
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site first before packing parts.', 'warning');
+      setIsSiteModalOpen(true);
+      return;
+    }
 
     markLocalDraftEdit();
     const cleanPN = String(unit.part_number || '').trim();
@@ -567,6 +622,11 @@ export default function ScanOutPacking() {
   // --- XLSX / CSV File Import Handling ---
   const handleFileSelect = async (file) => {
     if (!file) return;
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site first before importing packing lists.', 'warning');
+      setIsSiteModalOpen(true);
+      return;
+    }
     setIsParsing(true);
     try {
       const res = await parseScanOutPartsFile(file, inventoryUnits, sites, selectedSiteId);
@@ -692,19 +752,18 @@ export default function ScanOutPacking() {
     // Generate fresh new draft so the user can start a new packing list for another site
     const newDraftId = `ship-${Date.now()}`;
     const newInvoiceRef = generateNextInvoiceRef(shipments);
-    const isMM = selectedSite?.region === 'Metro Manila';
-    const autoCourier = isMM ? 'Lalamove' : 'Lite Express';
 
+    setSelectedSiteId('');
     setCurrentShipment({
       id: newDraftId,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
       invoice_ref: newInvoiceRef,
-      site_id: selectedSiteId,
+      site_id: '',
       week_number: 1,
       created_date: new Date().toLocaleDateString('en-US'),
       shipment_date: '',
-      carrier: autoCourier,
-      courier: autoCourier,
+      carrier: 'Lalamove',
+      courier: 'Lalamove',
       tracking_number: '',
       transfer_slip_number: '',
       total_boxes: 1,
@@ -712,7 +771,7 @@ export default function ScanOutPacking() {
       prepared_by_name: currentUser?.fullName || '',
       verified_by_name: 'Anjo Alcazar',
       pickup_by_name: '',
-      receiving_signature: selectedSite?.code || 'ASP NPM',
+      receiving_signature: '',
       remarks: 'KGB PARTS',
       items: []
     });
@@ -726,6 +785,12 @@ export default function ScanOutPacking() {
 
   // --- Combined Action: Save to Database & Finalize Packing List ---
   const handleFinalizeShipment = async () => {
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site before finalizing the packing list.', 'error');
+      setIsSiteModalOpen(true);
+      return;
+    }
+
     if (!currentShipment.items || currentShipment.items.length === 0) {
       showToast('Cannot finalize an empty packing list. Please add parts first.', 'error');
       return;
@@ -786,13 +851,14 @@ export default function ScanOutPacking() {
       const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
       const nextInvoiceRef = generateNextInvoiceRef([finalized, ...shipments]);
 
+      setSelectedSiteId('');
       setCurrentShipment({
         id: `ship-${Date.now()}`,
         shipment_number: nextShipmentNumber,
         invoice_ref: nextInvoiceRef,
-        site_id: selectedSite.id,
-        carrier: isMM ? 'Lalamove' : 'Lite Express',
-        courier: isMM ? 'Lalamove' : 'Lite Express',
+        site_id: '',
+        carrier: 'Lalamove',
+        courier: 'Lalamove',
         shipment_date: '',
         box_number: 1,
         total_boxes: 1,
@@ -801,7 +867,7 @@ export default function ScanOutPacking() {
         prepared_by_name: activeUserName,
         verified_by_name: 'Anjo Alcazar',
         pickup_by_name: '',
-        receiving_signature: selectedSite?.code || 'ASP NPM',
+        receiving_signature: '',
         remarks: 'KGB PARTS',
         items: []
       });
@@ -809,7 +875,7 @@ export default function ScanOutPacking() {
       setScanError(null);
       setLastAction({
         type: 'finalized',
-        message: `Finalized Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) sent to ${selectedSite.name}! Next packing list initialized.`
+        message: `Finalized Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) sent to ${selectedSite?.name || 'branch'}! Next packing list initialized.`
       });
       setIsFinalizeModalOpen(false);
       showToast(`Workstation ready for next shipment! (${nextInvoiceRef})`, 'info');
@@ -1159,49 +1225,51 @@ export default function ScanOutPacking() {
           {/* Card 1: Destination Branch */}
           <div
             style={{
-              background: 'rgba(15, 23, 42, 0.75)',
-              border: '1px solid rgba(56, 189, 248, 0.3)',
+              background: !selectedSite ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(217, 119, 6, 0.26) 100%)' : 'rgba(15, 23, 42, 0.75)',
+              border: !selectedSite ? '1.5px solid #f59e0b' : '1px solid rgba(56, 189, 248, 0.3)',
               borderRadius: '10px',
               padding: '10px 12px',
               display: 'flex',
               flexDirection: 'column',
-              justifyContent: 'space-between'
+              justifyContent: 'space-between',
+              transition: 'all 0.2s ease'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#94a3b8', fontWeight: 700, letterSpacing: '0.4px' }}>
-                Destination Site
+              <span style={{ fontSize: '10.5px', textTransform: 'uppercase', color: !selectedSite ? '#fbbf24' : '#94a3b8', fontWeight: 800, letterSpacing: '0.4px' }}>
+                Destination Site {!selectedSite && <span style={{ color: '#ef4444' }}>*</span>}
               </span>
               <button
                 type="button"
                 onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
                 style={{
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  border: '1px solid rgba(56, 189, 248, 0.4)',
-                  color: '#38bdf8',
+                  background: !selectedSite ? '#f59e0b' : 'rgba(56, 189, 248, 0.15)',
+                  border: !selectedSite ? '1px solid #d97706' : '1px solid rgba(56, 189, 248, 0.4)',
+                  color: !selectedSite ? '#ffffff' : '#38bdf8',
                   borderRadius: '4px',
-                  padding: '1px 6px',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
+                  padding: '2px 8px',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: !selectedSite ? '0 1px 4px rgba(245, 158, 11, 0.4)' : 'none'
                 }}
               >
-                Change
+                {!selectedSite ? 'Select Site' : 'Change'}
               </button>
             </div>
             <div
               onClick={() => { setIsSiteModalOpen(true); setSiteSearchQuery(''); }}
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
             >
-              <div style={{ background: 'rgba(56, 189, 248, 0.12)', padding: '5px', borderRadius: '6px', color: '#38bdf8', flexShrink: 0 }}>
+              <div style={{ background: !selectedSite ? 'rgba(245, 158, 11, 0.2)' : 'rgba(56, 189, 248, 0.12)', padding: '5px', borderRadius: '6px', color: !selectedSite ? '#f59e0b' : '#38bdf8', flexShrink: 0 }}>
                 <Building2 size={16} />
               </div>
               <div style={{ overflow: 'hidden' }}>
-                <div style={{ fontWeight: 800, color: '#38bdf8', fontSize: '13.5px', lineHeight: 1.2 }}>
-                  {selectedSite?.code || 'SELECT SITE'}
+                <div style={{ fontWeight: 800, color: !selectedSite ? '#fef08a' : '#38bdf8', fontSize: '13px', lineHeight: 1.2 }}>
+                  {selectedSite?.code || '— SELECT SITE —'}
                 </div>
-                <div style={{ color: '#cbd5e1', fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
-                  {selectedSite?.name || 'Click to select branch'}
+                <div style={{ color: !selectedSite ? '#fed7aa' : '#cbd5e1', fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                  {selectedSite?.name || 'Please select a destination site first'}
                 </div>
               </div>
             </div>
@@ -1575,19 +1643,171 @@ export default function ScanOutPacking() {
           </div>
         </div>
 
-        {/* Category Filter Pills */}
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
-          <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>Category:</span>
+        {/* 1. Primary Part Assignment Tabs (Forecasting, CRBR, SVNR) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.4px', marginRight: '4px' }}>
+            Inventory Tag:
+          </span>
+
+          {/* All Parts Tab */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setStockAssignmentTab('ALL')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: stockAssignmentTab === 'ALL' ? '1px solid #0f172a' : '1px solid #cbd5e1',
+              background: stockAssignmentTab === 'ALL' ? '#0f172a' : '#ffffff',
+              color: stockAssignmentTab === 'ALL' ? '#ffffff' : '#334155',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: stockAssignmentTab === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+            }}
+          >
+            <span>All Parts</span>
+            <span
+              style={{
+                background: stockAssignmentTab === 'ALL' ? 'rgba(255,255,255,0.22)' : '#e2e8f0',
+                color: stockAssignmentTab === 'ALL' ? '#ffffff' : '#334155',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}
+            >
+              {assignmentCounts.all}
+            </span>
+          </button>
+
+          {/* MDC – Forecasting Tab */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setStockAssignmentTab('MDC_FORECASTING')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: stockAssignmentTab === 'MDC_FORECASTING' ? '1px solid #0284c7' : '1px solid #cbd5e1',
+              background: stockAssignmentTab === 'MDC_FORECASTING' ? '#0284c7' : '#ffffff',
+              color: stockAssignmentTab === 'MDC_FORECASTING' ? '#ffffff' : '#0369a1',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: stockAssignmentTab === 'MDC_FORECASTING' ? '0 1px 3px rgba(2,132,199,0.2)' : 'none'
+            }}
+          >
+            <span>MDC – Forecasting</span>
+            <span
+              style={{
+                background: stockAssignmentTab === 'MDC_FORECASTING' ? 'rgba(255,255,255,0.25)' : '#e0f2fe',
+                color: stockAssignmentTab === 'MDC_FORECASTING' ? '#ffffff' : '#0369a1',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}
+            >
+              {assignmentCounts.forecasting}
+            </span>
+          </button>
+
+          {/* DC – CRBR Tab */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setStockAssignmentTab('DC_CRBR')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: stockAssignmentTab === 'DC_CRBR' ? '1px solid #d97706' : '1px solid #cbd5e1',
+              background: stockAssignmentTab === 'DC_CRBR' ? '#d97706' : '#ffffff',
+              color: stockAssignmentTab === 'DC_CRBR' ? '#ffffff' : '#b45309',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: stockAssignmentTab === 'DC_CRBR' ? '0 1px 3px rgba(217,119,6,0.2)' : 'none'
+            }}
+          >
+            <span>DC – CRBR</span>
+            <span
+              style={{
+                background: stockAssignmentTab === 'DC_CRBR' ? 'rgba(255,255,255,0.25)' : '#fef3c7',
+                color: stockAssignmentTab === 'DC_CRBR' ? '#ffffff' : '#b45309',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}
+            >
+              {assignmentCounts.crbr}
+            </span>
+          </button>
+
+          {/* SVNR Tab */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setStockAssignmentTab('SVNR')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: stockAssignmentTab === 'SVNR' ? '1px solid #9333ea' : '1px solid #cbd5e1',
+              background: stockAssignmentTab === 'SVNR' ? '#9333ea' : '#ffffff',
+              color: stockAssignmentTab === 'SVNR' ? '#ffffff' : '#7e22ce',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: stockAssignmentTab === 'SVNR' ? '0 1px 3px rgba(147,51,234,0.2)' : 'none'
+            }}
+          >
+            <span>SVNR</span>
+            <span
+              style={{
+                background: stockAssignmentTab === 'SVNR' ? 'rgba(255,255,255,0.25)' : '#f3e8ff',
+                color: stockAssignmentTab === 'SVNR' ? '#ffffff' : '#7e22ce',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}
+            >
+              {assignmentCounts.svnr}
+            </span>
+          </button>
+        </div>
+
+        {/* 2. Sub-Category Filter Pills */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>Filter Part Type:</span>
           <button
             type="button"
             className={`btn btn-sm ${stockCategoryTab === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setStockCategoryTab('ALL')}
             style={{ padding: '2px 8px', fontSize: '11px', borderRadius: 'var(--radius-full)' }}
           >
-            All Parts ({availableStockUnits.length})
+            All Types
           </button>
           {['DISPLAY', 'BATTERY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(code => {
-            const countForCat = enrichedStockUnits.filter(u => u.category_code === code || u.category_name?.toUpperCase().includes(code)).length;
+            const countForCat = enrichedStockUnits.filter(u => {
+              if (stockAssignmentTab === 'MDC_FORECASTING' && !isUnitForecasting(u)) return false;
+              if (stockAssignmentTab === 'DC_CRBR' && !isUnitCrbr(u)) return false;
+              if (stockAssignmentTab === 'SVNR' && !isUnitSvnr(u)) return false;
+              return u.category_code === code || u.category_name?.toUpperCase().includes(code);
+            }).length;
             if (countForCat === 0 && stockCategoryTab !== code) return null;
             const catLabel = code === 'DISPLAY' ? 'Display' : code === 'BATTERY' ? 'Battery' : code === 'CAMERA' ? 'Camera' : code === 'BACK_GLASS' ? 'Back Glass' : 'Logic / Mid';
             return (
@@ -1618,9 +1838,21 @@ export default function ScanOutPacking() {
         ) : filteredStockUnits.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '24px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
             <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
-            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
-              No available parts match "{stockSearch}".
+            <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+              {stockAssignmentTab !== 'ALL'
+                ? `No available units found under "${stockAssignmentTab === 'MDC_FORECASTING' ? 'MDC – Forecasting' : stockAssignmentTab === 'DC_CRBR' ? 'DC – CRBR' : 'SVNR'}".`
+                : `No available parts match "${stockSearch}".`}
             </p>
+            {stockAssignmentTab !== 'ALL' && assignmentCounts.all > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => { setStockAssignmentTab('ALL'); setStockCategoryTab('ALL'); setStockSearch(''); }}
+                style={{ fontSize: '11px', padding: '3px 10px' }}
+              >
+                View All Available Parts ({assignmentCounts.all})
+              </button>
+            )}
           </div>
         ) : (
           <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
@@ -1639,8 +1871,8 @@ export default function ScanOutPacking() {
               <tbody>
                 {filteredStockUnits.map((unit, idx) => {
                   const catBadge = getCategoryBadgeStyle(unit.category_code);
-                  const isSvnr = unit.intake_assignment?.includes('SVNR') || unit.notes?.includes('SVNR');
-                  const isCrbr = !isSvnr && (unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR'));
+                  const isSvnr = isUnitSvnr(unit);
+                  const isCrbr = isUnitCrbr(unit);
                   return (
                     <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
@@ -1684,12 +1916,12 @@ export default function ScanOutPacking() {
                             color: isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1',
                             border: isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
                             fontSize: '10.5px',
-                            fontWeight: 600,
+                            fontWeight: 700,
                             padding: '2px 6px',
                             borderRadius: '4px'
                           }}
                         >
-                          {isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}
+                          {isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting'}
                         </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
@@ -1893,9 +2125,11 @@ export default function ScanOutPacking() {
             <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
               <strong style={{ minWidth: '55px', fontSize: '12px', color: '#0f172a' }}>Ship To</strong>
               <div>
-                <strong style={{ fontSize: '12.5px', color: '#0f172a', textTransform: 'uppercase' }}>{selectedSite.name}</strong>
-                <div style={{ color: '#334155', fontSize: '11.5px', marginTop: '2px', lineHeight: '1.4' }}>
-                  {selectedSite.address}
+                <strong style={{ fontSize: '12.5px', color: selectedSite ? '#0f172a' : '#d97706', textTransform: 'uppercase' }}>
+                  {selectedSite?.name || '— PLEASE SELECT DESTINATION SITE —'}
+                </strong>
+                <div style={{ color: selectedSite ? '#334155' : '#94a3b8', fontSize: '11.5px', marginTop: '2px', lineHeight: '1.4' }}>
+                  {selectedSite?.address || 'Click "Select Site" above to choose the target receiving branch.'}
                 </div>
               </div>
             </div>
@@ -2040,8 +2274,8 @@ export default function ScanOutPacking() {
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
                 style={{ width: '170px', fontWeight: 600 }}
-                value={currentShipment.receiving_signature ?? (selectedSite.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}
-                placeholder="APP RM"
+                value={currentShipment.receiving_signature ?? (selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}
+                placeholder={selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'}
                 title="Click to edit Receiving Branch Signature"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, receiving_signature: e.target.value }))}
               />
@@ -2443,7 +2677,7 @@ export default function ScanOutPacking() {
                 <div>
                   <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Batch Pack Scan-Out (XLSX / CSV)</h3>
                   <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Bulk pack parts into Manifest for {selectedSite.name}
+                    Bulk pack parts into Manifest for {selectedSite?.name || 'Selected Destination Site'}
                   </p>
                 </div>
               </div>

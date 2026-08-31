@@ -29,7 +29,10 @@ import {
   EyeOff,
   ChevronDown,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  Copy,
+  Boxes,
+  Plus
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
@@ -44,6 +47,7 @@ export default function ScanInReceiving() {
     batchAddScanInUnits,
     purchaseOrders,
     parts,
+    categories = [],
     inventoryUnits,
     dcIntakeRecords,
     cloudSyncStatus,
@@ -162,8 +166,48 @@ export default function ScanInReceiving() {
   }, []);
 
   // View & Filter States for Table (Defaults to All Authorized Stock)
-  const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR'
+  const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR' | 'SVNR'
+  const [categoryFilter, setCategoryFilter] = useState('ALL'); // 'ALL' | category code
   const [tableSearch, setTableSearch] = useState('');
+  const [copiedSerial, setCopiedSerial] = useState(null);
+
+  const handleCopySerial = (serial) => {
+    if (!serial) return;
+    try {
+      navigator.clipboard?.writeText(serial);
+      setCopiedSerial(serial);
+      showToast(`Copied serial #${serial} to clipboard`, 'info');
+      setTimeout(() => setCopiedSerial(null), 2500);
+    } catch (e) {}
+  };
+
+  const getCategoryBadgeStyle = (catCode = '') => {
+    const code = String(catCode).toUpperCase();
+    if (code.includes('BATTERY')) return { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' };
+    if (code.includes('DISPLAY')) return { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' };
+    if (code.includes('CAMERA')) return { background: '#f3e8ff', color: '#7e22ce', border: '1px solid #e9d5ff' };
+    if (code.includes('BACK') || code.includes('GLASS')) return { background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' };
+    if (code.includes('MID') || code.includes('REAR')) return { background: '#fee2e2', color: '#b91c1c', border: '1px solid #fecaca' };
+    return { background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' };
+  };
+
+  // Helper functions for Part Intake Assignment Classification
+  const isUnitSvnr = (u) => {
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('SVNR') || notes.includes('SVNR');
+  };
+
+  const isUnitCrbr = (u) => {
+    if (isUnitSvnr(u)) return false;
+    const assign = String(u.intake_assignment || '').toUpperCase();
+    const notes = String(u.notes || '').toUpperCase();
+    return assign.includes('CRBR') || notes.includes('CRBR');
+  };
+
+  const isUnitForecasting = (u) => {
+    return !isUnitSvnr(u) && !isUnitCrbr(u);
+  };
 
   // Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -835,30 +879,114 @@ export default function ScanInReceiving() {
     return normalizeInventoryUnits(raw, parts);
   }, [inventoryUnits, packedSerialsSet, parts, isFulfillment, isPmgUser, activeReceivingSite, currentUser]);
 
-  // Table items calculation with Assignment Filter (Directly driven by authorized site stock)
+  // Enrich available stock units with part catalog info and accurate Apple category classification
+  const enrichedReceivedUnits = useMemo(() => {
+    const partsMap = new Map((parts || []).map(p => [String(p.part_number || '').toUpperCase(), p]));
+    const catMap = new Map((categories || []).map(c => [c.id, c]));
+
+    return (availableInStockUnits || []).map(unit => {
+      const pn = String(unit.part_number || '').toUpperCase();
+      const partInfo = partsMap.get(pn);
+      const desc = unit.description || partInfo?.description || 'Apple Genuine Service Part';
+      const descLower = desc.toLowerCase();
+
+      const isDisplay = descLower.includes('display') || descLower.includes('screen');
+      const isBattery = descLower.includes('battery');
+      const isCamera = descLower.includes('camera');
+      const isBackGlass = descLower.includes('back glass') || descLower.includes('rear glass');
+      const isMidSystem = descLower.includes('logic') || descLower.includes('mid system') || descLower.includes('rear system');
+
+      const categoryObj = partInfo?.category_id ? catMap.get(partInfo.category_id) : null;
+      let categoryName = 'General';
+      let categoryCode = 'GENERAL';
+
+      if (isDisplay) {
+        categoryName = 'Display';
+        categoryCode = 'DISPLAY';
+      } else if (isBattery) {
+        categoryName = 'Battery';
+        categoryCode = 'BATTERY';
+      } else if (isCamera) {
+        categoryName = 'Camera';
+        categoryCode = 'CAMERA';
+      } else if (isBackGlass) {
+        categoryName = 'Back Glass';
+        categoryCode = 'BACK_GLASS';
+      } else if (isMidSystem) {
+        categoryName = 'Logic / Mid System';
+        categoryCode = 'MID_REAR';
+      } else if (categoryObj?.name) {
+        categoryName = categoryObj.name;
+        categoryCode = categoryObj.code || 'GENERAL';
+      } else if (pn.startsWith('661-')) {
+        categoryName = 'Apple Part';
+        categoryCode = 'APPLE_PART';
+      }
+
+      const iphoneModel = partInfo?.iphone_model || unit.iphone_model || '';
+
+      return {
+        ...unit,
+        description: desc,
+        iphone_model: iphoneModel,
+        category_name: categoryName,
+        category_code: categoryCode
+      };
+    });
+  }, [availableInStockUnits, parts, categories]);
+
+  // Metric counts for assignment
+  const assignmentCounts = useMemo(() => {
+    let forecasting = 0;
+    let crbr = 0;
+    let svnr = 0;
+
+    (availableInStockUnits || []).forEach(u => {
+      if (isUnitSvnr(u)) svnr++;
+      else if (isUnitCrbr(u)) crbr++;
+      else forecasting++;
+    });
+
+    return {
+      all: (availableInStockUnits || []).length,
+      forecasting,
+      crbr,
+      svnr
+    };
+  }, [availableInStockUnits]);
+
+  // Table items calculation with Assignment, Category & Search Filters
   const displayedUnits = useMemo(() => {
-    let sourceList = availableInStockUnits || [];
+    return (enrichedReceivedUnits || []).filter(u => {
+      // 1. Assignment Filter
+      if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
+      if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
+      if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
 
-    // Assignment filter
-    if (assignmentFilter === 'MDC - Forecasting') {
-      sourceList = sourceList.filter(u => !u.intake_assignment?.includes('CRBR') && !u.intake_assignment?.includes('SVNR') && !u.notes?.includes('CRBR') && !u.notes?.includes('SVNR'));
-    } else if (assignmentFilter === 'DC - CRBR') {
-      sourceList = sourceList.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR'));
-    } else if (assignmentFilter === 'SVNR - Service Non-Repair') {
-      sourceList = sourceList.filter(u => u.intake_assignment?.includes('SVNR') || u.notes?.includes('SVNR'));
-    }
+      // 2. Sub-Category Filter
+      if (categoryFilter !== 'ALL') {
+        const targetCode = categoryFilter.toUpperCase();
+        const uCode = (u.category_code || '').toUpperCase();
+        const uName = (u.category_name || '').toUpperCase();
+        if (uCode !== targetCode && !uName.includes(targetCode)) return false;
+      }
 
-    if (!tableSearch.trim()) return sourceList;
+      // 3. Search Filter
+      if (tableSearch.trim()) {
+        const q = tableSearch.toLowerCase().trim();
+        const matchesPn = (u.part_number || '').toLowerCase().includes(q);
+        const matchesSn = (u.serial_number || '').toLowerCase().includes(q);
+        const matchesDesc = (u.description || '').toLowerCase().includes(q);
+        const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
+        const matchesCat = (u.category_name || '').toLowerCase().includes(q);
+        const matchesAssign = (u.intake_assignment || '').toLowerCase().includes(q);
+        const matchesNotes = (u.notes || '').toLowerCase().includes(q);
+        if (!matchesPn && !matchesSn && !matchesDesc && !matchesModel && !matchesCat && !matchesAssign && !matchesNotes) return false;
+      }
 
-    const q = tableSearch.toLowerCase().trim();
-    return sourceList.filter(u =>
-      (u.part_number && u.part_number.toLowerCase().includes(q)) ||
-      (u.serial_number && u.serial_number.toLowerCase().includes(q)) ||
-      (u.description && u.description.toLowerCase().includes(q)) ||
-      (u.intake_assignment && u.intake_assignment.toLowerCase().includes(q)) ||
-      (u.notes && u.notes.toLowerCase().includes(q))
-    );
-  }, [assignmentFilter, availableInStockUnits, tableSearch]);
+      return true;
+    });
+  }, [enrichedReceivedUnits, assignmentFilter, categoryFilter, tableSearch]);
 
   const handleConfirmDeletePart = async () => {
     if (!unitToDelete) return;
@@ -905,21 +1033,9 @@ export default function ScanInReceiving() {
     }
   };
 
-  // Metric counts for assignment
-  const forecastingCount = useMemo(() => {
-    const list = availableInStockUnits || [];
-    return list.filter(u => !u.intake_assignment?.includes('CRBR') && !u.intake_assignment?.includes('SVNR') && !u.notes?.includes('CRBR') && !u.notes?.includes('SVNR')).length;
-  }, [availableInStockUnits]);
-
-  const crbrCount = useMemo(() => {
-    const list = availableInStockUnits || [];
-    return list.filter(u => u.intake_assignment?.includes('CRBR') || u.notes?.includes('CRBR')).length;
-  }, [availableInStockUnits]);
-
-  const svnrCount = useMemo(() => {
-    const list = availableInStockUnits || [];
-    return list.filter(u => u.intake_assignment?.includes('SVNR') || u.notes?.includes('SVNR')).length;
-  }, [availableInStockUnits]);
+  const forecastingCount = assignmentCounts.forecasting;
+  const crbrCount = assignmentCounts.crbr;
+  const svnrCount = assignmentCounts.svnr;
 
   return (
     <div className="scanner-container">
@@ -949,6 +1065,30 @@ export default function ScanInReceiving() {
                 <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'}
               </span>
             </div>
+
+            {!isPmgUser && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setActiveTab('intake-records')}
+                style={{
+                  background: '#1e293b',
+                  color: '#38bdf8',
+                  borderColor: 'rgba(56, 189, 248, 0.4)',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  height: '30px',
+                  fontSize: '12px',
+                  borderRadius: '6px'
+                }}
+                title="View serialized stock grouped by date in DC Parts Stock Records"
+              >
+                <BookmarkPlus size={14} color="#38bdf8" />
+                <span>DC Parts Stock Records</span>
+              </button>
+            )}
 
             <div className="telemetry-badge" title="Hardware Scanner Connection Status">
               <div className="pulse-dot" />
@@ -1634,167 +1774,353 @@ export default function ScanInReceiving() {
       </div>
 
       {/* Scanned DC Inventory Units Table */}
-      <div className="card">
+      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
         {/* Table Header Controls */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <h3 style={{ margin: 0 }}>
-              {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory History` : 'Received DC Stock & Intake History'}
-            </h3>
-            
-            <span
-              style={{
-                background: 'rgba(56, 189, 248, 0.1)',
-                color: '#0284c7',
-                padding: '4px 10px',
-                borderRadius: '12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                border: '1px solid rgba(56, 189, 248, 0.25)'
-              }}
-            >
-              {availableInStockUnits.length} In-Stock Units
-            </span>
-
-            {/* Assignment Filter Switcher (DC & Provincial) */}
-            {!isPmgUser && (
-              <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '3px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '2px' }}>
-                <button
-                  type="button"
-                  onClick={() => setAssignmentFilter('ALL')}
-                  style={{
-                    background: assignmentFilter === 'ALL' ? '#fff' : 'transparent',
-                    color: assignmentFilter === 'ALL' ? 'var(--text-main)' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11.5px',
-                    fontWeight: assignmentFilter === 'ALL' ? 600 : 400,
-                    cursor: 'pointer'
-                  }}
-                >
-                  All Destinations
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAssignmentFilter('MDC - Forecasting')}
-                  style={{
-                    background: assignmentFilter === 'MDC - Forecasting' ? '#0284c7' : 'transparent',
-                    color: assignmentFilter === 'MDC - Forecasting' ? '#fff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11.5px',
-                    fontWeight: assignmentFilter === 'MDC - Forecasting' ? 600 : 400,
-                    cursor: 'pointer'
-                  }}
-                >
-                  MDC - Forecasting ({forecastingCount})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAssignmentFilter('DC - CRBR')}
-                  style={{
-                    background: assignmentFilter === 'DC - CRBR' ? '#d97706' : 'transparent',
-                    color: assignmentFilter === 'DC - CRBR' ? '#fff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11.5px',
-                    fontWeight: assignmentFilter === 'DC - CRBR' ? 600 : 400,
-                    cursor: 'pointer'
-                  }}
-                >
-                  DC - CRBR ({crbrCount})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAssignmentFilter('SVNR - Service Non-Repair')}
-                  style={{
-                    background: assignmentFilter === 'SVNR - Service Non-Repair' ? '#7c3aed' : 'transparent',
-                    color: assignmentFilter === 'SVNR - Service Non-Repair' ? '#fff' : 'var(--text-muted)',
-                    border: 'none',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11.5px',
-                    fontWeight: assignmentFilter === 'SVNR - Service Non-Repair' ? 600 : 400,
-                    cursor: 'pointer'
-                  }}
-                >
-                  SVNR ({svnrCount})
-                </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Boxes size={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: '15.5px', color: '#0f172a', fontWeight: 700 }}>
+                  {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory History` : 'Received DC Stock & Intake History'}
+                </h3>
+                <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
+                  {availableInStockUnits.length} in-stock
+                </span>
+                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 8px' }}>
+                  {assignmentCounts.all} Total Units
+                </span>
               </div>
-            )}
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                {isPmgUser
+                  ? 'All serialized units received and on-hand at your authorized retail branch'
+                  : 'Manage serialized inventory in DC and click any assignment badge to switch tags'}
+              </p>
+            </div>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <div style={{ position: 'relative', width: '220px' }}>
-              <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <div style={{ position: 'relative', width: '240px' }}>
+              <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
-                placeholder={isPmgUser ? "Filter P/N, S/N..." : "Filter P/N, S/N, destination..."}
+                placeholder={isPmgUser ? "Search P/N, Serial, Model..." : "Search P/N, Serial, Tag, Model..."}
                 value={tableSearch}
                 onChange={(e) => setTableSearch(e.target.value)}
                 className="form-input"
-                style={{ paddingLeft: '28px', height: '34px', fontSize: '12px', width: '100%' }}
+                style={{ paddingLeft: '26px', paddingRight: tableSearch ? '24px' : '8px', height: '32px', fontSize: '12px', width: '100%' }}
               />
+              {tableSearch && (
+                <button
+                  type="button"
+                  onClick={() => setTableSearch('')}
+                  style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}
+                >
+                  <X size={12} />
+                </button>
+              )}
             </div>
 
             {!isPmgUser && (
               <button
+                type="button"
                 className="btn btn-secondary btn-sm"
                 onClick={() => setActiveTab('intake-records')}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', height: '34px' }}
-                title="View all stock grouped by date in DC Intake Records"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12px',
+                  height: '32px',
+                  fontWeight: 600,
+                  color: '#0284c7',
+                  borderColor: '#bae6fd',
+                  background: '#f0f9ff'
+                }}
+                title="View all stock grouped by date in DC Parts Stock Records"
               >
                 <BookmarkPlus size={14} color="#0284c7" />
-                <span>Intake Records</span>
+                <span>DC Stock Records</span>
               </button>
             )}
           </div>
         </div>
 
-        {displayedUnits.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)', fontSize: '13.5px' }}>
-            {tableSearch || assignmentFilter !== 'ALL' ? (
-              <span>No parts found matching current filters. Try resetting search filters.</span>
-            ) : (
-              <span>No parts currently in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.</span>
+        {/* 1. Primary Part Assignment Tabs (Forecasting, CRBR, SVNR) */}
+        {!isPmgUser && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.4px', marginRight: '4px' }}>
+              Inventory Tag:
+            </span>
+
+            {/* All Destinations / All Parts Tab */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAssignmentFilter('ALL')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: assignmentFilter === 'ALL' ? '1px solid #0f172a' : '1px solid #cbd5e1',
+                background: assignmentFilter === 'ALL' ? '#0f172a' : '#ffffff',
+                color: assignmentFilter === 'ALL' ? '#ffffff' : '#334155',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: assignmentFilter === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              <span>All Destinations</span>
+              <span
+                style={{
+                  background: assignmentFilter === 'ALL' ? 'rgba(255,255,255,0.22)' : '#e2e8f0',
+                  color: assignmentFilter === 'ALL' ? '#ffffff' : '#334155',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {assignmentCounts.all}
+              </span>
+            </button>
+
+            {/* MDC – Forecasting Tab */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAssignmentFilter('MDC - Forecasting')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: assignmentFilter === 'MDC - Forecasting' ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                background: assignmentFilter === 'MDC - Forecasting' ? '#0284c7' : '#ffffff',
+                color: assignmentFilter === 'MDC - Forecasting' ? '#ffffff' : '#0369a1',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: assignmentFilter === 'MDC - Forecasting' ? '0 1px 3px rgba(2,132,199,0.2)' : 'none'
+              }}
+            >
+              <span>MDC – Forecasting</span>
+              <span
+                style={{
+                  background: assignmentFilter === 'MDC - Forecasting' ? 'rgba(255,255,255,0.25)' : '#e0f2fe',
+                  color: assignmentFilter === 'MDC - Forecasting' ? '#ffffff' : '#0369a1',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {assignmentCounts.forecasting}
+              </span>
+            </button>
+
+            {/* DC – CRBR Tab */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAssignmentFilter('DC - CRBR')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: assignmentFilter === 'DC - CRBR' ? '1px solid #d97706' : '1px solid #cbd5e1',
+                background: assignmentFilter === 'DC - CRBR' ? '#d97706' : '#ffffff',
+                color: assignmentFilter === 'DC - CRBR' ? '#ffffff' : '#b45309',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: assignmentFilter === 'DC - CRBR' ? '0 1px 3px rgba(217,119,6,0.2)' : 'none'
+              }}
+            >
+              <span>DC – CRBR</span>
+              <span
+                style={{
+                  background: assignmentFilter === 'DC - CRBR' ? 'rgba(255,255,255,0.25)' : '#fef3c7',
+                  color: assignmentFilter === 'DC - CRBR' ? '#ffffff' : '#b45309',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {assignmentCounts.crbr}
+              </span>
+            </button>
+
+            {/* SVNR Tab */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAssignmentFilter('SVNR - Service Non-Repair')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? '1px solid #9333ea' : '1px solid #cbd5e1',
+                background: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? '#9333ea' : '#ffffff',
+                color: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? '#ffffff' : '#7e22ce',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? '0 1px 3px rgba(147,51,234,0.2)' : 'none'
+              }}
+            >
+              <span>SVNR</span>
+              <span
+                style={{
+                  background: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? 'rgba(255,255,255,0.25)' : '#f3e8ff',
+                  color: (assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') ? '#ffffff' : '#7e22ce',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {assignmentCounts.svnr}
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* 2. Sub-Category Filter Pills */}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginRight: '2px' }}>Filter Part Type:</span>
+          <button
+            type="button"
+            className={`btn btn-sm ${categoryFilter === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setCategoryFilter('ALL')}
+            style={{ padding: '2px 8px', fontSize: '11px', borderRadius: 'var(--radius-full)' }}
+          >
+            All Types
+          </button>
+          {['DISPLAY', 'BATTERY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(code => {
+            const countForCat = enrichedReceivedUnits.filter(u => {
+              if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
+              if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
+              if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+              return u.category_code === code || u.category_name?.toUpperCase().includes(code);
+            }).length;
+            if (countForCat === 0 && categoryFilter !== code) return null;
+            const catLabel = code === 'DISPLAY' ? 'Display' : code === 'BATTERY' ? 'Battery' : code === 'CAMERA' ? 'Camera' : code === 'BACK_GLASS' ? 'Back Glass' : 'Logic / Mid';
+            return (
+              <button
+                key={code}
+                type="button"
+                className={`btn btn-sm ${categoryFilter === code ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setCategoryFilter(code)}
+                style={{ padding: '2px 8px', fontSize: '11px', borderRadius: 'var(--radius-full)' }}
+              >
+                {catLabel} ({countForCat})
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 3. Table / Empty State */}
+        {availableInStockUnits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '36px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+            <CheckCircle2 size={28} color="#10b981" style={{ margin: '0 auto 6px' }} />
+            <h4 style={{ margin: '0 0 2px 0', fontSize: '13.5px', color: '#0f172a', fontWeight: 600 }}>All Scanned Units Processed</h4>
+            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
+              No parts currently in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.
+            </p>
+          </div>
+        ) : displayedUnits.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '28px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+            <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
+            <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+              {assignmentFilter !== 'ALL'
+                ? `No available units found under "${assignmentFilter === 'MDC - Forecasting' ? 'MDC – Forecasting' : assignmentFilter === 'DC - CRBR' ? 'DC – CRBR' : 'SVNR'}".`
+                : `No available parts match "${tableSearch}".`}
+            </p>
+            {(assignmentFilter !== 'ALL' || categoryFilter !== 'ALL' || tableSearch) && assignmentCounts.all > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => { setAssignmentFilter('ALL'); setCategoryFilter('ALL'); setTableSearch(''); }}
+                style={{ fontSize: '11px', padding: '3px 10px' }}
+              >
+                View All Received Parts ({assignmentCounts.all})
+              </button>
             )}
           </div>
         ) : (
-          <div className="table-container" style={{ maxHeight: '420px', overflowY: 'auto' }}>
-            <table className="data-table">
-              <thead>
+          <div className="table-container" style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+            <table className="data-table" style={{ fontSize: '12px', width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 2 }}>
                 <tr>
-                  <th>#</th>
-                  <th>Part Number</th>
-                  <th>Description</th>
-                  <th>Serial Number</th>
-                  <th>{isPmgUser ? 'Receiving Branch / Stock' : 'Assignment / Note (Click to switch)'}</th>
-                  <th>Intake Source</th>
-                  <th>Timestamp</th>
-                  <th>Status</th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
+                  <th style={{ width: '36px', textAlign: 'center' }}>#</th>
+                  <th style={{ width: '110px' }}>Part Number</th>
+                  <th>Description / Model</th>
+                  <th style={{ width: '100px' }}>Category</th>
+                  <th style={{ width: '180px' }}>Serial Number</th>
+                  <th style={{ width: '160px' }}>{isPmgUser ? 'Receiving Branch' : 'Assignment (Click to switch)'}</th>
+                  <th style={{ width: '130px' }}>Intake Source</th>
+                  <th style={{ width: '90px' }}>Timestamp</th>
+                  <th style={{ width: '80px' }}>Status</th>
+                  <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {displayedUnits.map((unit, idx) => {
-                  const isSvnr = unit.intake_assignment?.includes('SVNR') || unit.notes?.includes('SVNR');
-                  const isCrbr = !isSvnr && (unit.intake_assignment?.includes('CRBR') || unit.notes?.includes('CRBR'));
+                  const catBadge = getCategoryBadgeStyle(unit.category_code);
+                  const isSvnr = isUnitSvnr(unit);
+                  const isCrbr = isUnitCrbr(unit);
                   const badgeBg = isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe';
                   const badgeColor = isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1';
                   const badgeBorder = isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
-                  const badgeLabel = isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
+                  const badgeLabel = isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting';
 
                   return (
-                    <tr key={unit.id || `${unit.serial_number}-${idx}`}>
-                      <td className="font-mono">{idx + 1}</td>
-                      <td className="font-mono">
-                        <strong style={{ color: '#0f172a' }}>{unit.part_number}</strong>
+                    <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
+                        {idx + 1}
                       </td>
-                      <td>{unit.description}</td>
-                      <td className="font-mono">{unit.serial_number}</td>
+                      <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                        {unit.part_number}
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 500, color: '#1e293b' }}>{unit.description}</div>
+                        {unit.iphone_model && (
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>Model: <strong>{unit.iphone_model}</strong></div>
+                        )}
+                      </td>
+                      <td>
+                        <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
+                          {unit.category_name}
+                        </span>
+                      </td>
+                      <td className="font-mono" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <span>{unit.serial_number}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              if (e && e.preventDefault) e.preventDefault();
+                              handleCopySerial(unit.serial_number);
+                            }}
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                            title="Copy Serial Number"
+                          >
+                            <Copy size={11} />
+                          </button>
+                        </div>
+                      </td>
                       <td>
                         {isPmgUser ? (
                           <span
@@ -1823,7 +2149,7 @@ export default function ScanInReceiving() {
                               if (isSvnr) {
                                 newDest = 'MDC - Forecasting';
                               } else if (isCrbr) {
-                                newDest = isProvincial ? 'SVNR - Service Non-Repair' : 'MDC - Forecasting';
+                                newDest = isProvincialSite(activeReceivingSite?.code) ? 'SVNR - Service Non-Repair' : 'MDC - Forecasting';
                               } else {
                                 newDest = 'DC - CRBR';
                               }
@@ -1836,7 +2162,7 @@ export default function ScanInReceiving() {
                               color: badgeColor,
                               border: badgeBorder,
                               fontWeight: 700,
-                              fontSize: '11.5px',
+                              fontSize: '11px',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
@@ -1855,22 +2181,22 @@ export default function ScanInReceiving() {
                       </td>
                       <td>
                         {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
-                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }}>
-                            <FileSpreadsheet size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '10.5px' }}>
+                            <FileSpreadsheet size={11} style={{ display: 'inline', marginRight: '3px' }} />
                             Spreadsheet Import
                           </span>
                         ) : (
-                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0' }}>
-                            <Barcode size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', fontSize: '10.5px' }}>
+                            <Barcode size={11} style={{ display: 'inline', marginRight: '3px' }} />
                             Barcode Scan
                           </span>
                         )}
                       </td>
-                      <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        {unit.received_at ? new Date(unit.received_at).toLocaleTimeString() : 'Recent'}
+                      <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {unit.received_at ? new Date(unit.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
                       </td>
                       <td>
-                        <span className="badge badge-success">In Stock</span>
+                        <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
                         <button
@@ -1878,18 +2204,19 @@ export default function ScanInReceiving() {
                           className="btn btn-secondary btn-sm"
                           onClick={() => setUnitToDelete(unit)}
                           style={{
-                            padding: '4px 8px',
-                            fontSize: '11.5px',
+                            padding: '3px 7px',
+                            fontSize: '11px',
                             color: '#ef4444',
                             borderColor: '#fca5a5',
                             background: '#fff',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '4px'
+                            gap: '3px',
+                            borderRadius: '4px'
                           }}
                           title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={12} />
                           <span>Delete</span>
                         </button>
                       </td>
