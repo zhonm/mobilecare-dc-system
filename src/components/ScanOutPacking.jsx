@@ -832,7 +832,6 @@ export default function ScanOutPacking() {
         generatePackingListPDF(finalized, finalized.items || [], selectedSite, {
           supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
           supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-          supervisorSignature: supervisorSettings?.signature_image,
           guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
           pickupDate: finalized.pickup_date || finalized.shipment_date
         });
@@ -892,7 +891,6 @@ export default function ScanOutPacking() {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      supervisorSignature: supervisorSettings?.signature_image,
       guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
       pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
     };
@@ -951,7 +949,6 @@ export default function ScanOutPacking() {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      supervisorSignature: supervisorSettings?.signature_image,
       guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
       pickupDate: updatedShipment.pickup_date
     };

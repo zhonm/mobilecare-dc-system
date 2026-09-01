@@ -78,6 +78,7 @@ export default function UserAccessManagement() {
   const [showPasswordText, setShowPasswordText] = useState(false);
   const [copiedNotice, setCopiedNotice] = useState(false);
   const [isResettingSubmitting, setIsResettingSubmitting] = useState(false);
+  const [isDeletingSubmitting, setIsDeletingSubmitting] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
 
@@ -256,14 +257,19 @@ export default function UserAccessManagement() {
   };
 
   const handleDeleteUser = async () => {
-    if (!deletingUser) return;
-    if (deleteUser) {
-      const res = await deleteUser(deletingUser.id);
-      if (res && res.success !== false) {
+    if (!deletingUser || isDeletingSubmitting) return;
+    setIsDeletingSubmitting(true);
+    try {
+      if (deleteUser) {
+        const res = await deleteUser(deletingUser.id);
+        if (res && res.success !== false) {
+          closeModals();
+        }
+      } else {
         closeModals();
       }
-    } else {
-      closeModals();
+    } finally {
+      setIsDeletingSubmitting(false);
     }
   };
 
@@ -1296,11 +1302,11 @@ export default function UserAccessManagement() {
               Are you sure you want to delete <strong>{deletingUser.fullName}</strong> ({deletingUser.email})? This action cannot be undone.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button type="button" className="btn btn-secondary" onClick={closeModals}>
+              <button type="button" className="btn btn-secondary" onClick={closeModals} disabled={isDeletingSubmitting}>
                 Cancel
               </button>
-              <button type="button" className="btn btn-danger" onClick={handleDeleteUser}>
-                Delete User
+              <button type="button" className="btn btn-danger" onClick={handleDeleteUser} disabled={isDeletingSubmitting}>
+                <span>{isDeletingSubmitting ? 'Deleting...' : 'Delete User'}</span>
               </button>
             </div>
           </div>

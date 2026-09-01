@@ -338,7 +338,6 @@ export function AppProvider({ children }) {
         supervisorSettings: catalogAndSites.supervisorSettings,
         setSupervisorSettings: catalogAndSites.setSupervisorSettings,
         saveSupervisorSettings: catalogAndSites.saveSupervisorSettings,
-        resetSupervisorSignature: catalogAndSites.resetSupervisorSignature,
         forecastingModel: forecastingAndAllocation.forecastingModel,
         setForecastingModel: forecastingAndAllocation.setForecastingModel,
         changeForecastingModel: forecastingAndAllocation.changeForecastingModel,

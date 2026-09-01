@@ -262,6 +262,20 @@ export function removeSessionCookie(name) {
  * Reads and persists across LocalStorage, SessionStorage, and Cookies.
  */
 export function getStoredUserSession() {
+  let deletedIds = [];
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      deletedIds = JSON.parse(window.localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+    }
+  } catch (e) {}
+
+  const isUserDeleted = (u) => {
+    if (!u || !deletedIds.length) return false;
+    const uid = u.id ? String(u.id).toLowerCase() : '';
+    const email = u.email ? String(u.email).toLowerCase() : '';
+    return deletedIds.includes(uid) || deletedIds.includes(email);
+  };
+
   // 1. Try LocalStorage
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -269,6 +283,10 @@ export function getStoredUserSession() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.email) {
+          if (isUserDeleted(parsed)) {
+            clearStoredUserSession();
+            return null;
+          }
           return parsed;
         }
       }
@@ -282,6 +300,10 @@ export function getStoredUserSession() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.email) {
+          if (isUserDeleted(parsed)) {
+            clearStoredUserSession();
+            return null;
+          }
           return parsed;
         }
       }
@@ -292,6 +314,10 @@ export function getStoredUserSession() {
   try {
     const cookieUser = getSessionCookie('mdc_current_user');
     if (cookieUser && typeof cookieUser === 'object' && cookieUser.email) {
+      if (isUserDeleted(cookieUser)) {
+        clearStoredUserSession();
+        return null;
+      }
       return cookieUser;
     }
   } catch (e) {}

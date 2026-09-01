@@ -1,10 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64 } from '../assets/logoBase64.js';
-import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
 import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
-
-export { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 };
 
 /**
  * Generates and downloads a pixel-perfect Packing List PDF matching corporate standards,
@@ -316,7 +313,6 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const destSiteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
   const courierType = (shipment.carrier || shipment.courier || 'Lite Express').toUpperCase();
   const bookingId = (shipment.booking_id || shipment.tracking_number || shipment.airway_bill || 'N/A').toUpperCase();
-  const supervisorSig = options.supervisorSignature || DEFAULT_SUPERVISOR_SIGNATURE_BASE64;
   const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
   const pickupDate = options.pickupDate || shipment.pickup_date || shipment.shipment_date || new Date().toLocaleDateString('en-US');
 
@@ -391,20 +387,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setTextColor(15, 23, 42);
   doc.text('MDC - SUPERVISOR', decLeftColX, bottomY);
 
-  // Supervisor Signature Image (cleanly centered above the underline, never overlapping label)
-  try {
-    if (supervisorSig) {
-      const sigWidth = 38;
-      const sigHeight = 14;
-      const sigX = decLeftColX + (decLeftColWidth - sigWidth) / 2;
-      const sigY = bottomY + 1.5;
-      doc.addImage(supervisorSig, 'PNG', sigX, sigY, sigWidth, sigHeight);
-    }
-  } catch (sigErr) {
-    console.warn('Could not render supervisor signature in Declaration Form PDF:', sigErr);
-  }
-
-  // Supervisor Underline
+  // Supervisor Underline for manual wet signature
   doc.setDrawColor(100, 116, 139);
   doc.setLineWidth(0.35);
   doc.line(decLeftColX, bottomY + 16, decLeftColX + decLeftColWidth, bottomY + 16);

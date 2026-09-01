@@ -47,8 +47,18 @@ export function useAuth({
     let isMounted = true;
 
     const recoverPersistedSession = async () => {
-      // If already resolved synchronously, ensure all storage tiers are aligned
+      let deletedIds = [];
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+      } catch (e) {}
+
+      // If already resolved synchronously, ensure all storage tiers are aligned and user is not deleted
       if (currentUser) {
+        if (deletedIds.includes(currentUser.id?.toLowerCase()) || deletedIds.includes(currentUser.email?.toLowerCase())) {
+          clearStoredUserSession();
+          setCurrentUser(null);
+          return;
+        }
         persistUserSession(currentUser);
         dbStorage.setItem('mdc_current_user', currentUser);
         return;
@@ -61,13 +71,18 @@ export function useAuth({
           const authEmail = sessionData?.session?.user?.email;
           if (isMounted && authEmail) {
             const cleanAuthEmail = authEmail.trim().toLowerCase();
+            if (deletedIds.includes(cleanAuthEmail)) {
+              clearStoredUserSession();
+              return;
+            }
+
             const { data: dbProf } = await supabase
               .from('profiles')
               .select('*')
               .ilike('email', cleanAuthEmail)
               .maybeSingle();
 
-            if (isMounted && dbProf) {
+            if (isMounted && dbProf && !dbProf.is_deleted && !deletedIds.includes(dbProf.id?.toLowerCase())) {
               const { data: dbPerms } = await supabase
                 .from('user_page_permissions')
                 .select('page_id')
@@ -99,7 +114,7 @@ export function useAuth({
             }
 
             const matched = matchUserByEmail(usersList, cleanAuthEmail);
-            if (isMounted && matched) {
+            if (isMounted && matched && !deletedIds.includes(matched.id?.toLowerCase()) && !deletedIds.includes(matched.email?.toLowerCase())) {
               persistUserSession(matched);
               dbStorage.setItem('mdc_current_user', matched);
               setCurrentUser(matched);
@@ -115,6 +130,10 @@ export function useAuth({
       try {
         const dbUser = await dbStorage.getItem('mdc_current_user');
         if (isMounted && dbUser && typeof dbUser === 'object' && dbUser.email) {
+          if (deletedIds.includes(dbUser.id?.toLowerCase()) || deletedIds.includes(dbUser.email?.toLowerCase())) {
+            clearStoredUserSession();
+            return;
+          }
           // If Supabase is connected, verify we have an active backend session before trusting stale local storage
           if (supabase) {
             const { data: sessionData } = await supabase.auth.getSession();
@@ -158,33 +177,45 @@ export function useAuth({
 
   // Keep currentUser in sync with latest usersList updates from cloud/peers without infinite re-render loops
   useEffect(() => {
-    if (currentUser && Array.isArray(usersList) && usersList.length > 0) {
-      const match = usersList.find(u =>
-        u.id === currentUser.id ||
-        (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
-      );
-      if (match) {
-        const permsMatch = Array.isArray(match.permittedPages) && Array.isArray(currentUser.permittedPages)
-          ? match.permittedPages.length === currentUser.permittedPages.length && match.permittedPages.every((p, i) => p === currentUser.permittedPages[i])
-          : JSON.stringify(match.permittedPages) === JSON.stringify(currentUser.permittedPages);
+    if (currentUser) {
+      let deletedIds = [];
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+      } catch (e) {}
 
-        const hasDiff =
-          (match.fullName && match.fullName !== currentUser.fullName) ||
-          (match.role && match.role !== currentUser.role) ||
-          (match.rolePosition && match.rolePosition !== currentUser.rolePosition) ||
-          (match.siteId && match.siteId !== currentUser.siteId) ||
-          (match.isActive !== undefined && match.isActive !== currentUser.isActive) ||
-          !permsMatch;
+      if (deletedIds.includes(currentUser.id?.toLowerCase()) || deletedIds.includes(currentUser.email?.toLowerCase())) {
+        signOut();
+        return;
+      }
 
-        if (hasDiff) {
-          setCurrentUser(prev => {
-            if (!prev) return null;
-            return {
-              ...prev,
-              ...match,
-              passwordHash: match.passwordHash || prev.passwordHash
-            };
-          });
+      if (Array.isArray(usersList) && usersList.length > 0) {
+        const match = usersList.find(u =>
+          u.id === currentUser.id ||
+          (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+        );
+        if (match) {
+          const permsMatch = Array.isArray(match.permittedPages) && Array.isArray(currentUser.permittedPages)
+            ? match.permittedPages.length === currentUser.permittedPages.length && match.permittedPages.every((p, i) => p === currentUser.permittedPages[i])
+            : JSON.stringify(match.permittedPages) === JSON.stringify(currentUser.permittedPages);
+
+          const hasDiff =
+            (match.fullName && match.fullName !== currentUser.fullName) ||
+            (match.role && match.role !== currentUser.role) ||
+            (match.rolePosition && match.rolePosition !== currentUser.rolePosition) ||
+            (match.siteId && match.siteId !== currentUser.siteId) ||
+            (match.isActive !== undefined && match.isActive !== currentUser.isActive) ||
+            !permsMatch;
+
+          if (hasDiff) {
+            setCurrentUser(prev => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                ...match,
+                passwordHash: match.passwordHash || prev.passwordHash
+              };
+            });
+          }
         }
       }
     }
@@ -223,6 +254,35 @@ export function useAuth({
     return fallbackPreset.includes(pageId) && pageId !== 'user-access';
   };
 
+  // Helper to load authoritative deleted user IDs and emails from both local and cloud
+  const getAuthoritativeDeletedUserIds = async () => {
+    const deletedSet = new Set();
+    try {
+      const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      local.forEach(id => { if (id) deletedSet.add(String(id).toLowerCase().trim()); });
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        const { data: regDoc } = await supabase
+          .from('saved_records')
+          .select('snapshot_data')
+          .eq('id', 'master_users_registry')
+          .maybeSingle();
+
+        if (regDoc?.snapshot_data?.deletedUserIds && Array.isArray(regDoc.snapshot_data.deletedUserIds)) {
+          regDoc.snapshot_data.deletedUserIds.forEach(id => {
+            if (id) {
+              const cleanId = String(id).toLowerCase().trim();
+              deletedSet.add(cleanId);
+            }
+          });
+        }
+      } catch (e) {}
+    }
+    return deletedSet;
+  };
+
   // 1. Verify Company Email during Login (Authoritative Database First)
   const verifyLoginEmail = async (rawEmail) => {
     const email = rawEmail.trim().toLowerCase();
@@ -231,6 +291,14 @@ export function useAuth({
       return {
         success: false,
         error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel.'
+      };
+    }
+
+    const deletedSet = await getAuthoritativeDeletedUserIds();
+    if (deletedSet.has(email)) {
+      return {
+        success: false,
+        error: 'This account has been deleted from the system. Please contact your administrator.'
       };
     }
 
@@ -245,7 +313,7 @@ export function useAuth({
           .ilike('email', email)
           .maybeSingle();
 
-        if (!profErr && dbProf) {
+        if (!profErr && dbProf && !dbProf.is_deleted && !deletedSet.has(dbProf.id?.toLowerCase()) && !deletedSet.has(dbProf.email?.toLowerCase())) {
           const { data: dbPerms } = await supabase
             .from('user_page_permissions')
             .select('page_id')
@@ -282,7 +350,7 @@ export function useAuth({
 
         if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
           const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, email);
-          if (matchedFromReg) {
+          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
             const hasRegPass = Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash);
             if (!user) {
               user = {
@@ -308,16 +376,18 @@ export function useAuth({
 
     // 2. Fallback to local memory / storage if Supabase returned nothing or offline
     if (!user) {
-      user = matchUserByEmail(usersList, email);
+      const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+      user = matchUserByEmail(activeCandidates, email);
       if (!user) {
         try {
           const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
-          user = matchUserByEmail(localUsers, email);
+          const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+          user = matchUserByEmail(activeLocal, email);
         } catch (e) {}
       }
     }
 
-    if (!user) {
+    if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
       return {
         success: false,
         error: 'This email is not registered. Contact your administrator to provision your account.'
@@ -326,7 +396,7 @@ export function useAuth({
 
     // Keep client state & storage updated with the authoritative user record
     setUsersList(prev => {
-      const next = [...(prev || []).filter(u => u.id !== user.id && u.email?.toLowerCase() !== email), user];
+      const next = [...(prev || []).filter(u => u.id !== user.id && u.email?.toLowerCase() !== email && !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), user];
       try {
         localStorage.setItem('mdc_users', JSON.stringify(next));
         sessionStorage.setItem('mdc_users', JSON.stringify(next));
@@ -355,6 +425,15 @@ export function useAuth({
   const signInWithPassword = async (rawEmail, password, captchaToken = null) => {
     const cleanEmail = (rawEmail || '').trim().toLowerCase();
     const cleanPassword = (password || '').trim();
+
+    const deletedSet = await getAuthoritativeDeletedUserIds();
+    if (deletedSet.has(cleanEmail)) {
+      return {
+        success: false,
+        error: 'This account has been deleted from the system. Please contact your administrator.'
+      };
+    }
+
     let user = null;
 
     // 1. Authoritative real-time database lookup first
@@ -366,7 +445,7 @@ export function useAuth({
           .ilike('email', cleanEmail)
           .maybeSingle();
 
-        if (!profErr && dbProf) {
+        if (!profErr && dbProf && !dbProf.is_deleted && !deletedSet.has(dbProf.id?.toLowerCase()) && !deletedSet.has(dbProf.email?.toLowerCase())) {
           const { data: dbPerms } = await supabase
             .from('user_page_permissions')
             .select('page_id')
@@ -402,7 +481,7 @@ export function useAuth({
 
         if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
           const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
-          if (matchedFromReg) {
+          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
             const hasRegPass = Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash);
             if (!user) {
               user = {
@@ -427,17 +506,19 @@ export function useAuth({
     }
 
     if (!user) {
-      user = matchUserByEmail(usersList, cleanEmail);
+      const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+      user = matchUserByEmail(activeCandidates, cleanEmail);
     }
     if (!user) {
       try {
         const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
-        user = matchUserByEmail(localUsers, cleanEmail);
+        const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+        user = matchUserByEmail(activeLocal, cleanEmail);
       } catch (e) {}
     }
 
-    if (!user) {
-      return { success: false, error: 'User not found' };
+    if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
+      return { success: false, error: 'User not found or account has been deleted' };
     }
 
     if (!user.isActive) {
@@ -488,7 +569,7 @@ export function useAuth({
 
     // Update client state & storage with latest authenticated credentials
     setUsersList(prev => {
-      const next = [...(prev || []).filter(u => u.id !== user.id && u.email?.toLowerCase() !== cleanEmail), user];
+      const next = [...(prev || []).filter(u => u.id !== user.id && u.email?.toLowerCase() !== cleanEmail && !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), user];
       try {
         localStorage.setItem('mdc_users', JSON.stringify(next));
         sessionStorage.setItem('mdc_users', JSON.stringify(next));
@@ -527,16 +608,22 @@ export function useAuth({
   // 3. First-Time Password Creation & Activation
   const createFirstTimePassword = async (rawEmail, newPassword) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
-    let user = matchUserByEmail(usersList, cleanEmail);
+    const deletedSet = await getAuthoritativeDeletedUserIds();
+    if (deletedSet.has(cleanEmail)) {
+      return { success: false, error: 'This account has been deleted from the system.' };
+    }
+
+    let user = matchUserByEmail((usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
 
     if (!user) {
       try {
         const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
-        user = matchUserByEmail(localUsers, cleanEmail);
+        const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+        user = matchUserByEmail(activeLocal, cleanEmail);
       } catch (e) {}
     }
 
-    if (!user && pendingFirstTimeUser && pendingFirstTimeUser.email?.toLowerCase() === cleanEmail) {
+    if (!user && pendingFirstTimeUser && pendingFirstTimeUser.email?.toLowerCase() === cleanEmail && !deletedSet.has(cleanEmail)) {
       user = pendingFirstTimeUser;
     }
 
@@ -549,7 +636,10 @@ export function useAuth({
           .maybeSingle();
 
         if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
-          user = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
+          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
+          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
+            user = matchedFromReg;
+          }
         }
 
         if (!user) {
@@ -559,7 +649,7 @@ export function useAuth({
             .ilike('email', cleanEmail)
             .maybeSingle();
 
-          if (prof) {
+          if (prof && !prof.is_deleted && !deletedSet.has(prof.id?.toLowerCase()) && !deletedSet.has(prof.email?.toLowerCase())) {
             const resolvedRole = prof.role || 'user';
             user = {
               id: prof.id,
@@ -580,8 +670,8 @@ export function useAuth({
       }
     }
 
-    if (!user) {
-      return { success: false, error: 'User profile not found. Please contact Superadmin.' };
+    if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
+      return { success: false, error: 'User profile not found or has been deleted. Please contact Superadmin.' };
     }
 
     const secureHash = await hashPassword(newPassword);

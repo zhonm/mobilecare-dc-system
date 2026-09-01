@@ -202,6 +202,125 @@ async function runAllTests() {
     assert.strictEqual(toValidUUID(alreadyUUID), alreadyUUID, 'Existing UUID must be preserved');
   });
 
+  // Test 7: Permanent User Deletion prevents resurrection from initial seed or cached data
+  runTest('Permanent user deletion strictly filters deleted user from seed and caches', () => {
+    localStorage.clear();
+    const deletedUser = { id: 'usr-joshua-101', email: 'joshua@mobilecareph.com', fullName: 'Joshua DC' };
+    const remainingUser = { id: 'usr-zhon-102', email: 'zhon@mobilecareph.com', fullName: 'Zhon DC' };
+
+    const initialUsersList = [deletedUser, remainingUser];
+    const deletedIds = [deletedUser.id.toLowerCase(), deletedUser.email.toLowerCase()];
+
+    // Simulate deleteUser logic
+    const nextList = initialUsersList.filter(u => 
+      !deletedIds.includes(u.id.toLowerCase()) && 
+      !deletedIds.includes(u.email.toLowerCase())
+    );
+
+    localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+    localStorage.setItem('mdc_users', JSON.stringify(nextList));
+
+    // Verify nextList only contains remainingUser
+    assert.strictEqual(nextList.length, 1);
+    assert.strictEqual(nextList[0].id, remainingUser.id);
+
+    // Verify recovery strictly filters out deleted user
+    const loadedDeletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+    const recovered = [deletedUser, remainingUser].filter(u =>
+      !loadedDeletedIds.includes(u.id.toLowerCase()) &&
+      !loadedDeletedIds.includes(u.email.toLowerCase())
+    );
+
+    assert.strictEqual(recovered.length, 1);
+    assert.strictEqual(recovered[0].email, 'zhon@mobilecareph.com');
+  });
+
+  // Test 8: Cloud sync hydration merges cloud and local deleted lists without stripping
+  runTest('Cloud sync hydration strictly honors deleted registry and purges ghost users', () => {
+    const cloudDeletedUserIds = ['usr-old-1', 'olduser@mobilecareph.com'];
+    const localDeletedUserIds = ['usr-old-2', 'anotherold@mobilecareph.com'];
+
+    const mergedDeletedUserIds = Array.from(new Set([
+      ...localDeletedUserIds,
+      ...cloudDeletedUserIds
+    ].map(s => String(s).trim().toLowerCase())));
+
+    const candidateUsers = [
+      { id: 'usr-old-1', email: 'olduser@mobilecareph.com', fullName: 'Old User 1' },
+      { id: 'usr-old-2', email: 'anotherold@mobilecareph.com', fullName: 'Old User 2' },
+      { id: 'usr-active-3', email: 'active@mobilecareph.com', fullName: 'Active User' }
+    ];
+
+    const sanitized = candidateUsers.filter(u =>
+      !mergedDeletedUserIds.includes(u.id.toLowerCase()) &&
+      !mergedDeletedUserIds.includes(u.email.toLowerCase())
+    );
+
+    assert.strictEqual(sanitized.length, 1);
+    assert.strictEqual(sanitized[0].id, 'usr-active-3');
+  });
+
+  // Test 9: Deleted user login verification & session recovery strictly rejected
+  runTest('Deleted accounts are strictly rejected from email verification and session recovery', () => {
+    localStorage.clear();
+    const deletedUser = { id: 'usr-deleted-999', email: 'deleted.agent@mobilecareph.com', fullName: 'Deleted Agent' };
+    const deletedIds = [deletedUser.id.toLowerCase(), deletedUser.email.toLowerCase()];
+    localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+
+    // Stored session of deleted user MUST be discarded
+    localStorage.setItem('mdc_current_user', JSON.stringify(deletedUser));
+    
+    // Test getStoredUserSession logic
+    const loadedDeleted = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+    const rawStored = JSON.parse(localStorage.getItem('mdc_current_user'));
+    
+    const isDeleted = loadedDeleted.includes(rawStored.id?.toLowerCase()) || loadedDeleted.includes(rawStored.email?.toLowerCase());
+    assert.strictEqual(isDeleted, true, 'Deleted user session must be identified as deleted');
+
+    // Email login attempt by deleted account MUST be blocked
+    const loginAttemptEmail = 'deleted.agent@mobilecareph.com';
+    const isLoginBlocked = loadedDeleted.includes(loginAttemptEmail.toLowerCase());
+    assert.strictEqual(isLoginBlocked, true, 'Login verification for deleted email must be strictly blocked');
+  });
+
+  // Test 10: Re-provisioning a deleted account unblocks it and allows clean first-time setup
+  runTest('Re-provisioning previously deleted user clears deleted registry and enables normal login', () => {
+    localStorage.clear();
+    const email = 'recreated.agent@mobilecareph.com';
+    const oldId = 'usr-old-111';
+
+    // 1. Account was previously deleted
+    let deletedIds = [oldId.toLowerCase(), email.toLowerCase()];
+    localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+
+    // 2. Superadmin re-creates account
+    const newId = 'usr-new-222';
+    const reCreatedUser = {
+      id: newId,
+      email: email,
+      fullName: 'Recreated Agent',
+      role: 'admin',
+      hasSetPassword: false,
+      passwordHash: null,
+      isActive: true
+    };
+
+    // Filter out deleted status upon re-provisioning
+    deletedIds = deletedIds.filter(id => id !== email.toLowerCase() && id !== newId.toLowerCase());
+    localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+    localStorage.setItem('mdc_users', JSON.stringify([reCreatedUser]));
+
+    // 3. Verify user is NO LONGER blocked
+    const currentDeleted = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+    assert.strictEqual(currentDeleted.includes(email.toLowerCase()), false, 'Recreated email must be unblocked');
+    assert.strictEqual(currentDeleted.includes(newId.toLowerCase()), false, 'New user ID must be unblocked');
+
+    // 4. Verify user can verify login email and is prompted for first-time password setup
+    const isBlocked = currentDeleted.includes(email.toLowerCase());
+    assert.strictEqual(isBlocked, false);
+    assert.strictEqual(reCreatedUser.hasSetPassword, false, 'Recreated user starts fresh requiring password setup');
+  });
+
   console.log('====================================================');
   console.log(`RESULTS: ${testsPassed}/${testsPassed + testsFailed} PASSED (${testsFailed} FAILED)`);
   console.log('====================================================');

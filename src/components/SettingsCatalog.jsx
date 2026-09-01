@@ -20,9 +20,6 @@ import {
   Phone,
   User,
   RefreshCw,
-  FileSignature,
-  UploadCloud,
-  RotateCcw,
   ShieldCheck,
   FileText
 } from 'lucide-react';
@@ -40,8 +37,7 @@ export default function SettingsCatalog() {
     currentUser,
     showToast,
     supervisorSettings,
-    saveSupervisorSettings,
-    resetSupervisorSignature
+    saveSupervisorSettings
   } = useApp();
   const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'users' | 'sql'
   const [copied, setCopied] = useState(false);
@@ -51,7 +47,6 @@ export default function SettingsCatalog() {
   const [supervisorName, setSupervisorName] = useState(supervisorSettings?.supervisor_name || 'Anjo Alcazar');
   const [supervisorTitle, setSupervisorTitle] = useState(supervisorSettings?.supervisor_title || 'MDC Supervisor of DC');
   const [guardOnDutyDefault, setGuardOnDutyDefault] = useState(supervisorSettings?.guard_on_duty || '');
-  const signatureFileInputRef = useRef(null);
 
   // Search & Filter State
   const [partSearch, setPartSearch] = useState('');
@@ -263,7 +258,7 @@ export default function SettingsCatalog() {
           className={`btn ${activeTab === 'supervisor' ? 'btn-primary' : 'btn-secondary'}`}
           onClick={() => setActiveTab('supervisor')}
         >
-          <FileSignature size={15} />
+          <FileText size={15} />
           <span>Supervisor & Declaration Form</span>
         </button>
         {currentUser?.role === 'superadmin' && (
@@ -1039,20 +1034,11 @@ export default function SettingsCatalog() {
                   <h3 style={{ margin: 0 }}>MDC Supervisor & Declaration Form Directive</h3>
                 </div>
                 <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  Configure the default Distribution Center supervisor assignment, official signature image, and declaration form auto-population rules.
+                  Configure the default Distribution Center supervisor assignment and declaration form auto-population rules.
                 </p>
               </div>
 
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={resetSupervisorSignature}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                >
-                  <RotateCcw size={13} />
-                  <span>Reset to Official Signature</span>
-                </button>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
@@ -1128,82 +1114,23 @@ export default function SettingsCatalog() {
                 </div>
               </div>
 
-              {/* Signature Management Card */}
+              {/* Physical / Manual Wet Signature Policy Card */}
               <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                 <h4 style={{ margin: '0 0 14px 0', fontSize: '13.5px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FileSignature size={15} color="var(--primary)" />
-                  <span>Official Signature Image File</span>
+                  <ShieldCheck size={15} color="var(--primary)" />
+                  <span>Physical Wet Signature Policy</span>
                 </h4>
 
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                  {/* Signature Preview Box */}
-                  <div
-                    style={{
-                      width: '100%',
-                      height: '110px',
-                      background: '#ffffff',
-                      border: '1.5px dashed #cbd5e1',
-                      borderRadius: '6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: '10px',
-                      position: 'relative'
-                    }}
-                  >
-                    {supervisorSettings?.signature_image ? (
-                      <img
-                        src={supervisorSettings.signature_image}
-                        alt="Supervisor Signature Preview"
-                        style={{ maxHeight: '90px', maxWidth: '90%', objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>No signature image loaded</span>
-                    )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                  <p style={{ margin: 0 }}>
+                    In compliance with internal operational protocols, electronic signatures (e-signatures) are disabled.
+                  </p>
+                  <p style={{ margin: 0 }}>
+                    When the <strong>Packing List & Site Transfer Declaration Form PDF</strong> is generated and printed, an underline is provided above the supervisor’s printed name for a manual wet-ink signature.
+                  </p>
+                  <div style={{ marginTop: '12px', padding: '10px 12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', fontSize: '11.5px', color: '#1e40af' }}>
+                    ℹ️ <strong>Manual Sign-Off:</strong> Ensure DC supervisor physically reviews, verifies, and wet-signs Page 2 of the printed document prior to handover to logistics / courier rider.
                   </div>
-
-                  <div style={{ display: 'flex', gap: '10px', width: '100%' }}>
-                    <input
-                      type="file"
-                      ref={signatureFileInputRef}
-                      accept="image/png,image/jpeg,image/webp"
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        if (!file.type.startsWith('image/')) {
-                          showToast('Please select a valid image file (PNG, JPG, or WebP)', 'error');
-                          return;
-                        }
-                        const reader = new FileReader();
-                        reader.onload = (loadEvt) => {
-                          const base64Data = loadEvt.target.result;
-                          saveSupervisorSettings({
-                            supervisor_name: supervisorName.trim() || 'Anjo Alcazar',
-                            supervisor_title: supervisorTitle.trim() || 'MDC Supervisor of DC',
-                            signature_image: base64Data,
-                            guard_on_duty: guardOnDutyDefault.trim()
-                          });
-                          showToast('New supervisor signature uploaded and saved!', 'success');
-                        };
-                        reader.readAsDataURL(file);
-                      }}
-                    />
-
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-                      onClick={() => signatureFileInputRef.current?.click()}
-                    >
-                      <UploadCloud size={14} />
-                      <span>Upload New Signature (PNG/JPG)</span>
-                    </button>
-                  </div>
-
-                  <span style={{ fontSize: '11px', color: '#64748b', textAlign: 'center', lineHeight: 1.4 }}>
-                    Attaches the supervisor’s signature file (<code>SupervisorSignature.png</code>) to Page 2 of all site transfer packing lists. Easy replacement without code changes.
-                  </span>
                 </div>
               </div>
             </div>
@@ -1282,10 +1209,7 @@ export default function SettingsCatalog() {
                 <div>
                   <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>MDC - SUPERVISOR</div>
                   <div style={{ position: 'relative', borderBottom: '1px solid #64748b', minHeight: '38px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                    {supervisorSettings?.signature_image && (
-                      <img src={supervisorSettings.signature_image} alt="Supervisor Signature" style={{ position: 'absolute', bottom: '2px', height: '36px', objectFit: 'contain' }} />
-                    )}
-                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', zIndex: 1 }}>{supervisorName.toUpperCase()}</div>
+                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', zIndex: 1, paddingBottom: '2px' }}>{supervisorName.toUpperCase()}</div>
                   </div>
                 </div>
 

@@ -98,7 +98,6 @@ export default function Shipments() {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      supervisorSignature: supervisorSettings?.signature_image,
       guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
       pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
     };
@@ -307,7 +306,6 @@ export default function Shipments() {
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      supervisorSignature: supervisorSettings?.signature_image,
       guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
       pickupDate: updatedShipment.pickup_date
     };

@@ -22,7 +22,7 @@ export function useUserManagement({
 }) {
   const [usersList, setUsersList] = useState(() => {
     try {
-      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
       let saved = null;
       try {
         saved = localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users');
@@ -31,17 +31,10 @@ export function useUserManagement({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const parsedEmails = new Set(parsed.map(u => u.email?.toLowerCase()).filter(Boolean));
-          const parsedIds = new Set(parsed.map(u => u.id?.toLowerCase()).filter(Boolean));
-          const activeKnownEmails = new Set([...parsedEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
-          const activeKnownIds = new Set([...parsedIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
-          const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
-          try { localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted)); } catch (e) {}
-
           return parsed
             .filter(u =>
-              !cleanDeleted.includes(u.id?.toLowerCase()) &&
-              !cleanDeleted.includes(u.email?.toLowerCase()) &&
+              !deletedIds.includes(u.id?.toLowerCase()) &&
+              !deletedIds.includes(u.email?.toLowerCase()) &&
               !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
               !LEGACY_MOCK_IDS.includes(u.id)
             )
@@ -75,28 +68,19 @@ export function useUserManagement({
       try {
         const dbUsers = await dbStorage.getItem('mdc_users');
         if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
-          const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-          const activeEmails = new Set(dbUsers.map(u => u.email?.toLowerCase()).filter(Boolean));
-          const activeIds = new Set(dbUsers.map(u => u.id?.toLowerCase()).filter(Boolean));
-          const activeKnownEmails = new Set([...activeEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
-          const activeKnownIds = new Set([...activeIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
-          const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
+          const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
 
           const filtered = dbUsers.filter(u =>
-            !cleanDeleted.includes(u.id?.toLowerCase()) &&
-            !cleanDeleted.includes(u.email?.toLowerCase()) &&
+            !deletedIds.includes(u.id?.toLowerCase()) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
             !LEGACY_MOCK_IDS.includes(u.id)
           );
           if (filtered.length > 0) {
-            setUsersList(prev => {
-              if (prev && prev.length > filtered.length) return prev;
-              return filtered;
-            });
+            setUsersList(filtered);
             try {
               localStorage.setItem('mdc_users', JSON.stringify(filtered));
               sessionStorage.setItem('mdc_users', JSON.stringify(filtered));
-              localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted));
             } catch (e) {}
           }
         }
@@ -201,8 +185,11 @@ export function useUserManagement({
             full_name: fullName.trim(),
             role: role,
             role_position: finalRolePosition,
+            site_id: (siteId && isUUID(siteId)) ? siteId : null,
             has_set_password: false,
+            password_hash: null,
             is_active: true,
+            is_deleted: false,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }, { onConflict: 'email' })
@@ -680,37 +667,62 @@ export function useUserManagement({
 
   // 8. Delete User
   const deleteUser = async (userId) => {
-    const target = usersList.find(u => u.id === userId);
+    const cleanUserId = String(userId || '').trim();
+    const target = usersList.find(u => u.id === cleanUserId || u.email?.toLowerCase() === cleanUserId.toLowerCase());
     if (!target) {
       return { success: false, error: 'User not found' };
     }
 
-    if (target.id === currentUser?.id) {
+    if (target.id === currentUser?.id || target.email?.toLowerCase() === currentUser?.email?.toLowerCase()) {
       showToast('You cannot delete your own account while logged in', 'warning');
       return { success: false, error: 'Cannot delete self' };
     }
 
     if (target.role === 'superadmin') {
-      const superadminCount = usersList.filter(u => u.role === 'superadmin').length;
-      if (superadminCount <= 1) {
+      const remainingSuperadmins = usersList.filter(u => 
+        u.role === 'superadmin' && 
+        u.id !== target.id && 
+        u.email?.toLowerCase() !== target.email?.toLowerCase()
+      ).length;
+      if (remainingSuperadmins < 1) {
         showToast('Cannot delete the last superadmin account', 'error');
         return { success: false, error: 'Last superadmin' };
       }
     }
 
-    const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-    if (!deletedIds.includes(userId)) deletedIds.push(userId);
-    if (target.email && !deletedIds.includes(target.email.toLowerCase())) {
-      deletedIds.push(target.email.toLowerCase());
+    const cleanEmail = target.email?.toLowerCase();
+    const targetId = String(target.id || cleanUserId);
+
+    let deletedIds = [];
+    try {
+      deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+    } catch (e) {
+      deletedIds = [];
     }
+
+    if (targetId && !deletedIds.includes(targetId.toLowerCase())) {
+      deletedIds.push(targetId.toLowerCase());
+    }
+    if (cleanEmail && !deletedIds.includes(cleanEmail)) {
+      deletedIds.push(cleanEmail);
+    }
+    if (cleanUserId && !deletedIds.includes(cleanUserId.toLowerCase())) {
+      deletedIds.push(cleanUserId.toLowerCase());
+    }
+
     try {
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
     } catch (e) {
       console.warn('Error saving deleted user id:', e);
     }
 
-    const nextList = usersList.filter(u => u.id !== userId && u.email?.toLowerCase() !== target.email?.toLowerCase());
+    const nextList = usersList.filter(u => 
+      u.id?.toLowerCase() !== targetId.toLowerCase() && 
+      u.id?.toLowerCase() !== cleanUserId.toLowerCase() &&
+      u.email?.toLowerCase() !== cleanEmail
+    );
     setUsersList(nextList);
+
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
       sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
@@ -722,23 +734,25 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        if (isUUID(userId)) {
-          await supabase.from('user_page_permissions').delete().eq('user_id', userId);
-          await supabase.from('profiles').delete().eq('id', userId);
+        if (isUUID(targetId)) {
+          await supabase.from('user_page_permissions').delete().eq('user_id', targetId);
+          await supabase.from('profiles').delete().eq('id', targetId);
+          await supabase.from('profiles').update({ is_active: false, is_deleted: true }).eq('id', targetId);
         }
-        if (target.email) {
-          await supabase.from('profiles').delete().ilike('email', target.email);
+        if (cleanEmail) {
+          await supabase.from('profiles').delete().ilike('email', cleanEmail);
+          await supabase.from('profiles').update({ is_active: false, is_deleted: true }).ilike('email', cleanEmail);
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
       } catch (e) {
         console.error('Supabase delete user error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (enqueueOfflineAction) enqueueOfflineAction('PROFILE_DELETE', { id: userId, email: target.email });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
+        if (enqueueOfflineAction) enqueueOfflineAction('PROFILE_DELETE', { id: targetId, email: cleanEmail });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
     }
 
     showToast(`Deleted user ${target.fullName}`, 'success');

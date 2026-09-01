@@ -2,12 +2,9 @@ import { useState } from 'react';
 import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { DEFAULT_SUPERVISOR_SIGNATURE_BASE64 } from '../assets/supervisorSignatureBase64.js';
-
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
   supervisor_title: 'MDC Supervisor of DC',
-  signature_image: DEFAULT_SUPERVISOR_SIGNATURE_BASE64,
   guard_on_duty: ''
 };
 
@@ -31,8 +28,7 @@ export function useCatalogAndSites({
         const parsed = JSON.parse(saved);
         return {
           ...DEFAULT_SUPERVISOR_SETTINGS,
-          ...parsed,
-          signature_image: parsed.signature_image || DEFAULT_SUPERVISOR_SIGNATURE_BASE64
+          ...parsed
         };
       }
       return DEFAULT_SUPERVISOR_SETTINGS;
@@ -385,14 +381,6 @@ export function useCatalogAndSites({
     if (broadcastCloudEvent) {
       broadcastCloudEvent('SUPERVISOR_SETTINGS_UPDATED', newSettings);
     }
-    showToast('Supervisor & Declaration Form settings updated', 'success');
-  };
-
-  const resetSupervisorSignature = () => {
-    saveSupervisorSettings({
-      signature_image: DEFAULT_SUPERVISOR_SIGNATURE_BASE64
-    });
-    showToast('Supervisor signature reset to default official signature', 'info');
   };
 
   return {
@@ -405,7 +393,6 @@ export function useCatalogAndSites({
     supervisorSettings,
     setSupervisorSettings,
     saveSupervisorSettings,
-    resetSupervisorSignature,
     savePart,
     deletePart,
     saveSite,

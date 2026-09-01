@@ -800,7 +800,6 @@ export default function Dashboard() {
                         onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
                           supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
                           supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-                          supervisorSignature: supervisorSettings?.signature_image,
                           guardOnDuty: sh.guard_on_duty || supervisorSettings?.guard_on_duty,
                           pickupDate: sh.pickup_date || sh.shipment_date
                         })}

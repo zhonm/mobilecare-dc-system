@@ -300,28 +300,10 @@ export function useCloudSync({
             ...localDeletedUserIds,
             ...cloudDeletedUserIds
           ].map(s => String(s).trim().toLowerCase())));
+          localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
         } catch (e) {
           mergedDeletedUserIds = cloudDeletedUserIds.map(s => String(s).trim().toLowerCase());
         }
-
-        // Sanitize deleted IDs: any user actively in cloud registry, INITIAL_USERS, or dbProfiles MUST NOT be considered deleted
-        const activeKnownEmails = new Set([
-          ...cloudUsersList.map(u => u.email?.toLowerCase()),
-          ...INITIAL_USERS.map(u => u.email?.toLowerCase()),
-          ...(dbProfiles || []).map(p => p.email?.toLowerCase())
-        ].filter(Boolean));
-        const activeKnownIds = new Set([
-          ...cloudUsersList.map(u => u.id?.toLowerCase()),
-          ...INITIAL_USERS.map(u => u.id?.toLowerCase()),
-          ...(dbProfiles || []).map(p => p.id?.toLowerCase())
-        ].filter(Boolean));
-
-        mergedDeletedUserIds = mergedDeletedUserIds.filter(delId => 
-          !activeKnownEmails.has(delId) && !activeKnownIds.has(delId)
-        );
-        try {
-          localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
-        } catch (e) {}
 
         const permsMap = new Map();
         if (dbPerms && dbPerms.length > 0) {
@@ -334,12 +316,13 @@ export function useCloudSync({
         setUsersList(prev => {
           const profileMap = new Map();
 
-          // 1. Base seed
+          // 1. Base seed (Skip deleted users)
           INITIAL_USERS.forEach(u => {
             const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
             if (
               cleanEmail &&
-              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(uId) &&
               !mergedDeletedUserIds.includes(cleanEmail) &&
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
               !LEGACY_MOCK_IDS.includes(u.id)
@@ -348,12 +331,13 @@ export function useCloudSync({
             }
           });
 
-          // 2. Overlay previous local state
+          // 2. Overlay previous local state (Skip deleted users)
           (prev || []).forEach(u => {
             const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
             if (
               cleanEmail &&
-              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(uId) &&
               !mergedDeletedUserIds.includes(cleanEmail) &&
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
               !LEGACY_MOCK_IDS.includes(u.id)
@@ -362,12 +346,13 @@ export function useCloudSync({
             }
           });
 
-          // 3. Overlay authoritative master_users_registry from cloud
+          // 3. Overlay authoritative master_users_registry from cloud (Skip deleted users)
           cloudUsersList.forEach(u => {
             const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
             if (
               cleanEmail &&
-              !mergedDeletedUserIds.includes(u.id?.toLowerCase()) &&
+              !mergedDeletedUserIds.includes(uId) &&
               !mergedDeletedUserIds.includes(cleanEmail) &&
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
               !LEGACY_MOCK_IDS.includes(u.id)
@@ -383,14 +368,15 @@ export function useCloudSync({
             }
           });
 
-          // 4. Overlay dbProfiles if available
+          // 4. Overlay dbProfiles if available (Skip deleted users)
           if (dbProfiles && dbProfiles.length > 0) {
             dbProfiles.forEach(p => {
               const cleanEmail = p.email?.toLowerCase();
+              const pId = p.id?.toLowerCase();
               if (
                 cleanEmail &&
                 !p.is_deleted &&
-                !mergedDeletedUserIds.includes(p.id?.toLowerCase()) &&
+                !mergedDeletedUserIds.includes(pId) &&
                 !mergedDeletedUserIds.includes(cleanEmail) &&
                 !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
                 !LEGACY_MOCK_IDS.includes(p.id)
@@ -420,44 +406,18 @@ export function useCloudSync({
             });
           }
 
-          // Clean up any genuinely deleted users (that are not active in profileMap)
-          mergedDeletedUserIds.forEach(delId => {
-            if (!activeKnownEmails.has(delId) && !activeKnownIds.has(delId)) {
-              profileMap.delete(delId);
-            }
+          // Strict final filter to ensure no deleted user id or email leaks through
+          const merged = Array.from(profileMap.values()).filter(u => {
+            const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
+            return !mergedDeletedUserIds.includes(cleanEmail) && !mergedDeletedUserIds.includes(uId);
           });
 
-          const merged = Array.from(profileMap.values());
           try {
             localStorage.setItem('mdc_users', JSON.stringify(merged));
             sessionStorage.setItem('mdc_users', JSON.stringify(merged));
             dbStorage.setItem('mdc_users', merged);
           } catch (e) {}
-
-          // Self-heal: If cloud registry is missing or has fewer users, auto-seed it without self-triggering broadcasts
-          if (merged.length > 0 && supabase) {
-            if (!cloudUsersRegistryDoc || cloudUsersList.length < merged.length) {
-              const activeMergedEmails = new Set(merged.map(u => u.email?.toLowerCase()).filter(Boolean));
-              const activeMergedIds = new Set(merged.map(u => u.id?.toLowerCase()).filter(Boolean));
-              const sanitizedDeleted = mergedDeletedUserIds.filter(delId => 
-                !activeMergedEmails.has(delId) && !activeMergedIds.has(delId)
-              );
-              supabase.from('saved_records').upsert({
-                id: 'master_users_registry',
-                record_type: 'users_registry',
-                period_label: 'Master Users Registry',
-                period_year: new Date().getFullYear(),
-                period_month: new Date().getMonth() + 1,
-                notes: 'Master Provisioned Accounts & Permissions Registry',
-                snapshot_data: {
-                  users: merged,
-                  deletedUserIds: sanitizedDeleted,
-                  updatedAt: new Date().toISOString()
-                },
-                updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed master_users_registry notice:', e));
-            }
-          }
 
           return merged;
         });
