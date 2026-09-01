@@ -13,7 +13,6 @@ import Forecasting from './components/Forecasting';
 import SavedRecords from './components/SavedRecords';
 import PurchaseOrders from './components/PurchaseOrders';
 import ScanInReceiving from './components/ScanInReceiving';
-import IntakeRecords from './components/IntakeRecords';
 import AllocationMatrix from './components/AllocationMatrix';
 import ScanOutPacking from './components/ScanOutPacking';
 import Shipments from './components/Shipments';
@@ -71,9 +70,9 @@ function MainApp() {
       case 'orders':
         return <PurchaseOrders />;
       case 'scan-in':
-        return <ScanInReceiving />;
+        return <ScanInReceiving initialTab="station" />;
       case 'intake-records':
-        return <IntakeRecords />;
+        return <ScanInReceiving initialTab="records" />;
       case 'allocation':
         return <AllocationMatrix />;
       case 'scan-out':

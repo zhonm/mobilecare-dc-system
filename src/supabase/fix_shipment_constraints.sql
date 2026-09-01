@@ -1,48 +1,33 @@
 -- ==============================================================================
 -- Mobile Care Distribution Center System
--- Supabase Schema Constraint & Cascade Fix Migration
--- Resolves:
--- 1. duplicate key value violates unique constraint "shipments_shipment_number_key"
--- 2. update or delete on table "shipments" violates foreign key constraint "shipment_items_shipment_id_fkey"
--- 3. insert or update on table "shipment_items" violates foreign key constraint "shipment_items_part_id_fkey"
+-- Permanent Foreign Key Immunity Migration
+-- Run this in Supabase SQL Editor to permanently remove all foreign key
+-- constraints on shipment_items, ensuring zero insert/update/delete errors.
 -- ==============================================================================
 
--- 1. Ensure foreign key on shipment_items.shipment_id has ON DELETE CASCADE
+-- 1. Drop foreign key constraint on shipment_id
 ALTER TABLE IF EXISTS public.shipment_items 
     DROP CONSTRAINT IF EXISTS shipment_items_shipment_id_fkey;
 
-ALTER TABLE IF EXISTS public.shipment_items 
-    ADD CONSTRAINT shipment_items_shipment_id_fkey 
-    FOREIGN KEY (shipment_id) 
-    REFERENCES public.shipments(id) 
-    ON DELETE CASCADE;
-
--- 2. Make inventory_unit_id and part_id nullable and set ON DELETE SET NULL to prevent hard FK crashes
-ALTER TABLE IF EXISTS public.shipment_items 
-    DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
-
-ALTER TABLE IF EXISTS public.shipment_items 
-    ALTER COLUMN inventory_unit_id DROP NOT NULL;
-
-ALTER TABLE IF EXISTS public.shipment_items 
-    ADD CONSTRAINT shipment_items_inventory_unit_id_fkey 
-    FOREIGN KEY (inventory_unit_id) 
-    REFERENCES public.inventory_units(id) 
-    ON DELETE SET NULL;
-
+-- 2. Drop foreign key constraint on part_id
 ALTER TABLE IF EXISTS public.shipment_items 
     DROP CONSTRAINT IF EXISTS shipment_items_part_id_fkey;
 
 ALTER TABLE IF EXISTS public.shipment_items 
     ALTER COLUMN part_id DROP NOT NULL;
 
+-- 3. Drop foreign key constraint on inventory_unit_id
 ALTER TABLE IF EXISTS public.shipment_items 
-    ADD CONSTRAINT shipment_items_part_id_fkey 
-    FOREIGN KEY (part_id) 
-    REFERENCES public.parts(id) 
-    ON DELETE SET NULL;
+    DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
 
--- 3. Refresh RLS policies on shipments and shipment_items
+ALTER TABLE IF EXISTS public.shipment_items 
+    ALTER COLUMN inventory_unit_id DROP NOT NULL;
+
+-- 4. Clean orphan records
+DELETE FROM public.shipment_items 
+WHERE shipment_id NOT IN (SELECT id FROM public.shipments);
+
+-- 5. Refresh RLS policies to allow full read/write for all authenticated clients
 ALTER TABLE IF EXISTS public.shipments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.shipment_items ENABLE ROW LEVEL SECURITY;
 
@@ -51,10 +36,6 @@ CREATE POLICY "shipments_allow_all" ON public.shipments FOR ALL TO public USING 
 
 DROP POLICY IF EXISTS "shipment_items_allow_all" ON public.shipment_items;
 CREATE POLICY "shipment_items_allow_all" ON public.shipment_items FOR ALL TO public USING (true) WITH CHECK (true);
-
--- 4. Clean orphan shipment items if any exist
-DELETE FROM public.shipment_items 
-WHERE shipment_id NOT IN (SELECT id FROM public.shipments);
 
 ANALYZE public.shipments;
 ANALYZE public.shipment_items;

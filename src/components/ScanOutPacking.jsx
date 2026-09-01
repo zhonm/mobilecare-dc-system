@@ -19,8 +19,7 @@ import {
   RotateCcw,
   Database,
   Eye,
-  History,
-  Calendar,
+  Edit2,
   Boxes,
   Copy,
   Plus,
@@ -28,14 +27,13 @@ import {
   MapPin,
   ChevronDown,
   ChevronUp,
-  Lock,
   Users,
   ShieldAlert,
   SlidersHorizontal,
   Clock
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
-import { isLockedConfirmedShipment, generateNextInvoiceRef } from '../utils/appContextHelpers';
+import { generateNextInvoiceRef } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 // Pure category & assignment classification helpers
@@ -579,6 +577,15 @@ export default function ScanOutPacking() {
     const set = new Set(availableStockUnits.map(u => (u.part_number || '').toUpperCase()));
     return set.size;
   }, [availableStockUnits]);
+
+  // Filter only Drafts / Pending manifests for clean workstation UI (historical/shipped manifests reside in Shipments & Packing Lists)
+  const draftShipments = useMemo(() => {
+    return (shipments || []).filter(s => {
+      if (!s || !Array.isArray(s.items) || s.items.length === 0) return false;
+      const st = String(s.status || '').toLowerCase().trim();
+      return st === 'draft' || st === 'pending_pickup' || st === 'packing' || st === 'in_progress' || !st;
+    });
+  }, [shipments]);
 
   const handleSimulatePack = (unit, e) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -2275,32 +2282,32 @@ export default function ScanOutPacking() {
         </div>
       </div>
 
-      {/* Database History: Saved Packing Lists & Historical Records */}
+      {/* Active Drafts & Pending Manifests Section */}
       <div className="card" style={{ marginTop: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{ background: '#e0e7ff', color: '#4338ca', padding: '8px', borderRadius: '8px' }}>
-              <History size={20} />
+              <FileText size={20} />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16.5px' }}>Saved Packing Lists & Manifest Database History</h3>
+              <h3 style={{ margin: 0, fontSize: '16.5px' }}>Active Packing Drafts & Pending Manifests</h3>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-                Persistent record of all finalized and saved packing lists with dates, destinations, and included serialized parts
+                Active in-progress packing lists and pending manifests. Shipped and confirmed records are archived in the Shipments page.
               </p>
             </div>
           </div>
           <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
             <Database size={11} style={{ display: 'inline', marginRight: '4px' }} />
-            {shipments.filter(s => s.items && s.items.length > 0).length} Saved Manifests
+            {draftShipments.length} Active Draft{draftShipments.length === 1 ? '' : 's'}
           </span>
         </div>
 
-        {shipments.filter(s => s.items && s.items.length > 0).length === 0 ? (
+        {draftShipments.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '36px 20px', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 'var(--radius-md)' }}>
             <FileText size={32} style={{ margin: '0 auto 8px', color: '#cbd5e1' }} />
-            <p style={{ margin: 0, fontSize: '13.5px' }}>No saved packing lists in database history yet.</p>
+            <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 600, color: '#334155' }}>No active packing drafts pending.</p>
             <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
-              Pack parts above and click "Save to Database" or "Finalize & Download PDF" to record manifests.
+              Scan parts above to build an outbound manifest. Once shipped, records are safely archived in the Shipments page.
             </p>
           </div>
         ) : (
@@ -2319,120 +2326,120 @@ export default function ScanOutPacking() {
               </tr>
             </thead>
             <tbody>
-              {shipments
-                .filter(s => s.items && s.items.length > 0)
-                .map(s => {
-                  const destSite = sites.find(st => st.id === s.site_id) || { code: s.site_code || 'HUB', name: s.site_name || 'Branch' };
-                  const isPending = s.status === 'pending_pickup' || s.status === 'draft';
-                  const formattedDate = (s.pickup_date || (!isPending && s.shipment_date))
-                    ? (s.pickup_date || s.shipment_date)
-                    : 'Pending Dispatch';
-                  return (
-                    <tr key={s.id}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: isPending && formattedDate === 'Pending Dispatch' ? '#b45309' : '#334155' }}>
-                          {isPending && formattedDate === 'Pending Dispatch' ? <Clock size={13} color="#d97706" /> : <Calendar size={13} color="var(--primary)" />}
-                          <span>{formattedDate}</span>
+              {draftShipments.map(s => {
+                const destSite = sites.find(st => st.id === s.site_id) || { code: s.site_code || 'HUB', name: s.site_name || 'Branch' };
+                const formattedDate = s.created_date || (s.created_at ? new Date(s.created_at).toLocaleDateString('en-US') : 'Draft');
+                return (
+                  <tr key={s.id}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: '#b45309' }}>
+                        <Clock size={13} color="#d97706" />
+                        <span>{formattedDate}</span>
+                      </div>
+                    </td>
+                    <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                      {s.invoice_ref || s.shipment_number}
+                    </td>
+                    <td>
+                      <strong>{destSite.code}</strong> <span style={{ color: '#64748b', fontSize: '11.5px' }}>({destSite.name})</span>
+                    </td>
+                    <td>
+                      <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                        {s.items?.length || 0} units
+                      </span>
+                    </td>
+                    <td style={{ fontSize: '12px' }}>
+                      <div><strong>{s.carrier || s.courier || 'Lite Express'}</strong></div>
+                      <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
+                        {s.tracking_number ? `#${s.tracking_number}` : 'Pending Tracking'}
+                      </span>
+                      {s.transfer_slip_number && (
+                        <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
+                          TS: {s.transfer_slip_number}
                         </div>
-                      </td>
-                        <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
-                          {s.invoice_ref || s.shipment_number}
-                        </td>
-                        <td>
-                          <strong>{destSite.code}</strong> <span style={{ color: '#64748b', fontSize: '11.5px' }}>({destSite.name})</span>
-                        </td>
-                        <td>
-                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
-                            {s.items?.length || 0} units
-                          </span>
-                        </td>
-                        <td style={{ fontSize: '12px' }}>
-                          <div><strong>{s.carrier || s.courier || 'Lite Express'}</strong></div>
-                          <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
-                            {s.tracking_number ? `#${s.tracking_number}` : 'No tracking'}
-                          </span>
-                          {s.transfer_slip_number && (
-                            <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
-                              TS: {s.transfer_slip_number}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ fontSize: '11.5px', color: '#475569' }}>
-                          <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>
-                          <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
-                        </td>
-                        <td>
-                          <span
-                            className="badge"
-                            style={{
-                              background: s.status === 'received_confirmed' ? '#dcfce7' : (s.status === 'shipped' || s.status === 'in_transit') ? '#e0e7ff' : s.status === 'pending_pickup' ? '#fef3c7' : '#f1f5f9',
-                              color: s.status === 'received_confirmed' ? '#15803d' : (s.status === 'shipped' || s.status === 'in_transit') ? '#4338ca' : s.status === 'pending_pickup' ? '#b45309' : '#475569',
-                              textTransform: 'uppercase',
-                              fontSize: '10.5px',
-                              fontWeight: 600
+                      )}
+                    </td>
+                    <td style={{ fontSize: '11.5px', color: '#475569' }}>
+                      <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>
+                      <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
+                    </td>
+                    <td>
+                      <span
+                        className="badge"
+                        style={{
+                          background: s.status === 'pending_pickup' ? '#fef3c7' : '#f1f5f9',
+                          color: s.status === 'pending_pickup' ? '#b45309' : '#475569',
+                          border: s.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0',
+                          textTransform: 'uppercase',
+                          fontSize: '10.5px',
+                          fontWeight: 700
+                        }}
+                      >
+                        {s.status === 'pending_pickup' ? 'Pending Pickup' : 'Draft'}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: '6px' }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => {
+                            setCurrentShipment(s);
+                            if (s.site_id) setSelectedSiteId(s.site_id);
+                            showToast(`Loaded draft ${s.invoice_ref || s.shipment_number} into packing station`, 'info');
+                          }}
+                          title="Load this draft to continue packing"
+                          style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <Edit2 size={12} />
+                          <span>Resume</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setInspectShipmentModal(s)}
+                          title="View all serialized parts included in this draft"
+                          style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <Eye size={12} />
+                          <span>Inspect</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'pdf', true)}
+                          title="Download Draft PDF Manifest"
+                          style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <Download size={12} />
+                          <span>PDF</span>
+                        </button>
+                        {canUserDeleteRecord(s, currentUser) ? (
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => {
+                              if (window.confirm(`Delete draft packing list "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
+                                deleteShipment(s.id);
+                              }
                             }}
+                            title="Delete Draft"
+                            style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
                           >
-                            {s.status === 'pending_pickup' ? 'Pending Pickup' : s.status === 'received_confirmed' ? 'Received Confirmed' : s.status}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <div style={{ display: 'inline-flex', gap: '6px' }}>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => setInspectShipmentModal(s)}
-                              title="View all serialized parts included in this manifest"
-                              style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                            >
-                              <Eye size={12} />
-                              <span>Inspect Parts</span>
-                            </button>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => handleRequestPrintOrPDF(s, s.items || [], destSite, 'pdf', false)}
-                              title="Download Corporate PDF Manifest"
-                              style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                            >
-                              <Download size={12} />
-                              <span>PDF</span>
-                            </button>
-                            {isLockedConfirmedShipment(s) ? (
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                disabled
-                                style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.8, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
-                                title="Locked Record: Manifest is Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI."
-                              >
-                                <Lock size={12} />
-                              </button>
-                            ) : canUserDeleteRecord(s, currentUser) ? (
-                              <button
-                                className="btn btn-danger btn-sm"
-                                onClick={() => {
-                                  if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will permanently delete both the manifest and all serialized parts included in this shipment.`)) {
-                                    deleteShipment(s.id);
-                                  }
-                                }}
-                                title="Permanently Delete Manifest from Database"
-                                style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            ) : (
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                disabled
-                                style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.4, cursor: 'not-allowed' }}
-                                title={`Only ${s.prepared_by_name || s.saved_by_name || 'the creator'} can delete this manifest`}
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
+                            <Trash2 size={12} />
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            disabled
+                            style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.4, cursor: 'not-allowed' }}
+                            title={`Only ${s.prepared_by_name || s.saved_by_name || 'the creator'} can delete this draft`}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
             </table>
           </div>
         )}

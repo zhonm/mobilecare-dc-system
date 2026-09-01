@@ -357,17 +357,25 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
   if (!s || !Array.isArray(s.items) || s.items.length === 0) return [];
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
   
+  const knownPartIds = new Set();
   const partsMap = new Map();
   if (Array.isArray(partsList)) {
     partsList.forEach(p => {
-      if (p && p.part_number && isUUID(p.id)) partsMap.set(String(p.part_number).toUpperCase().trim(), p.id);
+      if (p && isUUID(p.id)) {
+        knownPartIds.add(p.id);
+        if (p.part_number) partsMap.set(String(p.part_number).toUpperCase().trim(), p.id);
+      }
     });
   }
 
+  const knownUnitIds = new Set();
   const unitsMap = new Map();
   if (Array.isArray(inventoryUnits)) {
     inventoryUnits.forEach(u => {
-      if (u && u.serial_number && isUUID(u.id)) unitsMap.set(String(u.serial_number).toUpperCase().trim(), u.id);
+      if (u && isUUID(u.id)) {
+        knownUnitIds.add(u.id);
+        if (u.serial_number) unitsMap.set(String(u.serial_number).toUpperCase().trim(), u.id);
+      }
     });
   }
 
@@ -376,23 +384,23 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
     const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
     const rawPn = String(it.part_number || existingU?.part_number || '').toUpperCase().trim();
     
-    // Resolve valid UUID for part_id (or null if not existing in db parts to prevent foreign key violation)
+    // Resolve valid UUID for part_id (strictly verified against known db parts to prevent foreign key violation)
     let validPartId = null;
-    if (isUUID(it.part_id)) {
-      validPartId = it.part_id;
-    } else if (isUUID(existingU?.part_id)) {
-      validPartId = existingU.part_id;
-    } else if (partsMap.has(rawPn)) {
+    if (partsMap.has(rawPn)) {
       validPartId = partsMap.get(rawPn);
+    } else if (isUUID(it.part_id) && knownPartIds.has(it.part_id)) {
+      validPartId = it.part_id;
+    } else if (isUUID(existingU?.part_id) && knownPartIds.has(existingU.part_id)) {
+      validPartId = existingU.part_id;
     }
 
-    // Resolve valid UUID for inventory_unit_id (or null if not existing in db inventory_units to prevent foreign key violation)
+    // Resolve valid UUID for inventory_unit_id (strictly verified against known db units to prevent foreign key violation)
     let validUnitId = null;
-    if (isUUID(existingU?.id)) {
-      validUnitId = existingU.id;
-    } else if (unitsMap.has(cleanSerial)) {
+    if (unitsMap.has(cleanSerial)) {
       validUnitId = unitsMap.get(cleanSerial);
-    } else if (isUUID(it.id)) {
+    } else if (isUUID(existingU?.id) && knownUnitIds.has(existingU.id)) {
+      validUnitId = existingU.id;
+    } else if (isUUID(it.id) && knownUnitIds.has(it.id)) {
       validUnitId = it.id;
     }
 

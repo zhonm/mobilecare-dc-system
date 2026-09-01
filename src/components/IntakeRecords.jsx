@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 
-export default function IntakeRecords() {
+export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
     dcIntakeRecords,
     deleteIntakeRecord,
@@ -659,7 +659,13 @@ export default function IntakeRecords() {
           {canEdit && (
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('scan-in')}
+              onClick={() => {
+                if (onNavigateToScanIn) {
+                  onNavigateToScanIn();
+                } else {
+                  setActiveTab('scan-in');
+                }
+              }}
               style={{
                 background: '#0284c7',
                 color: '#ffffff',
@@ -676,7 +682,7 @@ export default function IntakeRecords() {
               title="Return to Receive Scan-In Station"
             >
               <Barcode size={16} />
-              <span>← Back to Receive Scan-In (F1)</span>
+              <span>{embeddedMode ? 'Switch to Scan-In Station (F1)' : '← Back to Receive Scan-In (F1)'}</span>
             </button>
           )}
 

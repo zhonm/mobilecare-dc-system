@@ -4,7 +4,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
-import { reconcileUnitsWithPackedDrafts, toValidUUID, isUUID, safeUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
+import { reconcileUnitsWithPackedDrafts, toValidUUID, isUUID, safeUUID, formatShipmentForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
@@ -909,7 +909,7 @@ export function useCloudSync({
             }
           }
 
-          // Backfill direct public.shipments and public.shipment_items tables in Supabase if empty/missing (throttled to once every 60s)
+          // Backfill direct public.shipments table headers in Supabase if empty/missing (throttled to once every 60s)
           if (supabase && (!dbShipments || dbShipments.length < effectiveShipments.length) && (Date.now() - lastShipmentsBackfillAttemptRef.current > 60000)) {
             lastShipmentsBackfillAttemptRef.current = Date.now();
             const shipmentRowsToInsert = effectiveShipments
@@ -918,20 +918,23 @@ export function useCloudSync({
             const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.shipment_number, r])).values());
 
             if (uniqueShipmentRows.length > 0) {
-              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'shipment_number' }).then(({ error: bError }) => {
-                if (!bError) {
-                  // Also backfill shipment_items ONLY if shipments header upsert succeeded
-                  const allShipmentItemRows = [];
-                  effectiveShipments.forEach(s => {
-                    const itemRows = formatShipmentItemsForDb(s, dbUnits || [], dbParts || [], currentUser);
-                    allShipmentItemRows.push(...itemRows);
+              (async () => {
+                try {
+                  const { data: existingShpList } = await supabase.from('shipments').select('id, shipment_number');
+                  const existingMap = new Map((existingShpList || []).map(r => [r.shipment_number, r.id]));
+
+                  const rowsToUpsert = uniqueShipmentRows.map(r => {
+                    if (existingMap.has(r.shipment_number)) {
+                      return { ...r, id: existingMap.get(r.shipment_number) };
+                    }
+                    return r;
                   });
-                  const uniqueShipmentItemRows = Array.from(new Map(allShipmentItemRows.map(r => [r.id, r])).values());
-                  if (uniqueShipmentItemRows.length > 0) {
-                    supabase.from('shipment_items').upsert(uniqueShipmentItemRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
-                  }
+
+                  await supabase.from('shipments').upsert(rowsToUpsert, { onConflict: 'shipment_number' });
+                } catch (bErr) {
+                  console.warn('Shipments cloud header sync notice:', bErr.message);
                 }
-              }).catch(() => {});
+              })();
             }
           }
         } else {

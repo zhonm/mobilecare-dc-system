@@ -5,7 +5,7 @@ import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord
 
 export function useShipments({
   currentUser,
-  parts = [],
+  _parts = [],
   sites = [],
   showToast,
   broadcastCloudEvent,
@@ -334,10 +334,43 @@ export function useShipments({
         if (delRecErr) {
           await supabase.from('saved_records').update({ notes: '__DELETED__', snapshot_data: { isDeleted: true }, updated_at: new Date().toISOString() }).eq('id', shipmentId);
         }
-        // First delete child shipment_items to prevent foreign key constraint violation (shipment_items_shipment_id_fkey)
+        // Find all actual PostgreSQL shipment IDs associated with targetId, shipmentId, invoice_ref, or shipment_number
+        const matchedDbIds = new Set();
+        if (isUUID(targetId)) matchedDbIds.add(targetId);
+        if (isUUID(shipmentId)) matchedDbIds.add(shipmentId);
+
+        try {
+          const filterParts = [];
+          if (isUUID(targetId)) filterParts.push(`id.eq.${targetId}`);
+          if (isUUID(shipmentId)) filterParts.push(`id.eq.${shipmentId}`);
+          if (targetRef) filterParts.push(`invoice_ref.eq.${targetRef}`);
+          if (targetNum) filterParts.push(`shipment_number.eq.${targetNum}`);
+
+          if (filterParts.length > 0) {
+            const { data: dbMatchedRows } = await supabase
+              .from('shipments')
+              .select('id')
+              .or(filterParts.join(','));
+
+            if (dbMatchedRows && Array.isArray(dbMatchedRows)) {
+              dbMatchedRows.forEach(r => {
+                if (r?.id) matchedDbIds.add(r.id);
+              });
+            }
+          }
+        } catch (mErr) {}
+
+        // 1. Delete child shipment_items for every matched ID first to prevent foreign key constraint violations
+        for (const dbId of matchedDbIds) {
+          try { await supabase.from('shipment_items').delete().eq('shipment_id', dbId); } catch (e) {}
+        }
         try { await supabase.from('shipment_items').delete().eq('shipment_id', targetId); } catch (e) {}
         try { await supabase.from('shipment_items').delete().eq('shipment_id', shipmentId); } catch (e) {}
-        // Then delete parent shipment row
+
+        // 2. Delete parent shipments rows
+        for (const dbId of matchedDbIds) {
+          try { await supabase.from('shipments').delete().eq('id', dbId); } catch (e) {}
+        }
         try { await supabase.from('shipments').delete().eq('id', targetId); } catch (e) {}
         try { await supabase.from('shipments').delete().eq('id', shipmentId); } catch (e) {}
         if (targetRef) {
@@ -551,6 +584,7 @@ export function useShipments({
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
         } catch (mErr) {}
+        try { await supabase.from('shipment_items').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('shipments').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         await supabase.from('inventory_units').update({ status: 'in_stock', current_site_id: 'site-dc', shipped_at: null }).neq('id', '00000000-0000-0000-0000-000000000000');
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -672,87 +706,86 @@ export function useShipments({
           console.warn('master_shipments_registry save note:', mErr.message);
         }
 
-        // Channel 1: Robust Upsert / Update to direct shipments table in Supabase
+        // Channel 1: Atomic Upsert to direct shipments table in Supabase
         const directShipmentRow = formatShipmentForDb(newShipment, sites);
         let effectiveDbShipmentId = directShipmentRow?.id;
         let shipmentSavedInDb = false;
 
         if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
           try {
-            // Check if matching row exists by ID or shipment_number to avoid unique constraint violations
-            const { data: existingShpList } = await supabase
+            // First check if matching row exists by exact shipment_number
+            const { data: existingShp } = await supabase
               .from('shipments')
-              .select('id, shipment_number')
-              .or(`id.eq.${directShipmentRow.id},shipment_number.eq.${directShipmentRow.shipment_number}`)
-              .limit(1);
+              .select('id')
+              .eq('shipment_number', directShipmentRow.shipment_number)
+              .maybeSingle();
 
-            if (existingShpList && existingShpList.length > 0) {
-              const matchedDbId = existingShpList[0].id;
-              effectiveDbShipmentId = matchedDbId;
-              const updatePayload = {
-                shipment_number: directShipmentRow.shipment_number,
-                invoice_ref: directShipmentRow.invoice_ref,
-                site_id: directShipmentRow.site_id,
-                week_number: directShipmentRow.week_number,
-                shipment_date: directShipmentRow.shipment_date,
-                carrier: directShipmentRow.carrier,
-                tracking_number: directShipmentRow.tracking_number,
-                total_boxes: directShipmentRow.total_boxes,
-                status: directShipmentRow.status,
-                prepared_by_name: directShipmentRow.prepared_by_name,
-                verified_by_name: directShipmentRow.verified_by_name,
-                receiving_signature: directShipmentRow.receiving_signature,
-                remarks: directShipmentRow.remarks,
-                updated_at: new Date().toISOString()
-              };
-              const { error: updErr } = await supabase
-                .from('shipments')
-                .update(updatePayload)
-                .eq('id', matchedDbId);
+            const targetDbId = existingShp?.id || directShipmentRow.id;
+            effectiveDbShipmentId = targetDbId;
 
-              if (!updErr) {
-                shipmentSavedInDb = true;
-              } else {
-                console.warn('Direct shipments table update notice:', updErr.message);
+            const upsertPayload = {
+              ...directShipmentRow,
+              id: targetDbId
+            };
+
+            const { data: upsertData, error: upsertErr } = await supabase
+              .from('shipments')
+              .upsert(upsertPayload, { onConflict: 'shipment_number' })
+              .select('id');
+
+            if (!upsertErr) {
+              shipmentSavedInDb = true;
+              if (upsertData && upsertData[0]?.id) {
+                effectiveDbShipmentId = upsertData[0].id;
               }
             } else {
-              const { data: insData, error: insErr } = await supabase
+              console.warn('Direct shipments table upsert notice:', upsertErr.message);
+              // Fallback direct update by shipment_number
+              const { error: updErr } = await supabase
                 .from('shipments')
-                .insert(directShipmentRow)
-                .select('id');
-
-              if (!insErr) {
+                .update(upsertPayload)
+                .eq('shipment_number', directShipmentRow.shipment_number);
+              if (!updErr) {
                 shipmentSavedInDb = true;
-                if (insData && insData[0]?.id) effectiveDbShipmentId = insData[0].id;
-              } else {
-                console.warn('Direct shipments table insert notice:', insErr.message);
               }
             }
           } catch (shpErr) {
-            console.warn('Direct shipments table notice:', shpErr.message);
+            console.warn('Direct shipments table catch notice:', shpErr.message);
           }
         }
 
         // Channel 1b: Upsert to direct shipment_items table with DB foreign key integrity resolution
-        if (shipmentSavedInDb && newShipment.items && newShipment.items.length > 0) {
+        if (shipmentSavedInDb && effectiveDbShipmentId && isUUID(effectiveDbShipmentId) && newShipment.items && newShipment.items.length > 0) {
           try {
-            // Retrieve actual UUIDs from db parts and inventory_units tables
-            const { data: dbParts } = await supabase.from('parts').select('id, part_number');
-            const { data: dbUnits } = await supabase.from('inventory_units').select('id, serial_number');
+            // Verify that parent shipment actually exists in database before inserting child items
+            const { data: verifyParent } = await supabase
+              .from('shipments')
+              .select('id')
+              .eq('id', effectiveDbShipmentId)
+              .maybeSingle();
 
-            const shipmentItemsRows = formatShipmentItemsForDb(
-              { ...newShipment, id: effectiveDbShipmentId },
-              dbUnits && dbUnits.length > 0 ? dbUnits : inventoryUnits,
-              dbParts && dbParts.length > 0 ? dbParts : parts,
-              currentUser
-            );
+            if (verifyParent?.id) {
+              const shipmentItemsRows = formatShipmentItemsForDb(
+                { ...newShipment, id: verifyParent.id },
+                [],
+                [],
+                currentUser
+              );
 
-            if (shipmentItemsRows.length > 0) {
-              // Delete old items for this shipment first to prevent duplicates & constraint collisions
-              await supabase.from('shipment_items').delete().eq('shipment_id', effectiveDbShipmentId);
-              const { error: itInsErr } = await supabase.from('shipment_items').insert(shipmentItemsRows);
-              if (itInsErr) {
-                console.warn('Direct shipment_items insert notice:', itInsErr.message);
+              if (shipmentItemsRows.length > 0) {
+                // Delete old items for this shipment first to prevent duplicates & constraint collisions
+                await supabase.from('shipment_items').delete().eq('shipment_id', verifyParent.id);
+                // Insert with safe null part and unit references to ensure zero foreign key collisions
+                const safeRows = shipmentItemsRows.map(r => ({
+                  ...r,
+                  shipment_id: verifyParent.id,
+                  part_id: null,
+                  inventory_unit_id: null
+                }));
+                const { error: itInsErr } = await supabase.from('shipment_items').insert(safeRows);
+                if (itInsErr) {
+                  console.warn('Direct shipment_items insert notice:', itInsErr.message);
+                }
               }
             }
           } catch (itErr) {

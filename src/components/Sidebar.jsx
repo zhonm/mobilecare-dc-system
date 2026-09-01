@@ -188,12 +188,13 @@ export default function Sidebar() {
               {currentUser?.rolePosition || (currentUser?.role === 'superadmin' ? 'Superadmin' : currentUser?.role === 'admin' ? 'Operations Lead' : 'DC Specialist')}
             </div>
             <div className="user-tags-row">
-              <span className="user-role-badge">
-                {currentUser?.role?.replace('_', ' ')}
+              <span className={`user-role-badge user-role-${currentUser?.role || 'user'}`}>
+                {currentUser?.role === 'superadmin' ? 'SUPERADMIN' : currentUser?.role === 'parts_management' ? 'PMG SPECIALIST' : currentUser?.role?.replace('_', ' ')}
               </span>
               {userSite && (
                 <span className="user-site-code">
-                  • {userSite.code}
+                  <span className="user-dot-sep">•</span>
+                  <span>{userSite.code}</span>
                 </span>
               )}
             </div>

@@ -37,6 +37,7 @@ import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelPars
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
+import IntakeRecords from './IntakeRecords';
 
 // Pure category & assignment classification helpers
 function isUnitSvnr(u) {
@@ -55,7 +56,15 @@ function isUnitForecasting(u) {
   return !isUnitSvnr(u) && !isUnitCrbr(u);
 }
 
-export default function ScanInReceiving() {
+export default function ScanInReceiving({ initialTab = 'station' }) {
+  // Top Segmented Tab: 'station' (DC Receive Scan-In Station) | 'records' (DC Stock Records)
+  const [activeReceiveTab, setActiveReceiveTab] = useState(initialTab);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveReceiveTab(initialTab);
+    }
+  }, [initialTab]);
   const {
     addScanInUnit,
     deleteScanInUnit,
@@ -69,7 +78,7 @@ export default function ScanInReceiving() {
     cloudSyncStatus,
     showToast,
     commitUnitsToStock,
-    setActiveTab,
+    _setActiveTab,
     activePackDraft,
     shipments,
     currentUser,
@@ -1032,8 +1041,51 @@ export default function ScanInReceiving() {
 
   return (
     <div className="scanner-container">
-      {/* Scanner Workstation Hero Card */}
-      <div className="scanner-hero">
+      {/* Top Segmented Navigation Tabs: Station vs Records */}
+      <div className="scanin-top-tabs-bar">
+        <div className="scanin-top-tabs-group">
+          <button
+            type="button"
+            className={`scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
+            onClick={() => setActiveReceiveTab('station')}
+          >
+            <Barcode size={16} />
+            <span>{isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}</span>
+            <span className="scanin-tab-badge">
+              {availableInStockUnits.length} in stock
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
+            onClick={() => setActiveReceiveTab('records')}
+          >
+            <BookmarkPlus size={16} />
+            <span>{isPmgUser ? 'Branch Stock Records' : 'DC Stock Records'}</span>
+            <span className="scanin-tab-badge">
+              {dcIntakeRecords?.length || 0} batches
+            </span>
+          </button>
+        </div>
+
+        <div className="scanin-top-tabs-actions">
+          <div className="telemetry-badge" title="Hardware Scanner Connection Status" style={{ height: '32px' }}>
+            <div className="pulse-dot" />
+            <span style={{ color: '#34d399', fontWeight: 600, fontSize: '11.5px' }}>Scanner: Ready (HID)</span>
+          </div>
+        </div>
+      </div>
+
+      {activeReceiveTab === 'records' ? (
+        <IntakeRecords 
+          embeddedMode={true} 
+          onNavigateToScanIn={() => setActiveReceiveTab('station')} 
+        />
+      ) : (
+        <>
+          {/* Scanner Workstation Hero Card */}
+          <div className="scanner-hero">
         {/* Header Row: Title & System Telemetry Status */}
         <div className="scanner-hero-header" style={{ marginBottom: '18px', alignItems: 'flex-start' }}>
           <div>
@@ -1058,30 +1110,6 @@ export default function ScanInReceiving() {
                 <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'}
               </span>
             </div>
-
-            {!isPmgUser && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setActiveTab('intake-records')}
-                style={{
-                  background: '#1e293b',
-                  color: '#38bdf8',
-                  borderColor: 'rgba(56, 189, 248, 0.4)',
-                  fontWeight: 600,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  height: '30px',
-                  fontSize: '12px',
-                  borderRadius: '6px'
-                }}
-                title="View serialized stock grouped by date in DC Parts Stock Records"
-              >
-                <BookmarkPlus size={14} color="#38bdf8" />
-                <span>DC Parts Stock Records</span>
-              </button>
-            )}
 
             <div className="telemetry-badge" title="Hardware Scanner Connection Status">
               <div className="pulse-dot" />
@@ -1795,7 +1823,7 @@ export default function ScanInReceiving() {
           </div>
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <div style={{ position: 'relative', width: '240px' }}>
+            <div style={{ position: 'relative', width: '260px' }}>
               <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
@@ -1815,29 +1843,6 @@ export default function ScanInReceiving() {
                 </button>
               )}
             </div>
-
-            {!isPmgUser && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setActiveTab('intake-records')}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '12px',
-                  height: '32px',
-                  fontWeight: 600,
-                  color: '#0284c7',
-                  borderColor: '#bae6fd',
-                  background: '#f0f9ff'
-                }}
-                title="View all stock grouped by date in DC Parts Stock Records"
-              >
-                <BookmarkPlus size={14} color="#0284c7" />
-                <span>DC Stock Records</span>
-              </button>
-            )}
           </div>
         </div>
 
@@ -2549,7 +2554,7 @@ export default function ScanInReceiving() {
             type: 'success',
             message: `[DISPATCHED RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
           });
-          setActiveTab('intake-records');
+          setActiveReceiveTab('records');
         }}
       />
 
@@ -2583,6 +2588,8 @@ export default function ScanInReceiving() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

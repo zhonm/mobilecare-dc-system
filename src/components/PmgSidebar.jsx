@@ -262,11 +262,12 @@ export default function PmgSidebar() {
               {currentUser?.rolePosition || 'Parts Management Specialist'}
             </div>
             <div className="user-tags-row">
-              <span className="user-role-badge" style={{ background: '#0284c7', color: '#ffffff' }}>
+              <span className="user-role-badge user-role-pmg">
                 PMG SPECIALIST
               </span>
               <span className="user-site-code">
-                • {userSite.code}
+                <span className="user-dot-sep">•</span>
+                <span>{userSite.code}</span>
               </span>
             </div>
           </div>
