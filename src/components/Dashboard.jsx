@@ -97,14 +97,18 @@ export default function Dashboard() {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
-      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      const isDc = u.current_site_id === 'site-dc' || 
+                   u.site_code === 'DC-MDC' || 
+                   u.site_code === 'DC' || 
+                   (!u.current_site_id && !u.site_code) ||
+                   (sites.find(s => s.id === u.current_site_id || s.code === u.current_site_id)?.is_dc ?? false);
       const isStock = (u.status === 'in_stock' || !u.status) && isDc;
       if (!isStock) return false;
       if (isUnfiltered) return true;
       const cleanPN = String(u.part_number || '').trim().toUpperCase();
       return filteredPartNumbers.has(cleanPN) || filteredPartIds.has(u.part_id);
     });
-  }, [inventoryUnits, packedSerialsSet, isUnfiltered, filteredPartNumbers, filteredPartIds]);
+  }, [inventoryUnits, packedSerialsSet, isUnfiltered, filteredPartNumbers, filteredPartIds, sites]);
 
   const packedUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {

@@ -289,6 +289,9 @@ export function useCloudSync({
         const cloudUsersList = (cloudUsersRegistryDoc?.snapshot_data?.users && Array.isArray(cloudUsersRegistryDoc.snapshot_data.users))
           ? cloudUsersRegistryDoc.snapshot_data.users
           : [];
+        const cloudDeletedUserIds = Array.isArray(cloudUsersRegistryDoc?.snapshot_data?.deletedUserIds)
+          ? cloudUsersRegistryDoc.snapshot_data.deletedUserIds
+          : [];
         const activeProfileEmails = new Set(
           (dbProfiles || []).filter(p => !p.is_deleted).map(p => p.email?.toLowerCase().trim()).filter(Boolean)
         );
