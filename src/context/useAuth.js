@@ -290,21 +290,20 @@ export function useAuth({
     if (!isAllowedCompanyEmail(email)) {
       return {
         success: false,
-        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel.'
+        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel. Please contact DC if you need access.'
       };
     }
 
-    const deletedSet = await getAuthoritativeDeletedUserIds();
-    if (deletedSet.has(email)) {
-      return {
-        success: false,
-        error: 'This account has been deleted from the system. Please contact your administrator.'
-      };
-    }
+    let deletedSet = new Set();
+    try {
+      const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      local.forEach(id => { if (id) deletedSet.add(String(id).toLowerCase().trim()); });
+    } catch (e) {}
 
     let user = null;
+    let cloudReachable = false;
 
-    // 1. Query live Supabase Database as PRIMARY source of truth
+    // 1. Direct PostgreSQL profiles query as PRIMARY authority
     if (supabase) {
       try {
         const { data: dbProf, error: profErr } = await supabase
@@ -313,7 +312,29 @@ export function useAuth({
           .ilike('email', email)
           .maybeSingle();
 
-        if (!profErr && dbProf && !dbProf.is_deleted && !deletedSet.has(dbProf.id?.toLowerCase()) && !deletedSet.has(dbProf.email?.toLowerCase())) {
+        if (!profErr) {
+          cloudReachable = true;
+        }
+
+        if (dbProf) {
+          if (dbProf.is_deleted) {
+            return {
+              success: false,
+              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+            };
+          }
+
+          // Active database user found: unblock immediately
+          deletedSet.delete(email);
+          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+
+          if (dbProf.is_active === false) {
+            return {
+              success: false,
+              error: 'This account has been deactivated. Please contact DC if there is an issue with login.'
+            };
+          }
+
           const { data: dbPerms } = await supabase
             .from('user_page_permissions')
             .select('page_id')
@@ -336,46 +357,51 @@ export function useAuth({
             siteId: dbProf.site_id || 'site-dc',
             hasSetPassword: hasPasswordSet,
             passwordHash: dbProf.password_hash || null,
-            isActive: dbProf.is_active ?? true,
+            isActive: true,
             permittedPages: perms
           };
         }
+      } catch (e) {
+        console.warn('Supabase profiles verification note:', e.message);
+      }
+    }
 
-        // Check authoritative master_users_registry from saved_records as fallback or enhancement
-        const { data: regDoc } = await supabase
+    // 2. Check saved_records registry if profiles table query did not resolve a user
+    if (!user && supabase) {
+      try {
+        const { data: regDoc, error: regErr } = await supabase
           .from('saved_records')
           .select('snapshot_data')
           .eq('id', 'master_users_registry')
           .maybeSingle();
 
-        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
-          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, email);
-          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
-            const hasRegPass = Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash);
-            if (!user) {
-              user = {
-                ...matchedFromReg,
-                hasSetPassword: hasRegPass,
-                passwordHash: matchedFromReg.passwordHash || null
-              };
-            } else {
-              user = {
-                ...user,
-                ...matchedFromReg,
-                hasSetPassword: user.hasSetPassword || hasRegPass,
-                passwordHash: user.passwordHash || matchedFromReg.passwordHash || null,
-                permittedPages: user.permittedPages || matchedFromReg.permittedPages
-              };
-            }
+        if (!regErr && regDoc) {
+          cloudReachable = true;
+          const regUsers = regDoc.snapshot_data?.users || [];
+          const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
+
+          const matchedFromReg = matchUserByEmail(regUsers, email);
+          if (matchedFromReg && !regDeleted.includes(email) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
+            deletedSet.delete(email);
+            if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
+            user = {
+              ...matchedFromReg,
+              hasSetPassword: Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash),
+              passwordHash: matchedFromReg.passwordHash || null,
+              isActive: matchedFromReg.isActive ?? true
+            };
+          } else if (regDeleted.includes(email)) {
+            return {
+              success: false,
+              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+            };
           }
         }
-      } catch (e) {
-        console.warn('Supabase real-time email verification note:', e.message);
-      }
+      } catch (e) {}
     }
 
-    // 2. Fallback to local memory / storage if Supabase returned nothing or offline
-    if (!user) {
+    // 3. Fallback to local memory / storage ONLY if offline / Supabase was not reachable
+    if (!user && !cloudReachable) {
       const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
       user = matchUserByEmail(activeCandidates, email);
       if (!user) {
@@ -390,7 +416,7 @@ export function useAuth({
     if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
       return {
         success: false,
-        error: 'This email is not registered. Contact your administrator to provision your account.'
+        error: 'This email is not registered. Please contact DC if there is an issue with login or to provision your account.'
       };
     }
 
@@ -408,7 +434,7 @@ export function useAuth({
     if (!user.isActive) {
       return {
         success: false,
-        error: 'This account has been deactivated. Contact your administrator.'
+        error: 'This account has been deactivated. Please contact DC if there is an issue with login.'
       };
     }
 
@@ -426,17 +452,16 @@ export function useAuth({
     const cleanEmail = (rawEmail || '').trim().toLowerCase();
     const cleanPassword = (password || '').trim();
 
-    const deletedSet = await getAuthoritativeDeletedUserIds();
-    if (deletedSet.has(cleanEmail)) {
-      return {
-        success: false,
-        error: 'This account has been deleted from the system. Please contact your administrator.'
-      };
-    }
+    let deletedSet = new Set();
+    try {
+      const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      local.forEach(id => { if (id) deletedSet.add(String(id).toLowerCase().trim()); });
+    } catch (e) {}
 
     let user = null;
+    let cloudReachable = false;
 
-    // 1. Authoritative real-time database lookup first
+    // 1. Direct PostgreSQL profiles query as PRIMARY authority
     if (supabase) {
       try {
         const { data: dbProf, error: profErr } = await supabase
@@ -445,7 +470,27 @@ export function useAuth({
           .ilike('email', cleanEmail)
           .maybeSingle();
 
-        if (!profErr && dbProf && !dbProf.is_deleted && !deletedSet.has(dbProf.id?.toLowerCase()) && !deletedSet.has(dbProf.email?.toLowerCase())) {
+        if (!profErr) cloudReachable = true;
+
+        if (dbProf) {
+          if (dbProf.is_deleted) {
+            return {
+              success: false,
+              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+            };
+          }
+
+          // Active database user found: unblock immediately
+          deletedSet.delete(cleanEmail);
+          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+
+          if (dbProf.is_active === false) {
+            return {
+              success: false,
+              error: 'Account is deactivated. Please contact DC if there is an issue with login.'
+            };
+          }
+
           const { data: dbPerms } = await supabase
             .from('user_page_permissions')
             .select('page_id')
@@ -457,8 +502,6 @@ export function useAuth({
             ? dbPerms.map(p => p.page_id)
             : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
 
-          const hasPasswordSet = Boolean(dbProf.has_set_password || dbProf.password_hash);
-
           user = {
             id: dbProf.id,
             email: dbProf.email,
@@ -466,66 +509,73 @@ export function useAuth({
             role: resolvedRole,
             rolePosition: resolvedPosition,
             siteId: dbProf.site_id || 'site-dc',
-            hasSetPassword: hasPasswordSet,
+            hasSetPassword: Boolean(dbProf.has_set_password || dbProf.password_hash),
             passwordHash: dbProf.password_hash || null,
-            isActive: dbProf.is_active ?? true,
+            isActive: true,
             permittedPages: perms
           };
         }
+      } catch (e) {
+        console.warn('Supabase sign-in profile query note:', e.message);
+      }
+    }
 
-        const { data: regDoc } = await supabase
+    // 2. Check saved_records registry if profiles query did not resolve a user
+    if (!user && supabase) {
+      try {
+        const { data: regDoc, error: regErr } = await supabase
           .from('saved_records')
           .select('snapshot_data')
           .eq('id', 'master_users_registry')
           .maybeSingle();
 
-        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
-          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
-          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
-            const hasRegPass = Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash);
-            if (!user) {
-              user = {
-                ...matchedFromReg,
-                hasSetPassword: hasRegPass,
-                passwordHash: matchedFromReg.passwordHash || null
-              };
-            } else {
-              user = {
-                ...user,
-                ...matchedFromReg,
-                hasSetPassword: user.hasSetPassword || hasRegPass,
-                passwordHash: user.passwordHash || matchedFromReg.passwordHash || null,
-                permittedPages: user.permittedPages || matchedFromReg.permittedPages
-              };
-            }
+        if (!regErr && regDoc) {
+          cloudReachable = true;
+          const regUsers = regDoc.snapshot_data?.users || [];
+          const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
+
+          const matchedFromReg = matchUserByEmail(regUsers, cleanEmail);
+          if (matchedFromReg && !regDeleted.includes(cleanEmail) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
+            deletedSet.delete(cleanEmail);
+            if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
+            user = {
+              ...matchedFromReg,
+              hasSetPassword: Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash),
+              passwordHash: matchedFromReg.passwordHash || null,
+              isActive: matchedFromReg.isActive ?? true
+            };
+          } else if (regDeleted.includes(cleanEmail)) {
+            return {
+              success: false,
+              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+            };
           }
         }
-      } catch (e) {
-        console.warn('Supabase sign-in profile lookup note:', e.message);
-      }
-    }
-
-    if (!user) {
-      const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
-      user = matchUserByEmail(activeCandidates, cleanEmail);
-    }
-    if (!user) {
-      try {
-        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
-        const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
-        user = matchUserByEmail(activeLocal, cleanEmail);
       } catch (e) {}
     }
 
+    // 3. Fallback to local memory / storage ONLY if offline / Supabase was not reachable
+    if (!user && !cloudReachable) {
+      const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+      user = matchUserByEmail(activeCandidates, cleanEmail);
+      if (!user) {
+        try {
+          const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
+          const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+          user = matchUserByEmail(activeLocal, cleanEmail);
+        } catch (e) {}
+      }
+    }
+
     if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
-      return { success: false, error: 'User not found or account has been deleted' };
+      return { success: false, error: 'User account not found or has been deleted. Please contact DC if there is an issue with login.' };
     }
 
     if (!user.isActive) {
-      return { success: false, error: 'Account is deactivated' };
+      return { success: false, error: 'Account is deactivated. Please contact DC if there is an issue with login.' };
     }
 
-    // 1. Authoritative Supabase Auth Verification
+    // 1. Supabase Auth Verification
     let authPassed = false;
     let authErrorMessage = null;
 
@@ -563,7 +613,7 @@ export function useAuth({
         success: false,
         error: authErrorMessage && !authErrorMessage.includes('schema') && !authErrorMessage.includes('credentials')
           ? authErrorMessage
-          : 'Incorrect password. Please try again or reset password.'
+          : 'Incorrect password. Please try again or contact DC if you need a password reset.'
       };
     }
 
@@ -608,70 +658,91 @@ export function useAuth({
   // 3. First-Time Password Creation & Activation
   const createFirstTimePassword = async (rawEmail, newPassword) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
-    const deletedSet = await getAuthoritativeDeletedUserIds();
-    if (deletedSet.has(cleanEmail)) {
-      return { success: false, error: 'This account has been deleted from the system.' };
-    }
 
-    let user = matchUserByEmail((usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
+    let deletedSet = new Set();
+    try {
+      const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      local.forEach(id => { if (id) deletedSet.add(String(id).toLowerCase().trim()); });
+    } catch (e) {}
 
-    if (!user) {
+    let user = null;
+    let cloudReachable = false;
+
+    // 1. Direct PostgreSQL profiles query as PRIMARY authority
+    if (supabase) {
       try {
-        const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
-        const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
-        user = matchUserByEmail(activeLocal, cleanEmail);
+        const { data: dbProf, error: profErr } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .maybeSingle();
+
+        if (!profErr) cloudReachable = true;
+
+        if (dbProf) {
+          if (dbProf.is_deleted) {
+            return { success: false, error: 'This account has been deleted. Please contact DC if there is an issue with login.' };
+          }
+
+          deletedSet.delete(cleanEmail);
+          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+
+          const { data: dbPerms } = await supabase
+            .from('user_page_permissions')
+            .select('page_id')
+            .eq('user_id', dbProf.id);
+
+          const resolvedRole = dbProf.role || 'user';
+          const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
+          const perms = (dbPerms && dbPerms.length > 0)
+            ? dbPerms.map(p => p.page_id)
+            : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+          user = {
+            id: dbProf.id,
+            email: dbProf.email,
+            fullName: dbProf.full_name || cleanEmail.split('@')[0],
+            role: resolvedRole,
+            rolePosition: resolvedPosition,
+            siteId: dbProf.site_id || 'site-dc',
+            hasSetPassword: true,
+            isActive: true,
+            permittedPages: perms
+          };
+        }
       } catch (e) {}
     }
 
-    if (!user && pendingFirstTimeUser && pendingFirstTimeUser.email?.toLowerCase() === cleanEmail && !deletedSet.has(cleanEmail)) {
-      user = pendingFirstTimeUser;
-    }
-
+    // 2. Check saved_records registry if profiles query did not resolve a user
     if (!user && supabase) {
       try {
-        const { data: regDoc } = await supabase
+        const { data: regDoc, error: regErr } = await supabase
           .from('saved_records')
           .select('snapshot_data')
           .eq('id', 'master_users_registry')
           .maybeSingle();
 
-        if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
-          const matchedFromReg = matchUserByEmail(regDoc.snapshot_data.users, cleanEmail);
-          if (matchedFromReg && !deletedSet.has(matchedFromReg.id?.toLowerCase()) && !deletedSet.has(matchedFromReg.email?.toLowerCase())) {
+        if (!regErr && regDoc) {
+          cloudReachable = true;
+          const regUsers = regDoc.snapshot_data?.users || [];
+          const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
+
+          const matchedFromReg = matchUserByEmail(regUsers, cleanEmail);
+          if (matchedFromReg && !regDeleted.includes(cleanEmail) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
+            deletedSet.delete(cleanEmail);
+            if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
             user = matchedFromReg;
           }
         }
+      } catch (e) {}
+    }
 
-        if (!user) {
-          const { data: prof } = await supabase
-            .from('profiles')
-            .select('*')
-            .ilike('email', cleanEmail)
-            .maybeSingle();
-
-          if (prof && !prof.is_deleted && !deletedSet.has(prof.id?.toLowerCase()) && !deletedSet.has(prof.email?.toLowerCase())) {
-            const resolvedRole = prof.role || 'user';
-            user = {
-              id: prof.id,
-              email: prof.email,
-              fullName: prof.full_name || cleanEmail.split('@')[0],
-              role: resolvedRole,
-              rolePosition: prof.role_position || getDefaultRolePosition(resolvedRole),
-              siteId: prof.site_id || 'site-dc',
-              hasSetPassword: false,
-              passwordHash: null,
-              isActive: prof.is_active ?? true,
-              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user)
-            };
-          }
-        }
-      } catch (e) {
-        console.warn('createFirstTimePassword Supabase lookup note:', e);
-      }
+    if (!user && !cloudReachable) {
+      user = matchUserByEmail((usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
     }
 
     if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
-      return { success: false, error: 'User profile not found or has been deleted. Please contact Superadmin.' };
+      return { success: false, error: 'User profile not found or has been deleted. Please contact DC if there is an issue with login.' };
     }
 
     const secureHash = await hashPassword(newPassword);
@@ -681,6 +752,24 @@ export function useAuth({
       hasSetPassword: true,
       passwordHash: secureHash
     };
+
+    // Update profiles directly in Supabase PostgreSQL
+    if (supabase) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({
+            has_set_password: true,
+            password_hash: secureHash,
+            is_deleted: false,
+            is_active: true,
+            updated_at: new Date().toISOString()
+          })
+          .ilike('email', cleanEmail);
+      } catch (e) {
+        console.warn('Supabase password hash profile update error:', e.message);
+      }
+    }
 
     const nextList = (usersList || []).map(u => (u.id === user.id || u.email?.toLowerCase() === cleanEmail ? updatedUser : u));
     if (!nextList.some(u => u.id === updatedUser.id || u.email?.toLowerCase() === cleanEmail)) {

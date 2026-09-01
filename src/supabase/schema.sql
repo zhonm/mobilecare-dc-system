@@ -48,9 +48,9 @@ END $$;
 -- 3. CORE & REFERENCE TABLES
 -- ============================================================================
 
--- 3.1 Profiles Table (Linked with Supabase Auth)
+-- 3.1 Profiles Table (Decoupled & Compatible with Internal RBAC + Supabase Auth)
 CREATE TABLE IF NOT EXISTS public.profiles (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
     full_name TEXT NOT NULL,
     role user_role NOT NULL DEFAULT 'warehouse_staff',
@@ -59,13 +59,17 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     password_hash TEXT,
     has_set_password BOOLEAN NOT NULL DEFAULT false,
     is_active BOOLEAN NOT NULL DEFAULT true,
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
+ALTER TABLE public.profiles ALTER COLUMN id SET DEFAULT gen_random_uuid();
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS role_position TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password_hash TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS has_set_password BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles(LOWER(email));
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
@@ -717,32 +721,26 @@ ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- 6.1 Profiles Policies
-CREATE POLICY "profiles_select_own_or_admin" ON public.profiles
-    FOR SELECT TO authenticated
-    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role::text IN ('superadmin', 'admin')));
+DROP POLICY IF EXISTS "profiles_select_own_or_admin" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_insert_own_or_superadmin" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_own_or_superadmin" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_delete_superadmin_only" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_select_all" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_insert_all" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update_all" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_delete_all" ON public.profiles;
 
-CREATE POLICY "profiles_insert_own_or_superadmin" ON public.profiles
-    FOR INSERT TO authenticated
-    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
-
-CREATE POLICY "profiles_update_own_or_superadmin" ON public.profiles
-    FOR UPDATE TO authenticated
-    USING (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
-    WITH CHECK (auth.uid() = id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
-
-CREATE POLICY "profiles_delete_superadmin_only" ON public.profiles
-    FOR DELETE TO authenticated
-    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
+CREATE POLICY "profiles_select_all" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "profiles_insert_all" ON public.profiles FOR INSERT WITH CHECK (true);
+CREATE POLICY "profiles_update_all" ON public.profiles FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "profiles_delete_all" ON public.profiles FOR DELETE USING (true);
 
 -- 6.2 User Page Permissions Policies
-CREATE POLICY "user_page_permissions_select" ON public.user_page_permissions
-    FOR SELECT TO authenticated
-    USING (auth.uid() = user_id OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
+DROP POLICY IF EXISTS "user_page_permissions_select" ON public.user_page_permissions;
+DROP POLICY IF EXISTS "user_page_permissions_manage_superadmin" ON public.user_page_permissions;
+DROP POLICY IF EXISTS "user_page_permissions_all" ON public.user_page_permissions;
 
-CREATE POLICY "user_page_permissions_manage_superadmin" ON public.user_page_permissions
-    FOR ALL TO authenticated
-    USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'))
-    WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'superadmin'));
+CREATE POLICY "user_page_permissions_all" ON public.user_page_permissions FOR ALL USING (true) WITH CHECK (true);
 
 -- 6.3 Catalog & Master Data (Parts, Categories, Sites)
 CREATE POLICY "parts_select_authenticated" ON public.parts

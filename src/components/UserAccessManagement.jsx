@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ALL_PAGES } from '../constants/navigation';
 import { ROLE_OPTIONS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
+import { resolveSite } from '../utils/appContextHelpers';
 import {
   ShieldCheck,
   UserPlus,
@@ -59,6 +60,7 @@ export default function UserAccessManagement() {
     toggleUserPagePermission,
     applyRolePresetToUser,
     toggleUserActiveStatus,
+    syncAllUsersToDatabase,
     currentUser,
     showToast,
     isAutoRefreshing,
@@ -89,10 +91,12 @@ export default function UserAccessManagement() {
   const adminUsers = usersList.filter(u => u.role === 'admin');
 
   const openAddModal = () => {
+    const defaultSiteId = (sites || []).find(s => s.is_dc || s.code === 'DC' || s.code === 'DC-MDC')?.id || sites?.[0]?.id || 'site-dc';
     setForm({
       ...emptyForm,
       role: 'user',
       rolePosition: getDefaultRolePosition('user'),
+      siteId: defaultSiteId,
       permittedPages: [...ROLE_PRESETS.user]
     });
     setShowAddModal(true);
@@ -320,9 +324,12 @@ export default function UserAccessManagement() {
               <button
                 className="btn btn-secondary"
                 style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.2)' }}
-                onClick={() => autoRefreshData({ force: true, silent: false, reason: 'User Access manual sync' })}
+                onClick={async () => {
+                  if (syncAllUsersToDatabase) await syncAllUsersToDatabase();
+                  if (autoRefreshData) await autoRefreshData({ force: true, silent: false, reason: 'User Access manual sync' });
+                }}
                 disabled={isAutoRefreshing}
-                title="Sync users and permissions from cloud database"
+                title="Sync users and permissions to cloud database"
               >
                 <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
                 <span>{isAutoRefreshing ? 'Syncing…' : 'Sync DB'}</span>
@@ -432,7 +439,7 @@ export default function UserAccessManagement() {
               {usersList.map(user => {
                 const isSuper = user.role === 'superadmin';
                 const isSelf = user.id === currentUser?.id || user.email?.toLowerCase() === currentUser?.email?.toLowerCase();
-                const siteObj = sites.find(s => s.id === user.siteId || s.code === user.siteId || s.id === user.site_id || s.code === user.siteCode) || {};
+                const siteObj = resolveSite(user.siteId || user.site_id || user.siteCode, sites);
                 const canEditFull = isSuperadmin;
                 const canEditPosition = isSuperadmin || (isAdmin && user.role === 'user');
 

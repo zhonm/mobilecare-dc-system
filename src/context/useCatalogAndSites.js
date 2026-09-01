@@ -1,9 +1,8 @@
-import { useState } from 'react';
-import seedData from '../data/seedData.json';
+import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
-  supervisor_name: 'Anjo Alcazar',
+  supervisor_name: '',
   supervisor_title: 'MDC Supervisor of DC',
   guard_on_duty: ''
 };
@@ -40,9 +39,9 @@ export function useCatalogAndSites({
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_categories');
-      return saved ? JSON.parse(saved) : (seedData.categories || []);
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return seedData.categories || [];
+      return [];
     }
   });
 
@@ -50,34 +49,58 @@ export function useCatalogAndSites({
     try {
       const saved = localStorage.getItem('mdc_sites');
       const parsed = saved ? JSON.parse(saved) : [];
-      const map = new Map();
-      (seedData.sites || []).forEach(s => {
-        if (s && s.code) {
-          const normCode = normalizeSiteCode(s.code);
-          map.set(normCode, { ...s, code: normCode });
-        }
-      });
       if (Array.isArray(parsed) && parsed.length > 0) {
-        parsed.forEach(s => {
-          if (s && s.code) {
-            const normCode = normalizeSiteCode(s.code);
-            const existing = map.get(normCode);
-            map.set(normCode, { ...existing, ...s, code: normCode });
-          }
-        });
+        return parsed.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
       }
-      return Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+      return [];
     } catch {
-      return (seedData.sites || []).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+      return [];
     }
   });
+
+  useEffect(() => {
+    if (supabase) {
+      supabase.from('sites').select('*').then(({ data: dbSites, error }) => {
+        if (!error && dbSites && dbSites.length > 0) {
+          setSites(prev => {
+            const map = new Map((prev || []).map(s => [normalizeSiteCode(s.code), s]));
+            dbSites.forEach(s => {
+              const normCode = normalizeSiteCode(s.code);
+              const existing = map.get(normCode);
+              map.set(normCode, {
+                ...(existing || {}),
+                id: s.id || existing?.id,
+                code: normCode,
+                name: s.name || existing?.name,
+                region: s.region || existing?.region || 'Metro Manila',
+                address: s.address || s.full_address || existing?.address,
+                full_address: s.full_address || s.address || existing?.full_address,
+                contact_person: s.contact_person || existing?.contact_person,
+                contact_phone: s.contact_phone || existing?.contact_phone,
+                contact_email: s.contact_email || existing?.contact_email,
+                ship_to: s.ship_to || existing?.ship_to,
+                sold_to: s.sold_to || existing?.sold_to,
+                invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
+                is_dc: s.is_dc ?? existing?.is_dc ?? false,
+                is_active: s.is_active ?? existing?.is_active ?? true
+              });
+            });
+            const merged = Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+            try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_sites', merged);
+            return merged;
+          });
+        }
+      }).catch(() => {});
+    }
+  }, []);
 
   const [parts, setParts] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_parts');
-      return saved ? JSON.parse(saved) : (seedData.parts || []);
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return seedData.parts || [];
+      return [];
     }
   });
 
@@ -301,25 +324,8 @@ export function useCatalogAndSites({
     return { success: true, site: savedSite };
   };
 
-  const applyPmgDirectoryToSites = () => {
-    const seedMap = new Map((seedData.sites || []).map(s => [s.code, s]));
-    setSites(prev => {
-      const updated = (prev || []).map(s => {
-        const seed = seedMap.get(s.code);
-        return seed ? { ...s, ...seed } : s;
-      });
-      try { localStorage.setItem('mdc_sites', JSON.stringify(updated)); } catch (e) {}
-      dbStorage.setItem('mdc_sites', updated);
-      return updated;
-    });
-    showToast('Applied PMG Directory addresses to all branches!', 'success');
-  };
-
   const refreshSitesFromCloud = async () => {
-    if (!supabase) {
-      applyPmgDirectoryToSites();
-      return;
-    }
+    if (!supabase) return;
     try {
       showToast('Fetching latest site addresses from Supabase...', 'info');
       const { data: dbSites, error } = await supabase.from('sites').select('*');
@@ -349,18 +355,15 @@ export function useCatalogAndSites({
               is_active: s.is_active ?? existing?.is_active ?? true
             });
           });
-          const merged = Array.from(map.values());
+          const merged = Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
           try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
           dbStorage.setItem('mdc_sites', merged);
           return merged;
         });
         showToast(`Successfully refreshed ${dbSites.length} sites from cloud database!`, 'success');
-      } else {
-        applyPmgDirectoryToSites();
       }
     } catch (err) {
       console.warn('Supabase site fetch error:', err);
-      applyPmgDirectoryToSites();
     }
   };
 
@@ -382,6 +385,8 @@ export function useCatalogAndSites({
       broadcastCloudEvent('SUPERVISOR_SETTINGS_UPDATED', newSettings);
     }
   };
+
+  const applyPmgDirectoryToSites = refreshSitesFromCloud;
 
   return {
     categories,

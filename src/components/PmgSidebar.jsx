@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { resolveSite } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import {
   Inbox,
@@ -31,14 +32,10 @@ export default function PmgSidebar() {
 
   const [navSearch, setNavSearch] = useState('');
 
-  // Resolve user site object
+  // Resolve user site object with universal resolver
   const userSite = useMemo(() => {
-    return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || {
-      id: currentUser?.siteId || 'site-app-ppm',
-      code: currentUser?.siteId ? String(currentUser.siteId).replace('site-', '').toUpperCase() : 'APP PPM',
-      name: 'MobileCare - Service Branch'
-    };
-  }, [sites, currentUser?.siteId]);
+    return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
+  }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode]);
 
   // Compute live branch stock and requests metrics for sidebar widget
   const branchStock = useMemo(() => {

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { resolveSite } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import {
   LayoutDashboard,
@@ -43,7 +44,9 @@ export default function Sidebar() {
   const pendingShipmentsCount = shipments.filter(s => s.status === 'draft' || s.status === 'packing').length;
   const pendingRequestsCount = (partsRequests || []).filter(r => r.status === 'pending').length;
 
-  const userSite = sites.find(s => s.id === currentUser?.siteId);
+  const userSite = useMemo(() => {
+    return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
+  }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode]);
 
   const navItems = [
     // 1. Planning & Allocation (Placed prominently at top)

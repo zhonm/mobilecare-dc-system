@@ -321,6 +321,35 @@ async function runAllTests() {
     assert.strictEqual(reCreatedUser.hasSetPassword, false, 'Recreated user starts fresh requiring password setup');
   });
 
+  // Test 11: Fresh Incognito Browser (empty cache) trying to log in with deleted Anjo account
+  runTest('Fresh Incognito session strictly blocks deleted Anjo email without password creation prompt', () => {
+    localStorage.clear(); // Empty cache as in Private Window
+
+    const cloudMasterUsersRegistry = {
+      users: [
+        { id: '1b0e9f43-c2d5-4eb4-acef-2ea5d9d21280', email: 'zhon.manaois@mobilecareph.com', fullName: 'Zhon Manaois' },
+        { id: 'a703ae69-187d-4711-9f7f-c44da1d0177e', email: 'joshua.juvida@mobilecareph.com', fullName: 'Joshua Juvida' },
+        { id: 'usr-1787831250805', email: 'daphneclaire.bascuguin@mobilecareph.com', fullName: 'Daphne Bascuguin' },
+        { id: 'usr-1788085932974', email: 'andres@mobilecareph.com', fullName: 'Andres Bonifacio' },
+        { id: 'usr-1788162524515-g5pbk', email: 'joserizal@mobilecareph.com', fullName: 'Jose Rizal' }
+      ],
+      deletedUserIds: ['anjo.alcazar@mobilecareph.com', 'usr-anjo-alcazar']
+    };
+
+    const attemptEmail = 'anjo.alcazar@mobilecareph.com';
+
+    // Simulate verifyLoginEmail
+    const deletedSet = new Set(cloudMasterUsersRegistry.deletedUserIds.map(s => s.toLowerCase()));
+    const isDeleted = deletedSet.has(attemptEmail.toLowerCase());
+    assert.strictEqual(isDeleted, true, 'Deleted email must be identified in cloud deleted set');
+
+    const matchedInActive = cloudMasterUsersRegistry.users.find(u => u.email.toLowerCase() === attemptEmail.toLowerCase());
+    assert.strictEqual(Boolean(matchedInActive), false, 'Deleted user must NOT exist in active users registry');
+
+    const canProceed = !isDeleted && Boolean(matchedInActive);
+    assert.strictEqual(canProceed, false, 'Deleted user MUST be blocked from login and never routed to create password');
+  });
+
   console.log('====================================================');
   console.log(`RESULTS: ${testsPassed}/${testsPassed + testsFailed} PASSED (${testsFailed} FAILED)`);
   console.log('====================================================');

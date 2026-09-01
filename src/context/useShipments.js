@@ -621,18 +621,31 @@ export function useShipments({
 
         // Channel 1: Upsert to direct shipments table in Supabase
         const directShipmentRow = formatShipmentForDb(newShipment);
+        let effectiveDbShipmentId = directShipmentRow?.id;
         let shipmentSavedInDb = false;
+
         if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
           try {
-            const { error: shpErr } = await supabase.from('shipments').upsert(directShipmentRow, { onConflict: 'id' });
+            const { data: shpData, error: shpErr } = await supabase
+              .from('shipments')
+              .upsert(directShipmentRow, { onConflict: 'shipment_number' })
+              .select('id');
+
             if (!shpErr) {
               shipmentSavedInDb = true;
+              if (shpData && shpData[0]?.id) effectiveDbShipmentId = shpData[0].id;
             } else {
               console.warn('Direct shipments table notice:', shpErr.message);
               if (shpErr.code === '22P02' || shpErr.message.includes('enum')) {
                 const retryRow = { ...directShipmentRow, status: 'draft' };
-                const { error: retryErr } = await supabase.from('shipments').upsert(retryRow, { onConflict: 'id' });
-                if (!retryErr) shipmentSavedInDb = true;
+                const { data: retryData, error: retryErr } = await supabase
+                  .from('shipments')
+                  .upsert(retryRow, { onConflict: 'shipment_number' })
+                  .select('id');
+                if (!retryErr) {
+                  shipmentSavedInDb = true;
+                  if (retryData && retryData[0]?.id) effectiveDbShipmentId = retryData[0].id;
+                }
               }
             }
           } catch (shpErr) {
@@ -643,7 +656,7 @@ export function useShipments({
         // Channel 1b: Upsert to direct shipment_items table in Supabase ONLY IF parent shipment succeeded
         if (shipmentSavedInDb && newShipment.items && newShipment.items.length > 0) {
           try {
-            const shipmentItemsRows = formatShipmentItemsForDb(newShipment, inventoryUnits, [], currentUser);
+            const shipmentItemsRows = formatShipmentItemsForDb({ ...newShipment, id: effectiveDbShipmentId }, inventoryUnits, [], currentUser);
             if (shipmentItemsRows.length > 0) {
               await supabase.from('shipment_items').upsert(shipmentItemsRows, { onConflict: 'id' });
             }

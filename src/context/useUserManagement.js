@@ -61,11 +61,58 @@ export function useUserManagement({
     return INITIAL_USERS;
   });
 
-  // Asynchronous recovery for usersList from IndexedDB on startup
+  // Asynchronous recovery for usersList from Supabase PostgreSQL & storage on startup
   useEffect(() => {
     let isMounted = true;
     const recoverUsersFromDb = async () => {
       try {
+        if (supabase) {
+          const { data: dbProf, error } = await supabase.from('profiles').select('*');
+          if (!error && dbProf && dbProf.length > 0 && isMounted) {
+            const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
+            const permsMap = new Map();
+            (dbPerms || []).forEach(p => {
+              if (!permsMap.has(p.user_id)) permsMap.set(p.user_id, []);
+              permsMap.get(p.user_id).push(p.page_id);
+            });
+
+            const activeProfiles = dbProf
+              .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()))
+              .map(p => {
+                const customPerms = permsMap.get(p.id);
+                const role = p.role || 'user';
+                const resolvedPosition = p.role_position || getDefaultRolePosition(role);
+                const passHash = p.password_hash || null;
+                const isPasswordSet = Boolean(p.has_set_password || passHash);
+
+                return {
+                  id: p.id || `usr-${Date.now()}`,
+                  email: p.email,
+                  fullName: p.full_name || p.email.split('@')[0],
+                  role: role,
+                  rolePosition: resolvedPosition,
+                  siteId: p.site_id || 'site-dc',
+                  hasSetPassword: isPasswordSet,
+                  passwordHash: passHash,
+                  isActive: p.is_active ?? true,
+                  permittedPages: role === 'superadmin'
+                    ? ROLE_PRESETS.superadmin
+                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                };
+              });
+
+            if (activeProfiles.length > 0) {
+              setUsersList(activeProfiles);
+              try {
+                localStorage.setItem('mdc_users', JSON.stringify(activeProfiles));
+                sessionStorage.setItem('mdc_users', JSON.stringify(activeProfiles));
+                dbStorage.setItem('mdc_users', activeProfiles);
+              } catch (e) {}
+              return;
+            }
+          }
+        }
+
         const dbUsers = await dbStorage.getItem('mdc_users');
         if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
           const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
@@ -85,14 +132,14 @@ export function useUserManagement({
           }
         }
       } catch (e) {
-        console.debug('IndexedDB users recovery note:', e);
+        console.debug('Users recovery note:', e);
       }
     };
     recoverUsersFromDb();
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [supabase]);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
@@ -126,6 +173,73 @@ export function useUserManagement({
     }
   };
 
+  // Helper to sync all active provisioned users and their hashed passwords into Supabase PostgreSQL tables
+  const syncAllUsersToDatabase = async (customList = null) => {
+    if (!supabase) return;
+    const listToSync = customList || usersList;
+    if (!Array.isArray(listToSync) || listToSync.length === 0) return;
+
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+      const activeUsers = listToSync.filter(u => 
+        u.email && 
+        !deletedIds.includes(u.email.toLowerCase()) && 
+        !deletedIds.includes(u.id?.toLowerCase()) &&
+        !LEGACY_MOCK_EMAILS.includes(u.email.toLowerCase())
+      );
+
+      for (const u of activeUsers) {
+        const cleanEmail = u.email.trim().toLowerCase();
+        const validId = (u.id && isUUID(u.id)) ? u.id : toValidUUID(u.id || cleanEmail);
+        const resolvedRole = u.role || 'user';
+        const resolvedPosition = u.rolePosition || getDefaultRolePosition(resolvedRole);
+
+        // 1. Upsert into public.profiles
+        const { data: inserted, error: profErr } = await supabase
+          .from('profiles')
+          .upsert({
+            id: validId,
+            email: cleanEmail,
+            full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
+            role: resolvedRole,
+            role_position: resolvedPosition,
+            site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
+            password_hash: u.passwordHash || null,
+            has_set_password: Boolean(u.hasSetPassword || u.passwordHash),
+            is_active: u.isActive ?? true,
+            is_deleted: false,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'email' })
+          .select();
+
+        if (profErr) console.warn('Supabase profile sync note:', cleanEmail, profErr.message);
+
+        const effectiveUserId = (inserted && inserted[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validId;
+
+        // 2. Upsert page permissions into public.user_page_permissions
+        const perms = u.permittedPages || (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+        if (perms && perms.length > 0 && isUUID(effectiveUserId)) {
+          const permRows = perms.map(pageId => ({
+            user_id: effectiveUserId,
+            page_id: pageId
+          }));
+          await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+        }
+      }
+
+      await syncMasterUsersRegistry(activeUsers);
+    } catch (e) {
+      console.warn('syncAllUsersToDatabase notice:', e);
+    }
+  };
+
+  // Run auto-sync on mount to ensure existing provisioned staff are stored in Supabase profiles
+  useEffect(() => {
+    if (supabase && usersList && usersList.length > 0) {
+      syncAllUsersToDatabase(usersList);
+    }
+  }, [supabase]);
+
   // 1. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
@@ -135,12 +249,13 @@ export function useUserManagement({
       return { success: false, error: 'External email domains are prohibited for internal security.' };
     }
 
-    if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
-      showToast(`User with email ${cleanEmail} is already provisioned!`, 'error');
+    const activeExisting = usersList.find(u => u.email?.toLowerCase() === cleanEmail && u.isActive !== false);
+    if (activeExisting) {
+      showToast(`User with email ${cleanEmail} is already provisioned and active!`, 'error');
       return { success: false, error: 'User already exists' };
     }
 
-    const validUserId = toValidUUID(`usr-${Date.now()}-${cleanEmail}`);
+    const validUserId = toValidUUID(`usr-${cleanEmail}`);
 
     const newUser = {
       id: validUserId,
@@ -155,9 +270,10 @@ export function useUserManagement({
       permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : (customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.user)
     };
 
+    let filteredDeleted = [];
     try {
       const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-      const filteredDeleted = deletedIds.filter(id => id?.toLowerCase() !== cleanEmail && id?.toLowerCase() !== newUser.id.toLowerCase());
+      filteredDeleted = deletedIds.filter(id => id?.toLowerCase() !== cleanEmail && id?.toLowerCase() !== newUser.id.toLowerCase());
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
     } catch (e) {}
 
@@ -172,7 +288,7 @@ export function useUserManagement({
       dbStorage.setItem('mdc_users', nextList);
     } catch (e) {}
 
-    await syncMasterUsersRegistry(nextList);
+    await syncMasterUsersRegistry(nextList, filteredDeleted);
 
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
@@ -475,27 +591,30 @@ export function useUserManagement({
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         let updatedInDb = false;
+        const effectiveSiteId = (siteId && isUUID(siteId)) ? siteId : (target.siteId && isUUID(target.siteId) ? target.siteId : null);
 
         const updatePayload = {
           email: cleanEmail,
           full_name: fullName.trim(),
           role: resolvedRole,
+          role_position: resolvedPosition,
+          site_id: effectiveSiteId,
+          is_active: target.isActive ?? true,
           updated_at: new Date().toISOString()
         };
 
-        if (siteId && isUUID(siteId)) {
-          updatePayload.site_id = siteId;
-        }
+        let effectiveProfId = isUUID(userId) ? userId : null;
 
         if (isUUID(userId)) {
           const { data: byIdData, error: byIdErr } = await supabase
             .from('profiles')
             .update(updatePayload)
             .eq('id', userId)
-            .select();
+            .select('id');
 
           if (!byIdErr && byIdData && byIdData.length > 0) {
             updatedInDb = true;
+            effectiveProfId = byIdData[0].id;
           }
         }
 
@@ -504,43 +623,52 @@ export function useUserManagement({
             .from('profiles')
             .update(updatePayload)
             .ilike('email', previousEmail)
-            .select();
+            .select('id');
 
           if (!byEmailErr && byEmailData && byEmailData.length > 0) {
             updatedInDb = true;
+            effectiveProfId = byEmailData[0].id;
           }
         }
 
         if (!updatedInDb) {
-          const validProfId = isUUID(userId) ? userId : toValidUUID(`usr-${Date.now()}-${cleanEmail}`);
-          const { error: upsertErr } = await supabase
+          const validProfId = isUUID(userId) ? userId : toValidUUID(`usr-${cleanEmail}`);
+          const { data: upsertData, error: upsertErr } = await supabase
             .from('profiles')
             .upsert({
               id: validProfId,
               email: cleanEmail,
               full_name: fullName.trim(),
               role: resolvedRole,
+              role_position: resolvedPosition,
+              site_id: effectiveSiteId,
               has_set_password: target.hasSetPassword ?? true,
               is_active: target.isActive ?? true,
+              is_deleted: false,
               updated_at: new Date().toISOString()
-            }, { onConflict: 'email' });
+            }, { onConflict: 'email' })
+            .select('id');
           if (upsertErr) console.warn('Supabase profile upsert note:', upsertErr.message);
+          effectiveProfId = upsertData?.[0]?.id || validProfId;
+        }
+
+        // Update permissions in user_page_permissions table
+        if (finalPermittedPages && isUUID(effectiveProfId)) {
+          await supabase.from('user_page_permissions').delete().eq('user_id', effectiveProfId);
+          const permRows = finalPermittedPages.map(pageId => ({
+            user_id: effectiveProfId,
+            page_id: pageId
+          }));
+          if (permRows.length > 0) {
+            await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+          }
         }
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: cleanEmail, table: 'saved_records' });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: effectiveProfId, email: cleanEmail, siteId: effectiveSiteId, table: 'saved_records' });
       } catch (dbErr) {
         console.error('Supabase profile update error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (enqueueOfflineAction) {
-          enqueueOfflineAction('PROFILE_UPSERT', {
-            id: isUUID(userId) ? userId : toValidUUID(`usr-${Date.now()}-${cleanEmail}`),
-            email: cleanEmail,
-            full_name: fullName.trim(),
-            role: resolvedRole,
-            updated_at: new Date().toISOString()
-          });
-        }
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: cleanEmail, table: 'saved_records' });
       }
     } else {
@@ -770,6 +898,7 @@ export function useUserManagement({
     toggleUserPagePermission,
     applyRolePresetToUser,
     toggleUserActiveStatus,
-    syncMasterUsersRegistry
+    syncMasterUsersRegistry,
+    syncAllUsersToDatabase
   };
 }

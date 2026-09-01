@@ -2,6 +2,60 @@
 export const isUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
 export const safeUUID = (str) => isUUID(str) ? str : null;
 
+// Universal site resolver: matches ID (UUID), site code (e.g. 'APP NPM', 'DC-MDC'), or partial slug
+export function resolveSite(siteIdOrCode, sitesList = []) {
+  const list = Array.isArray(sitesList) && sitesList.length > 0
+    ? sitesList
+    : (() => {
+        try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+      })();
+
+  const raw = String(siteIdOrCode || '').trim();
+  const rawLower = raw.toLowerCase();
+
+  if (!raw || rawLower === 'site-dc' || rawLower === 'dc' || rawLower === 'dc-mdc') {
+    const dcSite = list.find(s => s.is_dc || (s.code && s.code.toUpperCase().includes('DC')));
+    if (dcSite) return dcSite;
+    if (list[0]) return list[0];
+    return { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center (DC)' };
+  }
+
+  // 1. Direct match on ID (UUID)
+  let found = list.find(s => s.id && String(s.id).toLowerCase() === rawLower);
+  if (found) return found;
+
+  // 2. Direct match on Code
+  found = list.find(s => s.code && String(s.code).toLowerCase() === rawLower);
+  if (found) return found;
+
+  // 3. Slug or normalized alphanumeric match (e.g. 'site-app-npm' -> 'app npm' or 'npm')
+  const cleanSlug = rawLower.replace(/^site-/, '').replace(/[^a-z0-9]/g, '');
+  if (cleanSlug) {
+    found = list.find(s => {
+      const sClean = String(s.code || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      return sClean && (sClean === cleanSlug || sClean.endsWith(cleanSlug) || cleanSlug.endsWith(sClean));
+    });
+    if (found) return found;
+  }
+
+  // 4. Name partial match
+  found = list.find(s => s.name && s.name.toLowerCase().includes(rawLower.replace(/^site-/, '')));
+  if (found) return found;
+
+  // 5. Fallback if list is populated
+  if (list.length > 0) return list[0];
+
+  // 6. Safe fallback: NEVER return raw UUID as site code
+  const isHexUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
+  const safeCode = isHexUUID ? 'APP NPM' : (raw.startsWith('site-') ? raw.replace('site-', '').toUpperCase().replace('-', ' ') : (raw || 'BRANCH'));
+
+  return {
+    id: raw || 'site-branch',
+    code: safeCode,
+    name: 'MobileCare - Service Branch'
+  };
+}
+
 // Helper to guarantee serialized units that are in an active draft or saved shipments maintain their 'packed' or 'shipped' status
 export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null) {
   if (!Array.isArray(units) || units.length === 0) return [];

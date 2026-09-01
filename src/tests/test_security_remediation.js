@@ -94,20 +94,12 @@ async function runSecurityTests() {
   const privilegeEscalation = verifySessionIntegrity(tamperedUser, forgedSig);
   assert(privilegeEscalation === false, 'verifySessionIntegrity blocks signature forgery / privilege escalation');
 
-  // 4. Initial Users Configuration Security
-  INITIAL_USERS.forEach(u => {
-    assert(u.passwordHash === null, `Initial user ${u.email} does not have hardcoded password hash`);
-    assert(u.hasSetPassword === false, `Initial user ${u.email} has hasSetPassword: false`);
-  });
+  // 4. Initial Users Configuration Security (No hardcoded users in client bundle)
+  assert(Array.isArray(INITIAL_USERS) && INITIAL_USERS.length === 0, 'INITIAL_USERS is empty - all users are database driven');
 
-  // 5. Verify Anjo Alcazar Account Configuration & Unblocking
-  const anjoUser = INITIAL_USERS.find(u => u.email === 'anjo.alcazar@mobilecareph.com');
-  assert(Boolean(anjoUser), 'Anjo Alcazar (anjo.alcazar@mobilecareph.com) is configured in INITIAL_USERS');
-  assert(anjoUser?.role === 'admin', 'Anjo Alcazar has role: admin');
-  assert(anjoUser?.rolePosition === 'DC Operations Lead', 'Anjo Alcazar has rolePosition: DC Operations Lead');
-
+  // 5. Verify Legacy Mock Emails Configuration
   const { LEGACY_MOCK_EMAILS } = await import('../constants/roles.js');
-  assert(!LEGACY_MOCK_EMAILS.includes('anjo.alcazar@mobilecareph.com'), 'LEGACY_MOCK_EMAILS does NOT block anjo.alcazar@mobilecareph.com');
+  assert(!LEGACY_MOCK_EMAILS.includes('anjo.alcazar@mobilecareph.com'), 'LEGACY_MOCK_EMAILS does NOT block valid company emails');
 
   // 6. Database-First Credential & Password Resolution on Incognito/Fresh Sessions
   const dbProfileMock = {

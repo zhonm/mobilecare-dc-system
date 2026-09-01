@@ -289,9 +289,12 @@ export function useCloudSync({
         const cloudUsersList = (cloudUsersRegistryDoc?.snapshot_data?.users && Array.isArray(cloudUsersRegistryDoc.snapshot_data.users))
           ? cloudUsersRegistryDoc.snapshot_data.users
           : [];
-        const cloudDeletedUserIds = (cloudUsersRegistryDoc?.snapshot_data?.deletedUserIds && Array.isArray(cloudUsersRegistryDoc.snapshot_data.deletedUserIds))
-          ? cloudUsersRegistryDoc.snapshot_data.deletedUserIds
-          : [];
+        const activeProfileEmails = new Set(
+          (dbProfiles || []).filter(p => !p.is_deleted).map(p => p.email?.toLowerCase().trim()).filter(Boolean)
+        );
+        const activeProfileIds = new Set(
+          (dbProfiles || []).filter(p => !p.is_deleted).map(p => p.id?.toLowerCase().trim()).filter(Boolean)
+        );
 
         let mergedDeletedUserIds = [];
         try {
@@ -299,10 +302,14 @@ export function useCloudSync({
           mergedDeletedUserIds = Array.from(new Set([
             ...localDeletedUserIds,
             ...cloudDeletedUserIds
-          ].map(s => String(s).trim().toLowerCase())));
+          ].map(s => String(s).trim().toLowerCase())))
+          .filter(id => !activeProfileEmails.has(id) && !activeProfileIds.has(id));
+
           localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
         } catch (e) {
-          mergedDeletedUserIds = cloudDeletedUserIds.map(s => String(s).trim().toLowerCase());
+          mergedDeletedUserIds = cloudDeletedUserIds
+            .map(s => String(s).trim().toLowerCase())
+            .filter(id => !activeProfileEmails.has(id) && !activeProfileIds.has(id));
         }
 
         const permsMap = new Map();
@@ -316,37 +323,44 @@ export function useCloudSync({
         setUsersList(prev => {
           const profileMap = new Map();
 
-          // 1. Base seed (Skip deleted users)
-          INITIAL_USERS.forEach(u => {
-            const cleanEmail = u.email?.toLowerCase();
-            const uId = u.id?.toLowerCase();
-            if (
-              cleanEmail &&
-              !mergedDeletedUserIds.includes(uId) &&
-              !mergedDeletedUserIds.includes(cleanEmail) &&
-              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            ) {
-              profileMap.set(cleanEmail, u);
-            }
-          });
+          // 1. Overlay dbProfiles directly from PostgreSQL (Highest Authority)
+          if (dbProfiles && dbProfiles.length > 0) {
+            dbProfiles.forEach(p => {
+              const cleanEmail = p.email?.toLowerCase();
+              const pId = p.id?.toLowerCase();
+              if (
+                cleanEmail &&
+                !p.is_deleted &&
+                !mergedDeletedUserIds.includes(pId) &&
+                !mergedDeletedUserIds.includes(cleanEmail) &&
+                !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+                !LEGACY_MOCK_IDS.includes(p.id)
+              ) {
+                const customPerms = permsMap.get(p.id);
+                const role = p.role || 'user';
+                const resolvedPosition = p.role_position || getDefaultRolePosition(role);
+                const passHash = p.password_hash || null;
+                const isPasswordSet = Boolean(p.has_set_password || passHash);
 
-          // 2. Overlay previous local state (Skip deleted users)
-          (prev || []).forEach(u => {
-            const cleanEmail = u.email?.toLowerCase();
-            const uId = u.id?.toLowerCase();
-            if (
-              cleanEmail &&
-              !mergedDeletedUserIds.includes(uId) &&
-              !mergedDeletedUserIds.includes(cleanEmail) &&
-              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            ) {
-              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
-            }
-          });
+                profileMap.set(cleanEmail, {
+                  id: p.id || `usr-${Date.now()}`,
+                  email: p.email,
+                  fullName: p.full_name || p.email.split('@')[0],
+                  role: role,
+                  rolePosition: resolvedPosition,
+                  siteId: p.site_id || 'site-dc',
+                  hasSetPassword: isPasswordSet,
+                  passwordHash: passHash,
+                  isActive: p.is_active ?? true,
+                  permittedPages: role === 'superadmin'
+                    ? ROLE_PRESETS.superadmin
+                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                });
+              }
+            });
+          }
 
-          // 3. Overlay authoritative master_users_registry from cloud (Skip deleted users)
+          // 2. Overlay master_users_registry from cloud
           cloudUsersList.forEach(u => {
             const cleanEmail = u.email?.toLowerCase();
             const uId = u.id?.toLowerCase();
@@ -368,43 +382,20 @@ export function useCloudSync({
             }
           });
 
-          // 4. Overlay dbProfiles if available (Skip deleted users)
-          if (dbProfiles && dbProfiles.length > 0) {
-            dbProfiles.forEach(p => {
-              const cleanEmail = p.email?.toLowerCase();
-              const pId = p.id?.toLowerCase();
-              if (
-                cleanEmail &&
-                !p.is_deleted &&
-                !mergedDeletedUserIds.includes(pId) &&
-                !mergedDeletedUserIds.includes(cleanEmail) &&
-                !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
-                !LEGACY_MOCK_IDS.includes(p.id)
-              ) {
-                const existing = profileMap.get(cleanEmail);
-                const customPerms = permsMap.get(p.id);
-                const role = p.role || existing?.role || 'user';
-                const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(role);
-                const passHash = p.password_hash || existing?.passwordHash || null;
-                const isPasswordSet = Boolean(p.has_set_password || passHash || existing?.hasSetPassword);
-
-                profileMap.set(cleanEmail, {
-                  id: p.id || existing?.id || `usr-${Date.now()}`,
-                  email: p.email,
-                  fullName: p.full_name || existing?.fullName || p.email.split('@')[0],
-                  role: role,
-                  rolePosition: resolvedPosition,
-                  siteId: p.site_id || existing?.siteId || 'site-dc',
-                  hasSetPassword: isPasswordSet,
-                  passwordHash: passHash,
-                  isActive: p.is_active ?? existing?.isActive ?? true,
-                  permittedPages: role === 'superadmin'
-                    ? ROLE_PRESETS.superadmin
-                    : (customPerms && customPerms.length > 0 ? customPerms : (existing?.permittedPages || ROLE_PRESETS[role] || ROLE_PRESETS.user))
-                });
-              }
-            });
-          }
+          // 3. Overlay previous local state (if not deleted)
+          (prev || []).forEach(u => {
+            const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
+            if (
+              cleanEmail &&
+              !mergedDeletedUserIds.includes(uId) &&
+              !mergedDeletedUserIds.includes(cleanEmail) &&
+              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            ) {
+              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
+            }
+          });
 
           // Strict final filter to ensure no deleted user id or email leaks through
           const merged = Array.from(profileMap.values()).filter(u => {
@@ -412,6 +403,19 @@ export function useCloudSync({
             const uId = u.id?.toLowerCase();
             return !mergedDeletedUserIds.includes(cleanEmail) && !mergedDeletedUserIds.includes(uId);
           });
+
+          if (currentUser && currentUser.email) {
+            const freshCurrent = merged.find(u => u.email?.toLowerCase() === currentUser.email.toLowerCase());
+            if (freshCurrent && (freshCurrent.siteId !== currentUser.siteId || freshCurrent.role !== currentUser.role || freshCurrent.rolePosition !== currentUser.rolePosition)) {
+              const updatedSession = { ...currentUser, ...freshCurrent };
+              if (setCurrentUser) setCurrentUser(updatedSession);
+              try {
+                localStorage.setItem('mdc_current_user', JSON.stringify(updatedSession));
+                sessionStorage.setItem('mdc_current_user', JSON.stringify(updatedSession));
+                dbStorage.setItem('mdc_current_user', updatedSession);
+              } catch (e) {}
+            }
+          }
 
           try {
             localStorage.setItem('mdc_users', JSON.stringify(merged));
@@ -886,10 +890,10 @@ export function useCloudSync({
             const shipmentRowsToInsert = effectiveShipments
               .map(s => formatShipmentForDb(s, dbSites || []))
               .filter(s => s && isUUID(s.site_id));
-            const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.id, r])).values());
+            const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.shipment_number, r])).values());
 
             if (uniqueShipmentRows.length > 0) {
-              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'id' }).then(({ error: bError }) => {
+              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'shipment_number' }).then(({ error: bError }) => {
                 if (!bError) {
                   // Also backfill shipment_items ONLY if shipments header upsert succeeded
                   const allShipmentItemRows = [];
