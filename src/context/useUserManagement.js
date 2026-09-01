@@ -10,6 +10,7 @@ import {
   LEGACY_MOCK_EMAILS,
   LEGACY_MOCK_IDS
 } from '../constants/roles';
+import { isUUID, toValidUUID } from '../utils/appContextHelpers';
 
 export function useUserManagement({
   currentUser,
@@ -28,29 +29,32 @@ export function useUserManagement({
       } catch (e) {}
 
       if (saved) {
-        const parsedEmails = new Set(parsed.map(u => u.email?.toLowerCase()).filter(Boolean));
-        const parsedIds = new Set(parsed.map(u => u.id?.toLowerCase()).filter(Boolean));
-        const activeKnownEmails = new Set([...parsedEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
-        const activeKnownIds = new Set([...parsedIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
-        const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
-        try { localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted)); } catch (e) {}
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const parsedEmails = new Set(parsed.map(u => u.email?.toLowerCase()).filter(Boolean));
+          const parsedIds = new Set(parsed.map(u => u.id?.toLowerCase()).filter(Boolean));
+          const activeKnownEmails = new Set([...parsedEmails, ...INITIAL_USERS.map(u => u.email?.toLowerCase())]);
+          const activeKnownIds = new Set([...parsedIds, ...INITIAL_USERS.map(u => u.id?.toLowerCase())]);
+          const cleanDeleted = deletedIds.filter(id => !activeKnownEmails.has(id?.toLowerCase()) && !activeKnownIds.has(id?.toLowerCase()));
+          try { localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(cleanDeleted)); } catch (e) {}
 
-        return parsed
-          .filter(u =>
-            !cleanDeleted.includes(u.id?.toLowerCase()) &&
-            !cleanDeleted.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_IDS.includes(u.id)
-          )
-          .map(u => {
-            if (u.role === 'parts_management') {
-              return {
-                ...u,
-                permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
-              };
-            }
-            return u;
-          });
+          return parsed
+            .filter(u =>
+              !cleanDeleted.includes(u.id?.toLowerCase()) &&
+              !cleanDeleted.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            )
+            .map(u => {
+              if (u.role === 'parts_management') {
+                return {
+                  ...u,
+                  permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
+                };
+              }
+              return u;
+            });
+        }
       }
       return INITIAL_USERS.filter(u =>
         !deletedIds.includes(u.id?.toLowerCase()) &&
@@ -152,8 +156,10 @@ export function useUserManagement({
       return { success: false, error: 'User already exists' };
     }
 
+    const validUserId = toValidUUID(`usr-${Date.now()}-${cleanEmail}`);
+
     const newUser = {
-      id: `usr-${Date.now()}`,
+      id: validUserId,
       email: cleanEmail,
       fullName: fullName.trim(),
       role,
@@ -190,9 +196,11 @@ export function useUserManagement({
         const { data: inserted, error: profErr } = await supabase
           .from('profiles')
           .upsert({
+            id: validUserId,
             email: cleanEmail,
             full_name: fullName.trim(),
             role: role,
+            role_position: finalRolePosition,
             has_set_password: false,
             is_active: true,
             created_at: new Date().toISOString(),
@@ -202,8 +210,8 @@ export function useUserManagement({
 
         if (profErr) console.warn('Supabase profile upsert warning:', profErr.message);
 
-        const effectiveUserId = inserted?.[0]?.id || newUser.id;
-        if (defaultPages && defaultPages.length > 0 && effectiveUserId) {
+        const effectiveUserId = (inserted?.[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validUserId;
+        if (defaultPages && defaultPages.length > 0 && isUUID(effectiveUserId)) {
           const permRows = defaultPages.map(pageId => ({
             user_id: effectiveUserId,
             page_id: pageId
@@ -219,18 +227,20 @@ export function useUserManagement({
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) {
           enqueueOfflineAction('PROFILE_UPSERT', {
+            id: validUserId,
             email: cleanEmail,
             full_name: fullName.trim(),
             role,
+            role_position: finalRolePosition,
             has_set_password: false,
             is_active: true,
             updated_at: new Date().toISOString()
           });
         }
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: newUser.id, table: 'saved_records' });
+        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: validUserId, table: 'saved_records' });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: newUser.id, table: 'saved_records' });
+      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: validUserId, table: 'saved_records' });
     }
 
     showToast(`Provisioned user ${fullName} (${cleanEmail}) as ${finalRolePosition}.`, 'success');
@@ -274,26 +284,26 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { data: prof, error: findErr } = await supabase
-          .from('profiles')
-          .select('id')
-          .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
-          .maybeSingle();
+        const profQuery = isUUID(userId)
+          ? supabase.from('profiles').select('id').or(`id.eq.${userId},email.ilike.${targetUser.email}`).maybeSingle()
+          : supabase.from('profiles').select('id').ilike('email', targetUser.email).maybeSingle();
+        const { data: prof, error: findErr } = await profQuery;
 
         if (findErr) throw findErr;
 
-        if (prof?.id) {
+        const effectiveProfId = (prof?.id && isUUID(prof.id)) ? prof.id : (isUUID(userId) ? userId : null);
+        if (effectiveProfId) {
           if (hasPage) {
             const { error: delErr } = await supabase
               .from('user_page_permissions')
               .delete()
-              .eq('user_id', prof.id)
+              .eq('user_id', effectiveProfId)
               .eq('page_id', pageId);
             if (delErr) throw delErr;
           } else {
             const { error: upErr } = await supabase
               .from('user_page_permissions')
-              .upsert({ user_id: prof.id, page_id: pageId }, { onConflict: 'user_id,page_id' });
+              .upsert({ user_id: effectiveProfId, page_id: pageId }, { onConflict: 'user_id,page_id' });
             if (upErr) throw upErr;
           }
         }
@@ -338,27 +348,27 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { data: prof, error: profFindErr } = await supabase
-          .from('profiles')
-          .select('id')
-          .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
-          .maybeSingle();
+        const profQuery = isUUID(userId)
+          ? supabase.from('profiles').select('id').or(`id.eq.${userId},email.ilike.${targetUser.email}`).maybeSingle()
+          : supabase.from('profiles').select('id').ilike('email', targetUser.email).maybeSingle();
+        const { data: prof, error: profFindErr } = await profQuery;
 
         if (profFindErr) throw profFindErr;
 
-        if (prof?.id) {
+        const effectiveProfId = (prof?.id && isUUID(prof.id)) ? prof.id : (isUUID(userId) ? userId : null);
+        if (effectiveProfId) {
           const { error: upProfErr } = await supabase
             .from('profiles')
             .update({ role: presetRole, updated_at: new Date().toISOString() })
-            .eq('id', prof.id);
+            .eq('id', effectiveProfId);
           if (upProfErr) throw upProfErr;
 
           await supabase
             .from('user_page_permissions')
             .delete()
-            .eq('user_id', prof.id);
+            .eq('user_id', effectiveProfId);
 
-          const rows = pages.map(pg => ({ user_id: prof.id, page_id: pg }));
+          const rows = pages.map(pg => ({ user_id: effectiveProfId, page_id: pg }));
           if (rows.length > 0) {
             const { error: permErr } = await supabase.from('user_page_permissions').upsert(rows, { onConflict: 'user_id,page_id' });
             if (permErr) throw permErr;
@@ -406,10 +416,10 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { error } = await supabase
-          .from('profiles')
-          .update({ is_active: nextState, updated_at: new Date().toISOString() })
-          .or(`id.eq.${userId},email.ilike.${target.email}`);
+        const statusUpdateQuery = isUUID(userId)
+          ? supabase.from('profiles').update({ is_active: nextState, updated_at: new Date().toISOString() }).or(`id.eq.${userId},email.ilike.${target.email}`)
+          : supabase.from('profiles').update({ is_active: nextState, updated_at: new Date().toISOString() }).ilike('email', target.email);
+        const { error } = await statusUpdateQuery;
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
@@ -486,19 +496,23 @@ export function useUserManagement({
           updated_at: new Date().toISOString()
         };
 
-        if (siteId && !siteId.startsWith('site-')) {
+        if (siteId && isUUID(siteId)) {
           updatePayload.site_id = siteId;
         }
 
-        const { data: byIdData, error: byIdErr } = await supabase
-          .from('profiles')
-          .update(updatePayload)
-          .eq('id', userId)
-          .select();
+        if (isUUID(userId)) {
+          const { data: byIdData, error: byIdErr } = await supabase
+            .from('profiles')
+            .update(updatePayload)
+            .eq('id', userId)
+            .select();
 
-        if (!byIdErr && byIdData && byIdData.length > 0) {
-          updatedInDb = true;
-        } else {
+          if (!byIdErr && byIdData && byIdData.length > 0) {
+            updatedInDb = true;
+          }
+        }
+
+        if (!updatedInDb) {
           const { data: byEmailData, error: byEmailErr } = await supabase
             .from('profiles')
             .update(updatePayload)
@@ -511,9 +525,11 @@ export function useUserManagement({
         }
 
         if (!updatedInDb) {
+          const validProfId = isUUID(userId) ? userId : toValidUUID(`usr-${Date.now()}-${cleanEmail}`);
           const { error: upsertErr } = await supabase
             .from('profiles')
             .upsert({
+              id: validProfId,
               email: cleanEmail,
               full_name: fullName.trim(),
               role: resolvedRole,
@@ -531,6 +547,7 @@ export function useUserManagement({
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) {
           enqueueOfflineAction('PROFILE_UPSERT', {
+            id: isUUID(userId) ? userId : toValidUUID(`usr-${Date.now()}-${cleanEmail}`),
             email: cleanEmail,
             full_name: fullName.trim(),
             role: resolvedRole,
@@ -621,14 +638,25 @@ export function useUserManagement({
           try { await supabase.auth.updateUser({ password: finalPassword }); } catch (authErr) {}
         }
 
-        const { error } = await supabase
-          .from('profiles')
-          .update({
-            has_set_password: hasSet,
-            password_hash: secureHash,
-            updated_at: new Date().toISOString()
-          })
-          .or(`id.eq.${userId},email.ilike.${target.email}`);
+        const passUpdateQuery = isUUID(userId)
+          ? supabase
+              .from('profiles')
+              .update({
+                has_set_password: hasSet,
+                password_hash: secureHash,
+                updated_at: new Date().toISOString()
+              })
+              .or(`id.eq.${userId},email.ilike.${target.email}`)
+          : supabase
+              .from('profiles')
+              .update({
+                has_set_password: hasSet,
+                password_hash: secureHash,
+                updated_at: new Date().toISOString()
+              })
+              .ilike('email', target.email);
+
+        const { error } = await passUpdateQuery;
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
@@ -694,13 +722,12 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        await supabase.from('user_page_permissions').delete().eq('user_id', userId);
-        const { error: delProfErr } = await supabase.from('profiles').delete().eq('id', userId);
-        if (delProfErr) {
-          const { error: delEmailErr } = await supabase.from('profiles').delete().ilike('email', target.email);
-          if (delEmailErr) {
-            await supabase.from('profiles').update({ is_deleted: true, is_active: false, updated_at: new Date().toISOString() }).or(`id.eq.${userId},email.ilike.${target.email}`);
-          }
+        if (isUUID(userId)) {
+          await supabase.from('user_page_permissions').delete().eq('user_id', userId);
+          await supabase.from('profiles').delete().eq('id', userId);
+        }
+        if (target.email) {
+          await supabase.from('profiles').delete().ilike('email', target.email);
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, email: target.email, table: 'saved_records' });

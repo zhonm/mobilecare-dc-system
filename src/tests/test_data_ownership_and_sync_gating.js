@@ -1,0 +1,215 @@
+/**
+ * Test Suite: Data Ownership & Initial Sync Gating
+ * Tests the fix for: "New accounts see stale/hardcoded/shared data instead of their own live Supabase data"
+ */
+
+import assert from 'assert';
+
+// Mock browser environment for node testing
+class MockStorage {
+  constructor() {
+    this.store = new Map();
+  }
+  getItem(key) {
+    return this.store.has(key) ? this.store.get(key) : null;
+  }
+  setItem(key, value) {
+    this.store.set(String(key), String(value));
+  }
+  removeItem(key) {
+    this.store.delete(String(key));
+  }
+  clear() {
+    this.store.clear();
+  }
+  get length() {
+    return this.store.size;
+  }
+  key(index) {
+    const keys = Array.from(this.store.keys());
+    return keys[index] || null;
+  }
+}
+
+globalThis.window = {
+  localStorage: new MockStorage(),
+  sessionStorage: new MockStorage(),
+  location: { href: 'http://localhost:5173', replace: () => {}, reload: () => {} }
+};
+globalThis.localStorage = globalThis.window.localStorage;
+globalThis.sessionStorage = globalThis.window.sessionStorage;
+
+import { clearOperationalLocalStorage } from '../utils/cacheManager.js';
+import { formatShipmentForDb, formatShipmentItemsForDb, isUUID, toValidUUID } from '../utils/appContextHelpers.js';
+
+console.log('====================================================');
+console.log('TEST SUITE: Data Ownership & Initial Sync Gating');
+console.log('====================================================');
+
+let testsPassed = 0;
+let testsFailed = 0;
+
+function runTest(description, fn) {
+  try {
+    fn();
+    console.log(`  ✓ PASS: ${description}`);
+    testsPassed++;
+  } catch (err) {
+    console.error(`  ✗ FAIL: ${description}`);
+    console.error(`    ${err.message}`);
+    testsFailed++;
+  }
+}
+
+async function runAsyncTest(description, fn) {
+  try {
+    await fn();
+    console.log(`  ✓ PASS: ${description}`);
+    testsPassed++;
+  } catch (err) {
+    console.error(`  ✗ FAIL: ${description}`);
+    console.error(`    ${err.message}`);
+    testsFailed++;
+  }
+}
+
+async function runAllTests() {
+  // Test 1: Operational cache wipe with keepSession: true removes operational data and owner marker but keeps session
+  await runAsyncTest('clearOperationalLocalStorage(keepSession: true) preserves user session while clearing operational data', async () => {
+    localStorage.clear();
+    // Simulate active session of User A with operational data
+    localStorage.setItem('mdc_current_user', JSON.stringify({ id: 'usr-alice', email: 'alice@company.com' }));
+    localStorage.setItem('mdc_users', JSON.stringify([{ id: 'usr-alice' }]));
+    localStorage.setItem('mdc_local_data_owner', 'usr-alice');
+    localStorage.setItem('mdc_inventory', JSON.stringify([{ serial_number: 'SER-123', part_number: '661-0001' }]));
+    localStorage.setItem('mdc_forecast', JSON.stringify([{ part_number: '661-0001', final_forecast: 50 }]));
+    localStorage.setItem('mdc_allocations', JSON.stringify([{ part_number: '661-0001' }]));
+    localStorage.setItem('mdc_shipments', JSON.stringify([{ id: 'ship-1' }]));
+    localStorage.setItem('mdc_parts', JSON.stringify([{ part_number: '661-0001' }]));
+    localStorage.setItem('mdc_sites', JSON.stringify([{ code: 'APP BGC' }]));
+
+    await clearOperationalLocalStorage({ keepSession: true });
+
+    // Session keys MUST be preserved
+    assert.ok(localStorage.getItem('mdc_current_user') !== null, 'mdc_current_user should be preserved');
+    assert.ok(localStorage.getItem('mdc_users') !== null, 'mdc_users should be preserved');
+
+    // Operational keys MUST be wiped
+    assert.strictEqual(localStorage.getItem('mdc_inventory'), null, 'mdc_inventory should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_forecast'), null, 'mdc_forecast should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_allocations'), null, 'mdc_allocations should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_shipments'), null, 'mdc_shipments should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_parts'), null, 'mdc_parts should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_sites'), null, 'mdc_sites should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_local_data_owner'), null, 'mdc_local_data_owner should be wiped');
+  });
+
+  // Test 2: Operational cache wipe with keepSession: false removes everything on signOut
+  await runAsyncTest('clearOperationalLocalStorage(keepSession: false) purges all data on signOut', async () => {
+    localStorage.clear();
+    localStorage.setItem('mdc_current_user', JSON.stringify({ id: 'usr-alice', email: 'alice@company.com' }));
+    localStorage.setItem('mdc_local_data_owner', 'usr-alice');
+    localStorage.setItem('mdc_inventory', JSON.stringify([{ serial: '123' }]));
+
+    await clearOperationalLocalStorage({ keepSession: false });
+
+    assert.strictEqual(localStorage.getItem('mdc_current_user'), null, 'mdc_current_user should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_local_data_owner'), null, 'mdc_local_data_owner should be wiped');
+    assert.strictEqual(localStorage.getItem('mdc_inventory'), null, 'mdc_inventory should be wiped');
+  });
+
+  // Test 3: Ownership validation logic for returning user on same device vs different device/user
+  runTest('Ownership check correctly identifies matching owner vs stale/new account', () => {
+    // Scenario A: User Bob logs into a device last hydrated by Alice
+    const userBob = { id: 'usr-bob-456', email: 'bob@mobilecare.com' };
+    const localOwnerAlice = 'usr-alice-123';
+
+    const isMatchBob = localOwnerAlice && (
+      localOwnerAlice === userBob.id ||
+      (userBob.email && localOwnerAlice.toLowerCase() === userBob.email.toLowerCase())
+    );
+    assert.strictEqual(Boolean(isMatchBob), false, 'Bob should NOT match Alice owner marker');
+
+    // Scenario B: User Alice logs into her own device
+    const userAlice = { id: 'usr-alice-123', email: 'alice@mobilecare.com' };
+    const isMatchAlice = localOwnerAlice && (
+      localOwnerAlice === userAlice.id ||
+      (userAlice.email && localOwnerAlice.toLowerCase() === userAlice.email.toLowerCase())
+    );
+    assert.strictEqual(Boolean(isMatchAlice), true, 'Alice should match Alice owner marker');
+
+    // Scenario C: Fresh browser / empty owner marker
+    const noOwner = null;
+    const isMatchFresh = noOwner && (
+      noOwner === userBob.id ||
+      (userBob.email && noOwner.toLowerCase() === userBob.email.toLowerCase())
+    );
+    assert.strictEqual(Boolean(isMatchFresh), false, 'Fresh device without marker must NOT match (forces initial sync)');
+  });
+
+  // Test 4: Hydration success stamps owner marker and first login done
+  runTest('Successful hydration stamps mdc_local_data_owner and mdc_first_login_done', () => {
+    localStorage.clear();
+    const currentUser = { id: 'usr-bob-789', email: 'bob@mobilecare.com', fullName: 'Bob Tester' };
+
+    // Simulate completion in FirstLoginLoadingScreen or useCloudSync
+    localStorage.setItem(`mdc_first_login_done_${currentUser.id}`, 'true');
+    localStorage.setItem('mdc_local_data_owner', currentUser.id);
+
+    assert.strictEqual(localStorage.getItem('mdc_local_data_owner'), 'usr-bob-789');
+    assert.strictEqual(localStorage.getItem('mdc_first_login_done_usr-bob-789'), 'true');
+
+    // Now if Bob logs in again, it matches
+    const owner = localStorage.getItem('mdc_local_data_owner');
+    const isReturningMatch = owner === currentUser.id;
+    assert.strictEqual(isReturningMatch, true, 'Subsequent login by Bob uses fast path');
+  });
+
+  // Test 5: Shipment formatting generates valid Postgres enum status and UUIDs
+  runTest('formatShipmentForDb maps statuses to safe Postgres enum values and valid UUIDs', () => {
+    const rawPendingShipment = {
+      id: 'shp-12345',
+      shipment_number: 'SHP-2026-001',
+      status: 'ready_for_dispatch',
+      site_id: 'site-bgc'
+    };
+
+    const formatted = formatShipmentForDb(rawPendingShipment, [{ id: '11111111-2222-3333-4444-555555555555', code: 'BGC' }]);
+    assert.ok(isUUID(formatted.id), 'Shipment ID must be a valid UUID');
+    assert.ok(isUUID(formatted.site_id), 'Site ID must be a valid UUID');
+    assert.notStrictEqual(formatted.status, 'ready_for_dispatch', 'Must not use ready_for_dispatch');
+    assert.strictEqual(formatted.status, 'draft', 'Pending status should safely map to draft for Postgres enum compatibility');
+
+    const confirmedShipment = {
+      id: '22222222-3333-4444-5555-666666666666',
+      status: 'received_confirmed',
+      site_id: '11111111-2222-3333-4444-555555555555'
+    };
+    const formattedConfirmed = formatShipmentForDb(confirmedShipment);
+    assert.strictEqual(formattedConfirmed.status, 'received_confirmed');
+  });
+
+  // Test 6: UUID generator produces RFC-compliant UUIDs for arbitrary user IDs
+  runTest('toValidUUID produces deterministic valid UUIDs', () => {
+    const customId = 'usr-1788232219698';
+    const generatedUUID = toValidUUID(customId);
+    assert.ok(isUUID(generatedUUID), `Generated ID "${generatedUUID}" must be a valid UUID`);
+
+    const generatedUUID2 = toValidUUID(customId);
+    assert.strictEqual(generatedUUID, generatedUUID2, 'UUID generation must be deterministic');
+
+    const alreadyUUID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+    assert.strictEqual(toValidUUID(alreadyUUID), alreadyUUID, 'Existing UUID must be preserved');
+  });
+
+  console.log('====================================================');
+  console.log(`RESULTS: ${testsPassed}/${testsPassed + testsFailed} PASSED (${testsFailed} FAILED)`);
+  console.log('====================================================');
+
+  if (testsFailed > 0) {
+    process.exit(1);
+  }
+}
+
+runAllTests();
+

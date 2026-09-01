@@ -265,16 +265,15 @@ export function formatShipmentForDb(s, sitesList = []) {
 
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
   const rawStatus = String(s.status || 'draft').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  const allowedStatuses = ['draft', 'packing', 'ready_for_dispatch', 'pending_pickup', 'shipped', 'in_transit', 'delivered', 'received_confirmed'];
   let validStatus = 'draft';
-  if (rawStatus === 'pending_pickup' || rawStatus === 'pending_for_pickup' || rawStatus === 'pending') {
-    validStatus = 'ready_for_dispatch';
-  } else if (rawStatus.includes('confirm') || rawStatus === 'received_confirmed' || rawStatus === 'delivered') {
+  if (rawStatus.includes('confirm') || rawStatus === 'received_confirmed' || rawStatus === 'delivered') {
     validStatus = 'received_confirmed';
   } else if (rawStatus === 'shipped' || rawStatus === 'in_transit') {
     validStatus = 'shipped';
-  } else if (allowedStatuses.includes(rawStatus)) {
+  } else if (rawStatus === 'draft' || rawStatus === 'packing') {
     validStatus = rawStatus;
+  } else {
+    validStatus = 'draft';
   }
 
   return {

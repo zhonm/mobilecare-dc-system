@@ -4,7 +4,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
-import { reconcileUnitsWithPackedDrafts, isUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb } from '../utils/appContextHelpers';
+import { reconcileUnitsWithPackedDrafts, isUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
@@ -185,9 +185,15 @@ export function useCloudSync({
       for (const item of queue) {
         try {
           if (item.actionType === 'PROFILE_UPSERT') {
-            await supabase.from('profiles').upsert(item.payload, { onConflict: 'email' });
+            const payload = { ...item.payload };
+            if (!isUUID(payload.id)) payload.id = toValidUUID(`usr-${Date.now()}-${payload.email}`);
+            await supabase.from('profiles').upsert(payload, { onConflict: 'email' });
           } else if (item.actionType === 'PROFILE_DELETE') {
-            await supabase.from('profiles').delete().or(`id.eq.${item.payload.id},email.ilike.${item.payload.email}`);
+            if (isUUID(item.payload.id)) {
+              await supabase.from('profiles').delete().or(`id.eq.${item.payload.id},email.ilike.${item.payload.email}`);
+            } else if (item.payload.email) {
+              await supabase.from('profiles').delete().ilike('email', item.payload.email);
+            }
           } else if (item.actionType === 'PART_UPSERT') {
             await supabase.from('parts').upsert(item.payload, { onConflict: 'part_number' });
           } else if (item.actionType === 'PART_DELETE') {
@@ -923,16 +929,18 @@ export function useCloudSync({
             const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.id, r])).values());
 
             if (uniqueShipmentRows.length > 0) {
-              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'id' }).then(() => {
-                // Also backfill shipment_items
-                const allShipmentItemRows = [];
-                effectiveShipments.forEach(s => {
-                  const itemRows = formatShipmentItemsForDb(s, dbUnits || [], dbParts || [], currentUser);
-                  allShipmentItemRows.push(...itemRows);
-                });
-                const uniqueShipmentItemRows = Array.from(new Map(allShipmentItemRows.map(r => [r.id, r])).values());
-                if (uniqueShipmentItemRows.length > 0) {
-                  supabase.from('shipment_items').upsert(uniqueShipmentItemRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
+              supabase.from('shipments').upsert(uniqueShipmentRows, { onConflict: 'id' }).then(({ error: bError }) => {
+                if (!bError) {
+                  // Also backfill shipment_items ONLY if shipments header upsert succeeded
+                  const allShipmentItemRows = [];
+                  effectiveShipments.forEach(s => {
+                    const itemRows = formatShipmentItemsForDb(s, dbUnits || [], dbParts || [], currentUser);
+                    allShipmentItemRows.push(...itemRows);
+                  });
+                  const uniqueShipmentItemRows = Array.from(new Map(allShipmentItemRows.map(r => [r.id, r])).values());
+                  if (uniqueShipmentItemRows.length > 0) {
+                    supabase.from('shipment_items').upsert(uniqueShipmentItemRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
+                  }
                 }
               }).catch(() => {});
             }
@@ -1314,6 +1322,22 @@ export function useCloudSync({
       const syncNow = new Date();
       setLastSyncedAt(syncNow);
       setCloudSyncStatus({ isSaving: false, lastSaved: syncNow, isOnline: true });
+
+      const effectiveUserId = currentUser?.id || (() => {
+        try {
+          const u = JSON.parse(localStorage.getItem('mdc_current_user') || 'null');
+          return u?.id;
+        } catch (e) {
+          return null;
+        }
+      })();
+
+      if (effectiveUserId) {
+        try {
+          localStorage.setItem('mdc_local_data_owner', effectiveUserId);
+        } catch (e) {}
+      }
+
       return true;
     } catch (e) {
       console.warn('Supabase fetch note (offline or unauthenticated):', e.message);

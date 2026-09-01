@@ -27,7 +27,13 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', 'shipped', 'in_transit', 'delivered', 'received_confirmed', 'discrepancy', 'cancelled');
+    CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', 'pending_pickup', 'shipped', 'in_transit', 'delivered', 'received_confirmed', 'discrepancy', 'cancelled');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+DO $$ BEGIN
+    ALTER TYPE shipment_status ADD VALUE IF NOT EXISTS 'ready_for_dispatch';
+    ALTER TYPE shipment_status ADD VALUE IF NOT EXISTS 'pending_pickup';
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;

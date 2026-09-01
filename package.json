@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node src/tests/test_security_remediation.js && node src/tests/test_forecast_wma.js && node src/tests/test_allocation_parity.js && node src/tests/test_masterlist_parity.js && node src/tests/test_master_allocation_diff.js && node src/tests/test_parts_stock_removal_and_pack.js && node src/tests/test_concurrent_packing_sync.js && node src/tests/test_parts_requests.js && node src/tests/test_svnr_assignment_category.js",
+    "test": "node src/tests/test_security_remediation.js && node src/tests/test_forecast_wma.js && node src/tests/test_allocation_parity.js && node src/tests/test_masterlist_parity.js && node src/tests/test_master_allocation_diff.js && node src/tests/test_parts_stock_removal_and_pack.js && node src/tests/test_concurrent_packing_sync.js && node src/tests/test_parts_requests.js && node src/tests/test_svnr_assignment_category.js && node src/tests/test_data_ownership_and_sync_gating.js",
     "preview": "vite preview"
   },
   "dependencies": {

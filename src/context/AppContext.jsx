@@ -309,6 +309,8 @@ export function AppProvider({ children }) {
 
         // Auth & RBAC
         currentUser: auth.currentUser,
+        isInitialSyncing: auth.isInitialSyncing,
+        setIsInitialSyncing: auth.setIsInitialSyncing,
         usersList: userManagement.usersList,
         pendingFirstTimeUser: auth.pendingFirstTimeUser,
         setPendingFirstTimeUser: auth.setPendingFirstTimeUser,
@@ -416,6 +418,7 @@ export function AppProvider({ children }) {
         applyParsedDataset: cloudSync.applyParsedDataset,
         syncAllDataToCloud: cloudSync.syncAllDataToCloud,
         refreshDataFromCloud: cloudSync.refreshDataFromCloud,
+        hydrateFromSupabase: cloudSync.hydrateFromSupabase,
         isAutoRefreshing: cloudSync.isAutoRefreshing,
         lastSyncedAt: cloudSync.lastSyncedAt,
         autoRefreshData: cloudSync.autoRefreshData,

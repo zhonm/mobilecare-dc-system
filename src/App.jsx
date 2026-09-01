@@ -2,6 +2,7 @@ import { Component } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
+import FirstLoginLoadingScreen from './components/FirstLoginLoadingScreen';
 import Sidebar from './components/Sidebar';
 import PmgSidebar from './components/PmgSidebar';
 import Header from './components/Header';
@@ -30,6 +31,7 @@ import './App.css';
 function MainApp() {
   const {
     currentUser,
+    isInitialSyncing,
     pendingFirstTimeUser,
     activeTab,
     canAccess,
@@ -44,6 +46,11 @@ function MainApp() {
       return <CreatePassword />;
     }
     return <Login />;
+  }
+
+  // 2. Initial Sync Guard: Block UI until live Supabase data hydration completes
+  if (isInitialSyncing) {
+    return <FirstLoginLoadingScreen />;
   }
 
   // 2. Route Guard: Check permission for active tab

@@ -11,6 +11,8 @@ import {
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
+import { clearOperationalLocalStorage } from '../utils/cacheManager';
+import { isUUID, toValidUUID } from '../utils/appContextHelpers';
 
 export function useAuth({
   usersList,
@@ -38,6 +40,7 @@ export function useAuth({
   });
 
   const [pendingFirstTimeUser, setPendingFirstTimeUser] = useState(null);
+  const [isInitialSyncing, setIsInitialSyncing] = useState(false);
 
   // Asynchronous safety-net recovery from IndexedDB (dbStorage) and active Supabase Auth session on app mount
   useEffect(() => {
@@ -498,10 +501,25 @@ export function useAuth({
     persistUserSession(user);
     dbStorage.setItem('mdc_current_user', user);
 
+    // Check data ownership marker against the logging-in user
+    const localDataOwner = localStorage.getItem('mdc_local_data_owner');
+    const isOwnerMatch = localDataOwner && (
+      localDataOwner === user.id ||
+      (user.email && localDataOwner.toLowerCase() === user.email.toLowerCase())
+    );
+
+    if (!isOwnerMatch) {
+      await clearOperationalLocalStorage({ keepSession: true });
+      setIsInitialSyncing(true);
+    } else {
+      if (typeof hydrateFromSupabase === 'function') {
+        hydrateFromSupabase();
+      }
+    }
+
     setCurrentUser(user);
     const initialPage = user.permittedPages?.[0] || 'dashboard';
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
-    if (typeof hydrateFromSupabase === 'function') hydrateFromSupabase();
     showToast(`Welcome back, ${user.fullName}!`, 'success');
     return { success: true, user };
   };
@@ -583,6 +601,23 @@ export function useAuth({
     setPendingFirstTimeUser(null);
     persistUserSession(updatedUser);
     dbStorage.setItem('mdc_current_user', updatedUser);
+
+    // Check data ownership marker against the newly activated user
+    const localDataOwner = localStorage.getItem('mdc_local_data_owner');
+    const isOwnerMatch = localDataOwner && (
+      localDataOwner === updatedUser.id ||
+      (updatedUser.email && localDataOwner.toLowerCase() === updatedUser.email.toLowerCase())
+    );
+
+    if (!isOwnerMatch) {
+      await clearOperationalLocalStorage({ keepSession: true });
+      setIsInitialSyncing(true);
+    } else {
+      if (typeof hydrateFromSupabase === 'function') {
+        hydrateFromSupabase();
+      }
+    }
+
     setCurrentUser(updatedUser);
 
     try {
@@ -616,14 +651,25 @@ export function useAuth({
     if (supabase) {
       try {
         await supabase.auth.updateUser({ password: newPassword }).catch(() => {});
-        await supabase
-          .from('profiles')
-          .update({
-            has_set_password: true,
-            password_hash: secureHash,
-            updated_at: new Date().toISOString()
-          })
-          .or(`id.eq.${user.id},email.ilike.${user.email}`);
+        const isIdUUID = isUUID(user.id);
+        const updateQuery = isIdUUID
+          ? supabase
+              .from('profiles')
+              .update({
+                has_set_password: true,
+                password_hash: secureHash,
+                updated_at: new Date().toISOString()
+              })
+              .or(`id.eq.${user.id},email.ilike.${user.email}`)
+          : supabase
+              .from('profiles')
+              .update({
+                has_set_password: true,
+                password_hash: secureHash,
+                updated_at: new Date().toISOString()
+              })
+              .ilike('email', user.email);
+        await updateQuery;
       } catch (e) {}
     }
 
@@ -646,8 +692,14 @@ export function useAuth({
       clearStoredUserSession();
       await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
+    try {
+      await clearOperationalLocalStorage({ keepSession: false });
+    } catch (e) {
+      console.warn('Error clearing operational storage on signOut:', e);
+    }
     setCurrentUser(null);
     setPendingFirstTimeUser(null);
+    setIsInitialSyncing(false);
     if (typeof setActiveTab === 'function') setActiveTab('dashboard');
     showToast('Signed out successfully.', 'info');
   };
@@ -658,6 +710,8 @@ export function useAuth({
   return {
     currentUser,
     setCurrentUser,
+    isInitialSyncing,
+    setIsInitialSyncing,
     pendingFirstTimeUser,
     setPendingFirstTimeUser,
     canAccess,

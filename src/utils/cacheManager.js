@@ -5,7 +5,7 @@
  * active user authentication credentials and session tokens.
  */
 
-import { dbStorage } from './dbStorage';
+import { dbStorage } from './dbStorage.js';
 
 /**
  * List of keys that must NEVER be deleted during operational cache wipes
@@ -135,7 +135,7 @@ export async function clearOperationalLocalStorage({
     // 4. Clear IndexedDB operational state
     try {
       if (dbStorage && typeof dbStorage.clearOperationalCache === 'function') {
-        await dbStorage.clearOperationalCache(PRESERVED_SESSION_KEYS);
+        await dbStorage.clearOperationalCache(keepSession ? PRESERVED_SESSION_KEYS : []);
       }
     } catch (dbErr) {
       console.debug('IndexedDB operational cache clearance note:', dbErr);

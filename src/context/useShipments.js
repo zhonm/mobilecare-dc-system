@@ -621,16 +621,27 @@ export function useShipments({
 
         // Channel 1: Upsert to direct shipments table in Supabase
         const directShipmentRow = formatShipmentForDb(newShipment);
+        let shipmentSavedInDb = false;
         if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
           try {
-            await supabase.from('shipments').upsert(directShipmentRow, { onConflict: 'id' });
+            const { error: shpErr } = await supabase.from('shipments').upsert(directShipmentRow, { onConflict: 'id' });
+            if (!shpErr) {
+              shipmentSavedInDb = true;
+            } else {
+              console.warn('Direct shipments table notice:', shpErr.message);
+              if (shpErr.code === '22P02' || shpErr.message.includes('enum')) {
+                const retryRow = { ...directShipmentRow, status: 'draft' };
+                const { error: retryErr } = await supabase.from('shipments').upsert(retryRow, { onConflict: 'id' });
+                if (!retryErr) shipmentSavedInDb = true;
+              }
+            }
           } catch (shpErr) {
             console.warn('Direct shipments table notice:', shpErr.message);
           }
         }
 
-        // Channel 1b: Upsert to direct shipment_items table in Supabase
-        if (newShipment.items && newShipment.items.length > 0) {
+        // Channel 1b: Upsert to direct shipment_items table in Supabase ONLY IF parent shipment succeeded
+        if (shipmentSavedInDb && newShipment.items && newShipment.items.length > 0) {
           try {
             const shipmentItemsRows = formatShipmentItemsForDb(newShipment, inventoryUnits, [], currentUser);
             if (shipmentItemsRows.length > 0) {
