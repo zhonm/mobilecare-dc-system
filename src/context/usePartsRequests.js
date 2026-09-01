@@ -592,8 +592,7 @@ export function usePartsRequests({
       : sites.filter(s => s.id === targetSiteFilter || s.code === targetSiteFilter);
 
     return siteList.map(site => {
-      const isDcSite = site.id === 'site-dc' || site.code === 'DC-MDC' || site.code === 'DC';
-      const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
+            const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
       const stock = getStockOnHandForSite(site.id);
 
       // Process parts summary with granular privacy

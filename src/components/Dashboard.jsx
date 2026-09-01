@@ -15,7 +15,10 @@ import {
   ChevronRight,
   Calendar,
   Check,
-  RefreshCw
+  RefreshCw,
+  AlertTriangle,
+  Clock,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -33,14 +36,25 @@ import {
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import { CATEGORY_COLORS } from '../constants/config';
 
+// Helper function to calculate calendar days a part has been in DC stock
+function calculateDaysInDc(dateString) {
+  if (!dateString) return 0;
+  const receivedDate = new Date(dateString);
+  if (isNaN(receivedDate.getTime())) return 0;
+  const now = new Date();
+  const diffMs = now.getTime() - receivedDate.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  return Math.max(0, diffDays);
+}
+
 export default function Dashboard() {
   const {
-    inventoryUnits,
-    forecastItems,
-    shipments,
-    dcIntakeRecords,
-    parts,
-    sites,
+    inventoryUnits = [],
+    forecastItems = [],
+    shipments = [],
+    dcIntakeRecords = [],
+    parts = [],
+    sites = [],
     currentUser,
     activePeriod,
     setActiveTab,
@@ -92,7 +106,7 @@ export default function Dashboard() {
     return set;
   }, [activePackDraft, shipments]);
 
-  // Active in-stock units
+  // Active in-stock units physically in DC warehouse
   const availableInStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
@@ -109,6 +123,21 @@ export default function Dashboard() {
       return filteredPartNumbers.has(cleanPN) || filteredPartIds.has(u.part_id);
     });
   }, [inventoryUnits, packedSerialsSet, isUnfiltered, filteredPartNumbers, filteredPartIds, sites]);
+
+  // Track 4-Day DC Aging Status for available DC in-stock units
+  const { agingUnits, freshUnits } = useMemo(() => {
+    const aging = [];
+    const fresh = [];
+    availableInStockUnits.forEach(u => {
+      const days = calculateDaysInDc(u.received_at || u.created_at || u.intake_date || u.date);
+      if (days >= 4) {
+        aging.push({ ...u, daysInDc: days });
+      } else {
+        fresh.push({ ...u, daysInDc: days });
+      }
+    });
+    return { agingUnits: aging, freshUnits: fresh };
+  }, [availableInStockUnits]);
 
   const packedUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
@@ -167,10 +196,7 @@ export default function Dashboard() {
     ];
 
     return categories.map(c => {
-      // Stock count
       const inStock = categoryStats.counts[c.catKey] || 0;
-
-      // Forecast count
       const forecastCount = (forecastItems || []).filter(f => {
         const desc = String(f.description || '').toUpperCase();
         const cat = String(f.category_id || '').toUpperCase();
@@ -189,11 +215,13 @@ export default function Dashboard() {
     });
   }, [categoryStats, forecastItems]);
 
-  // Grouped Stock Inventory by Part Number for Snapshot Table
+  // Grouped Stock Inventory by Part Number with 4-Day Aging Logic
   const groupedInventory = useMemo(() => {
     const map = new Map();
     availableInStockUnits.forEach(u => {
       const pn = String(u.part_number || '').toUpperCase();
+      const days = calculateDaysInDc(u.received_at || u.created_at || u.intake_date || u.date);
+
       if (!map.has(pn)) {
         const partObj = parts.find(p => p.part_number?.toUpperCase() === pn);
         map.set(pn, {
@@ -201,19 +229,34 @@ export default function Dashboard() {
           description: u.description || partObj?.description || 'Service Replacement Part',
           category: partObj?.category_id || 'GENERAL',
           units: [],
+          maxDaysInDc: days,
+          agingCount: 0,
+          freshCount: 0,
           latest_received_at: u.received_at,
           latest_serial: u.serial_number
         });
       }
       const entry = map.get(pn);
       entry.units.push(u);
+      if (days >= 4) {
+        entry.agingCount++;
+      } else {
+        entry.freshCount++;
+      }
+      if (days > entry.maxDaysInDc) {
+        entry.maxDaysInDc = days;
+      }
       if (new Date(u.received_at || 0) > new Date(entry.latest_received_at || 0)) {
         entry.latest_received_at = u.received_at;
         entry.latest_serial = u.serial_number;
       }
     });
 
-    let list = Array.from(map.values()).sort((a, b) => b.units.length - a.units.length);
+    let list = Array.from(map.values()).sort((a, b) => {
+      // Prioritize parts with aging units (>= 4 days) first, then by unit quantity
+      if (b.agingCount !== a.agingCount) return b.agingCount - a.agingCount;
+      return b.units.length - a.units.length;
+    });
 
     if (activeSnapshotFilter !== 'ALL') {
       list = list.filter(item => {
@@ -222,6 +265,7 @@ export default function Dashboard() {
         if (activeSnapshotFilter === 'DISPLAY') return cat.includes('DISPLAY') || desc.includes('DISPLAY');
         if (activeSnapshotFilter === 'BATTERY') return cat.includes('BATTERY') || desc.includes('BATTERY');
         if (activeSnapshotFilter === 'CAMERA') return cat.includes('CAMERA') || desc.includes('CAMERA');
+        if (activeSnapshotFilter === 'AGING') return item.agingCount > 0;
         return true;
       });
     }
@@ -247,18 +291,17 @@ export default function Dashboard() {
   const recentShipments = (shipments || []).slice(0, 5);
 
   return (
-    <div className="dashboard-view" style={{ animation: 'fadeIn 0.2s ease-out' }}>
+    <div className="dashboard-view" style={{ animation: 'fadeIn 0.2s ease-out', display: 'flex', flexDirection: 'column', gap: '22px' }}>
       
       {/* 1. Executive Operations Header Banner */}
       <div
         className="card"
         style={{
-          marginBottom: '22px',
           background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f172a 100%)',
           color: '#ffffff',
           padding: '24px 28px',
           border: '1px solid #334155',
-          borderRadius: 'var(--radius-lg)',
+          borderRadius: '12px',
           boxShadow: '0 8px 24px -4px rgba(15, 23, 42, 0.4)'
         }}
       >
@@ -336,20 +379,71 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* 4-Day DC Aging Stock Alert Banner (renders when parts remain >= 4 days in DC) */}
+      {agingUnits.length > 0 && (
+        <div
+          style={{
+            background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+            border: '1px solid #fde68a',
+            borderRadius: '10px',
+            padding: '14px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            boxShadow: '0 2px 8px rgba(245, 158, 11, 0.08)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ background: '#f59e0b', color: '#fff', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#92400e', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>DC Aging Alert: {agingUnits.length} Part{agingUnits.length > 1 ? 's' : ''} Stagnant in DC for ≥ 4 Days</span>
+                <span className="badge" style={{ background: '#f59e0b', color: '#fff', fontSize: '11px', fontWeight: 700 }}>
+                  Priority Dispatch
+                </span>
+              </div>
+              <div style={{ fontSize: '12px', color: '#b45309', marginTop: '2px' }}>
+                These parts have exceeded the 4-day DC retention threshold. Please allocate and pack them into outbound manifests for site delivery.
+              </div>
+            </div>
+          </div>
+
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => setActiveTab('scan-out')}
+            style={{
+              background: '#d97706',
+              borderColor: '#b45309',
+              fontWeight: 700,
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <PackageCheck size={14} />
+            <span>Pack Outbound Manifest (F2)</span>
+          </button>
+        </div>
+      )}
+
       {/* 2. Elevated Top KPI Metric Cards */}
       <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-          gap: '18px',
-          marginBottom: '24px'
+          gap: '18px'
         }}
       >
-        {/* KPI 1: DC Available In-Stock */}
+        {/* KPI 1: DC Available In-Stock with 4-Day Aging Status */}
         <div
           className="kpi-card"
           style={{
-            borderLeft: '4px solid #0284c7',
+            borderLeft: `4px solid ${agingUnits.length > 0 ? '#f59e0b' : '#0284c7'}`,
             cursor: 'pointer',
             transition: 'transform 0.15s ease, box-shadow 0.15s ease'
           }}
@@ -358,22 +452,40 @@ export default function Dashboard() {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <span className="kpi-title">DC In-Stock Inventory</span>
-            <div style={{ padding: '8px', background: '#e0f2fe', borderRadius: '8px', color: '#0284c7' }}>
+            <div style={{ padding: '8px', background: agingUnits.length > 0 ? '#fef3c7' : '#e0f2fe', borderRadius: '8px', color: agingUnits.length > 0 ? '#f59e0b' : '#0284c7' }}>
               <Boxes size={20} />
             </div>
           </div>
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
             {availableInStockUnits.length.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>units</span>
           </div>
-          <div className="kpi-sub">
-            <span style={{ color: '#0284c7', fontWeight: 700 }}>
-              {categoryStats.counts.DISPLAY} Displays
-            </span>{' '}
-            • {categoryStats.counts.BATTERY} Batteries • {categoryStats.counts.CAMERA} Cameras
+
+          {/* Aging Status Sub-label */}
+          <div className="kpi-sub" style={{ marginTop: '2px' }}>
+            {availableInStockUnits.length === 0 ? (
+              <span style={{ color: '#047857', fontWeight: 600 }}>
+                ✓ 0 units in DC (Clean Pipeline)
+              </span>
+            ) : agingUnits.length > 0 ? (
+              <span style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <Clock size={12} /> {agingUnits.length} Aging (≥4d in DC) • {freshUnits.length} Fresh
+              </span>
+            ) : (
+              <span style={{ color: '#047857', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <CheckCircle2 size={12} /> All {availableInStockUnits.length} Units Fresh (&lt;4d in DC)
+              </span>
+            )}
           </div>
+
           {/* Visual Mini Capacity Bar */}
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${Math.min(availableInStockUnits.length * 3, 100)}%`, background: '#0284c7' }} />
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.min(availableInStockUnits.length * 5, 100)}%`,
+                background: agingUnits.length > 0 ? '#f59e0b' : '#0284c7'
+              }}
+            />
           </div>
         </div>
 
@@ -469,12 +581,12 @@ export default function Dashboard() {
       </div>
 
       {/* 3. Analytics Intelligence Row: Category Breakdown Donut & Stock vs Demand Bar Chart */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.3fr', gap: '20px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.3fr', gap: '20px' }}>
         {/* Left Chart: Stock by Category Donut */}
         <div className="card" style={{ padding: '22px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>DC Stock by Category</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>DC Stock by Category</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                 Live distribution of available parts in warehouse
               </p>
@@ -531,7 +643,7 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '22px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>Stock vs Monthly Demand Target</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Stock vs Monthly Demand Target</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                 Inventory readiness versus forecasted consumption
               </p>
@@ -561,8 +673,8 @@ export default function Dashboard() {
       </div>
 
       {/* 4. Quick Workstation Launchpad */}
-      <div style={{ marginBottom: '24px' }}>
-        <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div>
+        <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Sparkles size={16} color="var(--primary)" />
           Quick Workstation Launchpad
         </h3>
@@ -667,13 +779,13 @@ export default function Dashboard() {
       </div>
 
       {/* 5. 2-Column Live Operational Feeds: Dispatched Records & Recent Shipments */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px' }}>
         
         {/* Left Column: Dispatched Records (Live Batches) */}
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent Dispatched in All Sites</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Dispatched in All Sites</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                 Batches dispatched and saved based on purchase orders
               </p>
@@ -737,7 +849,7 @@ export default function Dashboard() {
         <div className="card" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>Recent Packing Lists</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Packing Lists</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                 Exported manifests for branch delivery
               </p>
@@ -820,32 +932,32 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 6. Live DC Stock Inventory Snapshot Table */}
+      {/* 6. Live DC Stock Inventory Snapshot Table with 4-Day Aging Status Indicators */}
       <div className="card" style={{ padding: '22px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px' }}>DC Stock Inventory Snapshot</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>DC Stock Inventory Snapshot</h3>
               <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
                 <Check size={11} style={{ display: 'inline', marginRight: '3px' }} />
                 Real-Time Synced
               </span>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-              Aggregated stock counts by part SKU currently available in Distribution Center
+              Aggregated stock counts by part SKU currently available in Distribution Center with 4-day retention tracking
             </p>
           </div>
 
           {/* Table Filters & Search */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '6px' }}>
-              {['ALL', 'DISPLAY', 'BATTERY', 'CAMERA'].map(f => (
+              {['ALL', 'DISPLAY', 'BATTERY', 'CAMERA', 'AGING'].map(f => (
                 <button
                   key={f}
                   onClick={() => setActiveSnapshotFilter(f)}
                   style={{
                     border: 'none',
-                    background: activeSnapshotFilter === f ? '#0284c7' : 'transparent',
+                    background: activeSnapshotFilter === f ? (f === 'AGING' ? '#f59e0b' : '#0284c7') : 'transparent',
                     color: activeSnapshotFilter === f ? '#fff' : '#64748b',
                     padding: '4px 10px',
                     borderRadius: '4px',
@@ -854,7 +966,7 @@ export default function Dashboard() {
                     cursor: 'pointer'
                   }}
                 >
-                  {f}
+                  {f === 'AGING' ? `⚠️ Aging (${agingUnits.length})` : f}
                 </button>
               ))}
             </div>
@@ -897,8 +1009,9 @@ export default function Dashboard() {
                   <th style={{ width: '40px', textAlign: 'center' }}>#</th>
                   <th style={{ width: '140px' }}>PART NUMBER</th>
                   <th>DESCRIPTION</th>
-                  <th style={{ width: '130px', textAlign: 'center' }}>CATEGORY</th>
-                  <th style={{ width: '110px', textAlign: 'center' }}>IN-STOCK</th>
+                  <th style={{ width: '120px', textAlign: 'center' }}>CATEGORY</th>
+                  <th style={{ width: '100px', textAlign: 'center' }}>IN-STOCK</th>
+                  <th style={{ width: '160px', textAlign: 'center' }}>DC AGING STATUS</th>
                   <th style={{ width: '170px', textAlign: 'center' }}>RECENT SERIAL</th>
                   <th style={{ width: '110px', textAlign: 'center' }}>ACTIONS</th>
                 </tr>
@@ -922,6 +1035,41 @@ export default function Dashboard() {
                       <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px' }}>
                         {item.units.length} units
                       </span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {item.maxDaysInDc >= 4 ? (
+                        <span
+                          className="badge"
+                          style={{
+                            background: '#fffbeb',
+                            color: '#b45309',
+                            border: '1px solid #fde68a',
+                            fontWeight: 700,
+                            fontSize: '11px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                        >
+                          <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging)
+                        </span>
+                      ) : (
+                        <span
+                          className="badge"
+                          style={{
+                            background: '#ecfdf5',
+                            color: '#047857',
+                            border: '1px solid #a7f3d0',
+                            fontWeight: 600,
+                            fontSize: '11px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                        >
+                          <CheckCircle2 size={11} /> {item.maxDaysInDc}d in DC (Fresh)
+                        </span>
+                      )}
                     </td>
                     <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569' }}>
                       {item.latest_serial || '—'}
@@ -947,4 +1095,3 @@ export default function Dashboard() {
     </div>
   );
 }
-

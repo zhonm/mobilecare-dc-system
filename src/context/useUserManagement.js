@@ -148,7 +148,7 @@ export function useUserManagement({
     return () => {
       isMounted = false;
     };
-  }, [supabase]);
+  }, []);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
@@ -247,7 +247,8 @@ export function useUserManagement({
     if (supabase && usersList && usersList.length > 0) {
       syncAllUsersToDatabase(usersList);
     }
-  }, [supabase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 1. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
@@ -830,7 +831,7 @@ export function useUserManagement({
     const cleanEmail = target.email?.toLowerCase();
     const targetId = String(target.id || cleanUserId);
 
-    let deletedIds = [];
+    let deletedIds;
     try {
       deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
     } catch (e) {

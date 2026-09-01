@@ -31,13 +31,29 @@ import {
   ChevronRight,
   AlertTriangle,
   Copy,
-  Boxes,
-  Plus
+  Boxes
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
+
+// Pure category & assignment classification helpers
+function isUnitSvnr(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  return a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr);
+}
+
+function isUnitCrbr(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u);
+}
+
+function isUnitForecasting(u) {
+  return !isUnitSvnr(u) && !isUnitCrbr(u);
+}
 
 export default function ScanInReceiving() {
   const {
@@ -61,7 +77,6 @@ export default function ScanInReceiving() {
   } = useApp();
 
   const isPmgUser = currentUser?.role === 'parts_management';
-  const isFulfillment = ['superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff'].includes(currentUser?.role);
 
   const userSiteObj = useMemo(() => {
     return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
@@ -76,8 +91,7 @@ export default function ScanInReceiving() {
     return dcSiteObj;
   }, [isPmgUser, userSiteObj, dcSiteObj]);
 
-  const isProvincial = useMemo(() => isProvincialSite(activeReceivingSite), [activeReceivingSite]);
-
+  
   const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
@@ -169,15 +183,12 @@ export default function ScanInReceiving() {
   const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR' | 'SVNR'
   const [categoryFilter, setCategoryFilter] = useState('ALL'); // 'ALL' | category code
   const [tableSearch, setTableSearch] = useState('');
-  const [copiedSerial, setCopiedSerial] = useState(null);
 
   const handleCopySerial = (serial) => {
     if (!serial) return;
     try {
       navigator.clipboard?.writeText(serial);
-      setCopiedSerial(serial);
       showToast(`Copied serial #${serial} to clipboard`, 'info');
-      setTimeout(() => setCopiedSerial(null), 2500);
     } catch (e) {}
   };
 
@@ -192,22 +203,7 @@ export default function ScanInReceiving() {
   };
 
   // Helper functions for Part Intake Assignment Classification
-  const isUnitSvnr = (u) => {
-    const assign = String(u.intake_assignment || '').toUpperCase();
-    const notes = String(u.notes || '').toUpperCase();
-    return assign.includes('SVNR') || notes.includes('SVNR');
-  };
 
-  const isUnitCrbr = (u) => {
-    if (isUnitSvnr(u)) return false;
-    const assign = String(u.intake_assignment || '').toUpperCase();
-    const notes = String(u.notes || '').toUpperCase();
-    return assign.includes('CRBR') || notes.includes('CRBR');
-  };
-
-  const isUnitForecasting = (u) => {
-    return !isUnitSvnr(u) && !isUnitCrbr(u);
-  };
 
   // Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -877,7 +873,7 @@ export default function ScanInReceiving() {
       return (u.status === 'in_stock' || !u.status) && isDc;
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, packedSerialsSet, parts, isFulfillment, isPmgUser, activeReceivingSite, currentUser]);
+  }, [inventoryUnits, packedSerialsSet, parts, isPmgUser, activeReceivingSite, currentUser]);
 
   // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedReceivedUnits = useMemo(() => {
@@ -1033,9 +1029,6 @@ export default function ScanInReceiving() {
     }
   };
 
-  const forecastingCount = assignmentCounts.forecasting;
-  const crbrCount = assignmentCounts.crbr;
-  const svnrCount = assignmentCounts.svnr;
 
   return (
     <div className="scanner-container">

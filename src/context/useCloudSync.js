@@ -4,14 +4,15 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
-import { reconcileUnitsWithPackedDrafts, isUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
-import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
+import { reconcileUnitsWithPackedDrafts, toValidUUID, isUUID, safeUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
+import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 
 export function useCloudSync({
   currentUser,
+  setCurrentUser,
   activeTab,
   setActiveTab,
   activePeriod,
@@ -762,6 +763,25 @@ export function useCloudSync({
           deletedShipmentIds = cloudDeletedShipments;
         }
 
+        const isDeletedOrCorruptedShipment = (s) => {
+          if (!s) return true;
+          const sId = String(s.id || '').trim().toUpperCase();
+          const sRef = String(s.invoice_ref || s.invoiceRef || '').trim().toUpperCase();
+          const sNum = String(s.shipment_number || '').trim().toUpperCase();
+          const cleanRef = sRef.replace(/[^A-Z0-9]/g, '');
+
+          // Explicitly block accidental test phantom shipments
+          if (cleanRef === 'DCOWNED082726A' || cleanRef === 'DCOWNED082726B') return true;
+          if (sRef.includes('082726A') || sRef.includes('082726B')) return true;
+
+          return deletedShipmentIds.some(d => {
+            if (!d) return false;
+            const dClean = String(d).trim().toUpperCase();
+            const dNorm = dClean.replace(/[^A-Z0-9]/g, '');
+            return dClean === sId || dClean === sRef || dClean === sNum || (cleanRef && (dClean === cleanRef || dNorm === cleanRef));
+          });
+        };
+
         const cloudShipmentsRegistryDoc = dbSavedRecords.find(r => r.id === 'master_shipments_registry');
         const cloudShipmentsList = (cloudShipmentsRegistryDoc?.snapshot_data?.shipments && Array.isArray(cloudShipmentsRegistryDoc.snapshot_data.shipments))
           ? cloudShipmentsRegistryDoc.snapshot_data.shipments
@@ -772,19 +792,19 @@ export function useCloudSync({
         // 1. Ingest authoritative master_shipments_registry first
         cloudShipmentsList.forEach(s => {
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
-          if (canonicalRef && !deletedShipmentIds.includes(s.id)) {
+          if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
             shipmentMap.set(canonicalRef, s);
           }
         });
 
         // 2. Overlay individual saved_records shipment docs
         const shipmentRecords = dbSavedRecords
-          .filter(r => (r.record_type === 'shipment' || (r.snapshot_data && r.snapshot_data.shipment_number)) && !deletedShipmentIds.includes(r.id) && r.notes !== '__DELETED__' && r.snapshot_data?.isDeleted !== true)
+          .filter(r => (r.record_type === 'shipment' || (r.snapshot_data && r.snapshot_data.shipment_number)) && !isDeletedOrCorruptedShipment(r) && !isDeletedOrCorruptedShipment(r.snapshot_data) && r.notes !== '__DELETED__' && r.snapshot_data?.isDeleted !== true)
           .map(r => r.snapshot_data || r);
 
         shipmentRecords.forEach(s => {
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
-          if (canonicalRef) {
+          if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
             const existing = shipmentMap.get(canonicalRef);
             shipmentMap.set(canonicalRef, {
               ...(existing || {}),
@@ -796,9 +816,9 @@ export function useCloudSync({
 
         // 3. Overlay direct public.shipments table joined with shipment_items
         if (dbShipments && dbShipments.length > 0) {
-          dbShipments.filter(s => !deletedShipmentIds.includes(s.id)).forEach(dbS => {
+          dbShipments.filter(s => !isDeletedOrCorruptedShipment(s)).forEach(dbS => {
             const canonicalRef = String(dbS.invoice_ref || dbS.shipment_number || dbS.id || '').trim().toUpperCase();
-            if (canonicalRef) {
+            if (canonicalRef && !isDeletedOrCorruptedShipment(dbS)) {
               const existing = shipmentMap.get(canonicalRef);
               const formattedItems = Array.isArray(dbS.items) && dbS.items.length > 0
                 ? dbS.items
@@ -833,7 +853,7 @@ export function useCloudSync({
           if (Array.isArray(localShipments)) {
             localShipments.forEach(s => {
               const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
-              if (canonicalRef && !deletedShipmentIds.includes(s.id)) {
+              if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
                 const existing = shipmentMap.get(canonicalRef);
                 if (!existing) {
                   shipmentMap.set(canonicalRef, s);
@@ -846,7 +866,7 @@ export function useCloudSync({
         } catch (e) {}
 
         effectiveShipments = Array.from(shipmentMap.values())
-          .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !deletedShipmentIds.includes(s.id))
+          .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !isDeletedOrCorruptedShipment(s))
           .map(s => {
             if (!s) return s;
             const cleanPrepBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff')
@@ -1313,7 +1333,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, currentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, currentUser, setCurrentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1521,7 +1541,7 @@ export function useCloudSync({
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         broadcastBus = new BroadcastChannel('mdc_sync_bus');
-        broadcastBus.onmessage = (ev) => {
+        broadcastBus.onmessage = async (ev) => {
           if (ev.data && ev.data.type) {
             handleRealtimeInventoryEvent(ev.data.type, ev.data.payload);
 
@@ -1567,18 +1587,29 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)) {
-              if (ev.data.type === 'MASTER_DATA_CLEARED') {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)) {
+              if (ev.data.type === 'GLOBAL_FORCE_CACHE_REFRESH') {
+                await clearOperationalLocalStorage({ keepSession: true });
+                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+                lastRefreshTimeRef.current = 0;
+                await autoRefreshData({ force: true, silent: false, isManual: true, reason: `Global Force Refresh from ${ev.data.payload?.syncedBy || 'Superadmin'}` });
+                showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
+              } else if (ev.data.type === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
                   preservePeriod: ev.data.payload?.period || null
                 });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+                if (ev.data.payload?.period && setActivePeriod) {
+                  setActivePeriod(ev.data.payload.period);
+                }
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
+              } else {
+                if (ev.data.payload?.period && setActivePeriod) {
+                  setActivePeriod(ev.data.payload.period);
+                }
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
               }
-              if (ev.data.payload?.period && setActivePeriod) {
-                setActivePeriod(ev.data.payload.period);
-              }
-              autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
               if (Date.now() - lastLocalTime >= 3000) {
@@ -1595,7 +1626,7 @@ export function useCloudSync({
           .channel('mdc-global-sync-room', {
             config: { broadcast: { self: false } }
           })
-          .on('broadcast', { event: 'mdc_sync' }, (payload) => {
+          .on('broadcast', { event: 'mdc_sync' }, async (payload) => {
             console.debug('[Realtime WebSocket] Received global peer sync broadcast:', payload);
             const bType = payload?.payload?.type;
             const bPayload = payload?.payload?.payload;
@@ -1646,18 +1677,29 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(bType)) {
-              if (bType === 'MASTER_DATA_CLEARED') {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(bType)) {
+              if (bType === 'GLOBAL_FORCE_CACHE_REFRESH') {
+                await clearOperationalLocalStorage({ keepSession: true });
+                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+                lastRefreshTimeRef.current = 0;
+                await autoRefreshData({ force: true, silent: false, isManual: true, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
+                showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
+              } else if (bType === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
                   preservePeriod: bPayload?.period || null
                 });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+                if (bPayload?.period && setActivePeriod) {
+                  setActivePeriod(bPayload.period);
+                }
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+              } else {
+                if (bPayload?.period && setActivePeriod) {
+                  setActivePeriod(bPayload.period);
+                }
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
               }
-              if (bPayload?.period && setActivePeriod) {
-                setActivePeriod(bPayload.period);
-              }
-              autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
             }
             triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });
@@ -2484,6 +2526,145 @@ export function useCloudSync({
     }
   };
 
+  // Test Database Connection & Latency
+  const testDatabaseConnection = async () => {
+    if (!supabase) return { connected: false, error: 'Supabase client not initialized', latency: 0 };
+    const t0 = performance.now();
+    try {
+      const { count, error } = await supabase.from('parts').select('id', { count: 'exact', head: true });
+      const latency = Math.round(performance.now() - t0);
+      if (error) throw error;
+      return { connected: true, latency, count: count || 0 };
+    } catch (err) {
+      return { connected: false, error: err.message, latency: Math.round(performance.now() - t0) };
+    }
+  };
+
+  // Force Global Cloud Sync & Purge All Users Cache
+  const forceGlobalCloudSyncAndPurge = async (overrideData = null) => {
+    if (!supabase) {
+      showToast('Supabase client is not connected', 'error');
+      return { success: false, error: 'Supabase client is not connected' };
+    }
+
+    try {
+      showToast('Initiating Global Cloud Sync & Database Upsert...', 'info');
+
+      // 1. Sync all master data to Supabase (parts, sites, categories, forecasts, allocations, logs)
+      const syncRes = await syncAllDataToCloud(overrideData);
+      if (!syncRes.success) throw new Error(syncRes.error || 'Failed to sync master data');
+
+      // 2. Sync Live Inventory Units (DC & Branches)
+      const currentInv = overrideData?.inventoryUnits || inventoryUnits || [];
+      if (currentInv.length > 0) {
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master DC In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: { units: currentInv },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (e) {
+          console.warn('Inventory units saved_records sync note:', e);
+        }
+      }
+
+      // 3. Sync Outbound Shipments & Manifests
+      const currentShipments = overrideData?.shipments || _shipments || [];
+      if (currentShipments.length > 0) {
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_shipments_registry',
+            record_type: 'shipments_registry',
+            period_label: 'Master Shipments Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master DC Outbound Shipments & Packing Lists',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: {
+              shipments: currentShipments,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (e) {
+          console.warn('Shipments saved_records sync note:', e);
+        }
+      }
+
+      // 4. Sync User Accounts & Roles
+      const currentUsers = overrideData?.usersList || _usersList || [];
+      if (currentUsers.length > 0) {
+        try {
+          await supabase.from('saved_records').upsert({
+            id: 'master_user_accounts_registry',
+            record_type: 'user_accounts_registry',
+            period_label: 'Master User Accounts Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master User Accounts & Security Matrix',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: {
+              users: currentUsers,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (e) {
+          console.warn('Users saved_records sync note:', e);
+        }
+      }
+
+      // 5. Write Global Sync Beacon
+      const syncBeaconPayload = {
+        syncVersion: Date.now(),
+        syncedBy: currentUser?.fullName || 'Superadmin',
+        syncedByEmail: currentUser?.email || '',
+        syncedAt: new Date().toISOString(),
+        action: 'GLOBAL_FORCE_CACHE_REFRESH'
+      };
+
+      try {
+        await supabase.from('saved_records').upsert({
+          id: 'global_cloud_sync_beacon',
+          record_type: 'sync_beacon',
+          period_label: 'Global Cloud Sync Beacon',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: `Global synchronization initiated by ${currentUser?.fullName || 'Superadmin'}`,
+          saved_by_name: currentUser?.fullName || 'Superadmin',
+          saved_by_user_id: safeUUID(currentUser?.id),
+          snapshot_data: syncBeaconPayload,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (e) {
+        console.warn('Sync beacon note:', e);
+      }
+
+      // 6. Broadcast Global Cache Purge & Hard Refresh across the entire network
+      broadcastCloudEvent('GLOBAL_FORCE_CACHE_REFRESH', syncBeaconPayload);
+
+      // 7. Locally clear operational cache & rehydrate fresh data for this Superadmin session
+      await clearOperationalLocalStorage({ keepSession: true });
+      lastRefreshTimeRef.current = 0;
+      await autoRefreshData({ force: true, silent: true, isManual: true, reason: 'Superadmin Initiated Global Sync' });
+
+      setLastSyncedAt(new Date());
+      showToast('🚀 Global Cloud Sync Complete: Pushed latest data to PostgreSQL and triggered cache reload on all user devices!', 'success');
+      return { success: true, timestamp: syncBeaconPayload.syncedAt };
+    } catch (err) {
+      console.error('Global cloud sync error:', err);
+      showToast(`Global sync error: ${err.message}`, 'error');
+      return { success: false, error: err.message };
+    }
+  };
+
   return {
     cloudSyncStatus,
     setCloudSyncStatus,
@@ -2501,6 +2682,8 @@ export function useCloudSync({
     triggerDebouncedRealtimeSync,
     refreshDataFromCloud,
     syncAllDataToCloud,
+    forceGlobalCloudSyncAndPurge,
+    testDatabaseConnection,
     resetToDefaultData,
     clearAllData,
     applyParsedDataset,

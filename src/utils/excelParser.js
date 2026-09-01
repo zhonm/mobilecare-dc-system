@@ -3317,6 +3317,8 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
         status = rawStatusStr;
       }
       const verBy = row['Verified By'] || 'Admin Staff';
+      const pickupBy = row['Pickup By'] || row['Driver Name'] || '';
+      const prepBy = row['Prepared By'] || 'Warehouse Staff';
       const shipDate = row['Shipment Date'] || new Date().toISOString().split('T')[0];
       const pn = row['Part Number'] || row['Part #'] || row['P/N'] || '';
       const sn = row['Serial Number'] || row['Serial #'] || row['S/N'] || '';

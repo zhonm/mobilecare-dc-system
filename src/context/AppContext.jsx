@@ -215,6 +215,8 @@ export function AppProvider({ children }) {
   // 9. Shipments Domain
   const shipmentsDomain = useShipments({
     currentUser: auth.currentUser,
+    parts: catalogAndSites.parts,
+    sites: catalogAndSites.sites,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     logDeletionAudit: auditLogs.logDeletionAudit,
@@ -241,6 +243,7 @@ export function AppProvider({ children }) {
   // 11. Central Cloud Sync & Realtime Engine
   const cloudSync = useCloudSync({
     currentUser: auth.currentUser,
+    setCurrentUser: auth.setCurrentUser,
     activeTab,
     setActiveTab,
     activePeriod,
@@ -416,6 +419,8 @@ export function AppProvider({ children }) {
         applyPmgDirectoryToSites: catalogAndSites.applyPmgDirectoryToSites,
         applyParsedDataset: cloudSync.applyParsedDataset,
         syncAllDataToCloud: cloudSync.syncAllDataToCloud,
+        forceGlobalCloudSyncAndPurge: cloudSync.forceGlobalCloudSyncAndPurge,
+        testDatabaseConnection: cloudSync.testDatabaseConnection,
         refreshDataFromCloud: cloudSync.refreshDataFromCloud,
         hydrateFromSupabase: cloudSync.hydrateFromSupabase,
         isAutoRefreshing: cloudSync.isAutoRefreshing,

@@ -7,7 +7,6 @@ import {
   UploadCloud,
   TrendingUp,
   BookmarkCheck,
-  BookmarkPlus,
   ShoppingCart,
   Barcode,
   Split,

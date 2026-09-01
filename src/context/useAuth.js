@@ -12,7 +12,7 @@ import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { isUUID, toValidUUID } from '../utils/appContextHelpers';
+import { isUUID } from '../utils/appContextHelpers';
 
 export function useAuth({
   usersList,
@@ -254,34 +254,7 @@ export function useAuth({
     return fallbackPreset.includes(pageId) && pageId !== 'user-access';
   };
 
-  // Helper to load authoritative deleted user IDs and emails from both local and cloud
-  const getAuthoritativeDeletedUserIds = async () => {
-    const deletedSet = new Set();
-    try {
-      const local = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-      local.forEach(id => { if (id) deletedSet.add(String(id).toLowerCase().trim()); });
-    } catch (e) {}
 
-    if (supabase) {
-      try {
-        const { data: regDoc } = await supabase
-          .from('saved_records')
-          .select('snapshot_data')
-          .eq('id', 'master_users_registry')
-          .maybeSingle();
-
-        if (regDoc?.snapshot_data?.deletedUserIds && Array.isArray(regDoc.snapshot_data.deletedUserIds)) {
-          regDoc.snapshot_data.deletedUserIds.forEach(id => {
-            if (id) {
-              const cleanId = String(id).toLowerCase().trim();
-              deletedSet.add(cleanId);
-            }
-          });
-        }
-      } catch (e) {}
-    }
-    return deletedSet;
-  };
 
   // 1. Verify Company Email during Login (Authoritative Database First)
   const verifyLoginEmail = async (rawEmail) => {

@@ -800,8 +800,8 @@ it('Zero-Stock Auto-Cleaning strictly EXEMPTS parts that have units packed or in
   const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000;
   const fourDaysAgoIso = new Date(nowMs - FOUR_DAYS_MS).toISOString();
 
-  // Simulated inventory units
-  const inventoryUnits = [
+  // Simulated inventory units (referenced for scenario context)
+  const _inventoryUnits = [
     // inTransitPartPN has 0 in_stock units, but 1 unit packed in transit for PPM branch
     {
       id: 'u-transit-1',

@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { resolveSite } from '../utils/appContextHelpers';
 import * as XLSX from 'xlsx';
 import {
   Inbox,
@@ -251,7 +252,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                           (sh.site_code && (sh.site_code === targetSiteCode || sh.site_code === targetSiteId));
       return matchesSite;
     });
-  }, [shipments, isSuperadmin, selectedSiteId, currentUser, sites, userSiteObj, activeSiteObj]);
+  }, [shipments, isSuperadmin, selectedSiteId, currentUser, sites, activeSiteObj]);
 
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;
@@ -627,7 +628,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       });
     });
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj]);
+  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin]);
 
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>

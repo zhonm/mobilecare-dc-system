@@ -74,7 +74,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const trackingNumberStr = shipment.tracking_number || shipment.booking_id || '___________________';
 
   const metaRows = [
-    { label: 'INVOICE REF:', val: shipment.invoice_ref || `DCOWNED#082726A` },
+    { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________' },
     { label: 'CREATED DATE:', val: createdDateStr },
     { label: 'SHIPMENT DATE:', val: shipmentDateStr },
     { label: 'TRACKING NUMBER:', val: trackingNumberStr },

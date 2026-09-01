@@ -5,6 +5,8 @@ import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord
 
 export function useShipments({
   currentUser,
+  parts = [],
+  sites = [],
   showToast,
   broadcastCloudEvent,
   logDeletionAudit,
@@ -16,20 +18,49 @@ export function useShipments({
   const [shipments, setShipments] = useState(() => {
     try {
       if (isExplicitlyCleared()) return [];
+      let deletedTokensSet = new Set(['DCOWNED082726A', 'DCOWNED082726B', 'DCOWNED#082726A', 'DCOWNED#082726B']);
+      try {
+        const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
+        localDeleted.forEach(d => {
+          if (d) {
+            const raw = String(d).trim().toUpperCase();
+            deletedTokensSet.add(raw);
+            deletedTokensSet.add(raw.replace(/[^A-Z0-9]/g, ''));
+          }
+        });
+      } catch (e) {}
+
       const saved = localStorage.getItem('mdc_shipments');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map(s => {
-            if (!s) return s;
-            const cleanPreparedBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois');
-            return {
-              ...s,
-              status: s.status || 'pending_pickup',
-              prepared_by_name: cleanPreparedBy,
-              saved_by_name: cleanPreparedBy
-            };
-          });
+          return parsed
+            .filter(s => {
+              if (!s) return false;
+              const sId = String(s.id || '').trim().toUpperCase();
+              const sRef = String(s.invoice_ref || s.invoiceRef || '').trim().toUpperCase();
+              const sNum = String(s.shipment_number || '').trim().toUpperCase();
+              const sNorm = sRef.replace(/[^A-Z0-9]/g, '');
+
+              // Explicitly filter out accidental test shipments
+              if (sNorm === 'DCOWNED082726A' || sNorm === 'DCOWNED082726B') return false;
+              if (sRef.includes('082726A') || sRef.includes('082726B')) return false;
+
+              if (deletedTokensSet.has(sId) || deletedTokensSet.has(sRef) || deletedTokensSet.has(sNum) || (sNorm && deletedTokensSet.has(sNorm))) {
+                return false;
+              }
+              return true;
+            })
+            .map(s => {
+              if (!s) return s;
+              const cleanPreparedBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois');
+              return {
+                ...s,
+                status: s.status || 'pending_pickup',
+                prepared_by_name: cleanPreparedBy,
+                saved_by_name: cleanPreparedBy
+              };
+            });
         }
       }
       return [];
@@ -250,7 +281,25 @@ export function useShipments({
       } catch (e) {}
     }
 
-    const nextList = shipments.filter(s => s.id !== shipmentId);
+    const targetId = target?.id || shipmentId;
+    const targetRef = target?.invoice_ref ? String(target.invoice_ref).trim() : '';
+    const targetNum = target?.shipment_number ? String(target.shipment_number).trim() : '';
+    const cleanRef = targetRef.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    const nextList = shipments.filter(s => {
+      if (!s) return false;
+      const sId = String(s.id || '').trim();
+      const sRef = String(s.invoice_ref || s.invoiceRef || '').trim();
+      const sNum = String(s.shipment_number || '').trim();
+      const sNorm = sRef.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+      if (sId === targetId || sId === shipmentId) return false;
+      if (targetRef && sRef.toUpperCase() === targetRef.toUpperCase()) return false;
+      if (targetNum && sNum.toUpperCase() === targetNum.toUpperCase()) return false;
+      if (cleanRef && sNorm === cleanRef) return false;
+      return true;
+    });
+
     setShipments(nextList);
     dbStorage.setItem('mdc_shipments', nextList);
 
@@ -258,7 +307,8 @@ export function useShipments({
     try {
       localStorage.setItem('mdc_shipments', JSON.stringify(nextList));
       const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
-      updatedDeletedList = Array.from(new Set([...deletedList, shipmentId]));
+      const tokensToAdd = [targetId, shipmentId, targetRef, targetNum, cleanRef].filter(Boolean);
+      updatedDeletedList = Array.from(new Set([...deletedList, ...tokensToAdd]));
       localStorage.setItem('mdc_deleted_shipment_ids', JSON.stringify(updatedDeletedList));
     } catch (e) {}
 
@@ -284,7 +334,18 @@ export function useShipments({
         if (delRecErr) {
           await supabase.from('saved_records').update({ notes: '__DELETED__', snapshot_data: { isDeleted: true }, updated_at: new Date().toISOString() }).eq('id', shipmentId);
         }
+        // First delete child shipment_items to prevent foreign key constraint violation (shipment_items_shipment_id_fkey)
+        try { await supabase.from('shipment_items').delete().eq('shipment_id', targetId); } catch (e) {}
+        try { await supabase.from('shipment_items').delete().eq('shipment_id', shipmentId); } catch (e) {}
+        // Then delete parent shipment row
+        try { await supabase.from('shipments').delete().eq('id', targetId); } catch (e) {}
         try { await supabase.from('shipments').delete().eq('id', shipmentId); } catch (e) {}
+        if (targetRef) {
+          try { await supabase.from('shipments').delete().eq('invoice_ref', targetRef); } catch (e) {}
+        }
+        if (targetNum) {
+          try { await supabase.from('shipments').delete().eq('shipment_number', targetNum); } catch (e) {}
+        }
 
         await supabase.from('saved_records').upsert({
           id: 'deleted_shipment_ids_registry',
@@ -611,33 +672,60 @@ export function useShipments({
           console.warn('master_shipments_registry save note:', mErr.message);
         }
 
-        // Channel 1: Upsert to direct shipments table in Supabase
-        const directShipmentRow = formatShipmentForDb(newShipment);
+        // Channel 1: Robust Upsert / Update to direct shipments table in Supabase
+        const directShipmentRow = formatShipmentForDb(newShipment, sites);
         let effectiveDbShipmentId = directShipmentRow?.id;
         let shipmentSavedInDb = false;
 
         if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
           try {
-            const { data: shpData, error: shpErr } = await supabase
+            // Check if matching row exists by ID or shipment_number to avoid unique constraint violations
+            const { data: existingShpList } = await supabase
               .from('shipments')
-              .upsert(directShipmentRow, { onConflict: 'shipment_number' })
-              .select('id');
+              .select('id, shipment_number')
+              .or(`id.eq.${directShipmentRow.id},shipment_number.eq.${directShipmentRow.shipment_number}`)
+              .limit(1);
 
-            if (!shpErr) {
-              shipmentSavedInDb = true;
-              if (shpData && shpData[0]?.id) effectiveDbShipmentId = shpData[0].id;
+            if (existingShpList && existingShpList.length > 0) {
+              const matchedDbId = existingShpList[0].id;
+              effectiveDbShipmentId = matchedDbId;
+              const updatePayload = {
+                shipment_number: directShipmentRow.shipment_number,
+                invoice_ref: directShipmentRow.invoice_ref,
+                site_id: directShipmentRow.site_id,
+                week_number: directShipmentRow.week_number,
+                shipment_date: directShipmentRow.shipment_date,
+                carrier: directShipmentRow.carrier,
+                tracking_number: directShipmentRow.tracking_number,
+                total_boxes: directShipmentRow.total_boxes,
+                status: directShipmentRow.status,
+                prepared_by_name: directShipmentRow.prepared_by_name,
+                verified_by_name: directShipmentRow.verified_by_name,
+                receiving_signature: directShipmentRow.receiving_signature,
+                remarks: directShipmentRow.remarks,
+                updated_at: new Date().toISOString()
+              };
+              const { error: updErr } = await supabase
+                .from('shipments')
+                .update(updatePayload)
+                .eq('id', matchedDbId);
+
+              if (!updErr) {
+                shipmentSavedInDb = true;
+              } else {
+                console.warn('Direct shipments table update notice:', updErr.message);
+              }
             } else {
-              console.warn('Direct shipments table notice:', shpErr.message);
-              if (shpErr.code === '22P02' || shpErr.message.includes('enum')) {
-                const retryRow = { ...directShipmentRow, status: 'draft' };
-                const { data: retryData, error: retryErr } = await supabase
-                  .from('shipments')
-                  .upsert(retryRow, { onConflict: 'shipment_number' })
-                  .select('id');
-                if (!retryErr) {
-                  shipmentSavedInDb = true;
-                  if (retryData && retryData[0]?.id) effectiveDbShipmentId = retryData[0].id;
-                }
+              const { data: insData, error: insErr } = await supabase
+                .from('shipments')
+                .insert(directShipmentRow)
+                .select('id');
+
+              if (!insErr) {
+                shipmentSavedInDb = true;
+                if (insData && insData[0]?.id) effectiveDbShipmentId = insData[0].id;
+              } else {
+                console.warn('Direct shipments table insert notice:', insErr.message);
               }
             }
           } catch (shpErr) {
@@ -645,12 +733,27 @@ export function useShipments({
           }
         }
 
-        // Channel 1b: Upsert to direct shipment_items table in Supabase ONLY IF parent shipment succeeded
+        // Channel 1b: Upsert to direct shipment_items table with DB foreign key integrity resolution
         if (shipmentSavedInDb && newShipment.items && newShipment.items.length > 0) {
           try {
-            const shipmentItemsRows = formatShipmentItemsForDb({ ...newShipment, id: effectiveDbShipmentId }, inventoryUnits, [], currentUser);
+            // Retrieve actual UUIDs from db parts and inventory_units tables
+            const { data: dbParts } = await supabase.from('parts').select('id, part_number');
+            const { data: dbUnits } = await supabase.from('inventory_units').select('id, serial_number');
+
+            const shipmentItemsRows = formatShipmentItemsForDb(
+              { ...newShipment, id: effectiveDbShipmentId },
+              dbUnits && dbUnits.length > 0 ? dbUnits : inventoryUnits,
+              dbParts && dbParts.length > 0 ? dbParts : parts,
+              currentUser
+            );
+
             if (shipmentItemsRows.length > 0) {
-              await supabase.from('shipment_items').upsert(shipmentItemsRows, { onConflict: 'id' });
+              // Delete old items for this shipment first to prevent duplicates & constraint collisions
+              await supabase.from('shipment_items').delete().eq('shipment_id', effectiveDbShipmentId);
+              const { error: itInsErr } = await supabase.from('shipment_items').insert(shipmentItemsRows);
+              if (itInsErr) {
+                console.warn('Direct shipment_items insert notice:', itInsErr.message);
+              }
             }
           } catch (itErr) {
             console.warn('Direct shipment_items table notice:', itErr.message);

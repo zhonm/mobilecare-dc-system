@@ -1279,7 +1279,7 @@ export default function IntakeRecords() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        let nextDest = 'MDC - Forecasting';
+                                        let nextDest;
                                         if (u.isSvnr) {
                                           nextDest = 'MDC - Forecasting';
                                         } else if (u.isCrbr) {

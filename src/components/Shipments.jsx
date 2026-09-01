@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -18,12 +18,6 @@ import {
   Truck,
   Clock,
   PackageCheck,
-  Package,
-  Calendar,
-  UserCheck,
-  MapPin,
-  ShieldCheck,
-  ArrowRightCircle
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
 import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
@@ -331,25 +325,6 @@ export default function Shipments() {
     }
   };
 
-  const handleBulkMoveToPendingPickup = async () => {
-    let count = 0;
-    const activeUserName = currentUser?.fullName || currentUser?.name || 'Zhon Manaois';
-    const toUpdate = (shipments || []).filter(s => !isLockedConfirmedShipment(s) && s.status !== 'received_confirmed');
-    for (const sh of toUpdate) {
-      count++;
-      const cleanPrepBy = (sh.prepared_by_name && sh.prepared_by_name !== 'Warehouse Staff') ? sh.prepared_by_name : activeUserName;
-      await saveShipment({
-        ...sh,
-        status: 'pending_pickup',
-        prepared_by_name: cleanPrepBy,
-        saved_by_name: cleanPrepBy,
-        shipment_date: '',
-        updated_at: new Date().toISOString()
-      });
-    }
-    showToast(`Successfully moved ${count} shipment manifest(s) to Pending for Pickup!`, 'success');
-  };
-
   // --- Safe Clear Handling ---
   const handleConfirmClearAll = () => {
     clearAllShipmentsData();
@@ -375,23 +350,6 @@ export default function Shipments() {
           </div>
 
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleBulkMoveToPendingPickup}
-              title="Move all unconfirmed shipments to Pending for Pickup"
-              style={{
-                background: '#fffbeb',
-                color: '#b45309',
-                borderColor: '#fde68a',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <Clock size={14} />
-              <span>Move to Pending Pickup</span>
-            </button>
 
             <button
               className="btn btn-secondary btn-sm"

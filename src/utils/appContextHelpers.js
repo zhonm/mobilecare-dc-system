@@ -319,7 +319,7 @@ export function formatShipmentForDb(s, sitesList = []) {
 
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
   const rawStatus = String(s.status || 'draft').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  let validStatus = 'draft';
+  let validStatus;
   if (rawStatus.includes('confirm') || rawStatus === 'received_confirmed' || rawStatus === 'delivered') {
     validStatus = 'received_confirmed';
   } else if (rawStatus === 'shipped' || rawStatus === 'in_transit') {
@@ -356,33 +356,53 @@ export function formatShipmentForDb(s, sitesList = []) {
 export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [], currentUser = null) {
   if (!s || !Array.isArray(s.items) || s.items.length === 0) return [];
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
+  
   const partsMap = new Map();
   if (Array.isArray(partsList)) {
     partsList.forEach(p => {
-      if (p.part_number && isUUID(p.id)) partsMap.set(p.part_number.toUpperCase(), p.id);
+      if (p && p.part_number && isUUID(p.id)) partsMap.set(String(p.part_number).toUpperCase().trim(), p.id);
+    });
+  }
+
+  const unitsMap = new Map();
+  if (Array.isArray(inventoryUnits)) {
+    inventoryUnits.forEach(u => {
+      if (u && u.serial_number && isUUID(u.id)) unitsMap.set(String(u.serial_number).toUpperCase().trim(), u.id);
     });
   }
 
   return s.items.map((it, idx) => {
     const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
     const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
-    const rawPn = String(it.part_number || existingU?.part_number || '').toUpperCase();
-    const partId = isUUID(it.part_id) 
-      ? it.part_id 
-      : (isUUID(existingU?.part_id) 
-        ? existingU.part_id 
-        : (partsMap.get(rawPn) || toValidUUID('part-' + rawPn)));
-    const unitId = isUUID(existingU?.id) 
-      ? existingU.id 
-      : (isUUID(it.id) ? it.id : toValidUUID('unit-' + cleanSerial));
+    const rawPn = String(it.part_number || existingU?.part_number || '').toUpperCase().trim();
+    
+    // Resolve valid UUID for part_id (or null if not existing in db parts to prevent foreign key violation)
+    let validPartId = null;
+    if (isUUID(it.part_id)) {
+      validPartId = it.part_id;
+    } else if (isUUID(existingU?.part_id)) {
+      validPartId = existingU.part_id;
+    } else if (partsMap.has(rawPn)) {
+      validPartId = partsMap.get(rawPn);
+    }
+
+    // Resolve valid UUID for inventory_unit_id (or null if not existing in db inventory_units to prevent foreign key violation)
+    let validUnitId = null;
+    if (isUUID(existingU?.id)) {
+      validUnitId = existingU.id;
+    } else if (unitsMap.has(cleanSerial)) {
+      validUnitId = unitsMap.get(cleanSerial);
+    } else if (isUUID(it.id)) {
+      validUnitId = it.id;
+    }
 
     const itemId = isUUID(it.id) ? it.id : toValidUUID(`shp-item-${shipmentId}-${cleanSerial}-${idx}`);
 
     return {
       id: itemId,
       shipment_id: shipmentId,
-      inventory_unit_id: unitId,
-      part_id: partId,
+      inventory_unit_id: validUnitId,
+      part_id: validPartId,
       serial_number: cleanSerial,
       box_number: it.box_number || 1,
       scanned_at: it.scanned_at || s.shipment_date || new Date().toISOString(),

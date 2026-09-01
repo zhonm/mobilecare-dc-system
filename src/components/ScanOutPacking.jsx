@@ -38,6 +38,23 @@ import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelPa
 import { isLockedConfirmedShipment, generateNextInvoiceRef } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
+// Pure category & assignment classification helpers
+function isUnitSvnr(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  return a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr);
+}
+
+function isUnitCrbr(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u);
+}
+
+function isUnitForecasting(u) {
+  return !isUnitSvnr(u) && !isUnitCrbr(u);
+}
+
 export default function ScanOutPacking() {
   const {
     sites,
@@ -195,10 +212,11 @@ export default function ScanOutPacking() {
   }, [currentShipment, shipments, userDraftStorageKey]);
 
   // Live Packing Presence Heartbeat: broadcast current user's active packing station to peers (throttled)
-  const currentItemCountRef = useRef((currentShipment?.items || []).length);
+  const currentItemCount = currentShipment?.items?.length || 0;
+  const currentItemCountRef = useRef(currentItemCount);
   useEffect(() => {
-    currentItemCountRef.current = (currentShipment?.items || []).length;
-  }, [(currentShipment?.items || []).length]);
+    currentItemCountRef.current = currentItemCount;
+  }, [currentItemCount]);
 
   useEffect(() => {
     if (!currentUser || !broadcastPackingPresence) return;
@@ -444,22 +462,7 @@ export default function ScanOutPacking() {
   };
 
   // Helper functions for Part Intake Assignment Classification
-  const isUnitSvnr = (u) => {
-    const assign = String(u.intake_assignment || '').toUpperCase();
-    const notes = String(u.notes || '').toUpperCase();
-    return assign.includes('SVNR') || notes.includes('SVNR');
-  };
 
-  const isUnitCrbr = (u) => {
-    if (isUnitSvnr(u)) return false;
-    const assign = String(u.intake_assignment || '').toUpperCase();
-    const notes = String(u.notes || '').toUpperCase();
-    return assign.includes('CRBR') || notes.includes('CRBR');
-  };
-
-  const isUnitForecasting = (u) => {
-    return !isUnitSvnr(u) && !isUnitCrbr(u);
-  };
 
   // Assignment counts for Available DC Stock Units
   const assignmentCounts = useMemo(() => {
@@ -870,19 +873,10 @@ export default function ScanOutPacking() {
         remarks: 'KGB PARTS',
         items: []
       });
-      setPackedScans([]);
-      setScanError(null);
-      setLastAction({
-        type: 'finalized',
-        message: `Finalized Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) sent to ${selectedSite?.name || 'branch'}! Next packing list initialized.`
-      });
-      setIsFinalizeModalOpen(false);
       showToast(`Workstation ready for next shipment! (${nextInvoiceRef})`, 'info');
     } catch (err) {
       console.error('Finalize error:', err);
       showToast('Error saving packing list to database', 'error');
-    } finally {
-      setIsFinalizing(false);
     }
   };
 
@@ -1508,7 +1502,7 @@ export default function ScanOutPacking() {
                   type="text"
                   className="form-input font-mono"
                   style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '11.5px', height: '32px' }}
-                  value={currentShipment.invoice_ref ?? 'DCOWNED#082726A'}
+                  value={currentShipment.invoice_ref || ''}
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
                 />
               </div>
@@ -2043,8 +2037,8 @@ export default function ScanOutPacking() {
                   type="text"
                   className="packing-inline-input font-mono"
                   style={{ width: '200px', fontWeight: 700 }}
-                  value={currentShipment.invoice_ref ?? `DCOWNED#082726A`}
-                  placeholder="DCOWNED#082726A"
+                  value={currentShipment.invoice_ref || ''}
+                  placeholder="e.g. DCOWNED#..."
                   title="Click to edit Invoice Reference"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
                 />

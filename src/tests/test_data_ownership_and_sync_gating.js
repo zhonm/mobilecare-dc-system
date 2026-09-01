@@ -40,7 +40,7 @@ globalThis.localStorage = globalThis.window.localStorage;
 globalThis.sessionStorage = globalThis.window.sessionStorage;
 
 import { clearOperationalLocalStorage } from '../utils/cacheManager.js';
-import { formatShipmentForDb, formatShipmentItemsForDb, isUUID, toValidUUID } from '../utils/appContextHelpers.js';
+import { formatShipmentForDb, isUUID, toValidUUID } from '../utils/appContextHelpers.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Data Ownership & Initial Sync Gating');
