@@ -27,6 +27,7 @@ export default function FirstLoginLoadingScreen() {
     currentUser,
     hydrateFromSupabase,
     setIsInitialSyncing,
+    setActiveTab,
     showToast
   } = useApp();
 
@@ -102,6 +103,10 @@ export default function FirstLoginLoadingScreen() {
       // Brief pause at 100% to let user see successful completion
       setTimeout(() => {
         setIsInitialSyncing(false);
+        const hasDashboard = currentUser?.role === 'superadmin' || currentUser?.role === 'admin' || currentUser?.role === 'user' || currentUser?.permittedPages?.includes('dashboard');
+        if (typeof setActiveTab === 'function') {
+          setActiveTab(hasDashboard ? 'dashboard' : (currentUser?.permittedPages?.[0] || 'request-parts'));
+        }
         if (showToast) {
           showToast(`Live workspace ready for ${currentUser?.fullName || currentUser?.email || 'User'}!`, 'success');
         }

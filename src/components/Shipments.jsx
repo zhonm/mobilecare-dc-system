@@ -49,30 +49,7 @@ export default function Shipments() {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
 
-  // Auto-migration: Move any existing unconfirmed shipments to 'pending_pickup', fix 'Warehouse Staff' to active user ('Zhon Manaois'), and clear forced dates
-  useEffect(() => {
-    const activeUserName = currentUser?.fullName || currentUser?.name || 'Zhon Manaois';
-    const needMigration = (shipments || []).filter(s => 
-      !isLockedConfirmedShipment(s) && (
-        s.status === 'shipped' || 
-        s.prepared_by_name === 'Warehouse Staff' ||
-        s.saved_by_name === 'Warehouse Staff' ||
-        (s.status === 'pending_pickup' && s.shipment_date && !s.pickup_date)
-      )
-    );
-    if (needMigration.length > 0) {
-      needMigration.forEach(s => {
-        const cleanPrepBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : activeUserName;
-        saveShipment({
-          ...s,
-          status: 'pending_pickup',
-          prepared_by_name: cleanPrepBy,
-          saved_by_name: cleanPrepBy,
-          shipment_date: ''
-        });
-      });
-    }
-  }, [shipments, saveShipment, currentUser]);
+
 
   // Courier Pickup Handover Modal State
   const [pickupModalState, setPickupModalState] = useState(null);

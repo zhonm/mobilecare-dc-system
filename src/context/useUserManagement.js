@@ -8,7 +8,8 @@ import {
   ROLE_PRESETS,
   getDefaultRolePosition,
   LEGACY_MOCK_EMAILS,
-  LEGACY_MOCK_IDS
+  LEGACY_MOCK_IDS,
+  sortUsersDeterministically
 } from '../constants/roles';
 import { isUUID, toValidUUID } from '../utils/appContextHelpers';
 
@@ -31,29 +32,33 @@ export function useUserManagement({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed
-            .filter(u =>
-              !deletedIds.includes(u.id?.toLowerCase()) &&
-              !deletedIds.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            )
-            .map(u => {
-              if (u.role === 'parts_management') {
-                return {
-                  ...u,
-                  permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
-                };
-              }
-              return u;
-            });
+          return sortUsersDeterministically(
+            parsed
+              .filter(u =>
+                !deletedIds.includes(u.id?.toLowerCase()) &&
+                !deletedIds.includes(u.email?.toLowerCase()) &&
+                !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+                !LEGACY_MOCK_IDS.includes(u.id)
+              )
+              .map(u => {
+                if (u.role === 'parts_management') {
+                  return {
+                    ...u,
+                    permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
+                  };
+                }
+                return u;
+              })
+          );
         }
       }
-      return INITIAL_USERS.filter(u =>
-        !deletedIds.includes(u.id?.toLowerCase()) &&
-        !deletedIds.includes(u.email?.toLowerCase()) &&
-        !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-        !LEGACY_MOCK_IDS.includes(u.id)
+      return sortUsersDeterministically(
+        INITIAL_USERS.filter(u =>
+          !deletedIds.includes(u.id?.toLowerCase()) &&
+          !deletedIds.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_IDS.includes(u.id)
+        )
       );
     } catch (e) {
       console.warn('Error loading mdc_users:', e);
@@ -67,7 +72,7 @@ export function useUserManagement({
     const recoverUsersFromDb = async () => {
       try {
         if (supabase) {
-          const { data: dbProf, error } = await supabase.from('profiles').select('*');
+          const { data: dbProf, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: true });
           if (!error && dbProf && dbProf.length > 0 && isMounted) {
             const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
             const permsMap = new Map();
@@ -76,30 +81,32 @@ export function useUserManagement({
               permsMap.get(p.user_id).push(p.page_id);
             });
 
-            const activeProfiles = dbProf
-              .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()))
-              .map(p => {
-                const customPerms = permsMap.get(p.id);
-                const role = p.role || 'user';
-                const resolvedPosition = p.role_position || getDefaultRolePosition(role);
-                const passHash = p.password_hash || null;
-                const isPasswordSet = Boolean(p.has_set_password || passHash);
+            const activeProfiles = sortUsersDeterministically(
+              dbProf
+                .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()))
+                .map(p => {
+                  const customPerms = permsMap.get(p.id);
+                  const role = p.role || 'user';
+                  const resolvedPosition = p.role_position || getDefaultRolePosition(role);
+                  const passHash = p.password_hash || null;
+                  const isPasswordSet = Boolean(p.has_set_password || passHash);
 
-                return {
-                  id: p.id || `usr-${Date.now()}`,
-                  email: p.email,
-                  fullName: p.full_name || p.email.split('@')[0],
-                  role: role,
-                  rolePosition: resolvedPosition,
-                  siteId: p.site_id || 'site-dc',
-                  hasSetPassword: isPasswordSet,
-                  passwordHash: passHash,
-                  isActive: p.is_active ?? true,
-                  permittedPages: role === 'superadmin'
-                    ? ROLE_PRESETS.superadmin
-                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
-                };
-              });
+                  return {
+                    id: p.id || `usr-${Date.now()}`,
+                    email: p.email,
+                    fullName: p.full_name || p.email.split('@')[0],
+                    role: role,
+                    rolePosition: resolvedPosition,
+                    siteId: p.site_id || 'site-dc',
+                    hasSetPassword: isPasswordSet,
+                    passwordHash: passHash,
+                    isActive: p.is_active ?? true,
+                    permittedPages: role === 'superadmin'
+                      ? ROLE_PRESETS.superadmin
+                      : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                  };
+                })
+            );
 
             if (activeProfiles.length > 0) {
               setUsersList(activeProfiles);
@@ -117,11 +124,13 @@ export function useUserManagement({
         if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
           const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
 
-          const filtered = dbUsers.filter(u =>
-            !deletedIds.includes(u.id?.toLowerCase()) &&
-            !deletedIds.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-            !LEGACY_MOCK_IDS.includes(u.id)
+          const filtered = sortUsersDeterministically(
+            dbUsers.filter(u =>
+              !deletedIds.includes(u.id?.toLowerCase()) &&
+              !deletedIds.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            )
           );
           if (filtered.length > 0) {
             setUsersList(filtered);

@@ -56,3 +56,33 @@ export const LEGACY_MOCK_IDS = [
   'usr-sitestaff',
   'usr-firsttime'
 ];
+
+export function sortUsersDeterministically(users = []) {
+  if (!Array.isArray(users)) return [];
+  const roleRank = {
+    superadmin: 1,
+    admin: 2,
+    parts_management: 3,
+    user: 4
+  };
+  return [...users].sort((a, b) => {
+    // 1. Role hierarchy (Superadmin first, then Admin, PMG, User)
+    const rankA = roleRank[a.role] || 99;
+    const rankB = roleRank[b.role] || 99;
+    if (rankA !== rankB) return rankA - rankB;
+
+    // 2. Active status (Active before Deactivated)
+    const activeA = a.isActive !== false ? 1 : 0;
+    const activeB = b.isActive !== false ? 1 : 0;
+    if (activeA !== activeB) return activeB - activeA;
+
+    // 3. Alphabetical by Full Name
+    const nameA = String(a.fullName || a.email || '').trim().toLowerCase();
+    const nameB = String(b.fullName || b.email || '').trim().toLowerCase();
+    const nameComp = nameA.localeCompare(nameB);
+    if (nameComp !== 0) return nameComp;
+
+    // 4. Stable tiebreaker: ID
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}

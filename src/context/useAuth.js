@@ -649,7 +649,8 @@ export function useAuth({
     }
 
     setCurrentUser(user);
-    const initialPage = user.permittedPages?.[0] || 'dashboard';
+    const hasDashboard = user.role === 'superadmin' || user.role === 'admin' || user.role === 'user' || user.permittedPages?.includes('dashboard');
+    const initialPage = hasDashboard ? 'dashboard' : (user.permittedPages?.[0] || 'request-parts');
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
     showToast(`Welcome back, ${user.fullName}!`, 'success');
     return { success: true, user };
@@ -856,7 +857,8 @@ export function useAuth({
       broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: updatedUser.id, table: 'saved_records' });
     }
 
-    const initialPage = updatedUser.permittedPages?.[0] || 'dashboard';
+    const hasDashboard = updatedUser.role === 'superadmin' || updatedUser.role === 'admin' || updatedUser.role === 'user' || updatedUser.permittedPages?.includes('dashboard');
+    const initialPage = hasDashboard ? 'dashboard' : (updatedUser.permittedPages?.[0] || 'request-parts');
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
     showToast(`Password successfully configured! Welcome to DC System, ${updatedUser.fullName}.`, 'success');
     return { success: true, user: updatedUser };

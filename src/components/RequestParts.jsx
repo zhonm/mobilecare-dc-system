@@ -231,8 +231,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
   // Derive Incoming & In-Transit Shipments for this branch (Awaiting Superadmin confirmation)
   const incomingShipments = useMemo(() => {
-    const targetSiteId = isSuperadmin && selectedSiteId !== 'ALL' ? selectedSiteId : (currentUser?.siteId || userSiteObj.id);
-    const targetSiteCode = activeSiteObj?.code || userSiteObj?.code;
+    const userResolved = resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
+    const targetSiteId = isSuperadmin && selectedSiteId !== 'ALL' ? selectedSiteId : userResolved.id;
+    const targetSiteCode = isSuperadmin && selectedSiteId !== 'ALL'
+      ? (sites.find(s => s.id === selectedSiteId)?.code || selectedSiteId)
+      : (activeSiteObj?.code || userResolved.code);
 
     return (shipments || []).filter(sh => {
       if (!sh.items || sh.items.length === 0) return false;
@@ -241,11 +244,14 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       if (selectedSiteId === 'ALL' && isSuperadmin) return true;
 
-      const matchesSite = (sh.site_id && (sh.site_id === targetSiteId || sh.site_id === targetSiteCode)) ||
+      const shSite = resolveSite(sh.site_id || sh.site_code || sh.siteId || sh.siteCode, sites);
+      const matchesSite = (shSite.id && (shSite.id === targetSiteId || shSite.id === targetSiteCode)) ||
+                          (shSite.code && targetSiteCode && shSite.code.toUpperCase() === String(targetSiteCode).toUpperCase()) ||
+                          (sh.site_id && (sh.site_id === targetSiteId || sh.site_id === targetSiteCode)) ||
                           (sh.site_code && (sh.site_code === targetSiteCode || sh.site_code === targetSiteId));
       return matchesSite;
     });
-  }, [shipments, isSuperadmin, selectedSiteId, currentUser?.siteId, userSiteObj, activeSiteObj]);
+  }, [shipments, isSuperadmin, selectedSiteId, currentUser, sites, userSiteObj, activeSiteObj]);
 
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;

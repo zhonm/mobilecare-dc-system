@@ -5,7 +5,7 @@ import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { reconcileUnitsWithPackedDrafts, isUUID, formatShipmentForDb, formatShipmentItemsForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
-import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS } from '../constants/roles';
+import { ROLE_PRESETS, getDefaultRolePosition, INITIAL_USERS, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
@@ -260,7 +260,7 @@ export function useCloudSync({
         resShipments,
         resPartsRequests
       ] = await Promise.all([
-        shouldFetch('profiles') ? supabase.from('profiles').select('*').limit(100) : Promise.resolve({ data: null }),
+        shouldFetch('profiles') ? supabase.from('profiles').select('*').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(500) : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
@@ -400,12 +400,14 @@ export function useCloudSync({
             }
           });
 
-          // Strict final filter to ensure no deleted user id or email leaks through
-          const merged = Array.from(profileMap.values()).filter(u => {
-            const cleanEmail = u.email?.toLowerCase();
-            const uId = u.id?.toLowerCase();
-            return !mergedDeletedUserIds.includes(cleanEmail) && !mergedDeletedUserIds.includes(uId);
-          });
+          // Strict final filter and deterministic sort to ensure no deleted user id or email leaks through and list never shuffles
+          const merged = sortUsersDeterministically(
+            Array.from(profileMap.values()).filter(u => {
+              const cleanEmail = u.email?.toLowerCase();
+              const uId = u.id?.toLowerCase();
+              return !mergedDeletedUserIds.includes(cleanEmail) && !mergedDeletedUserIds.includes(uId);
+            })
+          );
 
           if (currentUser && currentUser.email) {
             const freshCurrent = merged.find(u => u.email?.toLowerCase() === currentUser.email.toLowerCase());
@@ -851,13 +853,13 @@ export function useCloudSync({
               ? s.prepared_by_name
               : (s.saved_by_name && s.saved_by_name !== 'Warehouse Staff' ? s.saved_by_name : (currentUser?.fullName || 'Zhon Manaois'));
 
-            const isPending = !isLockedConfirmedShipment(s) && s.status !== 'received_confirmed' && !s.received_at && !s.received_date;
+            const resolvedStatus = s.status || (isLockedConfirmedShipment(s) || s.received_at || s.received_date ? 'received_confirmed' : 'pending_pickup');
             return {
               ...s,
-              status: isPending ? 'pending_pickup' : s.status,
+              status: resolvedStatus,
               prepared_by_name: cleanPrepBy,
               saved_by_name: cleanPrepBy,
-              shipment_date: isPending ? '' : (s.shipment_date || s.pickup_date || '')
+              shipment_date: s.shipment_date || s.pickup_date || ''
             };
           });
 
