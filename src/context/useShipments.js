@@ -248,10 +248,10 @@ export function useShipments({
     const target = shipments.find(s => s.id === shipmentId);
     if (!target) return { success: false, error: 'Shipment not found' };
 
-    // Immutability Rule: Received confirmed shipments are permanently locked in the database
-    if (isLockedConfirmedShipment(target)) {
-      showToast('Locked Record: This shipment is marked as Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI.', 'error');
-      return { success: false, error: 'Confirmed shipments cannot be deleted through the system interface.' };
+    // Immutability Rule: Shipped / in-transit / received confirmed shipments cannot be deleted from system UI
+    if (isLockedConfirmedShipment(target) || target.status === 'shipped' || target.status === 'in_transit') {
+      showToast('Locked Record: This shipment has already been SHIPPED and picked up by the courier (or Confirmed Received). Dispatched shipments cannot be deleted through the system UI. To delete shipments, manage them directly in Supabase.', 'error');
+      return { success: false, error: 'Dispatched shipments cannot be deleted through the system interface.' };
     }
 
     // Authority Rule: Only the user who originally saved/prepared the shipment has permission to delete it
@@ -775,16 +775,28 @@ export function useShipments({
               if (shipmentItemsRows.length > 0) {
                 // Delete old items for this shipment first to prevent duplicates & constraint collisions
                 await supabase.from('shipment_items').delete().eq('shipment_id', verifyParent.id);
-                // Insert with safe null part and unit references to ensure zero foreign key collisions
+                // Insert with safe null part, unit, and user references to ensure zero foreign key collisions
                 const safeRows = shipmentItemsRows.map(r => ({
                   ...r,
                   shipment_id: verifyParent.id,
                   part_id: null,
-                  inventory_unit_id: null
+                  inventory_unit_id: null,
+                  scanned_by: null
                 }));
                 const { error: itInsErr } = await supabase.from('shipment_items').insert(safeRows);
                 if (itInsErr) {
-                  console.warn('Direct shipment_items insert notice:', itInsErr.message);
+                  console.warn('Direct shipment_items insert notice (attempting stripped retry):', itInsErr.message);
+                  const strippedRows = safeRows.map(r => ({
+                    id: r.id,
+                    shipment_id: r.shipment_id,
+                    serial_number: r.serial_number,
+                    box_number: r.box_number || 1,
+                    scanned_at: r.scanned_at || new Date().toISOString()
+                  }));
+                  const { error: retryErr } = await supabase.from('shipment_items').insert(strippedRows);
+                  if (retryErr) {
+                    console.warn('Direct shipment_items stripped insert notice:', retryErr.message);
+                  }
                 }
               }
             }

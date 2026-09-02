@@ -9,19 +9,36 @@
 ALTER TABLE IF EXISTS public.shipment_items 
     DROP CONSTRAINT IF EXISTS shipment_items_shipment_id_fkey;
 
--- 2. Drop foreign key constraint on part_id
+-- 2. Drop foreign key constraint on scanned_by (Profiles)
+ALTER TABLE IF EXISTS public.shipment_items 
+    DROP CONSTRAINT IF EXISTS shipment_items_scanned_by_fkey;
+
+ALTER TABLE IF EXISTS public.shipment_items 
+    ALTER COLUMN scanned_by DROP NOT NULL;
+
+-- 3. Drop foreign key constraint on part_id
 ALTER TABLE IF EXISTS public.shipment_items 
     DROP CONSTRAINT IF EXISTS shipment_items_part_id_fkey;
 
 ALTER TABLE IF EXISTS public.shipment_items 
     ALTER COLUMN part_id DROP NOT NULL;
 
--- 3. Drop foreign key constraint on inventory_unit_id
+-- 4. Drop foreign key constraint on inventory_unit_id
 ALTER TABLE IF EXISTS public.shipment_items 
     DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
 
 ALTER TABLE IF EXISTS public.shipment_items 
     ALTER COLUMN inventory_unit_id DROP NOT NULL;
+
+-- 5. Drop loose foreign key constraints on shipments
+ALTER TABLE IF EXISTS public.shipments 
+    DROP CONSTRAINT IF EXISTS shipments_created_by_fkey;
+
+ALTER TABLE IF EXISTS public.shipments 
+    DROP CONSTRAINT IF EXISTS shipments_allocation_cycle_id_fkey;
+
+ALTER TABLE IF EXISTS public.shipments 
+    ALTER COLUMN created_by DROP NOT NULL;
 
 -- 4. Clean orphan records
 DELETE FROM public.shipment_items 

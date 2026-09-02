@@ -1355,3 +1355,340 @@ export function printForecastingReportDirect(forecastItems = [], metadata = {}) 
     printWindow.print();
   }, 400);
 }
+
+/**
+ * Generates an executive-grade Audit Trail PDF report with corporate header, KPI metrics,
+ * and high-fidelity autoTable formatting for all audit categories.
+ */
+export function generateAuditTrailPDF(auditType = 'uploads', data = [], options = {}) {
+  const isPortrait = auditType === 'serial_tracer';
+  const doc = new jsPDF({
+    orientation: isPortrait ? 'portrait' : 'landscape',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
+
+  // Header Banner
+  doc.setFillColor(15, 23, 42); // slate-900
+  doc.rect(margin, 10, pageWidth - (margin * 2), 14, 'F');
+
+  try {
+    if (MOBILECARE_LOGO_BASE64) {
+      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', margin + 3, 11, 12, 12);
+    }
+  } catch (e) {
+    console.warn('Could not add logo to audit PDF:', e);
+  }
+
+  const titleX = margin + 18;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(255, 255, 255);
+  doc.text('MOBILE CARE SERVICES PHILS. INC.', titleX, 16);
+
+  let reportTitle = 'Master Ingestion & File Upload Audit Report';
+  if (auditType === 'deletions') reportTitle = 'Data Deletions & Purge Audit Trail Report';
+  if (auditType === 'scan_logs') reportTitle = 'Hardware Barcode Scanner Event Audit Report';
+  if (auditType === 'serial_tracer') reportTitle = 'Serialized Unit Custody Chain Trace Report';
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(148, 163, 184); // slate-400
+  doc.text(reportTitle, titleX, 21);
+
+  const genDateStr = new Date().toLocaleString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  doc.text(`Generated: ${genDateStr}`, pageWidth - margin - 4, 18.5, { align: 'right' });
+
+  let startY = 29;
+
+  // Summary Metrics Banner
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(margin, startY, pageWidth - (margin * 2), 11, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Total Audit Records: ${data.length}`, margin + 5, startY + 7);
+
+  const filterSummary = options.filterLabel ? `Filter: ${options.filterLabel}  |  ` : '';
+  const operatorSummary = `Operator: ${options.currentUser?.fullName || 'Superadmin'}`;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`${filterSummary}${operatorSummary}`, pageWidth - margin - 5, startY + 7, { align: 'right' });
+
+  startY += 16;
+
+  if (auditType === 'uploads') {
+    const tableHeaders = [
+      '#',
+      'Date & Time',
+      'Uploaded By',
+      'Email / Role',
+      'Ingested File',
+      'Target Period',
+      'Forecast Units',
+      'Allocated Units',
+      'Total Value',
+      'Status'
+    ];
+
+    const tableRows = data.map((d, i) => [
+      i + 1,
+      new Date(d.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
+      d.user_name || 'Super Admin',
+      `${d.user_email || ''}\n[${(d.user_role || 'SUPERADMIN').toUpperCase()}]`,
+      `${d.file_name || 'Dataset.xlsx'}\n(${d.file_type || 'WORKBOOK'})`,
+      d.target_month || 'N/A',
+      `${d.total_forecast_units || 0} units`,
+      `${d.total_allocated_units || 0} units`,
+      `$${Number(d.total_master_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      d.status || 'Active on Cloud'
+    ]);
+
+    autoTable(doc, {
+      startY,
+      head: [tableHeaders],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: 255,
+        fontSize: 7.5,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+        valign: 'middle',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 10 },
+        1: { cellWidth: 26 },
+        2: { fontStyle: 'bold', cellWidth: 28 },
+        3: { cellWidth: 38 },
+        4: { cellWidth: 46 },
+        5: { halign: 'center', cellWidth: 24 },
+        6: { halign: 'right', cellWidth: 22 },
+        7: { halign: 'right', cellWidth: 22 },
+        8: { halign: 'right', fontStyle: 'bold', cellWidth: 26 },
+        9: { halign: 'center', cellWidth: 26 }
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: margin, right: margin }
+    });
+  } else if (auditType === 'deletions') {
+    const tableHeaders = [
+      '#',
+      'Date & Time',
+      'Entity Type',
+      'Record ID & Label',
+      'Deleted By (User / Email)',
+      'Reason / Action Note',
+      'Impact Summary',
+      'Status'
+    ];
+
+    const tableRows = data.map((d, i) => {
+      let impact = [];
+      if (d.summary?.itemsCount !== undefined) impact.push(`${d.summary.itemsCount} units purged`);
+      if (d.summary?.poNumber) impact.push(`PO: ${d.summary.poNumber}`);
+      if (d.summary?.destinationSite) impact.push(`Dest: ${d.summary.destinationSite}`);
+      if (d.summary?.forecastPartsCount !== undefined) impact.push(`${d.summary.forecastPartsCount} parts`);
+      return [
+        i + 1,
+        new Date(d.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
+        d.entity_type || 'Record',
+        `${d.entity_id || ''}\n${d.entity_label || ''}`,
+        `${d.deleted_by_name || 'System'}\n${d.deleted_by_email || ''}\n[${d.deleted_by_position || d.deleted_by_role || 'Specialist'}]`,
+        d.reason || 'User initiated deletion',
+        impact.join(' • ') || 'Record purged',
+        'Audit Logged'
+      ];
+    });
+
+    autoTable(doc, {
+      startY,
+      head: [tableHeaders],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [185, 28, 28], // red-700
+        textColor: 255,
+        fontSize: 7.5,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2,
+        valign: 'middle',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 10 },
+        1: { cellWidth: 26 },
+        2: { fontStyle: 'bold', cellWidth: 32 },
+        3: { cellWidth: 44 },
+        4: { cellWidth: 48 },
+        5: { cellWidth: 46 },
+        6: { cellWidth: 42 },
+        7: { halign: 'center', cellWidth: 22 }
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: margin, right: margin }
+    });
+  } else if (auditType === 'scan_logs') {
+    const tableHeaders = [
+      '#',
+      'Timestamp',
+      'Operation',
+      'Part Number',
+      'Serial Number',
+      'Warehouse Operator',
+      'Validation Result'
+    ];
+
+    const tableRows = data.map((d, i) => [
+      i + 1,
+      new Date(d.created_at || d.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
+      d.scan_type || 'SCAN_IN',
+      d.part_number || 'N/A',
+      d.serial_number || 'N/A',
+      d.user_name || 'Warehouse Staff',
+      d.is_valid !== false ? 'VALID' : `REJECTED (${d.error_message || 'Error'})`
+    ]);
+
+    autoTable(doc, {
+      startY,
+      head: [tableHeaders],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: 255,
+        fontSize: 7.5,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2.2,
+        valign: 'middle',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 12 },
+        1: { cellWidth: 34 },
+        2: { halign: 'center', fontStyle: 'bold', cellWidth: 30 },
+        3: { cellWidth: 38 },
+        4: { fontStyle: 'bold', cellWidth: 55 },
+        5: { cellWidth: 45 },
+        6: { halign: 'center', cellWidth: 45 }
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: margin, right: margin }
+    });
+  } else if (auditType === 'serial_tracer') {
+    const u = options.matchedUnit;
+    if (u) {
+      // Unit detail card
+      doc.setFillColor(240, 249, 255); // sky-50
+      doc.setDrawColor(186, 230, 253);
+      doc.roundedRect(margin, startY, pageWidth - (margin * 2), 34, 2, 2, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(3, 105, 161);
+      doc.text(`SERIAL: ${u.serial_number}`, margin + 6, startY + 8);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(30, 41, 59);
+      doc.text(`Part Number: ${u.part_number}  |  Description: ${u.description || 'N/A'}`, margin + 6, startY + 15);
+      doc.text(`Status: ${String(u.status || 'in_stock').toUpperCase()}  |  Current Site: ${options.siteName || 'Distribution Center'}`, margin + 6, startY + 22);
+      doc.text(`Box Number: ${u.box_number || 'N/A'}  |  PO Reference: ${u.po_number || 'N/A'}`, margin + 6, startY + 29);
+
+      startY += 42;
+
+      const timelineHeaders = ['Custody Stage', 'Date & Time', 'Action / Status', 'Handled By / Destination'];
+      const timelineRows = [
+        [
+          '1. DC Receive Scan-In',
+          u.received_at ? new Date(u.received_at).toLocaleString() : 'Recorded',
+          'Received into Stock',
+          `By: ${u.received_by || 'Warehouse Staff'}`
+        ],
+        [
+          '2. Allocation & Order',
+          u.allocated_at ? new Date(u.allocated_at).toLocaleString() : 'System Matched',
+          'Assigned to Allocation Cycle',
+          `Target: ${options.siteName || 'DC Stock'}`
+        ],
+        [
+          '3. Box Pack Scan-Out',
+          u.shipped_at ? new Date(u.shipped_at).toLocaleString() : (u.status === 'packed' ? 'Packed in Dispatch' : 'Awaiting Pack'),
+          `Box #: ${u.box_number || 1}`,
+          `By: ${u.packed_by || 'Warehouse Dispatcher'}`
+        ],
+        [
+          '4. Shipment & Delivery',
+          u.delivered_at ? new Date(u.delivered_at).toLocaleString() : (u.status === 'delivered' ? 'Delivered to Branch' : 'In Transit / Dispatched'),
+          `Status: ${String(u.status || 'in_stock').toUpperCase()}`,
+          `Destination: ${options.siteName || 'Service Branch'}`
+        ]
+      ];
+
+      autoTable(doc, {
+        startY,
+        head: [timelineHeaders],
+        body: timelineRows,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [15, 23, 42],
+          textColor: 255,
+          fontSize: 8,
+          fontStyle: 'bold'
+        },
+        styles: {
+          fontSize: 8,
+          cellPadding: 3.5,
+          lineColor: [226, 232, 240],
+          lineWidth: 0.1
+        },
+        margin: { left: margin, right: margin }
+      });
+    }
+  }
+
+  // Footer Page Numbering & Security Statement
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(
+      'CONFIDENTIAL & IMMUTABLE AUDIT LOG — MOBILE CARE SERVICES PHILS. INC. (DISTRIBUTION CENTER)',
+      margin,
+      pageHeight - 6
+    );
+    doc.text(`Page ${i} of ${totalPages}`, pageWidth - margin, pageHeight - 6, { align: 'right' });
+  }
+
+  const fileName = `MDC_${auditType.toUpperCase()}_AUDIT_REPORT_${new Date().toISOString().split('T')[0]}.pdf`;
+  doc.save(fileName);
+}

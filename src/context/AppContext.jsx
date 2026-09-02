@@ -151,7 +151,8 @@ export function AppProvider({ children }) {
   // 4. Audit Logs Domain
   const auditLogs = useAuditLogs({
     currentUser: auth.currentUser,
-    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args)
+    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    setScanLogs: (...args) => inventory.setScanLogs(...args)
   });
 
   // 5. Forecasting & Allocation Domain
@@ -384,6 +385,7 @@ export function AppProvider({ children }) {
         deletionAuditLogs: auditLogs.deletionAuditLogs,
         setDeletionAuditLogs: auditLogs.setDeletionAuditLogs,
         logDeletionAudit: auditLogs.logDeletionAudit,
+        deleteAllAuditLogs: auditLogs.deleteAllAuditLogs,
         importStockTransfersReport: periodRecords.importStockTransfersReport,
         clearStockTransfersReport: periodRecords.clearStockTransfersReport,
         savePeriodRecord: periodRecords.savePeriodRecord,

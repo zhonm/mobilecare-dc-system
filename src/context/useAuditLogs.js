@@ -5,7 +5,8 @@ import { getDefaultRolePosition } from '../constants/roles';
 
 export function useAuditLogs({
   currentUser,
-  broadcastCloudEvent
+  broadcastCloudEvent,
+  setScanLogs
 }) {
   const [uploadAuditLogs, setUploadAuditLogs] = useState(() => {
     try {
@@ -153,11 +154,104 @@ export function useAuditLogs({
     return newLog;
   };
 
+  /**
+   * Superadmin Authority: Permanently delete all audit trail records
+   * across local storage, IndexedDB, and Supabase cloud tables (audit_logs, scan_logs, saved_records registries).
+   */
+  const deleteAllAuditLogs = async () => {
+    // 1. Clear Local State
+    setUploadAuditLogs([]);
+    setDeletionAuditLogs([]);
+    if (typeof setScanLogs === 'function') {
+      setScanLogs([]);
+    }
+
+    // 2. Clear Local Storage
+    try {
+      localStorage.setItem('mdc_upload_audit_logs', '[]');
+      localStorage.setItem('mdc_deletion_audit_logs', '[]');
+      localStorage.setItem('mdc_scan_logs', '[]');
+    } catch (e) {
+      console.warn('Could not clear local storage audit logs:', e);
+    }
+
+    // 3. Clear IndexedDB
+    try {
+      await dbStorage.setItem('mdc_upload_audit_logs', []);
+      await dbStorage.setItem('mdc_deletion_audit_logs', []);
+      await dbStorage.setItem('mdc_scan_logs', []);
+    } catch (e) {
+      console.warn('Could not clear dbStorage audit logs:', e);
+    }
+
+    // 4. Delete Records from Supabase Database
+    if (supabase) {
+      try {
+        // Delete all rows from public.audit_logs
+        await supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (err) {
+        console.warn('Could not purge supabase audit_logs:', err);
+      }
+
+      try {
+        // Delete all rows from public.scan_logs
+        await supabase.from('scan_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (err) {
+        console.warn('Could not purge supabase scan_logs:', err);
+      }
+
+      try {
+        // Reset audit registries in saved_records with empty array snapshot
+        await supabase.from('saved_records').upsert([
+          {
+            id: 'master_upload_audit_logs_registry',
+            record_type: 'upload_audit_registry',
+            period_label: 'Master Upload Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master upload audit records (0 entries)',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: { logs: [], lastUpdated: new Date().toISOString() },
+            updated_at: new Date().toISOString()
+          },
+          {
+            id: 'master_deletion_audit_logs_registry',
+            record_type: 'deletion_audit_registry',
+            period_label: 'Master Deletion Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master deletion audit records (0 entries)',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: { logs: [], lastUpdated: new Date().toISOString() },
+            updated_at: new Date().toISOString()
+          }
+        ], { onConflict: 'id' });
+      } catch (err) {
+        console.warn('Could not reset saved_records audit registries:', err);
+      }
+    }
+
+    // 5. Broadcast Realtime Synchronization Events
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('AUDIT_LOGS_PURGED', {
+        purged_by_id: currentUser?.id || 'usr-superadmin',
+        purged_by_name: currentUser?.fullName || 'Superadmin',
+        timestamp: new Date().toISOString()
+      });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records' });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'audit_logs' });
+      broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'scan_logs' });
+    }
+
+    return true;
+  };
+
   return {
     uploadAuditLogs,
     setUploadAuditLogs,
     deletionAuditLogs,
     setDeletionAuditLogs,
-    logDeletionAudit
+    logDeletionAudit,
+    deleteAllAuditLogs
   };
 }

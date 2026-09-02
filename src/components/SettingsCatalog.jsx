@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import UserAccessManagement from './UserAccessManagement';
 import {
   Settings,
   Plus,
@@ -34,6 +33,16 @@ import {
   Activity,
 } from 'lucide-react';
 
+const getCategoryBadgeStyle = (catName = '') => {
+  const name = String(catName || '').toUpperCase();
+  if (name.includes('BATTERY')) return { bg: '#ecfdf5', text: '#065f46', border: '#a7f3d0' };
+  if (name.includes('DISPLAY')) return { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' };
+  if (name.includes('CAMERA')) return { bg: '#faf5ff', text: '#7e22ce', border: '#e9d5ff' };
+  if (name.includes('BACK') || name.includes('GLASS')) return { bg: '#fffbeb', text: '#b45309', border: '#fde68a' };
+  if (name.includes('REAR') || name.includes('MID')) return { bg: '#eef2ff', text: '#4338ca', border: '#c7d2fe' };
+  return { bg: '#f1f5f9', text: '#475569', border: '#e2e8f0' };
+};
+
 export default function SettingsCatalog() {
   const {
     parts = [],
@@ -63,7 +72,7 @@ export default function SettingsCatalog() {
     supervisorSettings,
     saveSupervisorSettings
   } = useApp();
-  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'users' | 'sql'
+  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'sql'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
 
@@ -92,6 +101,7 @@ export default function SettingsCatalog() {
   const [newCatId, setNewCatId] = useState(categories[0]?.id || 'cat-battery');
   const [newStockPrice, setNewStockPrice] = useState(150);
   const [newExchangePrice, setNewExchangePrice] = useState(100);
+  const [showAddPartCard, setShowAddPartCard] = useState(true);
 
   // Edit Part Modal State
   const [editingPart, setEditingPart] = useState(null);
@@ -319,61 +329,183 @@ export default function SettingsCatalog() {
   }, [parts, partSearch, selectedCategoryFilter]);
 
   return (
-    <div className="settings-view" style={{ maxWidth: '1150px', margin: '0 auto' }}>
-      {/* Sub Tabs */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+    <div className="settings-view" style={{ maxWidth: '1240px', margin: '0 auto', paddingBottom: '30px' }}>
+      {/* Sub-Tabs Ribbon Navigation */}
+      <div
+        style={{
+          background: '#ffffff',
+          padding: '6px',
+          borderRadius: '12px',
+          border: '1px solid #e2e8f0',
+          display: 'flex',
+          gap: '6px',
+          alignItems: 'center',
+          marginBottom: '22px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          overflowX: 'auto'
+        }}
+      >
         <button
-          className={`btn ${activeTab === 'parts' ? 'btn-primary' : 'btn-secondary'}`}
+          type="button"
           onClick={() => setActiveTab('parts')}
+          style={{
+            background: activeTab === 'parts' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'parts' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'parts' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'parts' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
         >
           <Smartphone size={15} />
-          <span>Parts Master Catalog ({parts.length})</span>
+          <span>Parts Master Catalog</span>
+          <span
+            style={{
+              background: activeTab === 'parts' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+              color: activeTab === 'parts' ? '#ffffff' : '#475569',
+              padding: '2px 7px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 700
+            }}
+          >
+            {parts.length}
+          </span>
         </button>
+
         <button
-          className={`btn ${activeTab === 'sites' ? 'btn-primary' : 'btn-secondary'}`}
+          type="button"
           onClick={() => setActiveTab('sites')}
+          style={{
+            background: activeTab === 'sites' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'sites' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'sites' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'sites' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
         >
           <MapPin size={15} />
-          <span>Service Sites & Branches ({sites.length})</span>
+          <span>Service Sites &amp; Branches</span>
+          <span
+            style={{
+              background: activeTab === 'sites' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+              color: activeTab === 'sites' ? '#ffffff' : '#475569',
+              padding: '2px 7px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 700
+            }}
+          >
+            {sites.length}
+          </span>
         </button>
+
         <button
-          className={`btn ${activeTab === 'categories' ? 'btn-primary' : 'btn-secondary'}`}
+          type="button"
           onClick={() => setActiveTab('categories')}
+          style={{
+            background: activeTab === 'categories' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'categories' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'categories' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'categories' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
         >
           <Settings size={15} />
-          <span>Part Categories ({categories.length})</span>
+          <span>Part Categories</span>
+          <span
+            style={{
+              background: activeTab === 'categories' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+              color: activeTab === 'categories' ? '#ffffff' : '#475569',
+              padding: '2px 7px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 700
+            }}
+          >
+            {categories.length}
+          </span>
         </button>
+
         <button
-          className={`btn ${activeTab === 'supervisor' ? 'btn-primary' : 'btn-secondary'}`}
+          type="button"
           onClick={() => setActiveTab('supervisor')}
+          style={{
+            background: activeTab === 'supervisor' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'supervisor' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'supervisor' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'supervisor' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
         >
           <FileText size={15} />
-          <span>Supervisor & Declaration Form</span>
+          <span>Supervisor &amp; Declaration Form</span>
         </button>
-        {currentUser?.role === 'superadmin' && (
-          <button
-            className={`btn ${activeTab === 'users' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setActiveTab('users')}
-          >
-            <Users size={15} />
-            <span>User Access Control</span>
-          </button>
-        )}
+
         <button
-          className={`btn ${activeTab === 'sql' ? 'btn-primary' : 'btn-secondary'}`}
+          type="button"
           onClick={() => setActiveTab('sql')}
-          style={{ position: 'relative' }}
+          style={{
+            background: activeTab === 'sql' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'sql' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'sql' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'sql' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
         >
           <Database size={15} />
           <span>Supabase Cloud Database</span>
           <span
             style={{
-              width: '7px',
-              height: '7px',
+              width: '8px',
+              height: '8px',
               borderRadius: '50%',
               background: realtimeConnected ? '#10b981' : '#f59e0b',
               display: 'inline-block',
-              marginLeft: '4px',
               boxShadow: realtimeConnected ? '0 0 6px #10b981' : 'none'
             }}
           />
@@ -382,210 +514,381 @@ export default function SettingsCatalog() {
 
       {/* 1. Parts Catalog Tab */}
       {activeTab === 'parts' && (
-        <div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           {/* Add Part Card */}
-          <div className="card" style={{ marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
-              <Plus size={18} color="var(--primary)" />
-              <h3 style={{ margin: 0 }}>Add New Part to Catalog</h3>
+          <div className="card" style={{ padding: '18px 22px', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAddPartCard ? '16px' : 0, borderBottom: showAddPartCard ? '1px solid #f1f5f9' : 'none', paddingBottom: showAddPartCard ? '12px' : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Plus size={16} />
+                </div>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '14.5px', fontWeight: 700, color: '#0f172a' }}>Add New Part to Master Catalog</h4>
+                  <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>Register an authorized Apple component SKU, model compatibility, and dual-tier pricing</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddPartCard(!showAddPartCard)}
+                className="btn btn-secondary btn-sm"
+                style={{ padding: '5px 12px', fontSize: '11.5px', color: '#475569', fontWeight: 600 }}
+              >
+                {showAddPartCard ? 'Collapse Form' : '+ Expand Form'}
+              </button>
             </div>
-            <form onSubmit={handleAddPart}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '12px' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Part Number (P/N) *</label>
-                  <input
-                    type="text"
-                    className="form-input font-mono"
-                    placeholder="e.g. 661-36918"
-                    value={newPn}
-                    onChange={(e) => setNewPn(e.target.value)}
-                    required
-                  />
+
+            {showAddPartCard && (
+              <form onSubmit={handleAddPart}>
+                {/* Row 1: Part Info */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      Part Number (P/N) <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input font-mono"
+                      placeholder="e.g. 661-36918"
+                      value={newPn}
+                      onChange={(e) => setNewPn(e.target.value)}
+                      required
+                      style={{ height: '38px', fontSize: '13px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      Description <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Battery, iPhone 15 Pro Max"
+                      value={newDesc}
+                      onChange={(e) => setNewDesc(e.target.value)}
+                      required
+                      style={{ height: '38px', fontSize: '13px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      iPhone Model
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. iPhone 15 Pro Max"
+                      value={newModel}
+                      onChange={(e) => setNewModel(e.target.value)}
+                      style={{ height: '38px', fontSize: '13px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      Category
+                    </label>
+                    <select
+                      className="form-select"
+                      value={newCatId}
+                      onChange={(e) => setNewCatId(e.target.value)}
+                      style={{ height: '38px', fontSize: '13px' }}
+                    >
+                      {categories.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Description *</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. Battery, iPhone 15 Pro Max"
-                    value={newDesc}
-                    onChange={(e) => setNewDesc(e.target.value)}
-                    required
-                  />
-                </div>
+                {/* Row 2: Pricing & Action */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', alignItems: 'flex-end', background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      Stocking Price ($)
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 600, fontSize: '13px' }}>$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="form-input font-mono"
+                        placeholder="0.00"
+                        value={newStockPrice}
+                        onChange={(e) => setNewStockPrice(e.target.value)}
+                        style={{ paddingLeft: '24px', height: '38px', fontSize: '13px', fontWeight: 600, color: '#047857' }}
+                      />
+                    </div>
+                  </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">iPhone Model</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. iPhone 15 Pro Max"
-                    value={newModel}
-                    onChange={(e) => setNewModel(e.target.value)}
-                  />
-                </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                      Exchange Price ($)
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 600, fontSize: '13px' }}>$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="form-input font-mono"
+                        placeholder="0.00"
+                        value={newExchangePrice}
+                        onChange={(e) => setNewExchangePrice(e.target.value)}
+                        style={{ paddingLeft: '24px', height: '38px', fontSize: '13px', fontWeight: 600, color: '#475569' }}
+                      />
+                    </div>
+                  </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Category</label>
-                  <select
-                    className="form-select"
-                    value={newCatId}
-                    onChange={(e) => setNewCatId(e.target.value)}
-                  >
-                    {categories.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', height: '38px' }}>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                        border: 'none',
+                        fontWeight: 600,
+                        fontSize: '13px',
+                        boxShadow: '0 2px 4px rgba(2,132,199,0.2)'
+                      }}
+                    >
+                      <Plus size={15} />
+                      <span>Add Part to Catalog</span>
+                    </button>
+                  </div>
                 </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Stock Price ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="form-input"
-                    value={newStockPrice}
-                    onChange={(e) => setNewStockPrice(e.target.value)}
-                  />
-                </div>
-
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Exchange Price ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="form-input"
-                    value={newExchangePrice}
-                    onChange={(e) => setNewExchangePrice(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button type="submit" className="btn btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <Plus size={15} />
-                  <span>Add Part to Catalog</span>
-                </button>
-              </div>
-            </form>
+              </form>
+            )}
           </div>
 
-          {/* Parts Master Catalog Table with Search and Filters */}
-          <div className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-              <div>
-                <h3 style={{ margin: 0 }}>Parts Master Catalog</h3>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Manage part pricing, commodity categories, and active stock definitions ({filteredParts.length} of {parts.length} parts)
-                </p>
+          {/* Parts Master Catalog Table Card */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+            {/* Toolbar Header */}
+            <div
+              style={{
+                padding: '16px 20px',
+                background: '#ffffff',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '14px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ background: '#f0f9ff', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Smartphone size={20} />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
+                      Parts Master Catalog
+                    </h3>
+                    <span
+                      style={{
+                        background: '#e0f2fe',
+                        color: '#0369a1',
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: 700
+                      }}
+                    >
+                      {filteredParts.length} of {parts.length} Parts
+                    </span>
+                  </div>
+                  <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
+                    Standardized Apple component SKUs, exchange rates, and category definitions
+                  </p>
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* Search Bar */}
-                <div style={{ position: 'relative', width: '220px' }}>
-                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <div style={{ position: 'relative', width: '240px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
                     placeholder="Search P/N, model, desc..."
                     value={partSearch}
                     onChange={(e) => setPartSearch(e.target.value)}
                     className="form-input"
-                    style={{ paddingLeft: '30px', height: '36px', fontSize: '12.5px', width: '100%' }}
+                    style={{ paddingLeft: '32px', paddingRight: partSearch ? '28px' : '10px', height: '36px', fontSize: '12.5px', width: '100%', borderRadius: '6px' }}
                   />
+                  {partSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPartSearch('')}
+                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 {/* Category Filter */}
                 <select
                   className="form-select"
-                  style={{ height: '36px', fontSize: '12.5px', width: '160px' }}
+                  style={{ height: '36px', fontSize: '12.5px', width: '170px', borderRadius: '6px' }}
                   value={selectedCategoryFilter}
                   onChange={(e) => setSelectedCategoryFilter(e.target.value)}
                 >
-                  <option value="ALL">All Categories</option>
-                  {categories.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
+                  <option value="ALL">All Categories ({parts.length})</option>
+                  {categories.map(c => {
+                    const count = parts.filter(p => p.category_id === c.id).length;
+                    return (
+                      <option key={c.id} value={c.id}>{c.name} ({count})</option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
 
+            {/* Table Content */}
             {filteredParts.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '36px 20px', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 'var(--radius-md)' }}>
-                <Smartphone size={32} style={{ margin: '0 auto 8px', color: '#cbd5e1' }} />
-                <p style={{ margin: 0, fontSize: '13.5px' }}>No parts match your search or filter criteria.</p>
+              <div style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8' }}>
+                <Smartphone size={36} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
+                <p style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: 600, color: '#64748b' }}>No parts match your criteria</p>
+                <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8' }}>Try adjusting your search query or selecting a different category.</p>
+                {partSearch && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => { setPartSearch(''); setSelectedCategoryFilter('ALL'); }}
+                    style={{ marginTop: '12px' }}
+                  >
+                    Reset Filters
+                  </button>
+                )}
               </div>
             ) : (
-              <div className="table-container" style={{ maxHeight: '550px', overflowY: 'auto' }}>
-                <table className="data-table" style={{ fontSize: '12.5px' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ width: '45px' }}>#</th>
-                      <th>Part Number</th>
-                      <th>Description</th>
-                      <th>iPhone Model</th>
-                      <th>Category</th>
-                      <th style={{ textAlign: 'right' }}>Stock Price ($)</th>
-                      <th style={{ textAlign: 'right' }}>Exchange Price ($)</th>
-                      <th style={{ textAlign: 'center' }}>Status</th>
-                      <th style={{ textAlign: 'right', width: '120px' }}>Actions</th>
+              <div className="table-container" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f8fafc' }}>
+                    <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <th style={{ width: '45px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
+                      <th style={{ width: '130px', textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Part Number</th>
+                      <th style={{ textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Description</th>
+                      <th style={{ width: '130px', textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>iPhone Model</th>
+                      <th style={{ width: '120px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Category</th>
+                      <th style={{ width: '110px', textAlign: 'right', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Stock Price</th>
+                      <th style={{ width: '110px', textAlign: 'right', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Exchange Price</th>
+                      <th style={{ width: '90px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
+                      <th style={{ width: '90px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredParts.map((p, i) => {
                       const cat = categories.find(c => c.id === p.category_id);
                       const isVariant = partNumberCounts[p.part_number?.toUpperCase()] > 1;
+                      const catBadge = getCategoryBadgeStyle(cat?.name);
                       return (
-                        <tr key={p.id || `${p.part_number}-${p.description}-${i}`}>
-                          <td className="font-mono" style={{ fontSize: '12px', color: '#64748b' }}>{i + 1}</td>
-                          <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                        <tr
+                          key={p.id || `${p.part_number}-${p.description}-${i}`}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            transition: 'background-color 0.1s ease',
+                            background: i % 2 === 0 ? '#ffffff' : '#fafafa'
+                          }}
+                        >
+                          <td className="font-mono" style={{ textAlign: 'center', fontSize: '11.5px', color: '#94a3b8' }}>
+                            {i + 1}
+                          </td>
+                          <td className="font-mono" style={{ padding: '12px 14px', fontWeight: 700, color: '#0f172a' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                               <span>{p.part_number}</span>
                               {isVariant && (
                                 <span
-                                  className="badge badge-warning"
+                                  style={{
+                                    fontSize: '9.5px',
+                                    padding: '1px 5px',
+                                    borderRadius: '3px',
+                                    fontWeight: 700,
+                                    background: '#fef3c7',
+                                    color: '#92400e',
+                                    border: '1px solid #fde68a'
+                                  }}
                                   title="Multiple descriptions exist in catalog for this Part Number"
-                                  style={{ fontSize: '9.5px', padding: '1px 5px', borderRadius: '3px', fontWeight: 700 }}
                                 >
                                   Variant
                                 </span>
                               )}
                             </div>
                           </td>
-                          <td style={{ fontWeight: 500 }}>{p.description}</td>
-                          <td style={{ color: '#475569' }}>{p.iphone_model || 'iPhone'}</td>
-                          <td>
-                            <span className="badge badge-neutral" style={{ fontSize: '11px' }}>{cat?.name || 'Part'}</span>
+                          <td style={{ padding: '12px 14px', fontWeight: 500, color: '#1e293b', fontSize: '13px' }}>
+                            {p.description}
                           </td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#047857' }}>
-                            ${p.stocking_price || 0}
-                          </td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#475569' }}>
-                            ${p.exchange_price || 0}
-                          </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <span className={`badge ${p.is_active !== false ? 'badge-success' : 'badge-neutral'}`} style={{ fontSize: '10.5px' }}>
-                              {p.is_active !== false ? 'Active' : 'Inactive'}
+                          <td style={{ padding: '12px 14px', color: '#475569', fontSize: '12.5px' }}>
+                            <span style={{ background: '#f1f5f9', padding: '3px 8px', borderRadius: '4px', color: '#334155', fontWeight: 500 }}>
+                              {p.iphone_model || 'iPhone'}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <div style={{ display: 'inline-flex', gap: '6px' }}>
+                          <td style={{ textAlign: 'center', padding: '12px 10px' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '3px 9px',
+                                borderRadius: '6px',
+                                background: catBadge.bg,
+                                color: catBadge.text,
+                                border: `1px solid ${catBadge.border}`,
+                                display: 'inline-block',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.02em'
+                              }}
+                            >
+                              {cat?.name || 'Part'}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#047857', fontSize: '13px' }}>
+                            ${parseFloat(p.stocking_price || 0).toFixed(2)}
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#64748b', fontSize: '13px' }}>
+                            ${parseFloat(p.exchange_price || 0).toFixed(2)}
+                          </td>
+                          <td style={{ textAlign: 'center', padding: '12px 8px' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                padding: '3px 8px',
+                                borderRadius: '12px',
+                                background: p.is_active !== false ? '#ecfdf5' : '#f1f5f9',
+                                color: p.is_active !== false ? '#059669' : '#64748b',
+                                border: `1px solid ${p.is_active !== false ? '#a7f3d0' : '#e2e8f0'}`,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: p.is_active !== false ? '#10b981' : '#94a3b8' }} />
+                              <span>{p.is_active !== false ? 'Active' : 'Inactive'}</span>
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'center', padding: '12px 10px' }}>
+                            <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                               <button
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => setEditingPart({ ...p })}
                                 title="Edit Part details and prices"
-                                style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                style={{ padding: '4px 7px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
                               >
-                                <Edit2 size={12} />
-                                <span>Edit</span>
+                                <Edit2 size={13} color="#0284c7" />
                               </button>
                               <button
-                                className="btn btn-danger btn-sm"
+                                className="btn btn-secondary btn-sm"
                                 onClick={() => setDeletingPart(p)}
                                 title="Delete Part from catalog"
-                                style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                                style={{ padding: '4px 7px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
                               >
-                                <Trash2 size={12} />
+                                <Trash2 size={13} color="#ef4444" />
                               </button>
                             </div>
                           </td>
@@ -1333,11 +1636,6 @@ export default function SettingsCatalog() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* 5. User Access Management Tab (for Superadmin) */}
-      {activeTab === 'users' && (
-        <UserAccessManagement />
       )}
 
       {/* 5. Enhanced Supabase PostgreSQL Cloud Database Center */}

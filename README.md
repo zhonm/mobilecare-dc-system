@@ -145,11 +145,16 @@ If a database administrator needs to permanently purge a confirmed shipment and 
 1. **Log In to Supabase Table Editor**:
    - Open your project at [Supabase Dashboard](https://supabase.com/dashboard) and navigate to **Table Editor**.
 
-2. **One-Time Foreign Key Cascade Setup (Recommended)**:
-   - If you see a foreign key error (`is still referenced from table shipment_items`), run this quick 1-line script in Supabase **SQL Editor**:
+2. **One-Time Foreign Key Immunity Setup (Recommended)**:
+   - If you see a foreign key error (`violates foreign key constraint "shipment_items_scanned_by_fkey"` or `shipment_items_inventory_unit_id_fkey`), run this script in Supabase **SQL Editor** (`src/supabase/fix_shipment_items_scanned_by_fkey.sql`):
    ```sql
-   ALTER TABLE public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
-   ALTER TABLE public.shipment_items ADD CONSTRAINT shipment_items_inventory_unit_id_fkey FOREIGN KEY (inventory_unit_id) REFERENCES public.inventory_units(id) ON DELETE CASCADE;
+   ALTER TABLE IF EXISTS public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_scanned_by_fkey;
+   ALTER TABLE IF EXISTS public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_inventory_unit_id_fkey;
+   ALTER TABLE IF EXISTS public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_part_id_fkey;
+   ALTER TABLE IF EXISTS public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_shipment_id_fkey;
+   ALTER TABLE IF EXISTS public.shipment_items ALTER COLUMN scanned_by DROP NOT NULL;
+   ALTER TABLE IF EXISTS public.shipment_items ALTER COLUMN part_id DROP NOT NULL;
+   ALTER TABLE IF EXISTS public.shipment_items ALTER COLUMN inventory_unit_id DROP NOT NULL;
    ```
 
 3. **Delete the Manifest from `public.shipments`**:

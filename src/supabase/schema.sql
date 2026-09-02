@@ -308,14 +308,18 @@ CREATE INDEX IF NOT EXISTS idx_shipments_updated_at ON public.shipments(updated_
 CREATE TABLE IF NOT EXISTS public.shipment_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     shipment_id UUID NOT NULL REFERENCES public.shipments(id) ON DELETE CASCADE,
-    inventory_unit_id UUID NOT NULL REFERENCES public.inventory_units(id) ON DELETE CASCADE,
-    part_id UUID NOT NULL REFERENCES public.parts(id) ON DELETE RESTRICT,
+    inventory_unit_id UUID REFERENCES public.inventory_units(id) ON DELETE CASCADE,
+    part_id UUID REFERENCES public.parts(id) ON DELETE RESTRICT,
     serial_number TEXT NOT NULL,
     box_number INT NOT NULL DEFAULT 1,
     scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    scanned_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    scanned_by UUID,
     UNIQUE(shipment_id, inventory_unit_id)
 );
+ALTER TABLE public.shipment_items DROP CONSTRAINT IF EXISTS shipment_items_scanned_by_fkey;
+ALTER TABLE public.shipment_items ALTER COLUMN scanned_by DROP NOT NULL;
+ALTER TABLE public.shipment_items ALTER COLUMN inventory_unit_id DROP NOT NULL;
+ALTER TABLE public.shipment_items ALTER COLUMN part_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_shipment_items_shipment_id ON public.shipment_items(shipment_id);
 CREATE INDEX IF NOT EXISTS idx_shipment_items_inventory_unit_id ON public.shipment_items(inventory_unit_id);
 CREATE INDEX IF NOT EXISTS idx_shipment_items_part_id ON public.shipment_items(part_id);

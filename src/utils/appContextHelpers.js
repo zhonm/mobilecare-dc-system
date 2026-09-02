@@ -353,7 +353,7 @@ export function formatShipmentForDb(s, sitesList = []) {
 }
 
 // Format shipment items to match Supabase shipment_items table schema perfectly
-export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [], currentUser = null) {
+export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [], currentUser = null, usersList = []) {
   if (!s || !Array.isArray(s.items) || s.items.length === 0) return [];
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
   
@@ -377,6 +377,19 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
         if (u.serial_number) unitsMap.set(String(u.serial_number).toUpperCase().trim(), u.id);
       }
     });
+  }
+
+  // Resolve valid UUID for scanned_by (only if user ID is known to avoid foreign key violations)
+  const rawUserId = currentUser?.id;
+  let validScannedBy = null;
+  if (rawUserId && isUUID(rawUserId)) {
+    if (Array.isArray(usersList) && usersList.length > 0) {
+      if (usersList.some(u => u && (u.id === rawUserId || u.email === currentUser?.email))) {
+        validScannedBy = rawUserId;
+      }
+    } else {
+      validScannedBy = rawUserId;
+    }
   }
 
   return s.items.map((it, idx) => {
@@ -414,7 +427,7 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
       serial_number: cleanSerial,
       box_number: it.box_number || 1,
       scanned_at: it.scanned_at || s.shipment_date || new Date().toISOString(),
-      scanned_by: safeUUID(currentUser?.id)
+      scanned_by: validScannedBy
     };
   }).filter(r => r.serial_number);
 }

@@ -734,10 +734,6 @@ export default function UserAccessManagement() {
             Showing <strong>{filteredUsers.length}</strong> of <strong>{usersList.length}</strong> registered staff accounts
             {roleFilter !== 'ALL' && <span style={{ marginLeft: '4px', fontWeight: 600, color: '#0284c7' }}>({roleFilter.toUpperCase()})</span>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
-            <span>Deterministic PostgreSQL Order Active</span>
-          </div>
         </div>
 
         {/* Accounts Table */}

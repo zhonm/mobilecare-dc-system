@@ -10,7 +10,6 @@ import {
   FileText,
   X,
   RefreshCw,
-  RotateCcw,
   AlertTriangle,
   Check,
   Trash2,
@@ -33,7 +32,6 @@ export default function Shipments() {
     partsRequests,
     updatePartsRequestStatus,
     batchImportShipments,
-    clearAllShipmentsData,
     showToast,
     currentUser,
     canUserDeleteRecord,
@@ -42,8 +40,6 @@ export default function Shipments() {
 
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
-
-
 
   // Courier Pickup Handover Modal State
   const [pickupModalState, setPickupModalState] = useState(null);
@@ -60,9 +56,6 @@ export default function Shipments() {
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
   const fileInputRef = useRef(null);
-
-  // Clear Confirmation Modal State
-  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
   // Direct Corporate PDF Request Handler
   const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf') => {
@@ -325,12 +318,6 @@ export default function Shipments() {
     }
   };
 
-  // --- Safe Clear Handling ---
-  const handleConfirmClearAll = () => {
-    clearAllShipmentsData();
-    setIsClearModalOpen(false);
-  };
-
   return (
     <div className="shipments-view">
       {/* 1. Header & Action Controls */}
@@ -338,7 +325,7 @@ export default function Shipments() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h3 style={{ margin: 0 }}>Shipments & Manifest Archive</h3>
+              <h3 style={{ margin: 0 }}>Shipments &amp; Manifest Archive</h3>
               <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
                 <Check size={11} style={{ display: 'inline', marginRight: '3px' }} />
                 Database Persisted
@@ -367,17 +354,6 @@ export default function Shipments() {
               <FileSpreadsheet size={15} />
               <span>Import Manifests (XLSX / CSV)</span>
             </button>
-
-            {shipments.length > 0 && (
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={() => setIsClearModalOpen(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <RotateCcw size={13} />
-                <span>Clear All Shipments</span>
-              </button>
-            )}
 
             <div style={{ position: 'relative', width: '220px' }}>
               <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
@@ -677,7 +653,7 @@ export default function Shipments() {
                             </button>
                           )}
 
-                          {/* ACTION BUTTON 3: Locked Indicator (When Received Confirmed) */}
+                          {/* ACTION BUTTON 3: Locked / Dispatched / Delete Controls */}
                           {isLockedConfirmedShipment(sh) ? (
                             <button
                               className="btn btn-secondary btn-sm"
@@ -687,15 +663,18 @@ export default function Shipments() {
                             >
                               <Lock size={13} />
                             </button>
+                          ) : normStatus === 'shipped' ? (
+                            // Package is already SHIPPED and picked up by courier: Delete button is strictly removed from system interface
+                            null
                           ) : canUserDeleteRecord(sh, currentUser) ? (
                             <button
                               className="btn btn-danger btn-sm"
                               onClick={() => {
-                                if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will permanently delete both the manifest and all serialized parts included in this shipment.`)) {
+                                if (window.confirm(`Delete pending shipment "${sh.invoice_ref || sh.shipment_number}"? This will cancel the pending manifest and unpack serialized parts back to DC stock.`)) {
                                   deleteShipment(sh.id);
                                 }
                               }}
-                              title="Delete Shipment"
+                              title="Delete Pending Shipment"
                               style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
                             >
                               <Trash2 size={13} />
@@ -720,39 +699,6 @@ export default function Shipments() {
           </table>
         </div>
       </div>
-
-      {/* --- Safety Confirmation Modal: Clear All Shipments --- */}
-      {isClearModalOpen && (
-        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setIsClearModalOpen(false); }}>
-          <div className="modal-content" style={{ maxWidth: '480px' }}>
-            <div className="modal-header" style={{ background: '#991b1b' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <AlertTriangle size={20} color="#fff" />
-                <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>Clear All Shipment Manifests?</h3>
-              </div>
-              <button onClick={() => setIsClearModalOpen(false)} style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer' }}>
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ padding: '20px' }}>
-              <p style={{ fontSize: '13.5px', color: 'var(--text-main)', marginBottom: '12px' }}>
-                Are you sure you want to remove all <strong>{shipments.length} shipment records</strong>?
-              </p>
-              <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '10px 14px', borderRadius: 'var(--radius-md)', fontSize: '12px', color: '#991b1b' }}>
-                <strong>Safety Feature:</strong> Any units currently packed in these shipments will be safely restored back to <strong>In-Stock DC inventory</strong>.
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setIsClearModalOpen(false)}>
-                Cancel
-              </button>
-              <button className="btn btn-danger" onClick={handleConfirmClearAll}>
-                Yes, Clear All Shipments
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* --- XLSX / CSV Import Modal Dialog --- */}
       {isImportModalOpen && (
