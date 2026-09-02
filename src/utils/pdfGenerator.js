@@ -1,14 +1,19 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { MOBILECARE_LOGO_BASE64 } from '../assets/logoBase64.js';
+import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
+
+const getPdfDoc = (options = {}) => {
+  const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
+  return new Constructor(options);
+};
 
 /**
  * Generates and downloads a pixel-perfect Packing List PDF matching corporate standards,
  * with the official Declaration Form appended seamlessly as Page 2.
  */
 export function generatePackingListPDF(shipment, items = [], site = {}, options = {}) {
-  const doc = new jsPDF({
+  const doc = getPdfDoc({
     orientation: 'portrait',
     unit: 'mm',
     format: 'a4'
@@ -284,30 +289,33 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   const decMargin = 20;
   const decPageWidth = doc.internal.pageSize.getWidth();
-  const decHeaderY = 25;
+  const decHeaderY = 26;
+  const logoWidth = 30;
+  const logoHeight = 14.5; // medium size: preserves exact 1442:698 aspect ratio
+  const decCompX = decMargin + logoWidth + 6;
 
-  // Top Left: Mobile Care Logo + BUSINESS DISTRIBUTION CENTER
+  // Top Left: Mobile Care Logo (Medium size, transparent background) + BUSINESS DISTRIBUTION CENTER
   try {
-    if (MOBILECARE_LOGO_BASE64) {
-      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', decMargin, decHeaderY, 18, 18);
+    const logoToUse = MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
+    if (logoToUse) {
+      doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, logoWidth, logoHeight);
     }
   } catch (e) {
     console.warn('Could not render logo in Declaration Form PDF:', e);
   }
 
-  const decCompX = decMargin + 24;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(12);
   doc.setTextColor(15, 23, 42);
-  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + 11);
+  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + (logoHeight / 2) + 1.4);
 
   // Two-Column Section Geometry
-  const formStartY = decHeaderY + 34;
+  const formStartY = 58;
   const decLeftColX = decMargin;
   const decLeftColWidth = 84;
   const idBoxX = decLeftColX + decLeftColWidth + 14;
   const idBoxWidth = decPageWidth - decMargin - idBoxX;
-  const idBoxHeight = 98;
+  const idBoxHeight = 118;
 
   // Dynamic values
   const destSiteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
@@ -317,7 +325,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const pickupDate = options.pickupDate || shipment.pickup_date || shipment.shipment_date || new Date().toLocaleDateString('en-US');
 
   // Left Column Fields
-  const decRowGap = 25;
+  const decRowGap = 31;
 
   // 1. TRANSFER TO (SITE)
   const f1Y = formStartY;
@@ -326,11 +334,11 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setTextColor(15, 23, 42);
   doc.text('TRANSFER TO (SITE)', decLeftColX, f1Y);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(destSiteName, decLeftColX, f1Y + 7, { maxWidth: decLeftColWidth });
+  doc.setFontSize(9.5);
+  doc.text(destSiteName, decLeftColX, f1Y + 7.5, { maxWidth: decLeftColWidth });
   doc.setDrawColor(100, 116, 139);
   doc.setLineWidth(0.35);
-  doc.line(decLeftColX, f1Y + 9.5, decLeftColX + decLeftColWidth, f1Y + 9.5);
+  doc.line(decLeftColX, f1Y + 11, decLeftColX + decLeftColWidth, f1Y + 11);
 
   // 2. TYPE OF COURIER
   const f2Y = f1Y + decRowGap;
@@ -338,9 +346,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFontSize(8.5);
   doc.text('TYPE OF COURIER', decLeftColX, f2Y);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(courierType, decLeftColX, f2Y + 7, { maxWidth: decLeftColWidth });
-  doc.line(decLeftColX, f2Y + 9.5, decLeftColX + decLeftColWidth, f2Y + 9.5);
+  doc.setFontSize(9.5);
+  doc.text(courierType, decLeftColX, f2Y + 7.5, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f2Y + 11, decLeftColX + decLeftColWidth, f2Y + 11);
 
   // 3. BOOKING ID / AIRWAY BILL:
   const f3Y = f2Y + decRowGap;
@@ -348,9 +356,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFontSize(8.5);
   doc.text('BOOKING ID / AIRWAY BILL:', decLeftColX, f3Y);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(bookingId, decLeftColX, f3Y + 7, { maxWidth: decLeftColWidth });
-  doc.line(decLeftColX, f3Y + 9.5, decLeftColX + decLeftColWidth, f3Y + 9.5);
+  doc.setFontSize(9.5);
+  doc.text(bookingId, decLeftColX, f3Y + 7.5, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f3Y + 11, decLeftColX + decLeftColWidth, f3Y + 11);
 
   // 4. COURIER NAME AND SIGNATURE
   const f4Y = f3Y + decRowGap;
@@ -365,9 +373,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
     if (extras.length > 0) courierDisplay = courierDisplay ? `${courierDisplay} (${extras.join(' • ')})` : extras.join(' • ');
   }
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text(courierDisplay, decLeftColX, f4Y + 7, { maxWidth: decLeftColWidth });
-  doc.line(decLeftColX, f4Y + 9.5, decLeftColX + decLeftColWidth, f4Y + 9.5);
+  doc.setFontSize(9.5);
+  doc.text(courierDisplay, decLeftColX, f4Y + 7.5, { maxWidth: decLeftColWidth });
+  doc.line(decLeftColX, f4Y + 11, decLeftColX + decLeftColWidth, f4Y + 11);
 
   // Right Column: ID HERE Box
   doc.setDrawColor(15, 23, 42);
@@ -378,8 +386,8 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setTextColor(15, 23, 42);
   doc.text('ID HERE', idBoxX + (idBoxWidth / 2), f1Y - 4 + (idBoxHeight / 2) + 2, { align: 'center' });
 
-  // Bottom Section: Supervisor Signature & Verification
-  const bottomY = f4Y + 38;
+  // Bottom Section: Supervisor Signature & Verification (Evenly balanced at bottom)
+  const bottomY = 198;
 
   // 1. Left: MDC - SUPERVISOR
   doc.setFont('helvetica', 'bold');
@@ -390,13 +398,13 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   // Supervisor Underline for manual wet signature
   doc.setDrawColor(100, 116, 139);
   doc.setLineWidth(0.35);
-  doc.line(decLeftColX, bottomY + 16, decLeftColX + decLeftColWidth, bottomY + 16);
+  doc.line(decLeftColX, bottomY + 22, decLeftColX + decLeftColWidth, bottomY + 22);
 
   // Supervisor Printed Name (centered neatly under the signature line)
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
+  doc.setFontSize(8);
   doc.setTextColor(51, 65, 85);
-  doc.text(supervisorName.toUpperCase(), decLeftColX + (decLeftColWidth / 2), bottomY + 19.5, { align: 'center' });
+  doc.text(supervisorName.toUpperCase(), decLeftColX + (decLeftColWidth / 2), bottomY + 26.5, { align: 'center' });
 
   // 2. Right: GUARD ON DUTY & DATE PICKED UP
   const rightBottomColX = idBoxX;
@@ -409,19 +417,19 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.text('GUARD ON DUTY:', rightBottomColX, bottomY);
   if (guardOnDuty) {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text(guardOnDuty, rightBottomColX, bottomY + 12);
+    doc.setFontSize(9.5);
+    doc.text(guardOnDuty, rightBottomColX, bottomY + 16);
   }
-  doc.line(rightBottomColX, bottomY + 16, rightBottomColX + rightBottomWidth, bottomY + 16);
+  doc.line(rightBottomColX, bottomY + 22, rightBottomColX + rightBottomWidth, bottomY + 22);
 
   // DATE PICKED UP:
-  const bottomDateY = bottomY + 24;
+  const bottomDateY = bottomY + 36;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
   doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
+  doc.setFontSize(9.5);
   doc.text(pickupDate, rightBottomColX, bottomDateY + 12);
   doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
 

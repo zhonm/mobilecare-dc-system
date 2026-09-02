@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
 import {
   Settings,
   Plus,
@@ -1562,10 +1563,12 @@ export default function SettingsCatalog() {
             >
               {/* Header */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '28px' }}>
-                <div style={{ width: '42px', height: '42px', background: '#0f172a', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffffff', fontWeight: 800, fontSize: '10px' }}>
-                  MOBILE CARE
-                </div>
-                <div style={{ fontSize: '13pt', fontWeight: 800, color: '#0f172a' }}>
+                <img
+                  src={mobilecareNoBGLogo}
+                  alt="Mobile Care"
+                  style={{ height: '28px', width: 'auto', objectFit: 'contain' }}
+                />
+                <div style={{ fontSize: '12pt', fontWeight: 800, color: '#0f172a', letterSpacing: '0.02em' }}>
                   BUSINESS DISTRIBUTION CENTER
                 </div>
               </div>
