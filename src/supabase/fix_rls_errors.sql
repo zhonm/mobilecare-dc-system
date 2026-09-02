@@ -297,27 +297,14 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authent
 DO $$
 DECLARE
     t text;
+    -- 8. Register essential low-frequency event tables in supabase_realtime publication
     tables text[] := ARRAY[
         'profiles',
         'user_page_permissions',
-        'part_categories',
-        'parts',
         'sites',
-        'repair_usage_records',
-        'forecast_cycles',
-        'forecast_entries',
         'purchase_orders',
-        'po_items',
-        'inventory_units',
-        'allocation_cycles',
-        'allocation_items',
         'shipments',
-        'shipment_items',
-        'scan_logs',
-        'saved_records',
-        'dc_intake_records',
-        'parts_requests',
-        'audit_logs'
+        'parts_requests'
     ];
 BEGIN
     FOR t IN SELECT unnest(tables) LOOP

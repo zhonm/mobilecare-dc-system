@@ -1038,17 +1038,18 @@ export function useInventory({
   };
 
   const addScanOutUnit = ({ shipmentId, siteId, partNumber, serialNumber, boxNumber = 1 }) => {
-    const cleanPN = String(partNumber || '').trim().toUpperCase();
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
 
     const currentUnit = (inventoryUnits || []).find(u => 
       String(u.serial_number || '').trim().toUpperCase() === cleanSerial
     );
 
+    const cleanPN = String(partNumber || currentUnit?.part_number || '').trim().toUpperCase();
+
     if (!currentUnit) {
       barcodeAudio.playError();
-      showToast(`Unit not found in stock: ${cleanPN} / ${cleanSerial}`, 'error');
-      logScan('PACK_OUT', cleanPN, cleanSerial, false, 'Unit not found in stock');
+      showToast(`Unit not found in stock: ${cleanSerial}`, 'error');
+      logScan('PACK_OUT', cleanPN || 'UNKNOWN', cleanSerial, false, 'Unit not found in stock');
       return { success: false, error: 'Unit not found in DC stock' };
     }
 

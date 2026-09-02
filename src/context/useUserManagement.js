@@ -242,14 +242,6 @@ export function useUserManagement({
     }
   };
 
-  // Run auto-sync on mount to ensure existing provisioned staff are stored in Supabase profiles
-  useEffect(() => {
-    if (supabase && usersList && usersList.length > 0) {
-      syncAllUsersToDatabase(usersList);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // 1. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
@@ -874,12 +866,20 @@ export function useUserManagement({
       try {
         if (isUUID(targetId)) {
           await supabase.from('user_page_permissions').delete().eq('user_id', targetId);
+          const { error: tombstoneError } = await supabase
+            .from('profiles')
+            .update({ is_active: false, is_deleted: true, updated_at: new Date().toISOString() })
+            .eq('id', targetId);
+          if (tombstoneError) throw tombstoneError;
           await supabase.from('profiles').delete().eq('id', targetId);
-          await supabase.from('profiles').update({ is_active: false, is_deleted: true }).eq('id', targetId);
         }
         if (cleanEmail) {
+          const { error: tombstoneError } = await supabase
+            .from('profiles')
+            .update({ is_active: false, is_deleted: true, updated_at: new Date().toISOString() })
+            .ilike('email', cleanEmail);
+          if (tombstoneError) throw tombstoneError;
           await supabase.from('profiles').delete().ilike('email', cleanEmail);
-          await supabase.from('profiles').update({ is_active: false, is_deleted: true }).ilike('email', cleanEmail);
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });

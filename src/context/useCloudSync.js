@@ -215,8 +215,10 @@ export function useCloudSync({
               updated_at: new Date().toISOString()
             }, { onConflict: 'id' });
           } else if (item.actionType === 'INTAKE_DELETE') {
-            await supabase.from('dc_intake_records').delete().eq('id', item.payload.recordId);
-            await supabase.from('saved_records').delete().eq('id', item.payload.recordId);
+            if (isUUID(item.payload.recordId)) {
+              try { await supabase.from('dc_intake_records').delete().eq('id', item.payload.recordId); } catch (e) {}
+            }
+            try { await supabase.from('saved_records').delete().eq('id', item.payload.recordId); } catch (e) {}
           } else if (item.actionType === 'SHIPMENT_UPSERT') {
             await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
           } else if (item.actionType === 'SHIPMENT_DELETE') {
@@ -517,6 +519,20 @@ export function useCloudSync({
             setForecastItems([]);
             setAllocations([]);
             setInventoryUnits([]);
+            setRepairUsageRecords([]);
+            if (setUploadAuditLogs) setUploadAuditLogs([]);
+            try {
+              localStorage.setItem('mdc_forecast', '[]');
+              localStorage.setItem('mdc_allocations', '[]');
+              localStorage.setItem('mdc_inventory', '[]');
+              localStorage.setItem('mdc_repair_usage', '[]');
+              localStorage.setItem('mdc_upload_audit_logs', '[]');
+            } catch (e) {}
+            dbStorage.setItem('mdc_forecast', []);
+            dbStorage.setItem('mdc_allocations', []);
+            dbStorage.setItem('mdc_inventory', []);
+            dbStorage.setItem('mdc_repair_usage', []);
+            dbStorage.setItem('mdc_upload_audit_logs', []);
           } else {
             localStorage.removeItem('mdc_is_cleared');
             dbStorage.removeItem('mdc_is_cleared');
@@ -766,19 +782,14 @@ export function useCloudSync({
         const isDeletedOrCorruptedShipment = (s) => {
           if (!s) return true;
           const sId = String(s.id || '').trim().toUpperCase();
-          const sRef = String(s.invoice_ref || s.invoiceRef || '').trim().toUpperCase();
-          const sNum = String(s.shipment_number || '').trim().toUpperCase();
-          const cleanRef = sRef.replace(/[^A-Z0-9]/g, '');
+          const cleanRef = String(s.invoice_ref || s.invoiceRef || '').replace(/[^A-Z0-9]/g, '');
 
           // Explicitly block accidental test phantom shipments
           if (cleanRef === 'DCOWNED082726A' || cleanRef === 'DCOWNED082726B') return true;
-          if (sRef.includes('082726A') || sRef.includes('082726B')) return true;
 
           return deletedShipmentIds.some(d => {
             if (!d) return false;
-            const dClean = String(d).trim().toUpperCase();
-            const dNorm = dClean.replace(/[^A-Z0-9]/g, '');
-            return dClean === sId || dClean === sRef || dClean === sNum || (cleanRef && (dClean === cleanRef || dNorm === cleanRef));
+            return String(d).trim().toUpperCase() === sId;
           });
         };
 
@@ -823,25 +834,30 @@ export function useCloudSync({
               const formattedItems = Array.isArray(dbS.items) && dbS.items.length > 0
                 ? dbS.items
                 : (Array.isArray(dbS.shipment_items) && dbS.shipment_items.length > 0
-                    ? dbS.shipment_items.map(it => ({
-                        id: it.id,
-                        serial_number: it.serial_number,
-                        part_number: it.parts?.part_number || it.part_number,
-                        description: it.parts?.description || it.description,
-                        box_number: it.box_number || 1,
-                        cost: it.unit_cost || 0
-                      }))
+                    ? dbS.shipment_items.map(it => {
+                        const cleanSerial = String(it.serial_number || '').trim().toUpperCase();
+                        const matchingUnit = (dbUnits || []).find(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial);
+                        const matchingPart = (dbParts || []).find(p => (it.part_id && p.id === it.part_id) || (matchingUnit?.part_id && p.id === matchingUnit.part_id) || (matchingUnit?.part_number && p.part_number === matchingUnit.part_number));
+                        return {
+                          id: it.id,
+                          serial_number: it.serial_number,
+                          part_number: it.parts?.part_number || it.part_number || matchingUnit?.part_number || matchingPart?.part_number || 'UNKNOWN-PN',
+                          description: it.parts?.description || it.description || matchingUnit?.description || matchingPart?.description || 'Part Description',
+                          box_number: it.box_number || 1,
+                          cost: it.unit_cost || matchingPart?.stocking_price || 0
+                        };
+                      })
                     : (existing?.items || []));
 
               const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
               const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
 
               shipmentMap.set(canonicalRef, {
-                ...dbS,
                 ...(existing || {}),
+                ...dbS,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
-                items: formattedItems
+                items: formattedItems.length > 0 ? formattedItems : (existing?.items || [])
               });
             }
           });
@@ -857,8 +873,12 @@ export function useCloudSync({
                 const existing = shipmentMap.get(canonicalRef);
                 if (!existing) {
                   shipmentMap.set(canonicalRef, s);
-                } else if (!existing.items || existing.items.length === 0) {
-                  shipmentMap.set(canonicalRef, { ...existing, ...s });
+                } else {
+                  const existingTime = new Date(existing.updated_at || existing.created_at || 0).getTime();
+                  const localTime = new Date(s.updated_at || s.created_at || 0).getTime();
+                  if (localTime >= existingTime || (Array.isArray(s.items) && s.items.length >= (existing.items?.length || 0))) {
+                    shipmentMap.set(canonicalRef, { ...existing, ...s });
+                  }
                 }
               }
             });
@@ -1336,7 +1356,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, currentUser, setCurrentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, currentUser, setCurrentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1369,11 +1389,6 @@ export function useCloudSync({
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
-      try {
-        localStorage.removeItem('mdc_is_cleared');
-        dbStorage.removeItem('mdc_is_cleared');
-      } catch (e) {}
-
       const success = await hydrateFromSupabase(tables);
       if (!silent) {
         if (success) {
@@ -1418,7 +1433,7 @@ export function useCloudSync({
     return await autoRefreshData({ silent: false, force: true, isManual: true, reason: 'Manual sync trigger' });
   };
 
-  // Debounced burst handler for Realtime Postgres & WebSocket events with safe 1200ms cooldown
+  // Debounced burst handler for Realtime Postgres & WebSocket events with safe 1500ms cooldown
   const triggerDebouncedRealtimeSync = useCallback((reason, table = null) => {
     if (table) {
       pendingRealtimeTablesRef.current.add(table);
@@ -1437,7 +1452,7 @@ export function useCloudSync({
         reason: `Debounced Realtime [${reason}]`,
         tables: targetTables
       });
-    }, 1200);
+    }, 1500);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1707,29 +1722,19 @@ export function useCloudSync({
             triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
           });
 
-        const SYNC_TABLES = [
+        // Only subscribe to low-frequency, event-driven tables for postgres_changes.
+        // High-volume bulk tables (inventory_units, scan_logs, allocation_items, etc.) are synchronized
+        // via lightweight Supabase Broadcast events to prevent hitting MessagesPerSecondRateLimitReached.
+        const REALTIME_POSTGRES_TABLES = [
+          'parts_requests',
           'profiles',
           'user_page_permissions',
-          'parts',
-          'part_categories',
           'sites',
-          'repair_usage_records',
-          'forecast_cycles',
-          'forecast_entries',
-          'purchase_orders',
-          'po_items',
-          'inventory_units',
-          'allocation_cycles',
-          'allocation_items',
           'shipments',
-          'shipment_items',
-          'scan_logs',
-          'saved_records',
-          'dc_intake_records',
-          'parts_requests'
+          'purchase_orders'
         ];
 
-        SYNC_TABLES.forEach(tbl => {
+        REALTIME_POSTGRES_TABLES.forEach(tbl => {
           realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, (ev) => {
             console.debug(`[Realtime Postgres] ${tbl} ${ev.eventType}`);
 
@@ -1755,42 +1760,6 @@ export function useCloudSync({
                   try { localStorage.setItem('mdc_parts_requests', JSON.stringify(next)); } catch (e) {}
                   dbStorage.setItem('mdc_parts_requests', next);
                   return next;
-                });
-              }
-            }
-
-            if (tbl === 'inventory_units' && setInventoryUnits) {
-              if (ev.eventType === 'UPDATE' && ev.new?.serial_number) {
-                const cleanS = String(ev.new.serial_number).trim().toUpperCase();
-                setInventoryUnits(prev => {
-                  const updated = (prev || []).map(u => {
-                    if (String(u.serial_number || '').trim().toUpperCase() === cleanS) {
-                      return {
-                        ...u,
-                        status: ev.new.status || u.status,
-                        current_site_id: ev.new.current_site_id || u.current_site_id,
-                        box_number: ev.new.box_number || u.box_number,
-                        shipped_at: ev.new.shipped_at || u.shipped_at
-                      };
-                    }
-                    return u;
-                  });
-                  try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
-                  dbStorage.setItem('mdc_inventory', updated);
-                  return updated;
-                });
-              } else if (ev.eventType === 'DELETE' && (ev.old?.serial_number || ev.old?.id)) {
-                const targetSerial = ev.old?.serial_number ? String(ev.old.serial_number).trim().toUpperCase() : null;
-                const targetId = ev.old?.id;
-                setInventoryUnits(prev => {
-                  const updated = (prev || []).filter(u => {
-                    if (targetSerial && String(u.serial_number || '').trim().toUpperCase() === targetSerial) return false;
-                    if (targetId && u.id === targetId) return false;
-                    return true;
-                  });
-                  try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
-                  dbStorage.setItem('mdc_inventory', updated);
-                  return updated;
                 });
               }
             }
@@ -2140,6 +2109,7 @@ export function useCloudSync({
     dbStorage.setItem('mdc_shipments', []);
     dbStorage.setItem('mdc_scan_logs', []);
     dbStorage.setItem('mdc_repair_usage', []);
+    dbStorage.setItem('mdc_upload_audit_logs', []);
     dbStorage.setItem('mdc_stock_transfer_reports', []);
     dbStorage.setItem('mdc_stock_transfer_metadata', null);
 
@@ -2155,6 +2125,7 @@ export function useCloudSync({
       localStorage.setItem('mdc_repair_usage', '[]');
       localStorage.setItem('mdc_stock_transfer_reports', '[]');
       localStorage.removeItem('mdc_stock_transfer_metadata');
+      localStorage.setItem('mdc_upload_audit_logs', '[]');
     } catch (e) {
       console.warn('LocalStorage clear error:', e);
     }
@@ -2166,6 +2137,7 @@ export function useCloudSync({
     setShipments([]);
     setScanLogs([]);
     setRepairUsageRecords([]);
+    setUploadAuditLogs([]);
 
     if (logDeletionAudit) {
       await logDeletionAudit({
@@ -2225,6 +2197,7 @@ export function useCloudSync({
 
         try { await supabase.from('forecast_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('allocation_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
+        try { await supabase.from('repair_usage_records').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
 
         setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });

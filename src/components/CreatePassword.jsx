@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw, ArrowUp } from 'lucide-react';
+import { Lock, CheckCircle2, Circle, Eye, EyeOff, ArrowRight, ArrowLeft, RefreshCw, ArrowUp, ShieldCheck, UserCheck, AlertCircle } from 'lucide-react';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function CreatePassword() {
@@ -24,13 +24,43 @@ export default function CreatePassword() {
     }
   };
 
+  // Helper to extract user initials for avatar
+  const getUserInitials = (name) => {
+    if (!name) return 'U';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
+
   // Password Policy Rules (Enforcing strong case-sensitive passwords)
   const hasMinLength = password.length >= 8;
   const hasUpper = /[A-Z]/.test(password);
   const hasLower = /[a-z]/.test(password);
+  const hasUpperLower = hasUpper && hasLower;
   const hasNumber = /[0-9]/.test(password);
-  const isMatch = password.length > 0 && password === confirmPassword;
-  const isFormValid = hasMinLength && hasUpper && hasLower && hasNumber && isMatch;
+  const isMatch = password.length > 0 && confirmPassword.length > 0 && password === confirmPassword;
+  const isFormValid = hasMinLength && hasUpperLower && hasNumber && isMatch;
+
+  const requirements = [
+    { id: 'length', label: '8+ characters', met: hasMinLength },
+    { id: 'case', label: 'Upper & lowercase', met: hasUpperLower },
+    { id: 'number', label: 'At least 1 number', met: hasNumber },
+    { id: 'match', label: 'Passwords match', met: isMatch }
+  ];
+
+  const metCount = requirements.filter(r => r.met).length;
+
+  const getStrengthStatus = () => {
+    if (metCount === 0) return { label: '4 required', color: '#64748b' };
+    if (metCount === 1) return { label: 'Weak (1/4)', color: '#f87171' };
+    if (metCount === 2) return { label: 'Fair (2/4)', color: '#fbbf24' };
+    if (metCount === 3) return { label: 'Good (3/4)', color: '#38bdf8' };
+    return { label: 'Strong & Ready (4/4)', color: '#34d399' };
+  };
+
+  const strength = getStrengthStatus();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -58,7 +88,7 @@ export default function CreatePassword() {
     <div className="auth-page">
       <div className="auth-ambient-glow" />
 
-      <div className="auth-card" style={{ maxWidth: '480px' }}>
+      <div className="auth-card" style={{ maxWidth: '490px' }}>
         {/* Header */}
         <div className="auth-header">
           <div className="auth-logo-badge">
@@ -78,8 +108,29 @@ export default function CreatePassword() {
             Create Your Password
           </h1>
           <p className="auth-subtitle">
-            Welcome, <strong style={{ color: '#f1f5f9' }}>{pendingFirstTimeUser.fullName}</strong> ({pendingFirstTimeUser.email})
+            Set up your credentials to activate and secure your account.
           </p>
+        </div>
+
+        {/* User Identity Chip */}
+        <div className="auth-user-chip" style={{ marginBottom: '22px' }}>
+          <div className="auth-user-info">
+            <div className="auth-user-avatar">
+              {getUserInitials(pendingFirstTimeUser?.fullName)}
+            </div>
+            <div style={{ textAlign: 'left', minWidth: 0 }}>
+              <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '13px', lineHeight: 1.2 }}>
+                {pendingFirstTimeUser?.fullName || 'Authorized Staff'}
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '11.5px', lineHeight: 1.2, marginTop: '2px' }}>
+                {pendingFirstTimeUser?.email}
+              </div>
+            </div>
+          </div>
+          <div className="auth-user-chip-badge">
+            <UserCheck size={12} />
+            <span>First Setup</span>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit}>
@@ -135,7 +186,10 @@ export default function CreatePassword() {
               <input
                 type={showConfirmPassword ? 'text' : 'password'}
                 className="auth-input"
-                style={{ paddingRight: '48px' }}
+                style={{
+                  paddingRight: '48px',
+                  borderColor: isMatch ? '#10b981' : undefined
+                }}
                 placeholder="Re-enter your password"
                 value={confirmPassword}
                 onChange={(e) => {
@@ -164,33 +218,65 @@ export default function CreatePassword() {
             </div>
           </div>
 
-          {/* Security Checklist */}
-          <div style={{ background: 'rgba(30, 41, 59, 0.5)', borderRadius: '12px', padding: '14px 16px', marginBottom: '22px', border: '1px solid #334155' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
-              Security Requirements
+          {/* Security Checklist Box */}
+          <div className="auth-req-box">
+            <div className="auth-req-header">
+              <div className="auth-req-title">
+                <ShieldCheck size={14} color="#38bdf8" />
+                <span>Security Requirements</span>
+              </div>
+              <span className="auth-req-status" style={{ color: strength.color }}>
+                {strength.label}
+              </span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasMinLength ? '#34d399' : '#94a3b8' }}>
-                {hasMinLength ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
-                <span>8+ characters</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: (hasUpper && hasLower) ? '#34d399' : '#94a3b8' }}>
-                {(hasUpper && hasLower) ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
-                <span>Upper & lowercase letters (case-sensitive)</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasNumber ? '#34d399' : '#94a3b8' }}>
-                {hasNumber ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
-                <span>At least 1 number</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: isMatch ? '#34d399' : '#94a3b8' }}>
-                {isMatch ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
-                <span>Passwords match</span>
-              </div>
+
+            {/* 4-Segment Strength Progress Meter */}
+            <div className="auth-req-meter">
+              {[1, 2, 3, 4].map((step) => {
+                const isActive = metCount >= step;
+                let barColor = 'rgba(51, 65, 85, 0.45)';
+                if (isActive) {
+                  if (metCount === 1) barColor = '#f87171';
+                  else if (metCount === 2) barColor = '#fbbf24';
+                  else if (metCount === 3) barColor = '#38bdf8';
+                  else barColor = '#34d399';
+                }
+                return (
+                  <div
+                    key={step}
+                    className="auth-req-meter-bar"
+                    style={{
+                      background: barColor,
+                      boxShadow: isActive ? `0 0 8px ${barColor}40` : 'none'
+                    }}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Symmetrical 2x2 Requirement Cards */}
+            <div className="auth-req-grid">
+              {requirements.map((req) => (
+                <div
+                  key={req.id}
+                  className={`auth-req-item ${req.met ? 'is-met' : 'is-unmet'}`}
+                >
+                  <div className="auth-req-item-icon">
+                    {req.met ? (
+                      <CheckCircle2 size={14} color="#34d399" />
+                    ) : (
+                      <Circle size={13} color="#64748b" />
+                    )}
+                  </div>
+                  <span className="auth-req-item-text">{req.label}</span>
+                </div>
+              ))}
             </div>
           </div>
 
           {errorMessage && (
-            <div className="scanner-feedback-box scanner-feedback-error" style={{ marginBottom: '20px', padding: '10px 14px' }}>
+            <div className="scanner-feedback-box scanner-feedback-error" style={{ marginBottom: '20px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
               <span>{errorMessage}</span>
             </div>
           )}
@@ -199,6 +285,10 @@ export default function CreatePassword() {
             type="submit"
             className="auth-btn-primary"
             disabled={!isFormValid || isLoading}
+            style={{
+              boxShadow: isFormValid ? '0 4px 20px rgba(16, 185, 129, 0.4)' : undefined,
+              background: isFormValid ? 'linear-gradient(135deg, #059669 0%, #047857 100%)' : undefined
+            }}
           >
             {isLoading ? (
               <>
@@ -217,9 +307,10 @@ export default function CreatePassword() {
             <button
               type="button"
               onClick={() => setPendingFirstTimeUser(null)}
-              style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12.5px', cursor: 'pointer' }}
+              className="auth-back-link"
             >
-              ← Back to Login
+              <ArrowLeft size={14} />
+              <span>Back to Login</span>
             </button>
           </div>
         </form>
@@ -227,3 +318,4 @@ export default function CreatePassword() {
     </div>
   );
 }
+

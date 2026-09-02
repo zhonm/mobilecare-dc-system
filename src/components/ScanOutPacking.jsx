@@ -243,7 +243,6 @@ export default function ScanOutPacking() {
     };
   }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, broadcastPackingPresence]);
 
-  const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null);
   const [manifestSearch, setManifestSearch] = useState('');
@@ -258,7 +257,6 @@ export default function ScanOutPacking() {
   const [parsedBatch, setParsedBatch] = useState(null);
   const [importFilter, setImportFilter] = useState('ALL'); // 'ALL' | 'VALID' | 'NOT_FOUND'
 
-  const pnInputRef = useRef(null);
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -283,9 +281,9 @@ export default function ScanOutPacking() {
     }, 0);
   }, [currentShipment, partPriceMap]);
 
-  // Auto-focus Part Number input on mount
+  // Auto-focus Serial Number input on mount
   useEffect(() => {
-    pnInputRef.current?.focus();
+    serialInputRef.current?.focus();
   }, []);
 
   // Update shipment when site changes (auto-select Courier: Lalamove for MM, Lite Express for provincial)
@@ -346,72 +344,6 @@ export default function ScanOutPacking() {
     showToast(`Destination branch set to ${site.code} (${site.name})`, 'success');
   };
 
-  // Keyboard HID submission handlers
-  const handlePnKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (partNumberInput.trim()) {
-        serialInputRef.current?.focus();
-      }
-    }
-  };
-
-  const handleSerialKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      executePackScan();
-    }
-  };
-
-  const executePackScan = () => {
-    if (!selectedSiteId || !selectedSite) {
-      showToast('Please select a destination site first before packing parts.', 'warning');
-      setIsSiteModalOpen(true);
-      return;
-    }
-
-    const cleanPN = partNumberInput.trim().toUpperCase();
-    const cleanSerial = serialInput.trim().toUpperCase();
-
-    if (!cleanPN || !cleanSerial) {
-      setScanResult({ type: 'error', message: 'Please scan both Part Number and Serial Number' });
-      return;
-    }
-
-    markLocalDraftEdit();
-
-    const res = addScanOutUnit({
-      shipmentId: currentShipment.id,
-      siteId: selectedSiteId,
-      partNumber: cleanPN,
-      serialNumber: cleanSerial,
-      boxNumber: boxNumber
-    });
-
-    if (res.success) {
-      setScanResult({
-        type: 'success',
-        message: `Packed: ${res.item.description} (SN: ${res.item.serial_number}) into Box ${boxNumber}`
-      });
-
-      const updatedDraft = {
-        ...currentShipment,
-        items: [...(currentShipment.items || []), res.item],
-        updated_at: new Date().toISOString()
-      };
-      setCurrentShipment(updatedDraft);
-
-      setSerialInput('');
-      serialInputRef.current?.focus();
-    } else {
-      setScanResult({
-        type: 'error',
-        message: res.error
-      });
-      serialInputRef.current?.select();
-    }
-  };
-
   // Packed serial numbers in active draft set for O(1) deduplication
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
@@ -432,8 +364,130 @@ export default function ScanOutPacking() {
     });
   }, [inventoryUnits, packedSerialsSet]);
 
+  // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
+  const packUnitBySerial = (targetSerialInput) => {
+    const cleanSerial = String(targetSerialInput || serialInput || '').trim().toUpperCase();
+    if (!cleanSerial) {
+      setScanResult({ type: 'error', message: 'Please scan or paste a Serial Number.' });
+      return { success: false, error: 'Empty serial number' };
+    }
+
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site first before packing parts.', 'warning');
+      setIsSiteModalOpen(true);
+      setScanResult({ type: 'error', message: 'Destination site required. Please select a destination branch first.' });
+      return { success: false, error: 'Destination site required' };
+    }
+
+    // 1. Duplicate check in active draft
+    if (packedSerialsSet.has(cleanSerial)) {
+      const alreadyPackedItem = (currentShipment?.items || []).find(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial);
+      const boxMsg = alreadyPackedItem?.box_number ? `in Box #${alreadyPackedItem.box_number}` : 'in this shipment';
+      setScanResult({
+        type: 'error',
+        message: `Duplicate Protection: Unit #${cleanSerial} is already packed ${boxMsg}.`
+      });
+      showToast(`Duplicate: #${cleanSerial} is already packed ${boxMsg}`, 'warning');
+      setSerialInput('');
+      serialInputRef.current?.focus();
+      return { success: false, error: 'Already packed' };
+    }
+
+    // 2. Lookup matching unit in DC stock
+    const matchingUnit = (inventoryUnits || []).find(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      return s === cleanSerial;
+    });
+
+    if (!matchingUnit) {
+      setScanResult({
+        type: 'error',
+        message: `Stock Error: Serial #${cleanSerial} not found in DC inventory records.`
+      });
+      showToast(`Serial #${cleanSerial} not found in DC inventory`, 'error');
+      serialInputRef.current?.select();
+      return { success: false, error: 'Unit not found' };
+    }
+
+    const isDc = matchingUnit.current_site_id === 'site-dc' || matchingUnit.site_code === 'DC-MDC' || matchingUnit.site_code === 'DC' || (!matchingUnit.current_site_id && !matchingUnit.site_code);
+    if (!isDc || (matchingUnit.status && matchingUnit.status !== 'in_stock' && matchingUnit.status !== 'allocated')) {
+      setScanResult({
+        type: 'error',
+        message: `Unavailable: Unit #${cleanSerial} is currently "${matchingUnit.status || 'not in DC stock'}".`
+      });
+      showToast(`Unit #${cleanSerial} is not available in DC (Status: ${matchingUnit.status || 'Other Site'})`, 'error');
+      serialInputRef.current?.select();
+      return { success: false, error: 'Unit not available' };
+    }
+
+    // 3. Execute Pack
+    markLocalDraftEdit();
+
+    const res = addScanOutUnit({
+      shipmentId: currentShipment.id,
+      siteId: selectedSiteId,
+      partNumber: matchingUnit.part_number,
+      serialNumber: cleanSerial,
+      boxNumber: boxNumber
+    });
+
+    if (res.success) {
+      setScanResult({
+        type: 'success',
+        message: `⚡ Auto-Packed: ${res.item.description || matchingUnit.description || 'Part'} (SN: ${cleanSerial}) → Box ${boxNumber}`
+      });
+      showToast(`Packed ${matchingUnit.part_number} (${cleanSerial}) into Box #${boxNumber}`, 'success');
+
+      const updatedDraft = {
+        ...currentShipment,
+        items: [...(currentShipment.items || []), res.item],
+        updated_at: new Date().toISOString()
+      };
+      setCurrentShipment(updatedDraft);
+
+      setSerialInput('');
+      serialInputRef.current?.focus();
+      return { success: true, item: res.item };
+    } else {
+      setScanResult({
+        type: 'error',
+        message: res.error || 'Failed to pack unit'
+      });
+      return { success: false, error: res.error };
+    }
+  };
+
+  // Keyboard and Paste Handlers
+  const handleSerialPaste = (e) => {
+    const pasted = e.clipboardData?.getData('text');
+    if (pasted) {
+      const clean = pasted.trim().toUpperCase();
+      if (clean) {
+        e.preventDefault();
+        setSerialInput(clean);
+        packUnitBySerial(clean);
+      }
+    }
+  };
+
+  const handleSerialKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      packUnitBySerial(serialInput);
+    }
+  };
+
+  const executePackScan = () => {
+    packUnitBySerial(serialInput);
+  };
+
+  const handleDirectPackUnit = (unit) => {
+    if (unit?.serial_number) {
+      packUnitBySerial(unit.serial_number);
+    }
+  };
+
   // State for upgraded Available Stock Verification UI
-  const [stockSearch, setStockSearch] = useState('');
   const [stockAssignmentTab, setStockAssignmentTab] = useState('ALL'); // 'ALL' | 'MDC_FORECASTING' | 'DC_CRBR' | 'SVNR'
   const [stockCategoryTab, setStockCategoryTab] = useState('ALL'); // 'ALL' | category code
   const [stockInspectUnit, setStockInspectUnit] = useState(null); // unit for detail modal
@@ -558,20 +612,9 @@ export default function ScanOutPacking() {
         }
       }
 
-      // 3. Search filter
-      if (stockSearch.trim()) {
-        const q = stockSearch.toLowerCase().trim();
-        const matchesPn = (u.part_number || '').toLowerCase().includes(q);
-        const matchesSn = (u.serial_number || '').toLowerCase().includes(q);
-        const matchesDesc = (u.description || '').toLowerCase().includes(q);
-        const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
-        const matchesCat = (u.category_name || '').toLowerCase().includes(q);
-        const matchesAssign = (u.intake_assignment || '').toLowerCase().includes(q);
-        if (!matchesPn && !matchesSn && !matchesDesc && !matchesModel && !matchesCat && !matchesAssign) return false;
-      }
       return true;
     });
-  }, [enrichedStockUnits, stockAssignmentTab, stockCategoryTab, stockSearch]);
+  }, [enrichedStockUnits, stockAssignmentTab, stockCategoryTab]);
 
   const uniquePartTypesCount = useMemo(() => {
     const set = new Set(availableStockUnits.map(u => (u.part_number || '').toUpperCase()));
@@ -583,7 +626,7 @@ export default function ScanOutPacking() {
     return (shipments || []).filter(s => {
       if (!s || !Array.isArray(s.items) || s.items.length === 0) return false;
       const st = String(s.status || '').toLowerCase().trim();
-      return st === 'draft' || st === 'pending_pickup' || st === 'packing' || st === 'in_progress' || !st;
+      return st === 'draft' || st === 'pending_pickup' || st === 'packing' || st === 'in_progress' || st === 'saved' || !st;
     });
   }, [shipments]);
 
@@ -591,42 +634,7 @@ export default function ScanOutPacking() {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
     if (!unit || !unit.serial_number) return;
-
-    if (!selectedSiteId || !selectedSite) {
-      showToast('Please select a destination site first before packing parts.', 'warning');
-      setIsSiteModalOpen(true);
-      return;
-    }
-
-    markLocalDraftEdit();
-    const cleanPN = String(unit.part_number || '').trim();
-    const cleanSerial = String(unit.serial_number || '').trim();
-    setPartNumberInput(cleanPN);
-    setSerialInput(cleanSerial);
-
-    const res = addScanOutUnit({
-      shipmentId: currentShipment.id,
-      siteId: selectedSiteId,
-      partNumber: cleanPN,
-      serialNumber: cleanSerial,
-      boxNumber: boxNumber
-    });
-
-    if (res.success) {
-      setScanResult({
-        type: 'success',
-        message: `[PACKED] ${res.item.description} (#${res.item.serial_number}) into Box ${boxNumber}`
-      });
-      const updatedDraft = {
-        ...currentShipment,
-        items: [...(currentShipment.items || []), res.item],
-        updated_at: new Date().toISOString()
-      };
-      setCurrentShipment(updatedDraft);
-      setSerialInput('');
-    } else {
-      setScanResult({ type: 'error', message: res.error });
-    }
+    packUnitBySerial(unit.serial_number);
   };
 
   // --- XLSX / CSV File Import Handling ---
@@ -693,7 +701,7 @@ export default function ScanOutPacking() {
 
       setParsedBatch(null);
       setIsImportModalOpen(false);
-      pnInputRef.current?.focus();
+      serialInputRef.current?.focus();
     } else {
       showToast(res.error || 'Batch pack failed', 'error');
     }
@@ -1392,7 +1400,7 @@ export default function ScanOutPacking() {
           </div>
         </div>
 
-        {/* Primary Barcode Scanner Inputs (Hero Stage) */}
+        {/* Primary Barcode Scanner & Paste Input (Hero Stage) */}
         <div
           style={{
             background: 'rgba(15, 23, 42, 0.95)',
@@ -1403,50 +1411,62 @@ export default function ScanOutPacking() {
             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)'
           }}
         >
-          <div className="scan-input-grid" style={{ alignItems: 'center' }}>
-            <div>
-              <label style={{ color: '#38bdf8', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', display: 'block', letterSpacing: '0.4px' }}>
-                1. Part Number (P/N)
-              </label>
-              <input
-                ref={pnInputRef}
-                type="text"
-                className="scanner-input"
-                placeholder="e.g. 661-21991"
-                value={partNumberInput}
-                onChange={(e) => setPartNumberInput(e.target.value)}
-                onKeyDown={handlePnKeyDown}
-                style={{ height: '46px', fontSize: '15px', borderRadius: '8px' }}
-              />
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+            <label style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px', letterSpacing: '0.4px', margin: 0 }}>
+              <span>Serial Number (S/N)</span>
+              <span style={{ fontSize: '10.5px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.4)', padding: '2px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                ⚡ Instant Auto-Pack on Scan / Paste
+              </span>
+            </label>
+            <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+              Paste or scan serial to auto-detect part &amp; pack to Box #{boxNumber}
+            </span>
+          </div>
 
-            <div>
-              <label style={{ color: '#38bdf8', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', display: 'block', letterSpacing: '0.4px' }}>
-                2. Serial Number (S/N)
-              </label>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: 1 }}>
               <input
                 ref={serialInputRef}
                 type="text"
                 className="scanner-input"
-                placeholder="e.g. F8Y6276C1UQ13XCB1"
+                placeholder="Scan or paste Serial Number (e.g. G9PQHU084CQ9D088S5L4B)..."
                 value={serialInput}
                 onChange={(e) => setSerialInput(e.target.value)}
                 onKeyDown={handleSerialKeyDown}
-                style={{ height: '46px', fontSize: '15px', borderRadius: '8px' }}
+                onPaste={handleSerialPaste}
+                autoFocus
+                style={{ height: '48px', fontSize: '15px', borderRadius: '8px', width: '100%', paddingRight: serialInput ? '36px' : '14px' }}
               />
+              {serialInput && (
+                <button
+                  type="button"
+                  onClick={() => { setSerialInput(''); serialInputRef.current?.focus(); }}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '4px'
+                  }}
+                  title="Clear input"
+                >
+                  <X size={16} />
+                </button>
+              )}
             </div>
 
-            <div>
-              <label style={{ opacity: 0, fontSize: '11px', marginBottom: '6px', display: 'block' }}>Action</label>
-              <button
-                className="btn btn-primary btn-lg"
-                onClick={executePackScan}
-                style={{ height: '46px', padding: '0 20px', fontSize: '14px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-              >
-                <span>Pack Unit</span>
-                <ArrowRight size={17} />
-              </button>
-            </div>
+            <button
+              className="btn btn-primary btn-lg"
+              onClick={executePackScan}
+              style={{ height: '48px', padding: '0 24px', fontSize: '14px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
+            >
+              <span>Pack Unit</span>
+              <ArrowRight size={17} />
+            </button>
           </div>
         </div>
 
@@ -1595,29 +1615,8 @@ export default function ScanOutPacking() {
             </div>
           </div>
 
-          {/* Quick Search & Hard Sync Button */}
+          {/* Hard Sync Button */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ position: 'relative', width: '240px' }}>
-              <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-              <input
-                type="text"
-                placeholder="Search P/N, Serial, Model..."
-                value={stockSearch}
-                onChange={(e) => setStockSearch(e.target.value)}
-                className="form-input"
-                style={{ paddingLeft: '26px', paddingRight: stockSearch ? '24px' : '8px', height: '32px', fontSize: '12px', width: '100%' }}
-              />
-              {stockSearch && (
-                <button
-                  type="button"
-                  onClick={() => setStockSearch('')}
-                  style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0 }}
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
-
             {autoRefreshData && (
               <button
                 type="button"
@@ -1839,13 +1838,13 @@ export default function ScanOutPacking() {
             <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
               {stockAssignmentTab !== 'ALL'
                 ? `No available units found under "${stockAssignmentTab === 'MDC_FORECASTING' ? 'MDC – Forecasting' : stockAssignmentTab === 'DC_CRBR' ? 'DC – CRBR' : 'SVNR'}".`
-                : `No available parts match "${stockSearch}".`}
+                : 'No available units match the selected category filter.'}
             </p>
-            {stockAssignmentTab !== 'ALL' && assignmentCounts.all > 0 && (
+            {assignmentCounts.all > 0 && (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => { setStockAssignmentTab('ALL'); setStockCategoryTab('ALL'); setStockSearch(''); }}
+                onClick={() => { setStockAssignmentTab('ALL'); setStockCategoryTab('ALL'); }}
                 style={{ fontSize: '11px', padding: '3px 10px' }}
               >
                 View All Available Parts ({assignmentCounts.all})

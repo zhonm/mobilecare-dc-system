@@ -38,30 +38,18 @@ ALTER TABLE IF EXISTS scan_logs REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS saved_records REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS dc_intake_records REPLICA IDENTITY FULL;
 
--- 4. Register ALL tables in the supabase_realtime publication
--- This enables postgres_changes events to broadcast over websockets across all active client sessions
+-- 4. Register essential low-frequency event tables in the supabase_realtime publication
+-- High-volume bulk data tables (inventory_units, scan_logs, shipment_items, etc.) are omitted to prevent rate limit errors.
 DO $$
 DECLARE
     t text;
     tables text[] := ARRAY[
         'profiles',
         'user_page_permissions',
-        'part_categories',
-        'parts',
         'sites',
-        'repair_usage_records',
-        'forecast_cycles',
-        'forecast_entries',
         'purchase_orders',
-        'po_items',
-        'inventory_units',
-        'allocation_cycles',
-        'allocation_items',
         'shipments',
-        'shipment_items',
-        'scan_logs',
-        'saved_records',
-        'dc_intake_records'
+        'parts_requests'
     ];
 BEGIN
     FOR t IN SELECT unnest(tables) LOOP

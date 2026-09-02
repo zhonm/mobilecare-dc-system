@@ -60,7 +60,7 @@ export default function Sidebar() {
     { id: 'request-parts', label: 'Parts Requests', icon: Inbox, badge: pendingRequestsCount, section: 'Operations & Logistics' },
     { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Operations & Logistics' },
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Operations & Logistics' },
-    { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Operations & Logistics' },
+    { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
 
     // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },

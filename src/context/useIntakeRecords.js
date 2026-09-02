@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { safeUUID, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { safeUUID, isUUID, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 
 export function useIntakeRecords({
@@ -304,12 +304,14 @@ export function useIntakeRecords({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        try {
-          const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
-          if (delErr) {
-            await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
-          }
-        } catch (e) {}
+        if (isUUID(recordId)) {
+          try {
+            const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
+            if (delErr) {
+              await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
+            }
+          } catch (e) {}
+        }
         await supabase.from('saved_records').delete().eq('id', recordId);
 
         await supabase.from('saved_records').upsert({

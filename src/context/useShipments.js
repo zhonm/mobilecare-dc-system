@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef } from '../utils/appContextHelpers';
+import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
 
 export function useShipments({
   currentUser,
@@ -46,7 +47,7 @@ export function useShipments({
               if (sNorm === 'DCOWNED082726A' || sNorm === 'DCOWNED082726B') return false;
               if (sRef.includes('082726A') || sRef.includes('082726B')) return false;
 
-              if (deletedTokensSet.has(sId) || deletedTokensSet.has(sRef) || deletedTokensSet.has(sNum) || (sNorm && deletedTokensSet.has(sNorm))) {
+              if (deletedTokensSet.has(sId)) {
                 return false;
               }
               return true;
@@ -307,7 +308,7 @@ export function useShipments({
     try {
       localStorage.setItem('mdc_shipments', JSON.stringify(nextList));
       const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
-      const tokensToAdd = [targetId, shipmentId, targetRef, targetNum, cleanRef].filter(Boolean);
+      const tokensToAdd = [targetId, shipmentId, targetNum].filter(Boolean);
       updatedDeletedList = Array.from(new Set([...deletedList, ...tokensToAdd]));
       localStorage.setItem('mdc_deleted_shipment_ids', JSON.stringify(updatedDeletedList));
     } catch (e) {}
@@ -360,19 +361,31 @@ export function useShipments({
           }
         } catch (mErr) {}
 
-        // 1. Delete child shipment_items for every matched ID first to prevent foreign key constraint violations
+        // 1. Delete child shipment_items for every matched UUID first to prevent foreign key constraint violations
         for (const dbId of matchedDbIds) {
-          try { await supabase.from('shipment_items').delete().eq('shipment_id', dbId); } catch (e) {}
+          if (isUUID(dbId)) {
+            try { await supabase.from('shipment_items').delete().eq('shipment_id', dbId); } catch (e) {}
+          }
         }
-        try { await supabase.from('shipment_items').delete().eq('shipment_id', targetId); } catch (e) {}
-        try { await supabase.from('shipment_items').delete().eq('shipment_id', shipmentId); } catch (e) {}
+        if (isUUID(targetId)) {
+          try { await supabase.from('shipment_items').delete().eq('shipment_id', targetId); } catch (e) {}
+        }
+        if (isUUID(shipmentId)) {
+          try { await supabase.from('shipment_items').delete().eq('shipment_id', shipmentId); } catch (e) {}
+        }
 
         // 2. Delete parent shipments rows
         for (const dbId of matchedDbIds) {
-          try { await supabase.from('shipments').delete().eq('id', dbId); } catch (e) {}
+          if (isUUID(dbId)) {
+            try { await supabase.from('shipments').delete().eq('id', dbId); } catch (e) {}
+          }
         }
-        try { await supabase.from('shipments').delete().eq('id', targetId); } catch (e) {}
-        try { await supabase.from('shipments').delete().eq('id', shipmentId); } catch (e) {}
+        if (isUUID(targetId)) {
+          try { await supabase.from('shipments').delete().eq('id', targetId); } catch (e) {}
+        }
+        if (isUUID(shipmentId)) {
+          try { await supabase.from('shipments').delete().eq('id', shipmentId); } catch (e) {}
+        }
         if (targetRef) {
           try { await supabase.from('shipments').delete().eq('invoice_ref', targetRef); } catch (e) {}
         }
@@ -602,8 +615,8 @@ export function useShipments({
   };
 
   const saveShipment = async (shipmentData) => {
-    if (!shipmentData) return;
-    const isUpdate = shipmentData.id && shipments.some(s => s.id === shipmentData.id);
+    if (!shipmentData) return null;
+    const isUpdate = shipmentData.id && (shipments || []).some(s => s.id === shipmentData.id);
     const resolvedPreparedBy = (shipmentData.prepared_by_name && shipmentData.prepared_by_name !== 'Warehouse Staff')
       ? shipmentData.prepared_by_name
       : (currentUser?.fullName || currentUser?.name || 'Zhon Manaois');
@@ -615,7 +628,7 @@ export function useShipments({
     const newShipment = {
       ...shipmentData,
       id: shipmentData.id || `ship-${Date.now()}`,
-      shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 1).padStart(3, '0')}`,
+      shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String((shipments || []).length + 1).padStart(3, '0')}`,
       invoice_ref: shipmentData.invoice_ref || generateNextInvoiceRef(shipments),
       status: shipmentData.status || 'pending_pickup',
       prepared_by_name: resolvedPreparedBy,
@@ -625,15 +638,24 @@ export function useShipments({
       updated_at: new Date().toISOString()
     };
 
-    const nextList = isUpdate 
-      ? shipments.map(s => s.id === shipmentData.id ? newShipment : s)
-      : [newShipment, ...shipments.filter(s => s.id !== newShipment.id)];
+    // Unmark any previous accidental deletion markers so this shipment is never hidden
+    await unmarkDeletedShipmentIds([newShipment.id, newShipment.invoice_ref, newShipment.shipment_number]);
 
-    setShipments(nextList);
-    try {
-      localStorage.setItem('mdc_shipments', JSON.stringify(nextList));
-    } catch (e) {}
-    dbStorage.setItem('mdc_shipments', nextList);
+    let computedNextList = [];
+    setShipments(prev => {
+      const currentList = Array.isArray(prev) ? prev : [];
+      const isUpd = newShipment.id && currentList.some(s => s.id === newShipment.id);
+      computedNextList = isUpd 
+        ? currentList.map(s => s.id === newShipment.id ? newShipment : s)
+        : [newShipment, ...currentList.filter(s => s.id !== newShipment.id)];
+      try {
+        localStorage.setItem('mdc_shipments', JSON.stringify(computedNextList));
+      } catch (e) {}
+      dbStorage.setItem('mdc_shipments', computedNextList);
+      return computedNextList;
+    });
+
+    const nextList = computedNextList.length > 0 ? computedNextList : [newShipment, ...(shipments || []).filter(s => s.id !== newShipment.id)];
 
     let updatedInv = [];
     if (newShipment.items && newShipment.items.length > 0 && setInventoryUnits) {
@@ -653,7 +675,7 @@ export function useShipments({
               current_site_id: newShipment.site_id || u.current_site_id,
               shipped_at: newShipment.shipment_date || new Date().toISOString(),
               shipped_by: resolvedPreparedBy,
-              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : u.received_at,
+              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
               received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || currentUser?.fullName || 'Superadmin') : u.received_by
             };
           }
@@ -843,6 +865,7 @@ export function useShipments({
             const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
             const partId = isUUID(existingU?.part_id) ? existingU.part_id : null;
             const siteId = isUUID(newShipment.site_id) ? newShipment.site_id : null;
+            const isConfirmed = newShipment.status === 'received_confirmed' || newShipment.status === 'delivered';
 
             return {
               ...(partId ? { part_id: partId } : {}),
@@ -851,7 +874,8 @@ export function useShipments({
               box_number: it.box_number || 1,
               ...(siteId ? { current_site_id: siteId } : {}),
               shipped_at: newShipment.shipment_date || new Date().toISOString(),
-              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : null
+              received_at: existingU?.received_at || it.received_at || new Date().toISOString(),
+              ...(isConfirmed ? { received_confirmed_at: newShipment.received_at || new Date().toISOString() } : {})
             };
           }).filter(r => r.serial_number);
 

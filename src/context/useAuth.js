@@ -222,6 +222,60 @@ export function useAuth({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usersList, currentUser?.id, currentUser?.email, currentUser?.role, currentUser?.isActive, currentUser?.rolePosition]);
 
+  // Revoke an active local session when another client deletes or deactivates it.
+  useEffect(() => {
+    if (!currentUser) return undefined;
+
+    const matchesCurrentUser = (userId, email) => {
+      const normalizedId = String(userId || '').trim().toLowerCase();
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      return (normalizedId && normalizedId === String(currentUser.id || '').toLowerCase()) ||
+        (normalizedEmail && normalizedEmail === String(currentUser.email || '').toLowerCase());
+    };
+
+    const revokeIfCurrentUser = async (userId, email, reason) => {
+      if (matchesCurrentUser(userId, email)) {
+        await signOut();
+        showToast(`Your account was ${reason}. You have been signed out.`, 'warning');
+      }
+    };
+
+    let broadcastBus = null;
+    let profileChannel = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        broadcastBus = new BroadcastChannel('mdc_sync_bus');
+        broadcastBus.onmessage = (event) => {
+          const payload = event.data?.payload;
+          if (event.data?.type === 'USER_REGISTRY_UPDATED' && payload?.action === 'DELETE') {
+            revokeIfCurrentUser(payload.userId, payload.email, 'deleted');
+          }
+        };
+      }
+
+      if (supabase && typeof supabase.channel === 'function') {
+        profileChannel = supabase
+          .channel(`mdc-session-guard-${currentUser.id || currentUser.email}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (event) => {
+            const record = event.new || event.old || {};
+            if (event.eventType === 'DELETE' || record.is_deleted === true || record.is_active === false) {
+              revokeIfCurrentUser(record.id, record.email, event.eventType === 'DELETE' || record.is_deleted ? 'deleted' : 'deactivated');
+            }
+          })
+          .subscribe();
+      }
+    } catch (e) {
+      console.debug('Session revocation listener note:', e);
+    }
+
+    return () => {
+      if (broadcastBus) broadcastBus.close();
+      if (profileChannel) supabase.removeChannel(profileChannel);
+    };
+    // signOut and showToast are intentionally read from the active render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id, currentUser?.email]);
+
   // Strict Permission Check Helper
   const canAccess = (pageId) => {
     if (!currentUser) return false;

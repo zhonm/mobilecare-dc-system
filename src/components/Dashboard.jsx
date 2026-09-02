@@ -8,8 +8,6 @@ import {
   Barcode,
   PackageCheck,
   ShieldCheck,
-  Layers,
-  Sparkles,
   Search,
   Building2,
   ChevronRight,
@@ -19,6 +17,14 @@ import {
   AlertTriangle,
   Clock,
   CheckCircle2,
+  Package,
+  MapPin,
+  BarChart3,
+  SlidersHorizontal,
+  Layers,
+  Sparkles,
+  Smartphone,
+  ChevronDown
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -34,7 +40,16 @@ import {
   CartesianGrid
 } from 'recharts';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
-import { CATEGORY_COLORS } from '../constants/config';
+import {
+  getMasterlistSummary,
+  getMasterlistParts,
+  getMasterlistSites,
+  getMasterlistPartsForSite,
+  IPHONE_CATEGORIES,
+  getCategoryBadge
+} from '../utils/rawMasterlistScanner';
+
+const USD_TO_PHP_RATE = 57;
 
 // Helper function to calculate calendar days a part has been in DC stock
 function calculateDaysInDc(dateString) {
@@ -50,43 +65,37 @@ function calculateDaysInDc(dateString) {
 export default function Dashboard() {
   const {
     inventoryUnits = [],
-    forecastItems = [],
     shipments = [],
-    dcIntakeRecords = [],
     parts = [],
     sites = [],
+    forecastItems = [],
+    repairUsageRecords = [],
     currentUser,
     activePeriod,
     setActiveTab,
     isAutoRefreshing,
     autoRefreshData,
-    selectedCategory,
     activePackDraft,
     supervisorSettings
   } = useApp();
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // VIEW & FILTER STATES
+  // ─────────────────────────────────────────────────────────────────────────
+  const [reportTab, setReportTab] = useState('top-parts'); // 'top-parts' | 'top-sites' | 'site-parts'
+  const [selectedSiteName, setSelectedSiteName] = useState('MOBILECARE - NEWPOINT MALL');
+  const [reportCategory, setReportCategory] = useState('ALL');
+  const [reportSearch, setReportSearch] = useState('');
+  const [reportSortBy, setReportSortBy] = useState('units'); // 'units' | 'valuation' | 'name'
+  const [reportLimit, setReportLimit] = useState(10); // 10 | 25 | 50 | 'ALL'
+
+  // DC Snapshot Table State
   const [tableSearch, setTableSearch] = useState('');
   const [activeSnapshotFilter, setActiveSnapshotFilter] = useState('ALL');
 
-  // Filter parts based on global top header category
-  const isUnfiltered = !selectedCategory || selectedCategory === 'ALL';
-  const filteredParts = useMemo(() => {
-    return (parts || []).filter(p => {
-      if (isUnfiltered) return true;
-      const cat = String(p.category_id || '').toUpperCase();
-      const desc = String(p.description || '').toUpperCase();
-      if (selectedCategory === 'BATTERY') return cat.includes('BATTERY') || desc.includes('BATTERY');
-      if (selectedCategory === 'DISPLAY') return cat.includes('DISPLAY') || desc.includes('DISPLAY') || desc.includes('SCREEN');
-      if (selectedCategory === 'CAMERA') return cat.includes('CAMERA') || desc.includes('CAMERA');
-      if (selectedCategory === 'BACK_GLASS') return cat.includes('BACKGLASS') || cat.includes('BACK_GLASS') || desc.includes('BACK GLASS') || desc.includes('REAR');
-      return true;
-    });
-  }, [parts, selectedCategory, isUnfiltered]);
-
-  const filteredPartNumbers = useMemo(() => new Set(filteredParts.map(p => p.part_number?.trim().toUpperCase())), [filteredParts]);
-  const filteredPartIds = useMemo(() => new Set(filteredParts.map(p => p.id)), [filteredParts]);
-
-  // Serials that are currently in an active packing list draft or saved/dispatched shipments
+  // ─────────────────────────────────────────────────────────────────────────
+  // DC WAREHOUSE INVENTORY TELEMETRY & 4-DAY AGING
+  // ─────────────────────────────────────────────────────────────────────────
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
     if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
@@ -106,7 +115,6 @@ export default function Dashboard() {
     return set;
   }, [activePackDraft, shipments]);
 
-  // Active in-stock units physically in DC warehouse
   const availableInStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
@@ -116,15 +124,10 @@ export default function Dashboard() {
                    u.site_code === 'DC' || 
                    (!u.current_site_id && !u.site_code) ||
                    (sites.find(s => s.id === u.current_site_id || s.code === u.current_site_id)?.is_dc ?? false);
-      const isStock = (u.status === 'in_stock' || !u.status) && isDc;
-      if (!isStock) return false;
-      if (isUnfiltered) return true;
-      const cleanPN = String(u.part_number || '').trim().toUpperCase();
-      return filteredPartNumbers.has(cleanPN) || filteredPartIds.has(u.part_id);
+      return (u.status === 'in_stock' || !u.status) && isDc;
     });
-  }, [inventoryUnits, packedSerialsSet, isUnfiltered, filteredPartNumbers, filteredPartIds, sites]);
+  }, [inventoryUnits, packedSerialsSet, sites]);
 
-  // Track 4-Day DC Aging Status for available DC in-stock units
   const { agingUnits, freshUnits } = useMemo(() => {
     const aging = [];
     const fresh = [];
@@ -146,76 +149,66 @@ export default function Dashboard() {
     });
   }, [inventoryUnits, packedSerialsSet]);
 
-  // Total forecast
-  const totalForecast = useMemo(() => {
-    return (forecastItems || [])
-      .filter(f => isUnfiltered || filteredPartNumbers.has(f.part_number?.trim().toUpperCase()) || filteredPartIds.has(f.part_id))
-      .reduce((sum, f) => sum + (f.final_forecast || f.computed_forecast || 0), 0);
-  }, [forecastItems, isUnfiltered, filteredPartNumbers, filteredPartIds]);
+  // ─────────────────────────────────────────────────────────────────────────
+  // IPHONE MASTERLIST SCANNED QUERIES (8,295 REPAIRS, 415 SKUs, 28 HUBS)
+  // ─────────────────────────────────────────────────────────────────────────
+  const masterSummary = useMemo(() => getMasterlistSummary(), [repairUsageRecords]);
 
-  // Category distribution data for charts
-  const categoryStats = useMemo(() => {
-    const counts = { DISPLAY: 0, BATTERY: 0, CAMERA: 0, BACK_GLASS: 0, OTHER: 0 };
-    availableInStockUnits.forEach(u => {
-      const pn = String(u.part_number || '').toUpperCase();
-      const desc = String(u.description || '').toUpperCase();
-      const part = parts.find(p => p.part_number?.toUpperCase() === pn);
-      const cat = String(part?.category_id || '').toUpperCase();
-
-      if (cat.includes('DISPLAY') || desc.includes('DISPLAY') || desc.includes('SCREEN')) {
-        counts.DISPLAY++;
-      } else if (cat.includes('BATTERY') || desc.includes('BATTERY')) {
-        counts.BATTERY++;
-      } else if (cat.includes('CAMERA') || desc.includes('CAMERA')) {
-        counts.CAMERA++;
-      } else if (cat.includes('BACKGLASS') || cat.includes('BACK_GLASS') || desc.includes('BACK GLASS')) {
-        counts.BACK_GLASS++;
-      } else {
-        counts.OTHER++;
-      }
+  const masterPartsReport = useMemo(() => {
+    return getMasterlistParts({
+      category: reportCategory,
+      search: reportSearch,
+      limit: reportLimit,
+      sortBy: reportSortBy
     });
+  }, [reportCategory, reportSearch, reportLimit, reportSortBy, repairUsageRecords]);
 
-    const chartData = [
-      { name: 'Displays', key: 'DISPLAY', count: counts.DISPLAY, color: CATEGORY_COLORS.DISPLAY },
-      { name: 'Batteries', key: 'BATTERY', count: counts.BATTERY, color: CATEGORY_COLORS.BATTERY },
-      { name: 'Cameras', key: 'CAMERA', count: counts.CAMERA, color: CATEGORY_COLORS.CAMERA },
-      { name: 'Back Glass', key: 'BACK_GLASS', count: counts.BACK_GLASS, color: CATEGORY_COLORS.BACK_GLASS },
-      { name: 'Mid/Rear', key: 'OTHER', count: counts.OTHER, color: CATEGORY_COLORS.MID_REAR }
-    ].filter(item => item.count > 0 || availableInStockUnits.length === 0);
-
-    return { counts, chartData };
-  }, [availableInStockUnits, parts]);
-
-  // Demand vs Stock Comparison Data
-  const demandComparisonData = useMemo(() => {
-    const categories = [
-      { name: 'Displays', catKey: 'DISPLAY' },
-      { name: 'Batteries', catKey: 'BATTERY' },
-      { name: 'Cameras', catKey: 'CAMERA' },
-      { name: 'Back Glass', catKey: 'BACK_GLASS' }
-    ];
-
-    return categories.map(c => {
-      const inStock = categoryStats.counts[c.catKey] || 0;
-      const forecastCount = (forecastItems || []).filter(f => {
-        const desc = String(f.description || '').toUpperCase();
-        const cat = String(f.category_id || '').toUpperCase();
-        if (c.catKey === 'DISPLAY') return cat.includes('DISPLAY') || desc.includes('DISPLAY');
-        if (c.catKey === 'BATTERY') return cat.includes('BATTERY') || desc.includes('BATTERY');
-        if (c.catKey === 'CAMERA') return cat.includes('CAMERA') || desc.includes('CAMERA');
-        if (c.catKey === 'BACK_GLASS') return cat.includes('BACKGLASS') || desc.includes('BACK GLASS');
-        return false;
-      }).reduce((sum, it) => sum + (it.final_forecast || it.computed_forecast || 0), 0);
-
-      return {
-        category: c.name,
-        'In Stock': inStock,
-        'Demand Forecast': forecastCount || (inStock > 0 ? inStock * 2 : 10)
-      };
+  const masterSitesReport = useMemo(() => {
+    return getMasterlistSites({
+      search: reportSearch,
+      limit: reportLimit
     });
-  }, [categoryStats, forecastItems]);
+  }, [reportSearch, reportLimit, repairUsageRecords]);
 
-  // Grouped Stock Inventory by Part Number with 4-Day Aging Logic
+  const sitePartsReport = useMemo(() => {
+    return getMasterlistPartsForSite(selectedSiteName, {
+      category: reportCategory,
+      search: reportSearch,
+      limit: reportLimit,
+      sortBy: reportSortBy
+    });
+  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy, repairUsageRecords]);
+
+  // Category Distribution for Donut Chart
+  const categoryChartData = useMemo(() => {
+    const raw = masterSummary.categoryStats || {};
+    const colors = {
+      'Battery': '#059669',
+      'Display': '#0284c7',
+      'Rear System & Logic': '#7c3aed',
+      'Camera': '#db2777',
+      'Back Glass': '#0d9488',
+      'Component': '#475569'
+    };
+
+    return Object.entries(raw).map(([cat, count]) => ({
+      name: cat,
+      count,
+      color: colors[cat] || '#64748b'
+    })).sort((a, b) => b.count - a.count);
+  }, [masterSummary]);
+
+  // Top 8 Sites for Bar Chart
+  const topSitesChartData = useMemo(() => {
+    return masterSitesReport.all.slice(0, 8).map(s => ({
+      name: s.shortName.length > 12 ? s.shortName.substring(0, 12) + '...' : s.shortName,
+      fullName: s.shortName,
+      'iPhone Units': s.totalUnits,
+      'Valuation ($k)': Math.round(s.totalValUSD / 1000)
+    }));
+  }, [masterSitesReport]);
+
+  // DC Stock Grouped Snapshot Table
   const groupedInventory = useMemo(() => {
     const map = new Map();
     availableInStockUnits.forEach(u => {
@@ -226,13 +219,12 @@ export default function Dashboard() {
         const partObj = parts.find(p => p.part_number?.toUpperCase() === pn);
         map.set(pn, {
           part_number: pn,
-          description: u.description || partObj?.description || 'Service Replacement Part',
+          description: u.description || partObj?.description || 'iPhone Replacement Component',
           category: partObj?.category_id || 'GENERAL',
           units: [],
           maxDaysInDc: days,
           agingCount: 0,
           freshCount: 0,
-          latest_received_at: u.received_at,
           latest_serial: u.serial_number
         });
       }
@@ -246,14 +238,9 @@ export default function Dashboard() {
       if (days > entry.maxDaysInDc) {
         entry.maxDaysInDc = days;
       }
-      if (new Date(u.received_at || 0) > new Date(entry.latest_received_at || 0)) {
-        entry.latest_received_at = u.received_at;
-        entry.latest_serial = u.serial_number;
-      }
     });
 
     let list = Array.from(map.values()).sort((a, b) => {
-      // Prioritize parts with aging units (>= 4 days) first, then by unit quantity
       if (b.agingCount !== a.agingCount) return b.agingCount - a.agingCount;
       return b.units.length - a.units.length;
     });
@@ -261,10 +248,9 @@ export default function Dashboard() {
     if (activeSnapshotFilter !== 'ALL') {
       list = list.filter(item => {
         const desc = String(item.description).toUpperCase();
-        const cat = String(item.category).toUpperCase();
-        if (activeSnapshotFilter === 'DISPLAY') return cat.includes('DISPLAY') || desc.includes('DISPLAY');
-        if (activeSnapshotFilter === 'BATTERY') return cat.includes('BATTERY') || desc.includes('BATTERY');
-        if (activeSnapshotFilter === 'CAMERA') return cat.includes('CAMERA') || desc.includes('CAMERA');
+        if (activeSnapshotFilter === 'DISPLAY') return desc.includes('DISPLAY') || desc.includes('SCREEN');
+        if (activeSnapshotFilter === 'BATTERY') return desc.includes('BATTERY');
+        if (activeSnapshotFilter === 'CAMERA') return desc.includes('CAMERA');
         if (activeSnapshotFilter === 'AGING') return item.agingCount > 0;
         return true;
       });
@@ -282,35 +268,34 @@ export default function Dashboard() {
     return list;
   }, [availableInStockUnits, parts, activeSnapshotFilter, tableSearch]);
 
-  const coveragePct = totalForecast > 0
-    ? Math.min(Math.round((availableInStockUnits.length / totalForecast) * 100), 100)
-    : (availableInStockUnits.length > 0 ? 100 : 0);
-
-  const totalIntakeUnitsReceived = (dcIntakeRecords || []).reduce((sum, r) => sum + (r.total_units || (r.items ? r.items.length : 0)), 0);
-  const recentIntakes = (dcIntakeRecords || []).slice(0, 5);
-  const recentShipments = (shipments || []).slice(0, 5);
+  const recentShipments = (shipments || []).slice(0, 6);
 
   return (
     <div className="dashboard-view" style={{ animation: 'fadeIn 0.2s ease-out', display: 'flex', flexDirection: 'column', gap: '22px' }}>
       
-      {/* 1. Executive Operations Header Banner */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 1. EXECUTIVE OPERATIONS HEADER BANNER                              */}
+      {/* ───────────────────────────────────────────────────────────────── */}
       <div
         className="card"
         style={{
           background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f172a 100%)',
           color: '#ffffff',
-          padding: '24px 28px',
+          padding: '22px 28px',
           border: '1px solid #334155',
           borderRadius: '12px',
           boxShadow: '0 8px 24px -4px rgba(15, 23, 42, 0.4)'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-              <h2 style={{ color: '#fff', fontSize: '22px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
-                Distribution Center Operations
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Smartphone size={20} color="#38bdf8" />
+                <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
+                  Distribution Center Operations • iPhone Intelligence
+                </h2>
+              </div>
               <span
                 style={{
                   background: 'rgba(56, 189, 248, 0.15)',
@@ -318,7 +303,7 @@ export default function Dashboard() {
                   border: '1px solid rgba(56, 189, 248, 0.3)',
                   padding: '3px 10px',
                   borderRadius: '999px',
-                  fontSize: '11.5px',
+                  fontSize: '11px',
                   fontWeight: 700,
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -330,17 +315,15 @@ export default function Dashboard() {
               </span>
             </div>
             <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-              Logged in as <strong style={{ color: '#f1f5f9' }}>{currentUser?.fullName || 'Zhon Manaois'}</strong> {currentUser?.rolePosition ? `(${currentUser.rolePosition})` : ''} • Mobile Care Services Phils. Inc. Central Distribution Hub
+              Fixably / GSX Raw Masterlist: <strong style={{ color: '#38bdf8' }}>{masterSummary.totalUnits.toLocaleString()} iPhone Repairs</strong> • <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalDistinctParts} Active iPhone SKUs</strong> across <strong style={{ color: '#f1f5f9' }}>{masterSummary.totalSites} Service Hubs</strong>
             </p>
           </div>
 
-          {/* System Telemetry Badges */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Dashboard manual refresh' })}
               disabled={isAutoRefreshing}
-              title="Force reload all operational data from database"
               style={{
                 background: 'rgba(15, 23, 42, 0.6)',
                 border: '1px solid #334155',
@@ -356,7 +339,7 @@ export default function Dashboard() {
               }}
             >
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
-              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh Telemetry'}</span>
             </button>
 
             <div
@@ -379,7 +362,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 4-Day DC Aging Stock Alert Banner (renders when parts remain >= 4 days in DC) */}
+      {/* 4-Day Aging Alert Banner if units exist */}
       {agingUnits.length > 0 && (
         <div
           style={{
@@ -401,13 +384,13 @@ export default function Dashboard() {
             </div>
             <div>
               <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#92400e', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>DC Aging Alert: {agingUnits.length} Part{agingUnits.length > 1 ? 's' : ''} Stagnant in DC for ≥ 4 Days</span>
+                <span>DC Aging Alert: {agingUnits.length} Part{agingUnits.length > 1 ? 's' : ''} Stagnant in DC Warehouse for ≥ 4 Days</span>
                 <span className="badge" style={{ background: '#f59e0b', color: '#fff', fontSize: '11px', fontWeight: 700 }}>
                   Priority Dispatch
                 </span>
               </div>
               <div style={{ fontSize: '12px', color: '#b45309', marginTop: '2px' }}>
-                These parts have exceeded the 4-day DC retention threshold. Please allocate and pack them into outbound manifests for site delivery.
+                These parts have exceeded the 4-day retention threshold. Please pack and dispatch them for site delivery.
               </div>
             </div>
           </div>
@@ -426,12 +409,14 @@ export default function Dashboard() {
             }}
           >
             <PackageCheck size={14} />
-            <span>Pack Outbound Manifest (F2)</span>
+            <span>Pack Outbound Shipments (F2)</span>
           </button>
         </div>
       )}
 
-      {/* 2. Elevated Top KPI Metric Cards */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 2. EXECUTIVE 4-CARD SUMMARY METRICS ROW                           */}
+      {/* ───────────────────────────────────────────────────────────────── */}
       <div
         style={{
           display: 'grid',
@@ -439,13 +424,12 @@ export default function Dashboard() {
           gap: '18px'
         }}
       >
-        {/* KPI 1: DC Available In-Stock with 4-Day Aging Status */}
+        {/* Card 1: DC Available In-Stock */}
         <div
           className="kpi-card"
           style={{
             borderLeft: `4px solid ${agingUnits.length > 0 ? '#f59e0b' : '#0284c7'}`,
-            cursor: 'pointer',
-            transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+            cursor: 'pointer'
           }}
           onClick={() => setActiveTab('scan-in')}
           title="Click to open Receive Scan-In Station"
@@ -459,13 +443,9 @@ export default function Dashboard() {
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
             {availableInStockUnits.length.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>units</span>
           </div>
-
-          {/* Aging Status Sub-label */}
-          <div className="kpi-sub" style={{ marginTop: '2px' }}>
+          <div className="kpi-sub">
             {availableInStockUnits.length === 0 ? (
-              <span style={{ color: '#047857', fontWeight: 600 }}>
-                ✓ 0 units in DC (Clean Pipeline)
-              </span>
+              <span style={{ color: '#047857', fontWeight: 600 }}>Clean Pipeline (0 in DC)</span>
             ) : agingUnits.length > 0 ? (
               <span style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                 <Clock size={12} /> {agingUnits.length} Aging (≥4d in DC) • {freshUnits.length} Fresh
@@ -476,80 +456,44 @@ export default function Dashboard() {
               </span>
             )}
           </div>
-
-          {/* Visual Mini Capacity Bar */}
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.min(availableInStockUnits.length * 5, 100)}%`,
-                background: agingUnits.length > 0 ? '#f59e0b' : '#0284c7'
-              }}
-            />
+            <div style={{ height: '100%', width: `${Math.min(availableInStockUnits.length * 5, 100)}%`, background: agingUnits.length > 0 ? '#f59e0b' : '#0284c7' }} />
           </div>
         </div>
 
-        {/* KPI 2: Total Demand Forecast */}
+        {/* Card 2: Total iPhone Master Demand */}
         <div
           className="kpi-card"
           style={{
             borderLeft: '4px solid #10b981',
             cursor: 'pointer'
           }}
-          onClick={() => setActiveTab('forecast')}
-          title="Click to open Demand Forecasting"
+          onClick={() => {
+            setReportTab('top-parts');
+          }}
+          title="Click to view all iPhone Top Parts"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <span className="kpi-title">Monthly Demand Target</span>
+            <span className="kpi-title">Total iPhone Demand</span>
             <div style={{ padding: '8px', background: '#dcfce7', borderRadius: '8px', color: '#10b981' }}>
               <TrendingUp size={20} />
             </div>
           </div>
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {totalForecast.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>units</span>
+            {masterSummary.totalUnits.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>units</span>
           </div>
           <div className="kpi-sub">
             <span style={{ color: '#047857', fontWeight: 700 }}>
-              {coveragePct}% Covered
+              ${(masterSummary.totalValuationUSD / 1000000).toFixed(2)}M
             </span>{' '}
-            across 26 Service Hubs
+            (₱{(masterSummary.totalValuationPHP / 1000000).toFixed(1)}M) • {masterSummary.totalDistinctParts} iPhone SKUs
           </div>
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${coveragePct}%`, background: '#10b981' }} />
+            <div style={{ height: '100%', width: '100%', background: '#10b981' }} />
           </div>
         </div>
 
-        {/* KPI 3: Inbound Batches & Dispatched Manifests */}
-        <div
-          className="kpi-card"
-          style={{
-            borderLeft: '4px solid #8b5cf6',
-            cursor: 'pointer'
-          }}
-          onClick={() => setActiveTab('intake-records')}
-          title="Click to view Dispatched Already in All Sites"
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <span className="kpi-title">Dispatched Already in All Sites</span>
-            <div style={{ padding: '8px', background: '#ede9fe', borderRadius: '8px', color: '#8b5cf6' }}>
-              <Barcode size={20} />
-            </div>
-          </div>
-          <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {(dcIntakeRecords || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>manifests</span>
-          </div>
-          <div className="kpi-sub">
-            <span style={{ color: '#6d28d9', fontWeight: 700 }}>
-              {totalIntakeUnitsReceived.toLocaleString()} units
-            </span>{' '}
-            dispatched across all sites
-          </div>
-          <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: '100%', background: '#8b5cf6' }} />
-          </div>
-        </div>
-
-        {/* KPI 4: Outbound Packing Lists */}
+        {/* Card 3: Outbound Shipments */}
         <div
           className="kpi-card"
           style={{
@@ -557,16 +501,16 @@ export default function Dashboard() {
             cursor: 'pointer'
           }}
           onClick={() => setActiveTab('shipments')}
-          title="Click to view Outbound Packing Lists"
+          title="Click to view Outbound Shipments"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <span className="kpi-title">Outbound Packing Lists</span>
+            <span className="kpi-title">Outbound Shipments</span>
             <div style={{ padding: '8px', background: '#fef3c7', borderRadius: '8px', color: '#f59e0b' }}>
               <Truck size={20} />
             </div>
           </div>
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {(shipments || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>shipments</span>
+            {(shipments || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>manifests</span>
           </div>
           <div className="kpi-sub">
             <span style={{ color: '#b45309', fontWeight: 700 }}>
@@ -578,59 +522,937 @@ export default function Dashboard() {
             <div style={{ height: '100%', width: `${Math.min(shipments.length * 10, 100)}%`, background: '#f59e0b' }} />
           </div>
         </div>
+
+        {/* Card 4: Service Hubs Network */}
+        <div
+          className="kpi-card"
+          style={{
+            borderLeft: '4px solid #8b5cf6',
+            cursor: 'pointer'
+          }}
+          onClick={() => {
+            setReportTab('top-sites');
+          }}
+          title="Click to view all Service Hubs"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <span className="kpi-title">Service Hubs Network</span>
+            <div style={{ padding: '8px', background: '#ede9fe', borderRadius: '8px', color: '#8b5cf6' }}>
+              <Building2 size={20} />
+            </div>
+          </div>
+          <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
+            {masterSummary.totalSites} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>branches</span>
+          </div>
+          <div className="kpi-sub">
+            Top Hub:{' '}
+            <span style={{ color: '#6d28d9', fontWeight: 700 }}>
+              {masterSitesReport.topSite
+                ? `${masterSitesReport.topSite.shortName} (${masterSitesReport.topSite.totalUnits.toLocaleString()} units)`
+                : 'No hub data'}
+            </span>
+          </div>
+          <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: '100%', background: '#8b5cf6' }} />
+          </div>
+        </div>
       </div>
 
-      {/* 3. Analytics Intelligence Row: Category Breakdown Donut & Stock vs Demand Bar Chart */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 3. MANAGER DISTRIBUTION INTELLIGENCE & REPORTS CENTER             */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      <div
+        className="card"
+        style={{
+          padding: '24px',
+          border: '1px solid #e2e8f0',
+          borderRadius: '12px',
+          background: '#ffffff',
+          boxShadow: '0 4px 16px -2px rgba(0, 0, 0, 0.05)'
+        }}
+      >
+        {/* Header & Main Navigation Tabs */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '18px', paddingBottom: '16px', borderBottom: '1px solid #f1f5f9' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ background: '#eff6ff', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <BarChart3 size={20} color="#0284c7" />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
+                  Distribution Intelligence • iPhone Masterlist Reports
+                </h3>
+                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                  Calculated from Fixably/GSX raw records with live stocking prices and branch demand metrics
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* 3 Clean Report Views with Lucide Icons (No Emojis) */}
+          <div style={{ display: 'flex', background: '#f1f5f9', padding: '4px', borderRadius: '10px', border: '1px solid #e2e8f0', gap: '4px' }}>
+            <button
+              type="button"
+              onClick={() => setReportTab('top-parts')}
+              style={{
+                border: 'none',
+                background: reportTab === 'top-parts' ? '#0f172a' : 'transparent',
+                color: reportTab === 'top-parts' ? '#ffffff' : '#475569',
+                padding: '7px 16px',
+                borderRadius: '7px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.15s ease',
+                boxShadow: reportTab === 'top-parts' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
+              }}
+            >
+              <Smartphone size={15} />
+              <span>Top iPhone Parts ({masterSummary.totalDistinctParts})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReportTab('top-sites')}
+              style={{
+                border: 'none',
+                background: reportTab === 'top-sites' ? '#0f172a' : 'transparent',
+                color: reportTab === 'top-sites' ? '#ffffff' : '#475569',
+                padding: '7px 16px',
+                borderRadius: '7px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.15s ease',
+                boxShadow: reportTab === 'top-sites' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
+              }}
+            >
+              <Building2 size={15} />
+              <span>Service Hubs ({masterSummary.totalSites})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReportTab('site-parts')}
+              style={{
+                border: 'none',
+                background: reportTab === 'site-parts' ? '#0f172a' : 'transparent',
+                color: reportTab === 'site-parts' ? '#ffffff' : '#475569',
+                padding: '7px 16px',
+                borderRadius: '7px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.15s ease',
+                boxShadow: reportTab === 'site-parts' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
+              }}
+            >
+              <Layers size={15} />
+              <span>All Parts Per Site</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Clean iPhone Category Filter Pills (No Emojis) */}
+        {reportTab !== 'top-sites' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
+              Filter Category:
+            </span>
+            {IPHONE_CATEGORIES.map(cat => {
+              const isSelected = reportCategory === cat.key;
+              const count = cat.key === 'ALL' ? masterSummary.totalUnits : (masterSummary.categoryStats[cat.key] || 0);
+              return (
+                <button
+                  key={cat.key}
+                  type="button"
+                  onClick={() => setReportCategory(cat.key)}
+                  style={{
+                    border: '1px solid',
+                    borderColor: isSelected ? '#0284c7' : '#cbd5e1',
+                    background: isSelected ? '#0284c7' : '#ffffff',
+                    color: isSelected ? '#ffffff' : '#334155',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: isSelected ? 700 : 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.12s ease'
+                  }}
+                >
+                  <span style={{ whiteSpace: 'nowrap' }}>{cat.label}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, background: isSelected ? 'rgba(255,255,255,0.22)' : '#f1f5f9', color: isSelected ? '#ffffff' : '#64748b', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                    {count.toLocaleString()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Filter Controls Bar: Search, Sort, Limit */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+          {/* Left Side: Search Box */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={15} style={{ position: 'absolute', left: '12px', top: '10px', color: '#94a3b8' }} />
+              <input
+                type="text"
+                placeholder={reportTab === 'top-sites' ? 'Search service branch...' : 'Search iPhone part number or model description...'}
+                value={reportSearch}
+                onChange={(e) => setReportSearch(e.target.value)}
+                style={{
+                  padding: '7px 14px 7px 34px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  fontSize: '12.5px',
+                  width: '320px',
+                  background: '#f8fafc',
+                  color: '#0f172a'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Right Side: Sort & Limit Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            {/* Sort By Controls */}
+            {reportTab !== 'top-sites' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#475569', whiteSpace: 'nowrap' }}>
+                <span style={{ fontWeight: 600 }}>Sort by:</span>
+                <select
+                  value={reportSortBy}
+                  onChange={(e) => setReportSortBy(e.target.value)}
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="units">Demand Volume (High to Low)</option>
+                  <option value="valuation">Total Spend (High to Low)</option>
+                  <option value="name">Model Name (A to Z)</option>
+                </select>
+              </div>
+            )}
+
+            {/* Display Limit Pills */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#475569', whiteSpace: 'nowrap' }}>
+              <span style={{ fontWeight: 600 }}>Rows:</span>
+              {[10, 25, 50, 'ALL'].map(lim => (
+                <button
+                  key={lim}
+                  onClick={() => setReportLimit(lim)}
+                  style={{
+                    border: '1px solid',
+                    borderColor: reportLimit === lim ? '#0284c7' : '#cbd5e1',
+                    background: reportLimit === lim ? '#e0f2fe' : '#ffffff',
+                    color: reportLimit === lim ? '#0369a1' : '#475569',
+                    padding: '3px 10px',
+                    borderRadius: '5px',
+                    fontSize: '11.5px',
+                    fontWeight: reportLimit === lim ? 700 : 500,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {lim === 'ALL' ? 'All' : lim}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {/* VIEW 1: TOP IPHONE PARTS (NATIONAL MASTERLIST RANKING)            */}
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {reportTab === 'top-parts' && (
+          <div>
+            {/* Top Parts Summary Bar */}
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '12px 18px',
+                marginBottom: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
+                  National iPhone Parts Ranking
+                </span>
+                <span className="badge badge-primary">{masterPartsReport.totalCount} Parts Found</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12.5px', whiteSpace: 'nowrap' }}>
+                <div>
+                  Total Demand: <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{masterPartsReport.totalFilteredUnits.toLocaleString()} units</strong>
+                </div>
+                <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
+                <div>
+                  Valuation:{' '}
+                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>
+                    ${masterPartsReport.totalFilteredValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </strong>{' '}
+                  <span style={{ color: '#64748b' }}>(₱{masterPartsReport.totalFilteredValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })})</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Clean, Legible Table (No DC In-Stock / Action Columns) */}
+            {masterPartsReport.displayList.length === 0 ? (
+              <div style={{ padding: '36px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                <Package size={28} color="#94a3b8" style={{ marginBottom: '6px' }} />
+                <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No matching iPhone parts found</div>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0' }}>Try adjusting your search query or category filter.</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                <table className="table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ width: '60px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>RANK</th>
+                      <th style={{ width: '140px', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>PART NUMBER</th>
+                      <th style={{ minWidth: '240px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>IPHONE MODEL & DESCRIPTION</th>
+                      <th style={{ width: '180px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>CATEGORY</th>
+                      <th style={{ width: '140px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>STOCK PRICE</th>
+                      <th style={{ width: '150px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>TOTAL DEMAND</th>
+                      <th style={{ width: '160px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>TOTAL VALUATION</th>
+                      <th style={{ width: '140px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>SHARE OF DEMAND</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {masterPartsReport.displayList.map((item, idx) => {
+                      const badge = getCategoryBadge(item.category);
+                      return (
+                        <tr
+                          key={item.part_number}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            background: idx % 2 === 0 ? '#ffffff' : '#fafafa',
+                            transition: 'background 0.1s ease'
+                          }}
+                        >
+                          {/* Rank */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            {idx < 3 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '24px',
+                                  height: '24px',
+                                  borderRadius: '50%',
+                                  background: idx === 0 ? '#0f172a' : idx === 1 ? '#475569' : '#64748b',
+                                  color: '#ffffff',
+                                  fontWeight: 800,
+                                  fontSize: '11px'
+                                }}
+                              >
+                                {idx + 1}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#64748b', fontWeight: 700, fontSize: '12px' }}>#{idx + 1}</span>
+                            )}
+                          </td>
+
+                          {/* Part Number */}
+                          <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            {item.part_number}
+                          </td>
+
+                          {/* Description */}
+                          <td style={{ padding: '13px 14px' }}>
+                            <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13.5px' }}>
+                              {item.description}
+                            </div>
+                            <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                              Allocated / consumed across {item.sitesCount} service branches
+                            </div>
+                          </td>
+
+                          {/* Category Badge - No Wrap */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <span
+                              style={{
+                                background: badge.bg,
+                                color: badge.text,
+                                border: `1px solid ${badge.border}`,
+                                padding: '5px 12px',
+                                borderRadius: '6px',
+                                fontWeight: 700,
+                                fontSize: '11.5px',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {badge.name}
+                            </span>
+                          </td>
+
+                          {/* Stocking Price - No Wrap */}
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '13px' }}>${item.priceUSD}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>₱{(item.priceUSD * USD_TO_PHP_RATE).toLocaleString()}</div>
+                          </td>
+
+                          {/* Total Demand - No Wrap */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <span
+                              style={{
+                                background: '#f0f9ff',
+                                color: '#0369a1',
+                                border: '1px solid #bae6fd',
+                                padding: '5px 14px',
+                                borderRadius: '6px',
+                                fontWeight: 800,
+                                fontSize: '13px',
+                                fontFamily: 'var(--font-mono)',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {item.totalUnits.toLocaleString()} units
+                            </span>
+                          </td>
+
+                          {/* Total Valuation - No Wrap */}
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>
+                              ${item.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>
+                              ₱{item.totalValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </div>
+                          </td>
+
+                          {/* Share of Demand */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                              <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min(item.pctShare * 6, 100)}%`, height: '100%', background: '#0284c7' }} />
+                              </div>
+                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                                {item.pctShare.toFixed(1)}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {/* VIEW 2: ALL SERVICE HUBS (28 BRANCHES RANKING)                    */}
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {reportTab === 'top-sites' && (
+          <div>
+            {/* Summary Bar */}
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '12px 18px',
+                marginBottom: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
+                  28 Service Branches iPhone Ranking
+                </span>
+                <span className="badge badge-primary">{masterSitesReport.totalSitesCount} Branches</span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12.5px', whiteSpace: 'nowrap' }}>
+                <div>
+                  Top Branch: <strong style={{ color: '#0284c7' }}>{masterSitesReport.topSite?.shortName} ({masterSitesReport.topSite?.totalUnits} units)</strong>
+                </div>
+                <div style={{ width: '1px', height: '16px', background: '#cbd5e1' }} />
+                <div>
+                  Total Network Demand:{' '}
+                  <strong style={{ color: '#10b981', fontFamily: 'var(--font-mono)' }}>
+                    {masterSitesReport.grandTotalUnits.toLocaleString()} units
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {/* Sites Table */}
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+              <table className="table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                    <th style={{ width: '60px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>RANK</th>
+                    <th style={{ minWidth: '220px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>SERVICE BRANCH NAME</th>
+                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>REGION</th>
+                    <th style={{ width: '140px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>IPHONE UNITS</th>
+                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>DISTINCT SKUS</th>
+                    <th style={{ width: '160px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>TOTAL VALUATION</th>
+                    <th style={{ minWidth: '240px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>TOP CONSUMED IPHONE PART</th>
+                    <th style={{ width: '130px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>NETWORK SHARE</th>
+                    <th style={{ width: '110px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>VIEW</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {masterSitesReport.displayList.map((site, idx) => (
+                    <tr
+                      key={site.siteName}
+                      style={{
+                        borderBottom: '1px solid #f1f5f9',
+                        background: idx % 2 === 0 ? '#ffffff' : '#fafafa',
+                        transition: 'background 0.1s ease'
+                      }}
+                    >
+                      {/* Rank */}
+                      <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        {idx < 3 ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '24px',
+                              height: '24px',
+                              borderRadius: '50%',
+                              background: idx === 0 ? '#0f172a' : idx === 1 ? '#475569' : '#64748b',
+                              color: '#ffffff',
+                              fontWeight: 800,
+                              fontSize: '11px'
+                            }}
+                          >
+                            {idx + 1}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#64748b', fontWeight: 700, fontSize: '12px' }}>#{idx + 1}</span>
+                        )}
+                      </td>
+
+                      {/* Branch Name */}
+                      <td style={{ padding: '13px 14px' }}>
+                        <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13.5px' }}>
+                          {site.shortName}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                          {site.siteName}
+                        </div>
+                      </td>
+
+                      {/* Region */}
+                      <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <span
+                          style={{
+                            background: site.isMM ? '#f0f9ff' : '#ecfdf5',
+                            color: site.isMM ? '#0369a1' : '#047857',
+                            border: site.isMM ? '1px solid #bae6fd' : '1px solid #a7f3d0',
+                            padding: '4px 10px',
+                            borderRadius: '5px',
+                            fontSize: '11.5px',
+                            fontWeight: 700,
+                            display: 'inline-block',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {site.region}
+                        </span>
+                      </td>
+
+                      {/* Total Units */}
+                      <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <span
+                          style={{
+                            background: '#f0f9ff',
+                            color: '#0369a1',
+                            border: '1px solid #bae6fd',
+                            padding: '5px 14px',
+                            borderRadius: '6px',
+                            fontWeight: 800,
+                            fontSize: '13px',
+                            fontFamily: 'var(--font-mono)',
+                            display: 'inline-block',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {site.totalUnits.toLocaleString()} units
+                        </span>
+                      </td>
+
+                      {/* Distinct SKUs */}
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', padding: '13px 14px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                        {site.distinctPartsCount} SKUs
+                      </td>
+
+                      {/* Total Valuation */}
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>${site.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>₱{site.totalValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      </td>
+
+                      {/* Top Part */}
+                      <td style={{ padding: '13px 14px' }}>
+                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#334155' }}>
+                          {site.topPart ? `${site.topPart.description || site.topPart.part_number} (${site.topPart.units} units)` : '—'}
+                        </div>
+                      </td>
+
+                      {/* Share Bar */}
+                      <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                          <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.min(site.pctShare * 8, 100)}%`, height: '100%', background: '#0284c7' }} />
+                          </div>
+                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                            {site.pctShare.toFixed(1)}%
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Action */}
+                      <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 10px', fontSize: '12px', fontWeight: 600 }}
+                          onClick={() => {
+                            setSelectedSiteName(site.siteName);
+                            setReportTab('site-parts');
+                          }}
+                          title={`Explore all iPhone parts for ${site.shortName}`}
+                        >
+                          View Parts
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {/* VIEW 3: ALL IPHONE PARTS PER SITE (ENLARGED PROMINENT SITE PICKER)*/}
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {reportTab === 'site-parts' && (
+          <div>
+            {/* Prominent, Enlarged Site Selector Banner */}
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                border: '1px solid #cbd5e1',
+                borderRadius: '10px',
+                padding: '18px 22px',
+                marginBottom: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '16px',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
+              }}
+            >
+              {/* Left Side: Large Dropdown Picker */}
+              <div style={{ flex: '1 1 340px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '6px' }}>
+                  Select Service Branch:
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    className="form-select"
+                    value={selectedSiteName}
+                    onChange={(e) => setSelectedSiteName(e.target.value)}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '2px solid #0284c7',
+                      fontSize: '14.5px',
+                      fontWeight: 800,
+                      color: '#0f172a',
+                      background: '#ffffff',
+                      width: '100%',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 8px rgba(2, 132, 199, 0.12)'
+                    }}
+                  >
+                    {masterSitesReport.all.map(s => (
+                      <option key={s.siteName} value={s.siteName}>
+                        {s.shortName} • {s.totalUnits} iPhone units ({s.region})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Right Side: 3 Prominent Branch Metrics */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                    Branch Demand
+                  </div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                    {sitePartsReport.siteTotalUnits.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>units</span>
+                  </div>
+                </div>
+
+                <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                    Total Branch Spend
+                  </div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', fontFamily: 'var(--font-mono)' }}>
+                    ${sitePartsReport.siteTotalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>(₱{(sitePartsReport.siteTotalValPHP / 1000000).toFixed(2)}M)</span>
+                  </div>
+                </div>
+
+                <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                    Active SKUs
+                  </div>
+                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
+                    {sitePartsReport.totalPartsCount} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>parts</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Branch Parts Table (No DC In-Stock / Action Columns) */}
+            {sitePartsReport.displayList.length === 0 ? (
+              <div style={{ padding: '36px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                <Package size={28} color="#94a3b8" style={{ marginBottom: '6px' }} />
+                <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No matching iPhone parts found for this branch</div>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0' }}>Try adjusting your search query or category filter.</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                <table className="table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ width: '60px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>RANK</th>
+                      <th style={{ width: '140px', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>PART NUMBER</th>
+                      <th style={{ minWidth: '240px', padding: '12px 14px', color: '#475569', fontWeight: 700 }}>IPHONE MODEL & DESCRIPTION</th>
+                      <th style={{ width: '180px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>CATEGORY</th>
+                      <th style={{ width: '140px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>STOCK PRICE</th>
+                      <th style={{ width: '150px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>BRANCH DEMAND</th>
+                      <th style={{ width: '160px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>TOTAL BRANCH COST</th>
+                      <th style={{ width: '140px', textAlign: 'center', padding: '12px 14px', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap' }}>BRANCH SHARE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sitePartsReport.displayList.map((item, idx) => {
+                      const badge = getCategoryBadge(item.category);
+                      return (
+                        <tr
+                          key={item.part_number}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            background: idx % 2 === 0 ? '#ffffff' : '#fafafa',
+                            transition: 'background 0.1s ease'
+                          }}
+                        >
+                          {/* Rank */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            {idx < 3 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  width: '24px',
+                                  height: '24px',
+                                  borderRadius: '50%',
+                                  background: idx === 0 ? '#0f172a' : idx === 1 ? '#475569' : '#64748b',
+                                  color: '#ffffff',
+                                  fontWeight: 800,
+                                  fontSize: '11px'
+                                }}
+                              >
+                                {idx + 1}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#64748b', fontWeight: 700, fontSize: '12px' }}>#{idx + 1}</span>
+                            )}
+                          </td>
+
+                          {/* Part Number */}
+                          <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            {item.part_number}
+                          </td>
+
+                          {/* Description */}
+                          <td style={{ padding: '13px 14px' }}>
+                            <div style={{ fontWeight: 700, color: '#1e293b', fontSize: '13.5px' }}>
+                              {item.description}
+                            </div>
+                          </td>
+
+                          {/* Category Badge - No Wrap */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <span
+                              style={{
+                                background: badge.bg,
+                                color: badge.text,
+                                border: `1px solid ${badge.border}`,
+                                padding: '5px 12px',
+                                borderRadius: '6px',
+                                fontWeight: 700,
+                                fontSize: '11.5px',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {badge.name}
+                            </span>
+                          </td>
+
+                          {/* Stocking Price - No Wrap */}
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '13px' }}>${item.priceUSD}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>₱{(item.priceUSD * USD_TO_PHP_RATE).toLocaleString()}</div>
+                          </td>
+
+                          {/* Branch Demand - No Wrap */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <span
+                              style={{
+                                background: '#f0f9ff',
+                                color: '#0369a1',
+                                border: '1px solid #bae6fd',
+                                padding: '5px 14px',
+                                borderRadius: '6px',
+                                fontWeight: 800,
+                                fontSize: '13px',
+                                fontFamily: 'var(--font-mono)',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {item.units.toLocaleString()} units
+                            </span>
+                          </td>
+
+                          {/* Total Cost - No Wrap */}
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: 800, color: '#059669', fontSize: '13px' }}>
+                              ${item.totalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>
+                              ₱{(item.totalValUSD * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </div>
+                          </td>
+
+                          {/* Branch Share */}
+                          <td style={{ textAlign: 'center', padding: '13px 14px', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                              <div style={{ width: '45px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min(item.pctShare * 4, 100)}%`, height: '100%', background: '#0284c7' }} />
+                              </div>
+                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+                                {item.pctShare.toFixed(1)}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 4. ANALYTICS ROW: CATEGORY DISTRIBUTION & TOP HUBS DEMAND BARS     */}
+      {/* ───────────────────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.3fr', gap: '20px' }}>
-        {/* Left Chart: Stock by Category Donut */}
+        {/* Left: Category Breakdown Donut */}
         <div className="card" style={{ padding: '22px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>DC Stock by Category</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>iPhone Demand by Category</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Live distribution of available parts in warehouse
+                Distribution of 8,295 iPhone repairs across component families
               </p>
             </div>
-            <span className="badge badge-primary">{availableInStockUnits.length} Total Units</span>
+            <span className="badge badge-primary">8,295 Repairs</span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '220px' }}>
-            <div style={{ width: '55%', height: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '230px' }}>
+            <div style={{ width: '50%', height: '100%' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={categoryStats.chartData.length > 0 ? categoryStats.chartData : [{ name: 'Empty', count: 1, color: '#e2e8f0' }]}
+                    data={categoryChartData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={52}
-                    outerRadius={82}
+                    innerRadius={50}
+                    outerRadius={80}
                     paddingAngle={3}
                     dataKey="count"
                   >
-                    {categoryStats.chartData.map((entry, index) => (
+                    {categoryChartData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value, name) => [`${value} units`, name]}
+                    formatter={(value, name) => [`${value} repairs`, name]}
                     contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '8px', border: 'none', fontSize: '12px' }}
                   />
                 </PieChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Custom Legend & Count Stats */}
-            <div style={{ width: '42%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {categoryStats.chartData.map(item => {
-                const pct = availableInStockUnits.length > 0 ? Math.round((item.count / availableInStockUnits.length) * 100) : 0;
+            {/* Custom Legend */}
+            <div style={{ width: '48%', display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '230px', overflowY: 'auto' }}>
+              {categoryChartData.map(item => {
+                const pct = Math.round((item.count / 8295) * 100);
                 return (
-                  <div key={item.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: item.color }} />
+                  <div key={item.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: item.color, flexShrink: 0 }} />
                       <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{item.name}</span>
                     </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
-                      <strong>{item.count}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>({pct}%)</span>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                      <strong>{item.count.toLocaleString()}</strong> <span style={{ color: 'var(--text-muted)', fontSize: '10.5px' }}>({pct}%)</span>
                     </div>
                   </div>
                 );
@@ -639,40 +1461,43 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right Chart: Demand vs Stock Fulfillment */}
+        {/* Right: Top 8 Hubs Demand Bar Chart */}
         <div className="card" style={{ padding: '22px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Stock vs Monthly Demand Target</h3>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Top Service Hubs iPhone Demand</h3>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Inventory readiness versus forecasted consumption
+                Highest repair volume service branches for iPhone
               </p>
             </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('allocation')}>
-              <span>Allocation Matrix</span>
+            <button className="btn btn-secondary btn-sm" onClick={() => setReportTab('top-sites')}>
+              <span>View All 28 Hubs</span>
               <ArrowUpRight size={13} />
             </button>
           </div>
 
-          <div style={{ height: '220px', width: '100%' }}>
+          <div style={{ height: '230px', width: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={demandComparisonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={topSitesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="category" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 10.5, fill: '#64748b' }} axisLine={{ stroke: '#cbd5e1' }} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <Tooltip
+                  formatter={(value, name) => [name === 'Valuation ($k)' ? `$${value}k` : `${value} units`, name]}
                   contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '8px', border: 'none', fontSize: '12px' }}
                 />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: '11.5px', paddingTop: '6px' }} />
-                <Bar dataKey="In Stock" fill="#0284c7" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Demand Forecast" fill="#cbd5e1" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="iPhone Units" fill="#0284c7" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Valuation ($k)" fill="#10b981" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
       </div>
 
-      {/* 4. Quick Workstation Launchpad */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 5. QUICK WORKSTATION LAUNCHPAD                                    */}
+      {/* ───────────────────────────────────────────────────────────────── */}
       <div>
         <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Sparkles size={16} color="var(--primary)" />
@@ -680,7 +1505,6 @@ export default function Dashboard() {
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px' }}>
           
-          {/* Tile 1: Scan-In Station */}
           <div
             onClick={() => setActiveTab('scan-in')}
             className="card"
@@ -704,7 +1528,6 @@ export default function Dashboard() {
             <ChevronRight size={16} color="#94a3b8" />
           </div>
 
-          {/* Tile 2: Pack Scan-Out */}
           <div
             onClick={() => setActiveTab('scan-out')}
             className="card"
@@ -723,14 +1546,13 @@ export default function Dashboard() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Pack Scan-Out (F2)</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Generate corporate packing list & PDF</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Generate outbound shipments & PDF</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
           </div>
 
-          {/* Tile 3: DC Intake Records */}
           <div
-            onClick={() => setActiveTab('intake-records')}
+            onClick={() => setActiveTab('shipments')}
             className="card"
             style={{
               padding: '16px',
@@ -742,17 +1564,16 @@ export default function Dashboard() {
               transition: 'all 0.15s ease'
             }}
           >
-            <div style={{ padding: '12px', background: '#7c3aed', color: '#fff', borderRadius: '10px' }}>
-              <Layers size={22} />
+            <div style={{ padding: '12px', background: '#d97706', color: '#fff', borderRadius: '10px' }}>
+              <Truck size={22} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>DC Parts Stock Records</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Review in-stock parts & all-site dispatched records</div>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Outbound Shipments</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Branch dispatches & Lalamove/Lite Exp</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
           </div>
 
-          {/* Tile 4: Allocation Matrix */}
           <div
             onClick={() => setActiveTab('allocation')}
             className="card"
@@ -766,7 +1587,7 @@ export default function Dashboard() {
               transition: 'all 0.15s ease'
             }}
           >
-            <div style={{ padding: '12px', background: '#0284c7', color: '#fff', borderRadius: '10px' }}>
+            <div style={{ padding: '12px', background: '#7c3aed', color: '#fff', borderRadius: '10px' }}>
               <Building2 size={22} />
             </div>
             <div style={{ flex: 1 }}>
@@ -778,161 +1599,98 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 5. 2-Column Live Operational Feeds: Dispatched Records & Recent Shipments */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '20px' }}>
-        
-        {/* Left Column: Dispatched Records (Live Batches) */}
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Dispatched in All Sites</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Batches dispatched and saved based on purchase orders
-              </p>
-            </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('intake-records')}>
-              <span>View All ({dcIntakeRecords?.length || 0})</span>
-              <ArrowUpRight size={13} />
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 6. LIVE OUTBOUND SHIPMENTS FEED                                   */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      <div className="card" style={{ padding: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Outbound Shipments</h3>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+              Exported manifests dispatched for branch delivery
+            </p>
+          </div>
+          <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('shipments')}>
+            <span>View All Shipments ({shipments?.length || 0})</span>
+            <ArrowUpRight size={13} />
+          </button>
+        </div>
+
+        {recentShipments.length === 0 ? (
+          <div style={{ padding: '32px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+            <Truck size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
+            <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Outbound Shipments Generated Yet</div>
+            <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 12px' }}>
+              Scan serialized parts in Pack Scan-Out to generate delivery manifests for service branches.
+            </p>
+            <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-out')}>
+              Open Pack Scan-Out (F2)
             </button>
           </div>
-
-          {recentIntakes.length === 0 ? (
-            <div style={{ padding: '32px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
-              <Barcode size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
-              <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Dispatched Records Saved Yet</div>
-              <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 12px' }}>
-                Scan parts in the Receive station and save a dispatched batch record.
-              </p>
-              <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-in')}>
-                Receive Scan-In (F1)
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {recentIntakes.map(rec => (
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+            {recentShipments.map(sh => {
+              const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_id) || {};
+              return (
                 <div
-                  key={rec.id}
-                  onClick={() => setActiveTab('intake-records')}
+                  key={sh.id}
                   style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                     padding: '12px 14px',
                     border: '1px solid #e2e8f0',
                     borderRadius: '8px',
-                    background: '#f8fafc',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
+                    background: '#ffffff',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{rec.id}</strong>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>{rec.record_name}</span>
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                      {sh.invoice_ref || sh.shipment_number}
                     </div>
                     <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                      {rec.intake_date} • Saved by {rec.saved_by_name || 'Warehouse Staff'}
+                      To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || 0} units
                     </div>
                   </div>
 
-                  <div style={{ textAlign: 'right' }}>
-                    <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700, fontSize: '12px' }}>
-                      {rec.total_units || rec.items?.length || 0} units
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: '10.5px',
+                        fontWeight: 600,
+                        background: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#ecfdf5' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#f0f9ff' : (sh.status === 'pending_pickup' ? '#fffbeb' : '#f1f5f9'),
+                        color: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#047857' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#0369a1' : (sh.status === 'pending_pickup' ? '#b45309' : '#475569'),
+                        border: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '1px solid #a7f3d0' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '1px solid #bae6fd' : (sh.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0')
+                      }}
+                    >
+                      {sh.status === 'pending_pickup' ? 'Pending Pickup' : (sh.status === 'received_confirmed' ? 'Received' : (sh.status ? sh.status.replace('_', ' ') : 'Draft'))}
                     </span>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                      onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
+                        supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+                        supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+                        guardOnDuty: sh.guard_on_duty || supervisorSettings?.guard_on_duty,
+                        pickupDate: sh.pickup_date || sh.shipment_date
+                      })}
+                      title="Download Outbound Shipment Manifest PDF"
+                    >
+                      PDF
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right Column: Recent Outbound Shipments / Packing Lists */}
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Packing Lists</h3>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                Exported manifests for branch delivery
-              </p>
-            </div>
-            <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('shipments')}>
-              <span>View All ({shipments?.length || 0})</span>
-              <ArrowUpRight size={13} />
-            </button>
+              );
+            })}
           </div>
-
-          {recentShipments.length === 0 ? (
-            <div style={{ padding: '32px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
-              <Truck size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
-              <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Packing Lists Generated Yet</div>
-              <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 12px' }}>
-                Scan serialized parts to generate delivery manifests for service branches.
-              </p>
-              <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-out')}>
-                Open Pack Scan-Out (F2)
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {recentShipments.map(sh => {
-                const destSite = sites.find(s => s.id === sh.site_id) || {};
-                return (
-                  <div
-                    key={sh.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '12px 14px',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      background: '#ffffff'
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
-                        {sh.invoice_ref || sh.shipment_number}
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                        To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || 0} units
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span
-                        className="badge"
-                        style={{
-                          fontSize: '10.5px',
-                          fontWeight: 600,
-                          background: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#ecfdf5' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#f0f9ff' : (sh.status === 'pending_pickup' ? '#fffbeb' : '#f1f5f9'),
-                          color: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#047857' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#0369a1' : (sh.status === 'pending_pickup' ? '#b45309' : '#475569'),
-                          border: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '1px solid #a7f3d0' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '1px solid #bae6fd' : (sh.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0')
-                        }}
-                      >
-                        {sh.status === 'pending_pickup' ? 'Pending Pickup' : (sh.status === 'received_confirmed' ? 'Received' : (sh.status ? sh.status.replace('_', ' ') : 'Draft'))}
-                      </span>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        style={{ padding: '4px 8px', fontSize: '11.5px' }}
-                        onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
-                          supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
-                          supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-                          guardOnDuty: sh.guard_on_duty || supervisorSettings?.guard_on_duty,
-                          pickupDate: sh.pickup_date || sh.shipment_date
-                        })}
-                        title="Download Google Sheets styled PDF"
-                      >
-                        PDF
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* 6. Live DC Stock Inventory Snapshot Table with 4-Day Aging Status Indicators */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 7. LIVE DC STOCK INVENTORY SNAPSHOT TABLE                         */}
+      {/* ───────────────────────────────────────────────────────────────── */}
       <div className="card" style={{ padding: '22px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
@@ -948,7 +1706,6 @@ export default function Dashboard() {
             </p>
           </div>
 
-          {/* Table Filters & Search */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '6px' }}>
               {['ALL', 'DISPLAY', 'BATTERY', 'CAMERA', 'AGING'].map(f => (
@@ -963,10 +1720,11 @@ export default function Dashboard() {
                     borderRadius: '4px',
                     fontSize: '11.5px',
                     fontWeight: 600,
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap'
                   }}
                 >
-                  {f === 'AGING' ? `⚠️ Aging (${agingUnits.length})` : f}
+                  {f === 'AGING' ? `Aging (${agingUnits.length})` : f}
                 </button>
               ))}
             </div>
@@ -1002,41 +1760,40 @@ export default function Dashboard() {
             </button>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table" style={{ width: '100%', fontSize: '12.5px' }}>
+          <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+            <table className="table" style={{ width: '100%', fontSize: '12.5px', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ background: '#f8fafc' }}>
-                  <th style={{ width: '40px', textAlign: 'center' }}>#</th>
-                  <th style={{ width: '140px' }}>PART NUMBER</th>
-                  <th>DESCRIPTION</th>
-                  <th style={{ width: '120px', textAlign: 'center' }}>CATEGORY</th>
-                  <th style={{ width: '100px', textAlign: 'center' }}>IN-STOCK</th>
-                  <th style={{ width: '160px', textAlign: 'center' }}>DC AGING STATUS</th>
-                  <th style={{ width: '170px', textAlign: 'center' }}>RECENT SERIAL</th>
-                  <th style={{ width: '110px', textAlign: 'center' }}>ACTIONS</th>
+                <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                  <th style={{ width: '50px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>#</th>
+                  <th style={{ width: '140px', padding: '10px 12px', whiteSpace: 'nowrap' }}>PART NUMBER</th>
+                  <th style={{ padding: '10px 12px' }}>DESCRIPTION</th>
+                  <th style={{ width: '130px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>CATEGORY</th>
+                  <th style={{ width: '110px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>IN-STOCK</th>
+                  <th style={{ width: '160px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>DC AGING STATUS</th>
+                  <th style={{ width: '170px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>RECENT SERIAL</th>
                 </tr>
               </thead>
               <tbody>
                 {groupedInventory.map((item, idx) => (
-                  <tr key={item.part_number} style={{ transition: 'background 0.1s ease' }}>
-                    <td style={{ textAlign: 'center', color: '#64748b' }}>{idx + 1}</td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a' }}>
+                  <tr key={item.part_number} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
+                    <td style={{ textAlign: 'center', color: '#64748b', padding: '10px 12px', whiteSpace: 'nowrap' }}>{idx + 1}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       {item.part_number}
                     </td>
-                    <td style={{ color: '#334155' }}>
+                    <td style={{ color: '#334155', padding: '10px 12px' }}>
                       {item.description}
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px' }}>
+                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px', whiteSpace: 'nowrap' }}>
                         {String(item.category).replace('cat-', '').toUpperCase()}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px' }}>
+                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                      <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>
                         {item.units.length} units
                       </span>
                     </td>
-                    <td style={{ textAlign: 'center' }}>
+                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       {item.maxDaysInDc >= 4 ? (
                         <span
                           className="badge"
@@ -1048,7 +1805,8 @@ export default function Dashboard() {
                             fontSize: '11px',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '3px'
+                            gap: '3px',
+                            whiteSpace: 'nowrap'
                           }}
                         >
                           <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging)
@@ -1064,25 +1822,16 @@ export default function Dashboard() {
                             fontSize: '11px',
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: '3px'
+                            gap: '3px',
+                            whiteSpace: 'nowrap'
                           }}
                         >
                           <CheckCircle2 size={11} /> {item.maxDaysInDc}d in DC (Fresh)
                         </span>
                       )}
                     </td>
-                    <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569' }}>
+                    <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       {item.latest_serial || '—'}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        style={{ padding: '3px 8px', fontSize: '11px' }}
-                        onClick={() => setActiveTab('scan-out')}
-                        title="Add to packing list"
-                      >
-                        Pack Part
-                      </button>
                     </td>
                   </tr>
                 ))}

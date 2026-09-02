@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
+import { isUUID } from '../utils/appContextHelpers';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: '',
   supervisor_title: 'MDC Supervisor of DC',
@@ -228,11 +229,11 @@ export function useCatalogAndSites({
       if (supabase) {
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
         try {
-          if (deletedPart.id && !deletedPart.id.startsWith('part-')) {
+          if (deletedPart.id && isUUID(deletedPart.id)) {
             const { error } = await supabase.from('parts').delete().eq('id', deletedPart.id);
             if (error) throw error;
-          } else {
-            const { error } = await supabase.from('parts').delete().match({ part_number: deletedPart.part_number, description: deletedPart.description });
+          } else if (deletedPart.part_number) {
+            const { error } = await supabase.from('parts').delete().eq('part_number', deletedPart.part_number);
             if (error) throw error;
           }
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });

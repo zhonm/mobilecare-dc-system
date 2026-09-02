@@ -125,7 +125,10 @@ export default function UserAccessManagement() {
         const posMatch = (u.rolePosition || '').toLowerCase().includes(q);
         const site = resolveSite(u.siteId || u.site_id || u.siteCode, sites);
         const siteMatch = (site.name || '').toLowerCase().includes(q) || (site.code || '').toLowerCase().includes(q);
-        return nameMatch || emailMatch || posMatch || siteMatch;
+        const hasPass = Boolean(u.hasSetPassword ?? u.has_set_password ?? u.passwordHash);
+        const statusStr = u.isActive === false ? 'inactive disabled' : (!hasPass ? 'pending for password creation pending password setup' : 'active');
+        const statusMatch = statusStr.includes(q);
+        return nameMatch || emailMatch || posMatch || siteMatch || statusMatch;
       });
     }
 
@@ -164,7 +167,14 @@ export default function UserAccessManagement() {
     }
 
     if (sortKey === 'status') {
-      return list.sort((a, b) => (b.isActive !== false ? 1 : 0) - (a.isActive !== false ? 1 : 0));
+      return list.sort((a, b) => {
+        const getScore = (u) => {
+          if (u.isActive === false) return 0;
+          const hasPass = Boolean(u.hasSetPassword ?? u.has_set_password ?? u.passwordHash);
+          return hasPass ? 2 : 1;
+        };
+        return getScore(b) - getScore(a);
+      });
     }
 
     return sortUsersDeterministically(list);
@@ -741,13 +751,13 @@ export default function UserAccessManagement() {
           <table className="data-table" style={{ width: '100%', minWidth: '940px' }}>
             <thead>
               <tr style={{ background: '#f8fafc' }}>
-                <th style={{ width: '25%', minWidth: '220px', padding: '10px 16px', textAlign: 'left' }}>Staff Identity &amp; Email</th>
-                <th style={{ width: '19%', minWidth: '170px', padding: '10px 12px', textAlign: 'left' }}>Designated Role Position</th>
-                <th style={{ width: '13%', minWidth: '120px', textAlign: 'center', padding: '10px 10px' }}>Security Role</th>
-                <th style={{ width: '17%', minWidth: '160px', textAlign: 'left', padding: '10px 12px' }}>Assigned Location</th>
-                <th style={{ width: '8%', minWidth: '80px', textAlign: 'center', padding: '10px 8px' }}>Status</th>
-                <th style={{ width: '8%', minWidth: '90px', textAlign: 'center', padding: '10px 8px' }}>Scope</th>
-                <th style={{ width: '10%', minWidth: '100px', textAlign: 'center', padding: '10px 10px' }}>Actions</th>
+                <th style={{ width: '23%', minWidth: '200px', padding: '10px 16px', textAlign: 'left' }}>Staff Identity &amp; Email</th>
+                <th style={{ width: '18%', minWidth: '160px', padding: '10px 12px', textAlign: 'left' }}>Designated Role Position</th>
+                <th style={{ width: '12%', minWidth: '110px', textAlign: 'center', padding: '10px 10px' }}>Security Role</th>
+                <th style={{ width: '16%', minWidth: '150px', textAlign: 'left', padding: '10px 12px' }}>Assigned Location</th>
+                <th style={{ width: '14%', minWidth: '175px', textAlign: 'center', padding: '10px 8px' }}>Status</th>
+                <th style={{ width: '7%', minWidth: '80px', textAlign: 'center', padding: '10px 8px' }}>Scope</th>
+                <th style={{ width: '10%', minWidth: '95px', textAlign: 'center', padding: '10px 10px' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -894,19 +904,81 @@ export default function UserAccessManagement() {
 
                       {/* Status */}
                       <td style={{ textAlign: 'center', padding: '10px 8px' }}>
-                        <span
-                          className="badge"
-                          style={{
-                            background: user.isActive !== false ? '#dcfce7' : '#fee2e2',
-                            color: user.isActive !== false ? '#15803d' : '#b91c1c',
-                            border: `1px solid ${user.isActive !== false ? '#bbf7d0' : '#fecaca'}`,
-                            fontSize: '10.5px',
-                            fontWeight: 700,
-                            padding: '2px 6px'
-                          }}
-                        >
-                          {user.isActive !== false ? 'Active' : 'Inactive'}
-                        </span>
+                        {(() => {
+                          const isUserActive = user.isActive !== false;
+                          const hasCreatedPassword = Boolean(user.hasSetPassword ?? user.has_set_password ?? user.passwordHash);
+
+                          if (!isUserActive) {
+                            return (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#fee2e2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fecaca',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  padding: '3px 8px',
+                                  borderRadius: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
+                                Inactive
+                              </span>
+                            );
+                          }
+
+                          if (!hasCreatedPassword) {
+                            return (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#fef3c7',
+                                  color: '#b45309',
+                                  border: '1px solid #fde68a',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  padding: '3px 8px',
+                                  borderRadius: '6px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  whiteSpace: 'nowrap'
+                                }}
+                                title="User has not yet created their first-time login password"
+                              >
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} />
+                                Pending for Password Creation
+                              </span>
+                            );
+                          }
+
+                          return (
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#dcfce7',
+                                color: '#15803d',
+                                border: '1px solid #bbf7d0',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22c55e', display: 'inline-block' }} />
+                              Active
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Permitted Pages */}

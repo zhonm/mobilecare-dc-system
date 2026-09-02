@@ -15,6 +15,12 @@ import {
   filterAnomaliesWinsorized
 } from '../utils/forecastEngine';
 import {
+  getPerSiteForecastVsActual,
+  getMasterlistSites,
+  IPHONE_CATEGORIES,
+  getCategoryBadge
+} from '../utils/rawMasterlistScanner';
+import {
   BarChart,
   Bar,
   XAxis,
@@ -215,6 +221,13 @@ export default function ForecastingReports() {
   const [modelFilter, setModelFilter] = useState('ALL');
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Per-Site Forecast vs Actual Audit States
+  const [accuracyAuditScope, setAccuracyAuditScope] = useState('national'); // 'national' | 'site'
+  const [accuracyAuditSite, setAccuracyAuditSite] = useState('MOBILECARE - NEWPOINT MALL');
+  const [accuracyCategory, setAccuracyCategory] = useState('ALL');
+  const [accuracySearch, setAccuracySearch] = useState('');
+  const [accuracyLimit, setAccuracyLimit] = useState('ALL'); // 10 | 25 | 50 | 'ALL'
 
   const ALL_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -687,12 +700,14 @@ export default function ForecastingReports() {
     });
 
     const totalRegionalUnits = mmUnits + provUnits;
-    const mmPct = totalRegionalUnits > 0 ? Math.round((mmUnits / totalRegionalUnits) * 100) : 75;
-    const provPct = totalRegionalUnits > 0 ? (100 - mmPct) : 25;
+    const mmPct = totalRegionalUnits > 0 ? Math.round((mmUnits / totalRegionalUnits) * 100) : 0;
+    const provPct = totalRegionalUnits > 0 ? (100 - mmPct) : 0;
 
-    const regionalPieData = [
-      { name: 'Metro Manila (MM)', value: mmUnits || 443, color: '#0284c7', pct: mmPct },
-      { name: 'Provincial Network (Prov)', value: provUnits || 150, color: '#10b981', pct: provPct }
+    const regionalPieData = totalRegionalUnits > 0 ? [
+      { name: 'Metro Manila (MM)', value: mmUnits, color: '#0284c7', pct: mmPct },
+      { name: 'Provincial Network (Prov)', value: provUnits, color: '#10b981', pct: provPct }
+    ] : [
+      { name: 'No Data', value: 1, color: '#e2e8f0', pct: 0 }
     ];
 
     return {
@@ -719,8 +734,8 @@ export default function ForecastingReports() {
       overForecastCount,
       accuracyRate,
       regionalSummary: {
-        mmUnits: mmUnits || 443,
-        provUnits: provUnits || 150,
+        mmUnits,
+        provUnits,
         mmVal,
         provVal,
         mmPct,
@@ -729,6 +744,20 @@ export default function ForecastingReports() {
       }
     };
   }, [filteredItems, historyMonths, currentPeriodLabel, activeAllocations, serviceBranches, getPartStockPrice, forecastingModel]);
+
+  // ── Per-Site Forecast vs Actual Audit Dataset ──────────────────────────────
+  const siteAccuracyData = useMemo(() => {
+    return getPerSiteForecastVsActual(accuracyAuditSite, {
+      category: accuracyCategory,
+      search: accuracySearch,
+      limit: accuracyLimit,
+      sortBy: 'units'
+    });
+  }, [accuracyAuditSite, accuracyCategory, accuracySearch, accuracyLimit, activeDatasetItems, forecastItems]);
+
+  const masterSitesList = useMemo(() => {
+    return getMasterlistSites().all;
+  }, [activeDatasetItems, forecastItems]);
 
   // ── Pagination Calculation for Ledger ───────────────────────────────────────
   const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;
@@ -1566,136 +1595,490 @@ export default function ForecastingReports() {
       {/* ── View Mode: 3. Forecast vs Actual Backtesting Audit ─────────────── */}
       {viewMode === 'accuracy-audit' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Accuracy KPI Banner */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
-            <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Overall Accuracy Score
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: '#047857', marginTop: '4px' }}>
-                {analytics.accuracyRate}%
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                {analytics.accurateCount} of {filteredItems.length} models within error threshold
-              </div>
+          {/* Audit Scope Switcher */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', background: '#f1f5f9', padding: '4px', borderRadius: '8px', gap: '4px' }}>
+              <button
+                type="button"
+                onClick={() => setAccuracyAuditScope('national')}
+                style={{
+                  border: 'none',
+                  background: accuracyAuditScope === 'national' ? '#0f172a' : 'transparent',
+                  color: accuracyAuditScope === 'national' ? '#ffffff' : '#475569',
+                  padding: '7px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.15s ease',
+                  boxShadow: accuracyAuditScope === 'national' ? '0 1px 4px rgba(0,0,0,0.15)' : 'none'
+                }}
+              >
+                <BarChart3 size={14} />
+                <span>National Model Audit</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAccuracyAuditScope('site')}
+                style={{
+                  border: 'none',
+                  background: accuracyAuditScope === 'site' ? '#0f172a' : 'transparent',
+                  color: accuracyAuditScope === 'site' ? '#ffffff' : '#475569',
+                  padding: '7px 16px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.15s ease',
+                  boxShadow: accuracyAuditScope === 'site' ? '0 1px 4px rgba(0,0,0,0.15)' : 'none'
+                }}
+              >
+                <Building2 size={14} />
+                <span>Per-Site Branch Audit (All Parts)</span>
+              </button>
             </div>
 
-            <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Actual vs Forecast Usage
-              </div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
-                {analytics.totalPriorActual.toLocaleString()}{' '}
-                <span style={{ fontSize: '13px', fontWeight: 500, color: '#64748b' }}>vs {analytics.totalPriorForecast.toLocaleString()}</span>
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                Net Variance: <strong style={{ color: analytics.netPriorVariance >= 0 ? '#047857' : '#b91c1c' }}>
-                  {analytics.netPriorVariance >= 0 ? '+' : ''}{analytics.netPriorVariance} units
-                </strong>
-              </div>
-            </div>
-
-            <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                Model Categorization
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 700, marginTop: '8px', display: 'flex', gap: '8px' }}>
-                <span style={{ background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px' }}>
-                  {analytics.accurateCount} Accurate
-                </span>
-                <span style={{ background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '4px' }}>
-                  {analytics.underForecastCount} Under
-                </span>
-                <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '2px 8px', borderRadius: '4px' }}>
-                  {analytics.overForecastCount} Over
-                </span>
-              </div>
+            <div style={{ fontSize: '12px', color: '#64748b' }}>
+              {accuracyAuditScope === 'national' ? (
+                <span>Replicating September 2026 backtesting audit across 41 models</span>
+              ) : (
+                <span>Auditing historical usage vs forecast for {siteAccuracyData.matchedSite?.shortName || accuracyAuditSite}</span>
+              )}
             </div>
           </div>
 
-          {/* Validation Table */}
-          <div className="card" style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#0f172a' }}>
-                Forecasted vs. Actual Model Performance Audit
-              </h3>
-              <p style={{ fontSize: '11.5px', color: '#64748b', margin: '2px 0 0 0' }}>
-                Replication of the historical backtesting validation audit from the September 2026 reference workbook
-              </p>
-            </div>
+          {/* ── SUB-VIEW A: NATIONAL MODEL ACCURACY AUDIT ── */}
+          {accuracyAuditScope === 'national' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* Accuracy KPI Banner */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+                <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                    Overall Accuracy Score
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#047857', marginTop: '4px' }}>
+                    {analytics.accuracyRate}%
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                    {analytics.accurateCount} of {filteredItems.length} models within error threshold
+                  </div>
+                </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ width: '100%', margin: 0, fontSize: '12px' }}>
-                <thead>
-                  <tr style={{ background: '#0f172a', color: '#fff' }}>
-                    <th style={{ padding: '10px 12px', textAlign: 'left' }}>Part Number</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'left' }}>Description</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Commodity</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'center', background: '#0284c7' }}>Actual (Month 8)</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'center', background: '#334155' }}>Forecasted (Month 8)</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Variance (Δ)</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'center' }}>Accuracy Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analytics.accuracyAuditList.map((it, idx) => {
-                    const isDisplay = (it.description || '').toLowerCase().includes('display');
-                    return (
-                      <tr key={it.part_number || idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7' }}>{it.part_number}</td>
-                        <td style={{ fontWeight: 600, color: '#0f172a' }}>{it.description}</td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span style={{
-                            fontSize: '10.5px',
-                            fontWeight: 600,
-                            padding: '2px 7px',
-                            borderRadius: '4px',
-                            background: isDisplay ? '#eff6ff' : '#f0fdf4',
-                            color: isDisplay ? '#0284c7' : '#15803d'
-                          }}>
-                            {isDisplay ? 'Display' : 'Battery'}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'center', fontWeight: 800, color: '#0284c7', background: '#f0f9ff', fontSize: '13px' }}>
-                          {it.priorActual}
-                        </td>
-                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', background: '#f8fafc', fontSize: '13px' }}>
-                          {it.priorForecast}
-                        </td>
-                        <td style={{
-                          textAlign: 'center',
-                          fontWeight: 800,
-                          fontSize: '13px',
-                          color: it.variance === 0 ? '#059669' : (it.variance > 0 ? '#0284c7' : '#b91c1c'),
-                          background: it.variance === 0 ? '#ecfdf5' : (it.variance > 0 ? '#f0f9ff' : '#fee2e2')
-                        }}>
-                          {it.variance > 0 ? `+${it.variance}` : it.variance}
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: it.remark === 'Accurate' ? '#dcfce7' : (it.remark === 'Under Forecast' ? '#e0f2fe' : '#fee2e2'),
-                            color: it.remark === 'Accurate' ? '#15803d' : (it.remark === 'Under Forecast' ? '#0369a1' : '#b91c1c')
-                          }}>
-                            {it.remark === 'Accurate' && <CheckCircle2 size={12} />}
-                            {it.remark === 'Under Forecast' && <TrendingUp size={12} />}
-                            {it.remark === 'Over Forecast' && <TrendingDown size={12} />}
-                            {it.remark} ({it.variance > 0 ? `+${it.variance}` : it.variance})
-                          </span>
-                        </td>
+                <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                    Actual vs Forecast Usage
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
+                    {analytics.totalPriorActual.toLocaleString()}{' '}
+                    <span style={{ fontSize: '13px', fontWeight: 500, color: '#64748b' }}>vs {analytics.totalPriorForecast.toLocaleString()}</span>
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                    Net Variance: <strong style={{ color: analytics.netPriorVariance >= 0 ? '#047857' : '#b91c1c' }}>
+                      {analytics.netPriorVariance >= 0 ? '+' : ''}{analytics.netPriorVariance} units
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
+                    Model Categorization
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, marginTop: '8px', display: 'flex', gap: '8px' }}>
+                    <span style={{ background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                      {analytics.accurateCount} Accurate
+                    </span>
+                    <span style={{ background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                      {analytics.underForecastCount} Under
+                    </span>
+                    <span style={{ background: '#fee2e2', color: '#b91c1c', padding: '2px 8px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                      {analytics.overForecastCount} Over
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Validation Table */}
+              <div className="card" style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>
+                  <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#0f172a' }}>
+                    Forecasted vs. Actual Model Performance Audit
+                  </h3>
+                  <p style={{ fontSize: '11.5px', color: '#64748b', margin: '2px 0 0 0' }}>
+                    Replication of the historical backtesting validation audit from the September 2026 reference workbook
+                  </p>
+                </div>
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="table" style={{ width: '100%', margin: 0, fontSize: '12.5px', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#0f172a', color: '#fff' }}>
+                        <th style={{ padding: '11px 14px', textAlign: 'left', whiteSpace: 'nowrap' }}>Part Number</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'left' }}>Description</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>Commodity</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'center', background: '#0284c7', whiteSpace: 'nowrap' }}>Actual (Month 8)</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'center', background: '#334155', whiteSpace: 'nowrap' }}>Forecasted (Month 8)</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>Variance (Δ)</th>
+                        <th style={{ padding: '11px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>Accuracy Status</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody>
+                      {analytics.accuracyAuditList.map((it, idx) => {
+                        const isDisplay = (it.description || '').toLowerCase().includes('display');
+                        return (
+                          <tr key={it.part_number || idx} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
+                            <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7', padding: '11px 14px', whiteSpace: 'nowrap' }}>{it.part_number}</td>
+                            <td style={{ fontWeight: 600, color: '#0f172a', padding: '11px 14px' }}>{it.description}</td>
+                            <td style={{ textAlign: 'center', padding: '11px 14px', whiteSpace: 'nowrap' }}>
+                              <span style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                padding: '3px 8px',
+                                borderRadius: '4px',
+                                background: isDisplay ? '#eff6ff' : '#f0fdf4',
+                                color: isDisplay ? '#0284c7' : '#15803d',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {isDisplay ? 'Display' : 'Battery'}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'center', fontWeight: 800, color: '#0284c7', background: '#f0f9ff', fontSize: '13px', padding: '11px 14px', whiteSpace: 'nowrap' }}>
+                              {it.priorActual} units
+                            </td>
+                            <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', background: '#f8fafc', fontSize: '13px', padding: '11px 14px', whiteSpace: 'nowrap' }}>
+                              {it.priorForecast} units
+                            </td>
+                            <td style={{
+                              textAlign: 'center',
+                              fontWeight: 800,
+                              fontSize: '13px',
+                              padding: '11px 14px',
+                              whiteSpace: 'nowrap',
+                              color: it.variance === 0 ? '#059669' : (it.variance > 0 ? '#0284c7' : '#b91c1c'),
+                              background: it.variance === 0 ? '#ecfdf5' : (it.variance > 0 ? '#f0f9ff' : '#fee2e2')
+                            }}>
+                              {it.variance > 0 ? `+${it.variance}` : it.variance}
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '11px 14px', whiteSpace: 'nowrap' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '3px 10px',
+                                borderRadius: '12px',
+                                fontSize: '11.5px',
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                background: it.remark === 'Accurate' ? '#dcfce7' : (it.remark === 'Under Forecast' ? '#e0f2fe' : '#fee2e2'),
+                                color: it.remark === 'Accurate' ? '#15803d' : (it.remark === 'Under Forecast' ? '#0369a1' : '#b91c1c')
+                              }}>
+                                {it.remark === 'Accurate' && <CheckCircle2 size={12} />}
+                                {it.remark === 'Under Forecast' && <TrendingUp size={12} />}
+                                {it.remark === 'Over Forecast' && <TrendingDown size={12} />}
+                                {it.remark} ({it.variance > 0 ? `+${it.variance}` : it.variance})
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* ── SUB-VIEW B: PER-SITE BRANCH FORECAST VS ACTUAL AUDIT (ALL PARTS) ── */}
+          {accuracyAuditScope === 'site' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* Prominent Service Branch Picker & Branch KPIs */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '10px',
+                  padding: '18px 22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '16px'
+                }}
+              >
+                {/* Branch Dropdown */}
+                <div style={{ flex: '1 1 340px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '6px' }}>
+                    Select Service Branch to Audit:
+                  </label>
+                  <select
+                    className="form-select"
+                    value={accuracyAuditSite}
+                    onChange={(e) => setAccuracyAuditSite(e.target.value)}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '2px solid #0284c7',
+                      fontSize: '14.5px',
+                      fontWeight: 800,
+                      color: '#0f172a',
+                      background: '#ffffff',
+                      width: '100%',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 8px rgba(2, 132, 199, 0.12)'
+                    }}
+                  >
+                    {masterSitesList.map(s => (
+                      <option key={s.siteName} value={s.siteName}>
+                        {s.shortName} • {s.totalUnits} units ({s.region})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Branch Accuracy Summary Metrics */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Branch Accuracy
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-mono)' }}>
+                      {siteAccuracyData.accuracyRate}% <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>({siteAccuracyData.accurateCount}/{siteAccuracyData.totalCount})</span>
+                    </div>
+                  </div>
+
+                  <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Actual vs Forecast
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                      {siteAccuracyData.totalActualUnits.toLocaleString()}{' '}
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>vs {siteAccuracyData.totalForecastUnits.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Net Variance
+                    </div>
+                    <div style={{
+                      fontSize: '20px',
+                      fontWeight: 800,
+                      fontFamily: 'var(--font-mono)',
+                      color: siteAccuracyData.netUnitVariance === 0 ? '#059669' : (siteAccuracyData.netUnitVariance > 0 ? '#0284c7' : '#b91c1c')
+                    }}>
+                      {siteAccuracyData.netUnitVariance >= 0 ? '+' : ''}{siteAccuracyData.netUnitVariance}{' '}
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>units</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Category Filter Pills (No Emojis) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingBottom: '4px' }}>
+                <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
+                  Filter Category:
+                </span>
+                {IPHONE_CATEGORIES.map(cat => {
+                  const isSelected = accuracyCategory === cat.key;
+                  return (
+                    <button
+                      key={cat.key}
+                      type="button"
+                      onClick={() => setAccuracyCategory(cat.key)}
+                      style={{
+                        border: '1px solid',
+                        borderColor: isSelected ? '#0284c7' : '#cbd5e1',
+                        background: isSelected ? '#0284c7' : '#ffffff',
+                        color: isSelected ? '#ffffff' : '#334155',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '11.5px',
+                        fontWeight: isSelected ? 700 : 500,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        transition: 'all 0.12s ease'
+                      }}
+                    >
+                      <span>{cat.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Filter Controls: Search & Limit */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ position: 'relative' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '9px', color: '#94a3b8' }} />
+                  <input
+                    type="text"
+                    placeholder="Search part number or iPhone model..."
+                    value={accuracySearch}
+                    onChange={(e) => setAccuracySearch(e.target.value)}
+                    style={{
+                      padding: '6px 12px 6px 30px',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '12px',
+                      width: '280px',
+                      background: '#f8fafc'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#64748b', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontWeight: 600 }}>Show Rows:</span>
+                  {[10, 25, 50, 'ALL'].map(lim => (
+                    <button
+                      key={lim}
+                      onClick={() => setAccuracyLimit(lim)}
+                      style={{
+                        border: '1px solid',
+                        borderColor: accuracyLimit === lim ? '#0284c7' : '#cbd5e1',
+                        background: accuracyLimit === lim ? '#e0f2fe' : '#ffffff',
+                        color: accuracyLimit === lim ? '#0369a1' : '#475569',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: accuracyLimit === lim ? 700 : 500,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {lim === 'ALL' ? 'All' : lim}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Per-Site Forecast vs Actual Table */}
+              {siteAccuracyData.displayList.length === 0 ? (
+                <div style={{ padding: '36px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                  <Package size={28} color="#94a3b8" style={{ marginBottom: '6px' }} />
+                  <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No parts matching audit filters for this branch</div>
+                  <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0' }}>Try adjusting your search query or category filter.</p>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                  <table className="table" style={{ width: '100%', margin: 0, fontSize: '12.5px', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#0f172a', color: '#fff' }}>
+                        <th style={{ width: '50px', textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>#</th>
+                        <th style={{ width: '130px', padding: '11px 12px', whiteSpace: 'nowrap' }}>Part Number</th>
+                        <th style={{ minWidth: '220px', padding: '11px 12px' }}>iPhone Model &amp; Description</th>
+                        <th style={{ width: '150px', textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>Category</th>
+                        <th style={{ width: '120px', textAlign: 'right', padding: '11px 12px', whiteSpace: 'nowrap' }}>Stock Price</th>
+                        <th style={{ width: '130px', textAlign: 'center', background: '#0284c7', padding: '11px 12px', whiteSpace: 'nowrap' }}>Actual Usage</th>
+                        <th style={{ width: '130px', textAlign: 'center', background: '#334155', padding: '11px 12px', whiteSpace: 'nowrap' }}>Forecasted</th>
+                        <th style={{ width: '120px', textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>Variance (Δ)</th>
+                        <th style={{ width: '150px', textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>Accuracy Status</th>
+                        <th style={{ width: '140px', textAlign: 'right', padding: '11px 12px', whiteSpace: 'nowrap' }}>Cost Variance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {siteAccuracyData.displayList.map((it, idx) => {
+                        const badge = getCategoryBadge(it.category);
+                        return (
+                          <tr
+                            key={it.part_number || idx}
+                            style={{
+                              borderBottom: '1px solid #f1f5f9',
+                              background: idx % 2 === 0 ? '#ffffff' : '#fafafa'
+                            }}
+                          >
+                            <td style={{ textAlign: 'center', color: '#64748b', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              {idx + 1}
+                            </td>
+                            <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0284c7', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              {it.part_number}
+                            </td>
+                            <td style={{ fontWeight: 600, color: '#0f172a', padding: '11px 12px' }}>
+                              {it.description}
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              <span
+                                style={{
+                                  background: badge.bg,
+                                  color: badge.text,
+                                  border: `1px solid ${badge.border}`,
+                                  padding: '3px 8px',
+                                  borderRadius: '5px',
+                                  fontWeight: 700,
+                                  fontSize: '11px',
+                                  display: 'inline-block',
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                {badge.name}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              <div style={{ fontWeight: 700, color: '#0f172a' }}>${it.unitPriceUSD}</div>
+                              <div style={{ fontSize: '10.5px', color: '#64748b' }}>₱{it.unitPricePHP?.toLocaleString()}</div>
+                            </td>
+                            <td style={{ textAlign: 'center', fontWeight: 800, color: '#0284c7', background: '#f0f9ff', fontSize: '13px', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              {it.actualUsage} units
+                            </td>
+                            <td style={{ textAlign: 'center', fontWeight: 700, color: '#475569', background: '#f8fafc', fontSize: '13px', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              {it.forecasted} units
+                            </td>
+                            <td style={{
+                              textAlign: 'center',
+                              fontWeight: 800,
+                              fontSize: '13px',
+                              padding: '11px 12px',
+                              whiteSpace: 'nowrap',
+                              color: it.variance === 0 ? '#059669' : (it.variance > 0 ? '#0284c7' : '#b91c1c'),
+                              background: it.variance === 0 ? '#ecfdf5' : (it.variance > 0 ? '#f0f9ff' : '#fee2e2')
+                            }}>
+                              {it.variance > 0 ? `+${it.variance}` : it.variance}
+                            </td>
+                            <td style={{ textAlign: 'center', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '3px 10px',
+                                borderRadius: '12px',
+                                fontSize: '11.5px',
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                background: it.remark === 'Accurate' ? '#dcfce7' : (it.remark === 'Under Forecast' ? '#e0f2fe' : '#fee2e2'),
+                                color: it.remark === 'Accurate' ? '#15803d' : (it.remark === 'Under Forecast' ? '#0369a1' : '#b91c1c')
+                              }}>
+                                {it.remark === 'Accurate' && <CheckCircle2 size={12} />}
+                                {it.remark === 'Under Forecast' && <TrendingUp size={12} />}
+                                {it.remark === 'Over Forecast' && <TrendingDown size={12} />}
+                                {it.remark} ({it.variance > 0 ? `+${it.variance}` : it.variance})
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '11px 12px', whiteSpace: 'nowrap' }}>
+                              <div style={{
+                                fontWeight: 700,
+                                color: it.costVarianceUSD === 0 ? '#059669' : (it.costVarianceUSD > 0 ? '#0284c7' : '#b91c1c')
+                              }}>
+                                {it.costVarianceUSD >= 0 ? `+$${it.costVarianceUSD.toLocaleString()}` : `-$${Math.abs(it.costVarianceUSD).toLocaleString()}`}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1751,17 +2134,23 @@ export default function ForecastingReports() {
               />
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', margin: '10px 0 4px 0' }}>
                 <span style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>
-                  {analytics.topSitesChart[0]?.name || 'Vertis North'}
+                  {analytics.totalRecommendedUnits > 0 ? (analytics.topSitesChart[0]?.name || '—') : 'No Volume'}
                 </span>
-                <span style={{ fontSize: '12px', fontWeight: 700, background: '#fef3c7', color: '#b45309', padding: '2px 6px', borderRadius: '4px' }}>
-                  {analytics.topSitesChart[0]?.code || 'APP VN'}
-                </span>
+                {analytics.totalRecommendedUnits > 0 && analytics.topSitesChart[0]?.code && (
+                  <span style={{ fontSize: '12px', fontWeight: 700, background: '#fef3c7', color: '#b45309', padding: '2px 6px', borderRadius: '4px' }}>
+                    {analytics.topSitesChart[0].code}
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: '13px', fontWeight: 700, color: '#d97706', marginBottom: '4px' }}>
-                {analytics.topSitesChart[0]?.totalUnits?.toLocaleString() || 102} Units ({(analytics.topSitesChart[0]?.pct || 17.5).toFixed(1)}% of DC Total)
+                {analytics.totalRecommendedUnits > 0
+                  ? `${analytics.topSitesChart[0]?.totalUnits?.toLocaleString() || 0} Units (${(analytics.topSitesChart[0]?.pct || 0).toFixed(1)}% of DC Total)`
+                  : '0 Units (0% of DC Total)'}
               </div>
               <p style={{ fontSize: '11.5px', color: '#64748b', lineHeight: 1.5, margin: 0 }}>
-                Highest consumer of Batteries ({analytics.topSitesChart[0]?.batteryUnits || 53} units) &amp; Displays ({analytics.topSitesChart[0]?.displayUnits || 41} units) in the NCR North network.
+                {analytics.totalRecommendedUnits > 0
+                  ? `Highest consumer of Batteries (${analytics.topSitesChart[0]?.batteryUnits || 0} units) & Displays (${analytics.topSitesChart[0]?.displayUnits || 0} units) in the NCR North network.`
+                  : 'No active repair volume loaded. Upload a masterlist or calculate forecasting to populate hub volume leaders.'}
               </p>
             </div>
           </div>
@@ -1789,30 +2178,38 @@ export default function ForecastingReports() {
                 </div>
               </div>
 
-              <div style={{ height: '360px', width: '100%' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={analytics.topSitesChart}
-                    layout="vertical"
-                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                    <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
-                    <YAxis
-                      dataKey="code"
-                      type="category"
-                      width={85}
-                      tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'monospace' }}
-                    />
-                    <Tooltip content={<CustomSiteBarTooltip />} />
-                    <Bar dataKey="totalUnits" name="Allocated Units" radius={[0, 4, 4, 0]} barSize={18}>
-                      {analytics.topSitesChart.map((entry, index) => (
-                        <Cell key={`site-bar-${index}`} fill={entry.isMM ? '#0284c7' : '#10b981'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {analytics.totalRecommendedUnits === 0 ? (
+                <div style={{ height: '360px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1', padding: '20px', textAlign: 'center' }}>
+                  <Building2 size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
+                  <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Branch Allocation Data</div>
+                  <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0' }}>Upload a Fixably masterlist or compute forecasts to populate site rankings.</p>
+                </div>
+              ) : (
+                <div style={{ height: '360px', width: '100%' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={analytics.topSitesChart}
+                      layout="vertical"
+                      margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
+                      <YAxis
+                        dataKey="code"
+                        type="category"
+                        width={85}
+                        tick={{ fontSize: 11, fill: '#0f172a', fontWeight: 600, fontFamily: 'monospace' }}
+                      />
+                      <Tooltip content={<CustomSiteBarTooltip />} />
+                      <Bar dataKey="totalUnits" name="Allocated Units" radius={[0, 4, 4, 0]} barSize={18}>
+                        {analytics.topSitesChart.map((entry, index) => (
+                          <Cell key={`site-bar-${index}`} fill={entry.isMM ? '#0284c7' : '#10b981'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
 
             {/* Chart 2: Regional Donut Distribution & Category Share */}
@@ -1854,7 +2251,7 @@ export default function ForecastingReports() {
                     <strong style={{ color: '#0f172a' }}>{analytics.regionalSummary.mmUnits.toLocaleString()} units ({analytics.regionalSummary.mmPct}%)</strong>
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>
-                    11 ASP sites • Avg. {Math.round(analytics.regionalSummary.mmUnits / 11)} units/site
+                    11 ASP sites • Avg. {analytics.regionalSummary.mmUnits > 0 ? Math.round(analytics.regionalSummary.mmUnits / 11) : 0} units/site
                   </div>
                 </div>
 
@@ -1880,16 +2277,16 @@ export default function ForecastingReports() {
               </div>
               <div style={{ fontSize: '12px', color: '#0f172a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>1. <strong>Vertis North (VN)</strong></span>
-                  <span style={{ fontWeight: 700, color: '#15803d' }}>{analytics.topBatterySite?.batteryUnits || 53} units</span>
+                  <span>1. <strong>{analytics.topBatterySite?.name || 'Vertis North (VN)'}</strong></span>
+                  <span style={{ fontWeight: 700, color: '#15803d' }}>{analytics.topBatterySite?.batteryUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>2. <strong>Festival Mall (FESTIVAL)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[1]?.batteryUnits || 34} units</span>
+                  <span>2. <strong>{analytics.topSitesChart[1]?.name || 'Festival Mall (FESTIVAL)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[1]?.batteryUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>3. <strong>Glorietta 5 (GL5)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[2]?.batteryUnits || 28} units</span>
+                  <span>3. <strong>{analytics.topSitesChart[2]?.name || 'Glorietta 5 (GL5)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[2]?.batteryUnits || 0} units</span>
                 </div>
               </div>
             </div>
@@ -1901,16 +2298,16 @@ export default function ForecastingReports() {
               </div>
               <div style={{ fontSize: '12px', color: '#0f172a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>1. <strong>Vertis North (VN)</strong></span>
-                  <span style={{ fontWeight: 700, color: '#0284c7' }}>{analytics.topDisplaySite?.displayUnits || 41} units</span>
+                  <span>1. <strong>{analytics.topDisplaySite?.name || 'Vertis North (VN)'}</strong></span>
+                  <span style={{ fontWeight: 700, color: '#0284c7' }}>{analytics.topDisplaySite?.displayUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>2. <strong>The Podium (PODIUM)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[2]?.displayUnits || 24} units</span>
+                  <span>2. <strong>{analytics.topSitesChart[2]?.name || 'The Podium (PODIUM)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[2]?.displayUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>3. <strong>Trinoma (TRI)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[3]?.displayUnits || 19} units</span>
+                  <span>3. <strong>{analytics.topSitesChart[3]?.name || 'Trinoma (TRI)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart[3]?.displayUnits || 0} units</span>
                 </div>
               </div>
             </div>
@@ -1922,16 +2319,16 @@ export default function ForecastingReports() {
               </div>
               <div style={{ fontSize: '12px', color: '#0f172a', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>1. <strong>Newpoint Mall (Pampanga)</strong></span>
-                  <span style={{ fontWeight: 700, color: '#7c3aed' }}>{analytics.topProvincialSite?.totalUnits || 28} units</span>
+                  <span>1. <strong>{analytics.topProvincialSite?.name || 'Newpoint Mall (Pampanga)'}</strong></span>
+                  <span style={{ fontWeight: 700, color: '#7c3aed' }}>{analytics.topProvincialSite?.totalUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>2. <strong>Cebu (CEB)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('CEB'))?.totalUnits || 22} units</span>
+                  <span>2. <strong>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('CEB'))?.name || 'Cebu (CEB)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('CEB'))?.totalUnits || 0} units</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>3. <strong>Davao (DVO)</strong></span>
-                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('DVO'))?.totalUnits || 19} units</span>
+                  <span>3. <strong>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('DVO'))?.name || 'Davao (DVO)'}</strong></span>
+                  <span style={{ fontWeight: 600, color: '#64748b' }}>{analytics.topSitesChart.find(s => !s.isMM && s.code.includes('DVO'))?.totalUnits || 0} units</span>
                 </div>
               </div>
             </div>
@@ -1946,75 +2343,66 @@ export default function ForecastingReports() {
               color="#0284c7"
             />
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
-              {/* Directive 1 */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <ShieldCheck size={16} color="#0284c7" />
-                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>Priority Batch Dispatch for Vertis North</strong>
-                  </div>
-                  <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#eff6ff', color: '#0284c7', padding: '2px 6px', borderRadius: '4px' }}>
-                    Top #1 Volume
-                  </span>
+            {analytics.totalRecommendedUnits === 0 ? (
+              <div style={{ padding: '24px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                <div style={{ fontSize: '13px', color: '#64748b' }}>
+                  Supply chain and logistics recommendations will be generated automatically when masterlist data or forecasting allocations are loaded.
                 </div>
-                <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                  Vertis North consumes <strong>{(analytics.topSitesChart[0]?.pct || 17.5).toFixed(1)}%</strong> of total DC inventory with fast-paced customer intake.
-                  <span style={{ color: '#0284c7', fontWeight: 600 }}> Recommendation:</span> Dispatch 100% of Week 1 allocation ($W_1$) on Monday morning. Maintain a dedicated <strong>+10% surge buffer</strong> on iPhone 13/14 battery modules to eliminate walk-in turnaround delays.
-                </p>
               </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
+                {/* Directive 1 */}
+                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <ShieldCheck size={16} color="#0284c7" />
+                      <strong style={{ fontSize: '13px', color: '#0f172a' }}>Priority Batch Dispatch for Top Hubs</strong>
+                    </div>
+                    <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#eff6ff', color: '#0284c7', padding: '2px 6px', borderRadius: '4px' }}>
+                      Top Volume Hub
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
+                    {analytics.topSitesChart[0]?.name || 'Top Hub'} consumes <strong>{(analytics.topSitesChart[0]?.pct || 0).toFixed(1)}%</strong> of total DC inventory with fast-paced customer intake.
+                    <span style={{ color: '#0284c7', fontWeight: 600 }}> Recommendation:</span> Dispatch 100% of Week 1 allocation ($W_1$) on Monday morning. Maintain a dedicated <strong>+10% surge buffer</strong> on iPhone 13/14 battery modules to eliminate walk-in turnaround delays.
+                  </p>
+                </div>
 
-              {/* Directive 2 */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Truck size={16} color="#15803d" />
-                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>Scheduled 3PL Delivery for Metro Manila</strong>
+                {/* Directive 2 */}
+                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Truck size={16} color="#15803d" />
+                      <strong style={{ fontSize: '13px', color: '#0f172a' }}>Scheduled 3PL Delivery for Metro Manila</strong>
+                    </div>
+                    <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#f0fdf4', color: '#15803d', padding: '2px 6px', borderRadius: '4px' }}>
+                      {analytics.regionalSummary.mmPct}% DC Share
+                    </span>
                   </div>
-                  <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#f0fdf4', color: '#15803d', padding: '2px 6px', borderRadius: '4px' }}>
-                    75% DC Share
-                  </span>
+                  <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
+                    The 11 NCR branches represent {analytics.regionalSummary.mmPct}% of volume.
+                    <span style={{ color: '#15803d', fontWeight: 600 }}> Recommendation:</span> Establish dedicated bi-weekly courier dispatches (Tuesday &amp; Thursday) from Central DC San Juan to maintain lean branch storage while ensuring continuous technician parts availability.
+                  </p>
                 </div>
-                <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                  The 11 NCR branches (Festival Mall, Glorietta 5, The Podium, MOA, BHS) represent 75% of volume.
-                  <span style={{ color: '#15803d', fontWeight: 600 }}> Recommendation:</span> Establish dedicated bi-weekly courier dispatches (Tuesday &amp; Thursday) from Central DC San Juan to maintain lean branch storage while ensuring continuous technician parts availability.
-                </p>
-              </div>
 
-              {/* Directive 3 */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Navigation size={16} color="#7c3aed" />
-                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>Consolidated Bulk Freight for Cebu &amp; Davao</strong>
+                {/* Directive 3 */}
+                <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Navigation size={16} color="#7c3aed" />
+                      <strong style={{ fontSize: '13px', color: '#0f172a' }}>Consolidated Bulk Freight for Provincial Hubs</strong>
+                    </div>
+                    <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#faf5ff', color: '#7c3aed', padding: '2px 6px', borderRadius: '4px' }}>
+                      3-5 Day Transit
+                    </span>
                   </div>
-                  <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#faf5ff', color: '#7c3aed', padding: '2px 6px', borderRadius: '4px' }}>
-                    3-5 Day Transit
-                  </span>
+                  <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
+                    Visayas and Mindanao regional hubs are subject to 3–5 day transit lead times via Lite Express.
+                    <span style={{ color: '#7c3aed', fontWeight: 600 }}> Recommendation:</span> Bundle weekly allocations into <strong>bi-weekly bulk dispatches</strong> to cut per-waybill air cargo surcharges by ~35% while insulating branches from transit delays.
+                  </p>
                 </div>
-                <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                  Visayas and Mindanao regional hubs are subject to 3–5 day transit lead times via Lite Express.
-                  <span style={{ color: '#7c3aed', fontWeight: 600 }}> Recommendation:</span> Bundle weekly allocations into <strong>bi-weekly bulk dispatches</strong> ($W_1+W_2$ bundled, $W_3+W_4$ bundled) to cut per-waybill air cargo surcharges by ~35% while insulating branches from transit delays.
-                </p>
               </div>
-
-              {/* Directive 4 */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Boxes size={16} color="#d97706" />
-                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>On-Demand Replenishment for Remote Outposts</strong>
-                  </div>
-                  <span style={{ fontSize: '10.5px', fontWeight: 700, background: '#fef3c7', color: '#b45309', padding: '2px 6px', borderRadius: '4px' }}>
-                    Lean Buffer
-                  </span>
-                </div>
-                <p style={{ fontSize: '12px', color: '#475569', lineHeight: 1.5, margin: 0 }}>
-                  Remote branches (Naga, Tuguegarao, La Union) exhibit intermittent demand for premium Pro Max displays.
-                  <span style={{ color: '#d97706', fontWeight: 600 }}> Recommendation:</span> Maintain zero local branch safety stock on low-velocity displays; fulfill on-demand from Central DC buffer upon GSX work order creation to prevent locked capital.
-                </p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
