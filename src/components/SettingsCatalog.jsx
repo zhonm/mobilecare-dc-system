@@ -60,6 +60,7 @@ export default function SettingsCatalog() {
     savePart,
     deletePart,
     saveSite,
+    deleteSite,
     refreshSitesFromCloud,
     syncAllDataToCloud,
     forceGlobalCloudSyncAndPurge,
@@ -120,11 +121,16 @@ export default function SettingsCatalog() {
     contact_person: '', contact_phone: '', is_dc: false
   };
   const [newSite, setNewSite] = useState(BLANK_SITE);
+  const [deletingSite, setDeletingSite] = useState(null);
 
   const filteredSites = useMemo(() => {
-    if (!siteSearch.trim()) return sites;
+    const valid = (sites || []).filter(s =>
+      !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+      !String(s.address || '').toUpperCase().includes('SM ILOILO')
+    );
+    if (!siteSearch.trim()) return valid;
     const q = siteSearch.toLowerCase();
-    return sites.filter(s =>
+    return valid.filter(s =>
       (s.code || '').toLowerCase().includes(q) ||
       (s.name || '').toLowerCase().includes(q) ||
       (s.region || '').toLowerCase().includes(q) ||
@@ -245,6 +251,12 @@ export default function SettingsCatalog() {
     if (!deletingPart) return;
     deletePart(deletingPart);
     setDeletingPart(null);
+  };
+
+  const handleConfirmDeleteSite = async () => {
+    if (!deletingSite) return;
+    await deleteSite(deletingSite.id, deletingSite.code);
+    setDeletingSite(null);
   };
 
   // Execute Force Global Sync & Purge Peer Cache
@@ -1167,15 +1179,27 @@ export default function SettingsCatalog() {
                           </span>
                         </td>
                         <td style={{ textAlign: 'center' }}>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            title="Edit branch"
-                            onClick={() => setEditingSite({ ...s })}
-                            style={{ padding: '4px 10px' }}
-                          >
-                            <Edit2 size={13} />
-                            <span>Edit</span>
-                          </button>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              title="Edit branch"
+                              onClick={() => setEditingSite({ ...s })}
+                              style={{ padding: '4px 8px' }}
+                            >
+                              <Edit2 size={12} />
+                              <span>Edit</span>
+                            </button>
+                            {!s.is_dc && (
+                              <button
+                                className="btn btn-danger btn-sm"
+                                title="Delete branch"
+                                onClick={() => setDeletingSite(s)}
+                                style={{ padding: '4px 7px' }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -1184,6 +1208,35 @@ export default function SettingsCatalog() {
               </table>
             </div>
           </div>
+
+          {/* ── Delete Branch Confirmation Modal ──────────────────────────── */}
+          {deletingSite && (
+            <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setDeletingSite(null); }}>
+              <div className="modal-content" style={{ maxWidth: '440px' }}>
+                <div className="modal-header" style={{ background: '#7f1d1d' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <AlertTriangle size={18} color="#fca5a5" />
+                    <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>Delete Service Branch</h3>
+                  </div>
+                  <button onClick={() => setDeletingSite(null)} style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}>
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="modal-body" style={{ padding: '20px' }}>
+                  <p style={{ margin: '0 0 10px', fontSize: '13.5px', color: '#1e293b' }}>
+                    Are you sure you want to permanently delete <strong>{deletingSite.name}</strong> (<code>{deletingSite.code}</code>)?
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
+                    This branch will be removed from all active allocations, catalogs, and cloud database records.
+                  </p>
+                </div>
+                <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setDeletingSite(null)}>Cancel</button>
+                  <button className="btn btn-danger btn-sm" onClick={handleConfirmDeleteSite}>Delete Branch</button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Add Branch Modal ─────────────────────────────────────────── */}
           {showAddSiteModal && (

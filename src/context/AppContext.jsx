@@ -482,6 +482,7 @@ export function AppProvider({ children }) {
         savePart: catalogAndSites.savePart,
         deletePart: catalogAndSites.deletePart,
         saveSite: catalogAndSites.saveSite,
+        deleteSite: catalogAndSites.deleteSite,
         refreshSitesFromCloud: catalogAndSites.refreshSitesFromCloud,
         applyPmgDirectoryToSites: catalogAndSites.applyPmgDirectoryToSites,
         applyParsedDataset: cloudSync.applyParsedDataset,

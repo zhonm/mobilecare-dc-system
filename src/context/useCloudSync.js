@@ -511,35 +511,34 @@ export function useCloudSync({
         })));
       }
 
-      // 3. Process Sites
+      // 3. Process Sites (Authoritative sync from Supabase; purge deleted sites)
       if (shouldFetch('sites') && dbSites && dbSites.length > 0) {
-        setSites(prev => {
-          const map = new Map((prev || []).map(s => [s.code, s]));
-          dbSites.forEach(s => {
-            const existing = map.get(s.code);
-            map.set(s.code, {
-              ...(existing || {}),
-              id: s.id || existing?.id,
-              code: s.code,
-              name: s.name || existing?.name,
-              region: s.region || existing?.region || 'Metro Manila',
-              address: s.address || s.full_address || existing?.address,
-              full_address: s.full_address || s.address || existing?.full_address,
-              contact_person: s.contact_person || existing?.contact_person,
-              contact_phone: s.contact_phone || existing?.contact_phone,
-              contact_email: s.contact_email || existing?.contact_email,
-              ship_to: s.ship_to || existing?.ship_to,
-              sold_to: s.sold_to || existing?.sold_to,
-              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
-              is_dc: s.is_dc ?? existing?.is_dc ?? false,
-              is_active: s.is_active ?? existing?.is_active ?? true
-            });
-          });
-          const merged = Array.from(map.values());
-          try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
-          dbStorage.setItem('mdc_sites', merged);
-          return merged;
-        });
+        const cleanSites = dbSites
+          .filter(s =>
+            !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+            !String(s.address || '').toUpperCase().includes('SM ILOILO')
+          )
+          .map(s => ({
+            id: s.id,
+            code: s.code,
+            name: s.name,
+            region: s.region || 'Metro Manila',
+            address: s.address || s.full_address || '',
+            full_address: s.full_address || s.address || '',
+            contact_person: s.contact_person || '',
+            contact_phone: s.contact_phone || '',
+            contact_email: s.contact_email || '',
+            ship_to: s.ship_to || null,
+            sold_to: s.sold_to || null,
+            invoice_prefix: s.invoice_prefix || '',
+            is_dc: s.is_dc ?? false,
+            is_active: s.is_active ?? true
+          }))
+          .sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+
+        setSites(cleanSites);
+        try { localStorage.setItem('mdc_sites', JSON.stringify(cleanSites)); } catch (e) {}
+        dbStorage.setItem('mdc_sites', cleanSites);
       }
 
       // 4. Process Parts

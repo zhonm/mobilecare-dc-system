@@ -90,13 +90,15 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
   if (rowShares && Array.isArray(rowShares) && rowShares.length > 0) {
     let totalCanonicalShare = 0;
     const demands = activeServiceSites.map((s, sIdx) => {
-      // Find matching column index in canonical site order
-      let siteColIdx = CANONICAL_SITE_LIST.findIndex(cs =>
-        cs.code === s.code ||
-        (s.name && cs.name && (cs.name.includes(s.name) || s.name.includes(cs.name)))
-      );
+      // Find matching column index in canonical site order (code match has highest priority)
+      let siteColIdx = CANONICAL_SITE_LIST.findIndex(cs => cs.code === s.code);
       if (siteColIdx < 0) {
         siteColIdx = CANONICAL_SITE_CODES.indexOf(s.code);
+      }
+      if (siteColIdx < 0 && s.name) {
+        siteColIdx = CANONICAL_SITE_LIST.findIndex(cs =>
+          cs.name && (cs.name.includes(s.name) || s.name.includes(cs.name))
+        );
       }
       if (siteColIdx < 0) {
         siteColIdx = sIdx;

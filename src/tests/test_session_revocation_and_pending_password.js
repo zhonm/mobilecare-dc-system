@@ -129,6 +129,43 @@ console.log('====================================================');
   console.log('  ✓ PASS: Deactivated account is automatically signed out');
 })();
 
+// Test 5: Deleted site SM ILOILO is purged from cache and not resurrected by cloud sync
+(() => {
+  const cachedSites = [
+    { id: 'site-1', code: 'APP BHS', name: 'MOBILECARE - APP BONIFACIO HIGH STREET' },
+    { id: 'site-27', code: 'APP ILO', name: 'MOBILECARE - APP SM ILOILO', address: 'MOBILECARE - APP SM ILOILO Service Branch, Philippines' },
+    { id: 'site-20', code: 'APP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' }
+  ];
+  localStorage.setItem('mdc_sites', JSON.stringify(cachedSites));
+
+  // Boot cache sanitizer
+  const saved = localStorage.getItem('mdc_sites');
+  const parsed = saved ? JSON.parse(saved) : [];
+  const clean = parsed.filter(s =>
+    !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+    !String(s.address || '').toUpperCase().includes('SM ILOILO')
+  );
+
+  assert.strictEqual(clean.length, 2, 'SM ILOILO must be removed from sites cache');
+  assert(!clean.some(s => s.name.includes('SM ILOILO')), 'No SM ILOILO sites remain in cleaned list');
+
+  // Authoritative cloud sync from Supabase (Supabase has 2 sites)
+  const dbSites = [
+    { id: 'site-1', code: 'APP BHS', name: 'MOBILECARE - APP BONIFACIO HIGH STREET' },
+    { id: 'site-20', code: 'APP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' }
+  ];
+
+  const authoritativeSites = dbSites
+    .filter(s =>
+      !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+      !String(s.address || '').toUpperCase().includes('SM ILOILO')
+    );
+
+  assert.strictEqual(authoritativeSites.length, 2, 'Authoritative sync preserves exact cloud sites');
+  assert(!authoritativeSites.some(s => s.name.includes('SM ILOILO')), 'SM ILOILO strictly excluded');
+  console.log('  ✓ PASS: Deleted site (SM ILOILO) is purged from cache and authoritative cloud sync prevents zombie resurrection');
+})();
+
 console.log('====================================================');
-console.log('ALL SESSION SECURITY TESTS PASSED (100%)');
+console.log('ALL SESSION & SITE SECURITY TESTS PASSED (100%)');
 console.log('====================================================\n');

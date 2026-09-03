@@ -51,7 +51,15 @@ export function useCatalogAndSites({
       const saved = localStorage.getItem('mdc_sites');
       const parsed = saved ? JSON.parse(saved) : [];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+        const clean = parsed.filter(s =>
+          !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+          !String(s.address || '').toUpperCase().includes('SM ILOILO')
+        );
+        if (clean.length !== parsed.length) {
+          try { localStorage.setItem('mdc_sites', JSON.stringify(clean)); } catch (e) {}
+          dbStorage.setItem('mdc_sites', clean);
+        }
+        return clean.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
       }
       return [];
     } catch {
@@ -63,34 +71,32 @@ export function useCatalogAndSites({
     if (supabase) {
       supabase.from('sites').select('*').then(({ data: dbSites, error }) => {
         if (!error && dbSites && dbSites.length > 0) {
-          setSites(prev => {
-            const map = new Map((prev || []).map(s => [normalizeSiteCode(s.code), s]));
-            dbSites.forEach(s => {
-              const normCode = normalizeSiteCode(s.code);
-              const existing = map.get(normCode);
-              map.set(normCode, {
-                ...(existing || {}),
-                id: s.id || existing?.id,
-                code: normCode,
-                name: s.name || existing?.name,
-                region: s.region || existing?.region || 'Metro Manila',
-                address: s.address || s.full_address || existing?.address,
-                full_address: s.full_address || s.address || existing?.full_address,
-                contact_person: s.contact_person || existing?.contact_person,
-                contact_phone: s.contact_phone || existing?.contact_phone,
-                contact_email: s.contact_email || existing?.contact_email,
-                ship_to: s.ship_to || existing?.ship_to,
-                sold_to: s.sold_to || existing?.sold_to,
-                invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
-                is_dc: s.is_dc ?? existing?.is_dc ?? false,
-                is_active: s.is_active ?? existing?.is_active ?? true
-              });
-            });
-            const merged = Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
-            try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
-            dbStorage.setItem('mdc_sites', merged);
-            return merged;
-          });
+          const authoritative = dbSites
+            .filter(s =>
+              !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+              !String(s.address || '').toUpperCase().includes('SM ILOILO')
+            )
+            .map(s => ({
+              id: s.id,
+              code: normalizeSiteCode(s.code),
+              name: s.name,
+              region: s.region || 'Metro Manila',
+              address: s.address || s.full_address || '',
+              full_address: s.full_address || s.address || '',
+              contact_person: s.contact_person || '',
+              contact_phone: s.contact_phone || '',
+              contact_email: s.contact_email || '',
+              ship_to: s.ship_to || null,
+              sold_to: s.sold_to || null,
+              invoice_prefix: s.invoice_prefix || '',
+              is_dc: s.is_dc ?? false,
+              is_active: s.is_active ?? true
+            }))
+            .sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+
+          setSites(authoritative);
+          try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
+          dbStorage.setItem('mdc_sites', authoritative);
         }
       }).catch(() => {});
     }
@@ -333,39 +339,70 @@ export function useCatalogAndSites({
       if (error) throw error;
 
       if (dbSites && dbSites.length > 0) {
-        setSites(prev => {
-          const map = new Map((prev || []).map(s => [normalizeSiteCode(s.code), s]));
-          dbSites.forEach(s => {
-            const normCode = normalizeSiteCode(s.code);
-            const existing = map.get(normCode);
-            map.set(normCode, {
-              ...(existing || {}),
-              id: s.id || existing?.id,
-              code: normCode,
-              name: s.name || existing?.name,
-              region: s.region || existing?.region || 'Metro Manila',
-              address: s.address || s.full_address || existing?.address,
-              full_address: s.full_address || s.address || existing?.full_address,
-              contact_person: s.contact_person || existing?.contact_person,
-              contact_phone: s.contact_phone || existing?.contact_phone,
-              contact_email: s.contact_email || existing?.contact_email,
-              ship_to: s.ship_to || existing?.ship_to,
-              sold_to: s.sold_to || existing?.sold_to,
-              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
-              is_dc: s.is_dc ?? existing?.is_dc ?? false,
-              is_active: s.is_active ?? existing?.is_active ?? true
-            });
-          });
-          const merged = Array.from(map.values()).sort((a, b) => (a.code || '').localeCompare(b.code || ''));
-          try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
-          dbStorage.setItem('mdc_sites', merged);
-          return merged;
-        });
-        showToast(`Successfully refreshed ${dbSites.length} sites from cloud database!`, 'success');
+        const authoritative = dbSites
+          .filter(s =>
+            !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+            !String(s.address || '').toUpperCase().includes('SM ILOILO')
+          )
+          .map(s => ({
+            id: s.id,
+            code: normalizeSiteCode(s.code),
+            name: s.name,
+            region: s.region || 'Metro Manila',
+            address: s.address || s.full_address || '',
+            full_address: s.full_address || s.address || '',
+            contact_person: s.contact_person || '',
+            contact_phone: s.contact_phone || '',
+            contact_email: s.contact_email || '',
+            ship_to: s.ship_to || null,
+            sold_to: s.sold_to || null,
+            invoice_prefix: s.invoice_prefix || '',
+            is_dc: s.is_dc ?? false,
+            is_active: s.is_active ?? true
+          }))
+          .sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+
+        setSites(authoritative);
+        try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
+        dbStorage.setItem('mdc_sites', authoritative);
+        showToast(`Successfully refreshed ${authoritative.length} sites from cloud database!`, 'success');
       }
     } catch (err) {
       console.warn('Supabase site fetch error:', err);
     }
+  };
+
+  const deleteSite = async (siteId, siteCode) => {
+    const normCode = normalizeSiteCode(siteCode);
+    const target = sites.find(s => s.id === siteId || normalizeSiteCode(s.code) === normCode);
+    if (!target) return { success: false, error: 'Site not found' };
+
+    if (target.is_dc) {
+      showToast('Distribution Center (DC) site cannot be deleted', 'error');
+      return { success: false, error: 'Cannot delete DC' };
+    }
+
+    const next = sites.filter(s => s.id !== siteId && normalizeSiteCode(s.code) !== normCode);
+    setSites(next);
+    try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
+    dbStorage.setItem('mdc_sites', next);
+
+    if (supabase) {
+      try {
+        if (isUUID(siteId)) {
+          await supabase.from('sites').delete().eq('id', siteId);
+        } else if (normCode) {
+          await supabase.from('sites').delete().ilike('code', normCode);
+        }
+        if (broadcastCloudEvent) broadcastCloudEvent('SITE_DELETED', { code: normCode, id: siteId });
+      } catch (e) {
+        console.warn('Supabase site delete error:', e);
+      }
+    } else {
+      if (broadcastCloudEvent) broadcastCloudEvent('SITE_DELETED', { code: normCode, id: siteId });
+    }
+    showToast(`Deleted site ${target.name} (${target.code})`, 'success');
+    return { success: true };
   };
 
   const saveSupervisorSettings = (newSettings) => {
@@ -402,6 +439,7 @@ export function useCatalogAndSites({
     savePart,
     deletePart,
     saveSite,
+    deleteSite,
     refreshSitesFromCloud,
     applyPmgDirectoryToSites
   };
