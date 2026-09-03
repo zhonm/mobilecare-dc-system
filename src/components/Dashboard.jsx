@@ -18,16 +18,12 @@ import {
   Clock,
   CheckCircle2,
   Package,
-  MapPin,
   BarChart3,
-  SlidersHorizontal,
   Layers,
   Sparkles,
   Smartphone,
-  ChevronDown,
   FileSpreadsheet,
-  Download,
-  FileText
+  Download
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -77,8 +73,6 @@ export default function Dashboard() {
     shipments = [],
     parts = [],
     sites = [],
-    forecastItems = [],
-    repairUsageRecords = [],
     currentUser,
     activePeriod,
     setActiveTab,
@@ -162,7 +156,7 @@ export default function Dashboard() {
   // ─────────────────────────────────────────────────────────────────────────
   // IPHONE MASTERLIST SCANNED QUERIES (8,295 REPAIRS, 415 SKUs, 28 HUBS)
   // ─────────────────────────────────────────────────────────────────────────
-  const masterSummary = useMemo(() => getMasterlistSummary(), [repairUsageRecords]);
+  const masterSummary = useMemo(() => getMasterlistSummary(), []);
 
   const masterPartsReport = useMemo(() => {
     return getMasterlistParts({
@@ -171,14 +165,14 @@ export default function Dashboard() {
       limit: reportLimit,
       sortBy: reportSortBy
     });
-  }, [reportCategory, reportSearch, reportLimit, reportSortBy, repairUsageRecords]);
+  }, [reportCategory, reportSearch, reportLimit, reportSortBy]);
 
   const masterSitesReport = useMemo(() => {
     return getMasterlistSites({
       search: reportSearch,
       limit: reportLimit
     });
-  }, [reportSearch, reportLimit, repairUsageRecords]);
+  }, [reportSearch, reportLimit]);
 
   const sitePartsReport = useMemo(() => {
     return getMasterlistPartsForSite(selectedSiteName, {
@@ -187,7 +181,7 @@ export default function Dashboard() {
       limit: reportLimit,
       sortBy: reportSortBy
     });
-  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy, repairUsageRecords]);
+  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy]);
 
   // Category Distribution for Donut Chart
   const categoryChartData = useMemo(() => {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { safeUUID, isUUID, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { safeUUID, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 
 export function useIntakeRecords({

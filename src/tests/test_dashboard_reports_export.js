@@ -156,6 +156,7 @@ async function runTests() {
     });
 
     assert.ok(workbook, 'Full package workbook should be created');
+    assert.ok(buffer && buffer.byteLength > 0, 'Full package buffer should have positive byte length');
     assert.ok(filename.includes('Dashboard_Master_Intelligence_Package'), `Filename should reflect master package: ${filename}`);
 
     assert.ok(workbook.getWorksheet('Executive Overview'), 'Sheet 1: Executive Overview must exist');

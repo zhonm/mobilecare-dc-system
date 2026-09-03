@@ -233,9 +233,12 @@ export default function ScanOutPacking() {
     };
 
     sendPresence(true);
+    // Low-egress 60s heartbeat (only when tab is actively visible)
     const heartbeatInterval = setInterval(() => {
-      sendPresence(true);
-    }, 15000);
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        sendPresence(true);
+      }
+    }, 60000);
 
     return () => {
       clearInterval(heartbeatInterval);
@@ -479,12 +482,6 @@ export default function ScanOutPacking() {
 
   const executePackScan = () => {
     packUnitBySerial(serialInput);
-  };
-
-  const handleDirectPackUnit = (unit) => {
-    if (unit?.serial_number) {
-      packUnitBySerial(unit.serial_number);
-    }
   };
 
   // State for upgraded Available Stock Verification UI

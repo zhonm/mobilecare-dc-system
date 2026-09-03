@@ -754,11 +754,11 @@ export default function ForecastingReports() {
       limit: accuracyLimit,
       sortBy: 'units'
     });
-  }, [accuracyAuditSite, accuracyCategory, accuracySearch, accuracyLimit, activeDatasetItems, forecastItems]);
+  }, [accuracyAuditSite, accuracyCategory, accuracySearch, accuracyLimit]);
 
   const masterSitesList = useMemo(() => {
     return getMasterlistSites().all;
-  }, [activeDatasetItems, forecastItems]);
+  }, []);
 
   // ── Pagination Calculation for Ledger ───────────────────────────────────────
   const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;

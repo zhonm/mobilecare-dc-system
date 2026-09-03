@@ -39,7 +39,6 @@ export default function AllocationMatrix() {
     forecastItems,
     sites,
     parts,
-    selectedCategory,
     selectedCategories,
     isPartMatchingCategoryFilter,
     updateSiteAllocation,

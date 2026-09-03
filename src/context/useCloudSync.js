@@ -138,7 +138,7 @@ export function useCloudSync({
     broadcastCloudEvent('PACKING_PRESENCE', payload);
   }, [currentUser, broadcastCloudEvent]);
 
-  // Prune stale packing station sessions (> 40s since last heartbeat)
+  // Prune stale packing station sessions (> 120s since last heartbeat)
   useEffect(() => {
     const pruneTimer = setInterval(() => {
       const now = Date.now();
@@ -146,7 +146,7 @@ export function useCloudSync({
         let changed = false;
         const next = {};
         for (const [uid, st] of Object.entries(prev)) {
-          if (now - (st.timestamp || 0) < 40000 && st.isPacking) {
+          if (now - (st.timestamp || 0) < 120000 && st.isPacking) {
             next[uid] = st;
           } else {
             changed = true;
@@ -154,7 +154,7 @@ export function useCloudSync({
         }
         return changed ? next : prev;
       });
-    }, 10000);
+    }, 30000);
     return () => clearInterval(pruneTimer);
   }, []);
 
@@ -267,14 +267,36 @@ export function useCloudSync({
       ] = await Promise.all([
         shouldFetch('profiles') ? supabase.from('profiles').select('*').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
-        shouldFetch('saved_records') ? supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(500) : Promise.resolve({ data: null }),
+        shouldFetch('saved_records') ? (async () => {
+          const SYSTEM_DOC_IDS = [
+            LIVE_MASTER_RECORD_ID,
+            'master_users_registry',
+            'master_deletion_audit_logs_registry',
+            'master_deleted_shipments_registry',
+            'master_deleted_intakes_registry',
+            'master_shipments_registry',
+            'live_master_dc_inventory'
+          ];
+          const [resSystem, resPeriods] = await Promise.all([
+            supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
+            supabase.from('saved_records')
+              .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
+              .order('created_at', { ascending: false })
+              .limit(50)
+          ]);
+          const systemRows = resSystem.data || [];
+          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id));
+          return { data: [...systemRows, ...periodRows] };
+        })() : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
-        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*, parts:part_id(*), sites:current_site_id(*)').limit(2000) : Promise.resolve({ data: null }),
+        // Egress optimization: fetch unit attributes directly; local cache joins parts and sites in memory
+        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*').limit(2000) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
-        shouldFetch('shipments') ? supabase.from('shipments').select('*, shipment_items(*, parts:part_id(*)), sites:site_id(*)').order('created_at', { ascending: false }).limit(200) : Promise.resolve({ data: null }),
-        shouldFetch('parts_requests') ? supabase.from('parts_requests').select('*, parts:part_id(*), sites:site_id(*)').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: null })
+        // Egress optimization: fetch shipments & items directly; local cache joins parts and sites in memory
+        shouldFetch('shipments') ? supabase.from('shipments').select('*, shipment_items(*)').order('created_at', { ascending: false }).limit(200) : Promise.resolve({ data: null }),
+        shouldFetch('parts_requests') ? supabase.from('parts_requests').select('*').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: null })
       ]);
 
       const dbProfiles = resProfiles.data;
@@ -1719,7 +1741,19 @@ export function useCloudSync({
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
               }
             }
-            triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload?.payload?.table || null);
+
+            // Egress Defense: Only trigger full/selective HTTP hydration if an unhandled table was explicitly targeted.
+            // Events that are already applied in-memory (presences, pack updates, model changes) do not re-query the cloud DB.
+            const isAlreadyHandledLocally = [
+              'PACKING_PRESENCE', 'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED',
+              'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
+              'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
+              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'
+            ].includes(bType);
+
+            if (!isAlreadyHandledLocally && payload?.payload?.table) {
+              triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload.payload.table);
+            }
           });
 
         // Only subscribe to low-frequency, event-driven tables for postgres_changes.
@@ -1808,23 +1842,23 @@ export function useCloudSync({
     }
   }, [currentUser?.id, autoRefreshData]);
 
-  // 2. Auto-Refresh on Page Navigation (Smart cache TTL: only re-fetch if > 3 mins since last sync)
+  // 2. Auto-Refresh on Page Navigation (Smart cache TTL: 15 mins since last sync)
   useEffect(() => {
     if (currentUser?.id && activeTab) {
       const now = Date.now();
-      if (now - lastRefreshTimeRef.current >= 180000) {
+      if (now - lastRefreshTimeRef.current >= 900000) {
         autoRefreshData({ silent: true, force: false, reason: `Page visit: ${activeTab}` });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, currentUser?.id]);
 
-  // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection (Throttled to 3 mins)
+  // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection (Throttled to 15 mins)
   useEffect(() => {
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible' && currentUser?.id) {
         const now = Date.now();
-        if (now - lastRefreshTimeRef.current >= 180000) {
+        if (now - lastRefreshTimeRef.current >= 900000) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
         }
       }
@@ -1849,19 +1883,21 @@ export function useCloudSync({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id, processOfflineSyncQueue]);
 
-  // 4. Periodic background safety-net heartbeat revalidation (every 5 mins)
+  // 4. Periodic background safety-net heartbeat revalidation (every 10 mins, only if offline or disconnected)
   useEffect(() => {
     if (!currentUser?.id) return;
-    const intervalMs = 300000; // 5 minutes
+    const intervalMs = 600000; // 10 minutes
     const heartbeatInterval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        processOfflineSyncQueue();
-        autoRefreshData({ silent: true, force: false, reason: 'Background safety heartbeat' });
+        const hasQueuedItems = processOfflineSyncQueue();
+        if (hasQueuedItems || !realtimeConnected) {
+          autoRefreshData({ silent: true, force: false, reason: 'Background safety heartbeat' });
+        }
       }
     }, intervalMs);
     return () => clearInterval(heartbeatInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, processOfflineSyncQueue]);
+  }, [currentUser?.id, processOfflineSyncQueue, realtimeConnected]);
 
   // Sync All Data to Supabase Cloud
   const syncAllDataToCloud = async (overrideData = null) => {

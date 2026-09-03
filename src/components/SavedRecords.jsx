@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../supabase/client';
 import SaveRecordModal from './SaveRecordModal';
 import {
   BookmarkCheck,
@@ -48,6 +49,7 @@ export default function SavedRecords() {
 
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [recordToView, setRecordToView] = useState(null);
+  const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
   const [viewTab, setViewTab] = useState('forecast'); // 'forecast' | 'allocation'
   const [recordToRestore, setRecordToRestore] = useState(null);
   const [restoreForecast, setRestoreForecast] = useState(true);
@@ -117,10 +119,54 @@ export default function SavedRecords() {
   const totalSavedCount = validSavedRecords.length;
   const latestRecord = validSavedRecords[0];
 
-  const handleOpenRestoreModal = (record) => {
-    setRecordToRestore(record);
-    const hasForecast = record.snapshot_data?.forecastItems?.length > 0;
-    const hasAlloc = record.snapshot_data?.allocations?.length > 0;
+  const handleOpenInspect = async (record) => {
+    if (!record) return;
+    setRecordToView(record);
+    if (record.snapshot_data && Object.keys(record.snapshot_data).length > 0) {
+      setViewTab(record.snapshot_data?.forecastItems?.length > 0 ? 'forecast' : 'allocation');
+    } else {
+      setIsLoadingSnapshot(true);
+      try {
+        if (supabase && record.id) {
+          const { data } = await supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', record.id)
+            .maybeSingle();
+          if (data?.snapshot_data) {
+            const enriched = { ...record, snapshot_data: data.snapshot_data };
+            setRecordToView(enriched);
+            setViewTab(data.snapshot_data?.forecastItems?.length > 0 ? 'forecast' : 'allocation');
+          }
+        }
+      } catch (e) {
+        console.warn('Inspect lazy load error:', e);
+      } finally {
+        setIsLoadingSnapshot(false);
+      }
+    }
+  };
+
+  const handleOpenRestoreModal = async (record) => {
+    if (!record) return;
+    let enriched = record;
+    if (!record.snapshot_data || Object.keys(record.snapshot_data).length === 0) {
+      if (supabase && record.id) {
+        try {
+          const { data } = await supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', record.id)
+            .maybeSingle();
+          if (data?.snapshot_data) {
+            enriched = { ...record, snapshot_data: data.snapshot_data };
+          }
+        } catch (e) {}
+      }
+    }
+    setRecordToRestore(enriched);
+    const hasForecast = enriched.snapshot_data?.forecastItems?.length > 0;
+    const hasAlloc = enriched.snapshot_data?.allocations?.length > 0;
     setRestoreForecast(hasForecast);
     setRestoreAllocation(hasAlloc);
   };
@@ -443,8 +489,8 @@ export default function SavedRecords() {
                 {filteredRecords.map(record => {
                   const snap = record.snapshot_data || {};
                   const summary = snap.summary || {};
-                  const forecastCount = snap.forecastItems?.length || 0;
-                  const allocCount = snap.allocations?.length || 0;
+                  const forecastCount = snap.forecastItems?.length ?? (record.record_type === 'both' || record.record_type === 'forecast' ? 'Archived' : 0);
+                  const allocCount = snap.allocations?.length ?? (record.record_type === 'both' || record.record_type === 'allocation' ? 'Archived' : 0);
                   const monthLabel = MONTH_NAMES[record.period_month - 1] || 'Aug';
 
                   return (
@@ -558,10 +604,7 @@ export default function SavedRecords() {
                           {/* Inspect Snapshot */}
                           <button
                             className="btn btn-sm btn-secondary"
-                            onClick={() => {
-                              setRecordToView(record);
-                              setViewTab(record.snapshot_data?.forecastItems?.length > 0 ? 'forecast' : 'allocation');
-                            }}
+                            onClick={() => handleOpenInspect(record)}
                             title="Inspect archived snapshot matrix"
                             style={{ fontSize: '11px', padding: '4px 8px' }}
                           >
@@ -818,95 +861,105 @@ export default function SavedRecords() {
               </button>
             </div>
 
-            {/* Modal Tabs */}
-            <div style={{ background: '#f8fafc', padding: '8px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '10px' }}>
-              {recordToView.snapshot_data?.forecastItems?.length > 0 && (
-                <button
-                  className={`btn btn-sm ${viewTab === 'forecast' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setViewTab('forecast')}
-                >
-                  <TrendingUp size={13} />
-                  <span>Forecast Snapshot ({recordToView.snapshot_data.forecastItems.length} parts)</span>
-                </button>
-              )}
-              {recordToView.snapshot_data?.allocations?.length > 0 && (
-                <button
-                  className={`btn btn-sm ${viewTab === 'allocation' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setViewTab('allocation')}
-                >
-                  <Split size={13} />
-                  <span>Allocation Snapshot ({recordToView.snapshot_data.allocations.length} parts)</span>
-                </button>
-              )}
-            </div>
-
-            <div className="modal-body" style={{ padding: '16px 24px', overflowY: 'auto' }}>
-              {/* Forecast Tab */}
-              {viewTab === 'forecast' && recordToView.snapshot_data?.forecastItems && (
-                <div className="table-container">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Part Number</th>
-                        <th>Description</th>
-                        <th style={{ textAlign: 'center' }}>Computed Forecast</th>
-                        <th style={{ textAlign: 'center' }}>Admin Override</th>
-                        <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recordToView.snapshot_data.forecastItems.map(item => (
-                        <tr key={item.part_id || item.part_number}>
-                          <td className="font-mono"><strong>{item.part_number}</strong></td>
-                          <td>{item.description}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.computed_forecast || 0}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
-                            {item.admin_override !== null && item.admin_override !== undefined ? item.admin_override : '—'}
-                          </td>
-                          <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', background: '#f0fdf4', color: '#15803d' }}>
-                            {item.recommended_order || item.final_forecast || item.computed_forecast || 0}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            {isLoadingSnapshot ? (
+              <div style={{ padding: '60px 24px', textAlign: 'center' }}>
+                <RefreshCw size={28} className="spin" style={{ color: 'var(--primary-color)', marginBottom: '12px' }} />
+                <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>Loading Archived Snapshot Data...</div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Retrieving demand forecast and allocation metrics from cloud storage</div>
+              </div>
+            ) : (
+              <>
+                {/* Modal Tabs */}
+                <div style={{ background: '#f8fafc', padding: '8px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '10px' }}>
+                  {recordToView.snapshot_data?.forecastItems?.length > 0 && (
+                    <button
+                      className={`btn btn-sm ${viewTab === 'forecast' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setViewTab('forecast')}
+                    >
+                      <TrendingUp size={13} />
+                      <span>Forecast Snapshot ({recordToView.snapshot_data.forecastItems.length} parts)</span>
+                    </button>
+                  )}
+                  {recordToView.snapshot_data?.allocations?.length > 0 && (
+                    <button
+                      className={`btn btn-sm ${viewTab === 'allocation' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setViewTab('allocation')}
+                    >
+                      <Split size={13} />
+                      <span>Allocation Snapshot ({recordToView.snapshot_data.allocations.length} parts)</span>
+                    </button>
+                  )}
                 </div>
-              )}
 
-              {/* Allocation Tab */}
-              {viewTab === 'allocation' && recordToView.snapshot_data?.allocations && (
-                <div className="table-container">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Part Number</th>
-                        <th>Description</th>
-                        <th style={{ textAlign: 'center' }}>Total Alloc</th>
-                        <th style={{ textAlign: 'center' }}>W1</th>
-                        <th style={{ textAlign: 'center' }}>W2</th>
-                        <th style={{ textAlign: 'center' }}>W3</th>
-                        <th style={{ textAlign: 'center' }}>W4</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recordToView.snapshot_data.allocations.map(item => (
-                        <tr key={item.part_id || item.part_number}>
-                          <td className="font-mono"><strong>{item.part_number}</strong></td>
-                          <td>{item.description}</td>
-                          <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0369a1' }}>
-                            {item.total_allocated_qty || 0}
-                          </td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty || 0}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty || 0}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty || 0}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty || 0}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="modal-body" style={{ padding: '16px 24px', overflowY: 'auto' }}>
+                  {/* Forecast Tab */}
+                  {viewTab === 'forecast' && recordToView.snapshot_data?.forecastItems && (
+                    <div className="table-container">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Part Number</th>
+                            <th>Description</th>
+                            <th style={{ textAlign: 'center' }}>Computed Forecast</th>
+                            <th style={{ textAlign: 'center' }}>Admin Override</th>
+                            <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recordToView.snapshot_data.forecastItems.map(item => (
+                            <tr key={item.part_id || item.part_number}>
+                              <td className="font-mono"><strong>{item.part_number}</strong></td>
+                              <td>{item.description}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.computed_forecast || 0}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
+                                {item.admin_override !== null && item.admin_override !== undefined ? item.admin_override : '—'}
+                              </td>
+                              <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', background: '#f0fdf4', color: '#15803d' }}>
+                                {item.recommended_order || item.final_forecast || item.computed_forecast || 0}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Allocation Tab */}
+                  {viewTab === 'allocation' && recordToView.snapshot_data?.allocations && (
+                    <div className="table-container">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Part Number</th>
+                            <th>Description</th>
+                            <th style={{ textAlign: 'center' }}>Total Qty</th>
+                            <th style={{ textAlign: 'center' }}>W1</th>
+                            <th style={{ textAlign: 'center' }}>W2</th>
+                            <th style={{ textAlign: 'center' }}>W3</th>
+                            <th style={{ textAlign: 'center' }}>W4</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recordToView.snapshot_data.allocations.map(item => (
+                            <tr key={item.part_id || item.part_number}>
+                              <td className="font-mono"><strong>{item.part_number}</strong></td>
+                              <td>{item.description}</td>
+                              <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0369a1' }}>
+                                {item.total_allocated_qty || 0}
+                              </td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty || 0}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty || 0}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty || 0}</td>
+                              <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty || 0}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
 
             <div className="modal-footer">
               <button

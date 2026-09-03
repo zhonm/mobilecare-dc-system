@@ -22,12 +22,10 @@ import {
   Layers,
   BarChart3,
   TrendingUp,
-  Clock,
   UserCheck,
   ChevronLeft,
   ChevronRight,
-  Printer,
-  Sparkles
+  Printer
 } from 'lucide-react';
 
 export default function AuditTrail() {

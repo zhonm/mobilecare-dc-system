@@ -311,7 +311,6 @@ export function getPerSiteForecastVsActual(siteIdentifier, { category = 'ALL', s
     let remark = 'Accurate';
     if (variance > 0) remark = 'Under Forecast';
     else if (variance < 0) remark = 'Over Forecast';
-    else remark = 'Accurate';
 
     if (remark === 'Accurate' || Math.abs(variance) <= 1) {
       accurateCount++;

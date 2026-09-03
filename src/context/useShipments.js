@@ -40,7 +40,6 @@ export function useShipments({
               if (!s) return false;
               const sId = String(s.id || '').trim().toUpperCase();
               const sRef = String(s.invoice_ref || s.invoiceRef || '').trim().toUpperCase();
-              const sNum = String(s.shipment_number || '').trim().toUpperCase();
               const sNorm = sRef.replace(/[^A-Z0-9]/g, '');
 
               // Explicitly filter out accidental test shipments

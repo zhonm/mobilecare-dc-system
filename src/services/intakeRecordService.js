@@ -1,6 +1,6 @@
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
-import { safeUUID, isUUID } from '../utils/appContextHelpers.js';
+import { safeUUID } from '../utils/appContextHelpers.js';
 import { unmarkDeletedIntakeIds, unmarkDeletedSerials, registerDeletedIntakeId } from './deletionRegistryService.js';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config.js';
 
