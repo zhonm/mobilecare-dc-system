@@ -119,11 +119,11 @@ export default function CommandPalette({ isOpen, onClose }) {
 
     if (canAccess('scan-in')) {
       quickActions.push({
-        id: 'action-f1',
-        title: 'Receive Scan-In Terminal (F1)',
+        id: 'action-scan-in',
+        title: 'Receive Scan-In Terminal',
         subtitle: 'Quick switch to inbound barcode receiving',
         icon: Barcode,
-        keywords: 'receive scan barcode f1 inbound',
+        keywords: 'receive scan barcode inbound intake',
         action: () => {
           setActiveTab('scan-in');
           handleClose();
@@ -133,11 +133,11 @@ export default function CommandPalette({ isOpen, onClose }) {
 
     if (canAccess('scan-out')) {
       quickActions.push({
-        id: 'action-f2',
-        title: 'Pack Scan-Out Terminal (F2)',
+        id: 'action-scan-out',
+        title: 'Pack Scan-Out Terminal',
         subtitle: 'Quick switch to outbound branch packing list generator',
         icon: PackageCheck,
-        keywords: 'pack scan out packing box shipment f2',
+        keywords: 'pack scan out packing box shipment manifest',
         action: () => {
           setActiveTab('scan-out');
           handleClose();

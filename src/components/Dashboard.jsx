@@ -24,7 +24,10 @@ import {
   Layers,
   Sparkles,
   Smartphone,
-  ChevronDown
+  ChevronDown,
+  FileSpreadsheet,
+  Download,
+  FileText
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -40,6 +43,12 @@ import {
   CartesianGrid
 } from 'recharts';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
+import {
+  exportDashboardReportToExcel,
+  exportDashboardReportToPDF,
+  exportDcInventoryToExcel,
+  exportDcInventoryToPDF
+} from '../utils/dashboardReportExporter';
 import {
   getMasterlistSummary,
   getMasterlistParts,
@@ -76,7 +85,8 @@ export default function Dashboard() {
     isAutoRefreshing,
     autoRefreshData,
     activePackDraft,
-    supervisorSettings
+    supervisorSettings,
+    showToast
   } = useApp();
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -124,7 +134,7 @@ export default function Dashboard() {
                    u.site_code === 'DC' || 
                    (!u.current_site_id && !u.site_code) ||
                    (sites.find(s => s.id === u.current_site_id || s.code === u.current_site_id)?.is_dc ?? false);
-      return (u.status === 'in_stock' || !u.status) && isDc;
+      return isDc && (u.status === 'in_stock' || !u.status);
     });
   }, [inventoryUnits, packedSerialsSet, sites]);
 
@@ -270,6 +280,117 @@ export default function Dashboard() {
 
   const recentShipments = (shipments || []).slice(0, 6);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // DASHBOARD REPORT EXPORT HANDLERS (XLSX & PDF)
+  // ─────────────────────────────────────────────────────────────────────────
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  const handleExportExcel = async (mode = 'current') => {
+    try {
+      setIsExportingExcel(true);
+      const tabTitle =
+        reportTab === 'top-parts'
+          ? 'Top iPhone Parts'
+          : reportTab === 'top-sites'
+          ? 'Service Hubs Network'
+          : `Branch Parts (${selectedSiteName})`;
+
+      const currentPeriodLabel = typeof activePeriod === 'string'
+        ? activePeriod
+        : (activePeriod?.label || 'September 2026');
+
+      await exportDashboardReportToExcel({
+        activeTab: reportTab,
+        masterPartsReport,
+        masterSitesReport,
+        sitePartsReport,
+        masterSummary,
+        selectedSiteName,
+        reportCategory,
+        reportSearch,
+        periodLabel: currentPeriodLabel,
+        exportMode: mode
+      });
+
+      showToast?.(
+        mode === 'all'
+          ? 'Complete Masterlist Intelligence Package exported to Excel (.xlsx)'
+          : `${tabTitle} exported to Excel (.xlsx)`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Error exporting dashboard report to Excel:', err);
+      showToast?.('Failed to export Excel report: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
+  const handleExportPDF = (mode = 'current') => {
+    try {
+      setIsExportingPDF(true);
+      const tabTitle =
+        reportTab === 'top-parts'
+          ? 'Top iPhone Parts'
+          : reportTab === 'top-sites'
+          ? 'Service Hubs Network'
+          : `Branch Parts (${selectedSiteName})`;
+
+      const currentPeriodLabel = typeof activePeriod === 'string'
+        ? activePeriod
+        : (activePeriod?.label || 'September 2026');
+
+      exportDashboardReportToPDF({
+        activeTab: reportTab,
+        masterPartsReport,
+        masterSitesReport,
+        sitePartsReport,
+        masterSummary,
+        selectedSiteName,
+        reportCategory,
+        reportSearch,
+        periodLabel: currentPeriodLabel,
+        exportMode: mode,
+        supervisorSettings
+      });
+
+      showToast?.(`${tabTitle} exported to Corporate PDF`, 'success');
+    } catch (err) {
+      console.error('Error generating dashboard PDF report:', err);
+      showToast?.('Failed to generate PDF report: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  const handleExportDcInventoryExcel = async () => {
+    try {
+      await exportDcInventoryToExcel(groupedInventory, {
+        filter: activeSnapshotFilter,
+        search: tableSearch
+      });
+      showToast?.('DC Warehouse Stock Inventory exported to Excel (.xlsx)', 'success');
+    } catch (err) {
+      console.error('Error exporting DC Inventory:', err);
+      showToast?.('Failed to export DC inventory: ' + (err.message || 'Unknown error'), 'error');
+    }
+  };
+
+  const handleExportDcInventoryPDF = () => {
+    try {
+      exportDcInventoryToPDF(groupedInventory, {
+        filter: activeSnapshotFilter,
+        search: tableSearch,
+        supervisorSettings
+      });
+      showToast?.('DC Warehouse Stock Inventory exported to PDF', 'success');
+    } catch (err) {
+      console.error('Error exporting DC Inventory PDF:', err);
+      showToast?.('Failed to generate DC inventory PDF: ' + (err.message || 'Unknown error'), 'error');
+    }
+  };
+
   return (
     <div className="dashboard-view" style={{ animation: 'fadeIn 0.2s ease-out', display: 'flex', flexDirection: 'column', gap: '22px' }}>
       
@@ -409,7 +530,7 @@ export default function Dashboard() {
             }}
           >
             <PackageCheck size={14} />
-            <span>Pack Outbound Shipments (F2)</span>
+            <span>Pack Outbound Shipments</span>
           </button>
         </div>
       )}
@@ -777,6 +898,86 @@ export default function Dashboard() {
                   {lim === 'ALL' ? 'All' : lim}
                 </button>
               ))}
+            </div>
+
+            {/* Divider */}
+            <div style={{ width: '1px', height: '22px', background: '#cbd5e1', margin: '0 2px' }} />
+
+            {/* Export Buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleExportExcel('current')}
+                disabled={isExportingExcel}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  color: '#15803d',
+                  borderColor: '#86efac',
+                  background: '#f0fdf4',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: isExportingExcel ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Export active report view to formatted Excel (.xlsx)"
+              >
+                <FileSpreadsheet size={14} />
+                <span>{isExportingExcel ? 'Exporting...' : 'Export XLSX'}</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleExportPDF('current')}
+                disabled={isExportingPDF}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  color: '#0284c7',
+                  borderColor: '#bae6fd',
+                  background: '#f0f9ff',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: isExportingPDF ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                title="Download active report view as Corporate PDF"
+              >
+                <Download size={14} />
+                <span>{isExportingPDF ? 'Generating...' : 'Export PDF'}</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleExportExcel('all')}
+                disabled={isExportingExcel}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  color: '#475569',
+                  borderColor: '#cbd5e1',
+                  background: '#ffffff',
+                  padding: '5px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: isExportingExcel ? 'not-allowed' : 'pointer'
+                }}
+                title="Export Complete Multi-Sheet Masterlist Package (All 415 Parts + 28 Hubs + Summary) to Excel (.xlsx)"
+              >
+                <Layers size={13} />
+                <span>Full Package</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1522,7 +1723,7 @@ export default function Dashboard() {
               <Barcode size={22} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Receive Scan-In (F1)</div>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Receive Scan-In</div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Barcode intake & spreadsheet manifest</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
@@ -1545,7 +1746,7 @@ export default function Dashboard() {
               <PackageCheck size={22} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Pack Scan-Out (F2)</div>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Pack Scan-Out</div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Generate outbound shipments & PDF</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
@@ -1624,7 +1825,7 @@ export default function Dashboard() {
               Scan serialized parts in Pack Scan-Out to generate delivery manifests for service branches.
             </p>
             <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-out')}>
-              Open Pack Scan-Out (F2)
+              Open Pack Scan-Out
             </button>
           </div>
         ) : (
@@ -1745,6 +1946,54 @@ export default function Dashboard() {
                 }}
               />
             </div>
+
+            <div style={{ width: '1px', height: '20px', background: '#cbd5e1', margin: '0 2px' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportDcInventoryExcel}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  color: '#15803d',
+                  borderColor: '#86efac',
+                  background: '#f0fdf4',
+                  padding: '4px 8px',
+                  borderRadius: '5px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                title="Export DC In-Stock Snapshot to Excel (.xlsx)"
+              >
+                <FileSpreadsheet size={13} />
+                <span>XLSX</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportDcInventoryPDF}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  color: '#0284c7',
+                  borderColor: '#bae6fd',
+                  background: '#f0f9ff',
+                  padding: '4px 8px',
+                  borderRadius: '5px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                title="Export DC In-Stock Snapshot to PDF"
+              >
+                <Download size={13} />
+                <span>PDF</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1756,7 +2005,7 @@ export default function Dashboard() {
               Scan barcodes or import parts manifest to register inventory into DC stock.
             </p>
             <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-in')}>
-              Receive Parts (F1)
+              Receive Parts
             </button>
           </div>
         ) : (

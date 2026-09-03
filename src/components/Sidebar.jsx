@@ -58,8 +58,8 @@ export default function Sidebar() {
 
     // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)
     { id: 'request-parts', label: 'Parts Requests', icon: Inbox, badge: pendingRequestsCount, section: 'Operations & Logistics' },
-    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, hotkey: 'F1', section: 'Operations & Logistics' },
-    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Operations & Logistics' },
+    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, section: 'Operations & Logistics' },
+    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, badge: pendingShipmentsCount, section: 'Operations & Logistics' },
     { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
 
     // 3. Reports & Traceability

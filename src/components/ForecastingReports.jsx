@@ -20,6 +20,7 @@ import {
   IPHONE_CATEGORIES,
   getCategoryBadge
 } from '../utils/rawMasterlistScanner';
+import { getPartCategory } from '../utils/categoryFilter';
 import {
   BarChart,
   Bar,
@@ -195,6 +196,8 @@ export default function ForecastingReports() {
     sites,
     parts,
     activePeriod,
+    selectedCategories,
+    isPartMatchingCategoryFilter,
     showToast,
     clearAllData,
     forecastingModel,
@@ -354,12 +357,10 @@ export default function ForecastingReports() {
     return activeDatasetItems.filter(item => {
       // Category filter
       if (categoryFilter !== 'ALL') {
-        const desc = (item.description || '').toLowerCase();
-        const cat = (item.category_id || '').toLowerCase();
-        if (categoryFilter === 'BATTERY' && !desc.includes('battery') && cat !== 'cat-battery') return false;
-        if (categoryFilter === 'DISPLAY' && !desc.includes('display') && cat !== 'cat-display') return false;
-        if (categoryFilter === 'CAMERA' && !desc.includes('camera') && cat !== 'cat-camera') return false;
-        if (categoryFilter === 'BACK_GLASS' && !desc.includes('glass') && !desc.includes('back') && cat !== 'cat-backglass') return false;
+        const itemCat = getPartCategory(item);
+        if (categoryFilter !== itemCat) return false;
+      } else if (isPartMatchingCategoryFilter && selectedCategories) {
+        if (!isPartMatchingCategoryFilter(item, selectedCategories)) return false;
       }
 
       // iPhone Model filter
@@ -384,7 +385,7 @@ export default function ForecastingReports() {
 
       return true;
     });
-  }, [activeDatasetItems, categoryFilter, modelFilter, searchQuery]);
+  }, [activeDatasetItems, categoryFilter, selectedCategories, isPartMatchingCategoryFilter, modelFilter, searchQuery]);
 
   // ── Multi-Dimensional Analytics Computations ───────────────────────────────
   const analytics = useMemo(() => {
@@ -1079,8 +1080,9 @@ export default function ForecastingReports() {
           {/* Commodity Category Filters */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Commodity:</span>
-            {['ALL', 'BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS'].map(cat => {
+            {['ALL', 'BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(cat => {
               const isActive = categoryFilter === cat;
+              const label = cat === 'MID_REAR' ? 'MID/REAR' : cat.replace('_', ' ');
               return (
                 <button
                   key={cat}
@@ -1097,7 +1099,7 @@ export default function ForecastingReports() {
                     cursor: 'pointer'
                   }}
                 >
-                  {cat.replace('_', ' ')}
+                  {label}
                 </button>
               );
             })}

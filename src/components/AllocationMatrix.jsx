@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
 import { calculateWeeklySplit, generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { CANONICAL_SITE_CODES } from '../constants/config';
 import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
@@ -39,6 +40,8 @@ export default function AllocationMatrix() {
     sites,
     parts,
     selectedCategory,
+    selectedCategories,
+    isPartMatchingCategoryFilter,
     updateSiteAllocation,
     resetPartAllocation,
     setActiveTab,
@@ -109,27 +112,25 @@ export default function AllocationMatrix() {
   const filteredAllocations = useMemo(() => {
     return (effectiveAllocations || []).filter(item => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const catId = (item.category_id || part?.category_id || '').toLowerCase();
-      const desc = (item.description || part?.description || '').toLowerCase();
-      const partNum = (item.part_number || part?.part_number || '').toLowerCase();
+      const combinedItem = { ...item, description: item.description || part?.description, category_id: item.category_id || part?.category_id };
+      const itemCat = getPartCategory(combinedItem);
 
       // Check category
-      const activeCat = localCategory !== 'ALL' ? localCategory : selectedCategory;
-      if (activeCat !== 'ALL') {
-        if (activeCat === 'BATTERY' && !(catId.includes('battery') || desc.includes('battery') || desc.includes('batt'))) return false;
-        if (activeCat === 'DISPLAY' && !(catId.includes('display') || desc.includes('display') || desc.includes('screen'))) return false;
-        if (activeCat === 'CAMERA' && !(catId.includes('camera') || desc.includes('camera') || desc.includes('cam'))) return false;
-        if (activeCat === 'BACK_GLASS' && !(catId.includes('backglass') || desc.includes('back') || desc.includes('rear glass'))) return false;
-        if (activeCat === 'OTHER') {
-          const isDisp = catId.includes('display') || desc.includes('display') || desc.includes('screen');
-          const isBatt = catId.includes('battery') || desc.includes('battery') || desc.includes('batt');
-          if (isDisp || isBatt) return false;
+      if (localCategory !== 'ALL') {
+        if (localCategory === 'OTHER') {
+          if (itemCat === 'DISPLAY' || itemCat === 'BATTERY') return false;
+        } else if (itemCat !== localCategory) {
+          return false;
         }
+      } else if (isPartMatchingCategoryFilter && selectedCategories) {
+        if (!isPartMatchingCategoryFilter(combinedItem, selectedCategories)) return false;
       }
 
       // Check search
       if (tableSearch.trim()) {
         const q = tableSearch.toLowerCase().trim();
+        const partNum = (item.part_number || part?.part_number || '').toLowerCase();
+        const desc = (item.description || part?.description || '').toLowerCase();
         if (!partNum.includes(q) && !desc.includes(q)) {
           return false;
         }
@@ -137,50 +138,29 @@ export default function AllocationMatrix() {
 
       return true;
     });
-  }, [effectiveAllocations, parts, selectedCategory, localCategory, tableSearch]);
+  }, [effectiveAllocations, parts, selectedCategories, isPartMatchingCategoryFilter, localCategory, tableSearch]);
 
   // Counts for category badges
   const totalDisplayCount = useMemo(() => {
-    return (effectiveAllocations || []).filter(item => {
-      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const catId = (item.category_id || part?.category_id || '').toLowerCase();
-      const desc = (item.description || part?.description || '').toLowerCase();
-      return catId.includes('display') || desc.includes('display') || desc.includes('screen');
-    }).length;
-  }, [effectiveAllocations, parts]);
+    return (effectiveAllocations || []).filter(item => getPartCategory(item) === 'DISPLAY').length;
+  }, [effectiveAllocations]);
 
   const totalBatteryCount = useMemo(() => {
-    return (effectiveAllocations || []).filter(item => {
-      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const catId = (item.category_id || part?.category_id || '').toLowerCase();
-      const desc = (item.description || part?.description || '').toLowerCase();
-      const isDisplay = catId.includes('display') || desc.includes('display') || desc.includes('screen');
-      return !isDisplay && (catId.includes('battery') || desc.includes('battery') || desc.includes('batt'));
-    }).length;
-  }, [effectiveAllocations, parts]);
+    return (effectiveAllocations || []).filter(item => getPartCategory(item) === 'BATTERY').length;
+  }, [effectiveAllocations]);
 
   // Split into Displays, Batteries, and Other
   const displayItems = useMemo(() => {
-    return filteredAllocations.filter(item => {
-      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const catId = (item.category_id || part?.category_id || '').toLowerCase();
-      const desc = (item.description || part?.description || '').toLowerCase();
-      return catId.includes('display') || desc.includes('display') || desc.includes('screen');
-    });
-  }, [filteredAllocations, parts]);
+    return filteredAllocations.filter(item => getPartCategory(item) === 'DISPLAY');
+  }, [filteredAllocations]);
 
   const batteryItems = useMemo(() => {
-    return filteredAllocations.filter(item => {
-      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const catId = (item.category_id || part?.category_id || '').toLowerCase();
-      const desc = (item.description || part?.description || '').toLowerCase();
-      return !displayItems.includes(item) && (catId.includes('battery') || desc.includes('battery') || desc.includes('batt'));
-    });
-  }, [filteredAllocations, parts, displayItems]);
+    return filteredAllocations.filter(item => getPartCategory(item) === 'BATTERY');
+  }, [filteredAllocations]);
 
   const otherItems = useMemo(() => {
-    return filteredAllocations.filter(item => !displayItems.includes(item) && !batteryItems.includes(item));
-  }, [filteredAllocations, displayItems, batteryItems]);
+    return filteredAllocations.filter(item => !['DISPLAY', 'BATTERY'].includes(getPartCategory(item)));
+  }, [filteredAllocations]);
 
   // Calculate Group Summaries
   const calculateGroupTotals = useCallback((items, fallbackPrice = 150, rowOffset = 3) => {
@@ -405,6 +385,9 @@ export default function AllocationMatrix() {
     const isZeroWeek = isWeeklyView && rowWeekQty === 0;
     const rowBg = (!isWeeklyView && isOrderRequired) || (isWeeklyView && !isZeroWeek) ? '#ffffff' : '#fef2f2';
 
+    const itemCat = getPartCategory(item);
+    const badgeStyle = getCategoryBadgeStyle(itemCat);
+
     return (
       <tr key={item.part_id || item.part_number} style={{ background: rowBg }}>
         {/* Sticky 1: Commodity Label */}
@@ -415,11 +398,12 @@ export default function AllocationMatrix() {
             fontWeight: 700,
             padding: '2px 6px',
             borderRadius: '4px',
-            background: commodityLabel === 'DISPLAY' ? '#e0f2fe' : commodityLabel === 'BATTERY' ? '#dcfce7' : '#f1f5f9',
-            color: commodityLabel === 'DISPLAY' ? '#0369a1' : commodityLabel === 'BATTERY' ? '#15803d' : '#475569',
+            background: badgeStyle.bg,
+            color: badgeStyle.color,
+            border: `1px solid ${badgeStyle.border}`,
             letterSpacing: '0.02em'
           }}>
-            {commodityLabel}
+            {badgeStyle.label}
           </span>
         </td>
 

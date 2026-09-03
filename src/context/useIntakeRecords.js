@@ -252,24 +252,32 @@ export function useIntakeRecords({
       if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
     }
 
-    showToast(`Saved Dispatched Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+    showToast(`Saved Parts History Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
     return { success: true, record: newRecord };
   };
 
   // Delete a saved intake record
   const deleteIntakeRecord = async (recordId) => {
-    const target = (dcIntakeRecords || []).find(r => r.id === recordId);
-    if (!target) return { success: false, error: 'Record not found' };
+    let target = (dcIntakeRecords || []).find(r => String(r.id).trim().toUpperCase() === String(recordId).trim().toUpperCase() || r.id === recordId);
+    if (!target) {
+      try {
+        const localSaved = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
+        target = localSaved.find(r => String(r.id).trim().toUpperCase() === String(recordId).trim().toUpperCase() || r.id === recordId);
+      } catch (e) {}
+    }
 
     // Authority Rule: Only the user who originally saved the record has permission to delete it
-    if (!canUserDeleteRecord(target, currentUser)) {
+    if (target && !canUserDeleteRecord(target, currentUser)) {
       const creatorName = target.saved_by_name || 'the original creator';
-      showToast(`Permission Denied: Only ${creatorName} can delete this dispatched record.`, 'error');
+      showToast(`Permission Denied: Only ${creatorName} can delete this parts history record.`, 'error');
       return { success: false, error: `Permission Denied: Only ${creatorName} can delete this record.` };
     }
 
     // 1. Register intake ID in deleted registry and remove from batch records
     await registerDeletedIntakeId(recordId);
+    if (target?.record_name && target.record_name !== recordId) {
+      await registerDeletedIntakeId(target.record_name);
+    }
 
     let currentRecords = dcIntakeRecords;
     if (!currentRecords || currentRecords.length === 0) {
@@ -278,7 +286,13 @@ export function useIntakeRecords({
         if (saved) currentRecords = JSON.parse(saved);
       } catch (e) {}
     }
-    const nextRecords = (currentRecords || []).filter(r => r.id !== recordId);
+    const cleanIdUpper = String(recordId).trim().toUpperCase();
+    const targetNameUpper = target?.record_name ? String(target.record_name).trim().toUpperCase() : '';
+    const nextRecords = (currentRecords || []).filter(r => {
+      const rIdUpper = String(r.id || '').trim().toUpperCase();
+      const rNameUpper = String(r.record_name || '').trim().toUpperCase();
+      return rIdUpper !== cleanIdUpper && (targetNameUpper ? rNameUpper !== targetNameUpper : true);
+    });
 
     setDcIntakeRecords(nextRecords);
     try {
@@ -290,7 +304,7 @@ export function useIntakeRecords({
       await logDeletionAudit({
         entityType: 'DC Intake Record',
         entityId: recordId,
-        entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Intake Record ${recordId}`),
+        entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Parts History Record ${recordId}`),
         summary: {
           itemsCount: target?.items?.length || target?.total_units || 0,
           poNumber: target?.po_number || target?.poNumber || 'N/A',
@@ -304,16 +318,35 @@ export function useIntakeRecords({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        if (isUUID(recordId)) {
+        const cleanRecId = String(recordId).trim();
+        const targetRecName = target?.record_name ? String(target.record_name).trim() : '';
+
+        // Delete from dc_intake_records table (by id and record_name)
+        try {
+          const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', cleanRecId);
+          if (delErr) {
+            await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', cleanRecId);
+          }
+        } catch (e) {}
+        if (targetRecName && targetRecName !== cleanRecId) {
           try {
-            const { error: delErr } = await supabase.from('dc_intake_records').delete().eq('id', recordId);
-            if (delErr) {
-              await supabase.from('dc_intake_records').update({ notes: '__DELETED__', items: [], updated_at: new Date().toISOString() }).eq('id', recordId);
-            }
+            await supabase.from('dc_intake_records').delete().eq('id', targetRecName);
           } catch (e) {}
         }
-        await supabase.from('saved_records').delete().eq('id', recordId);
+        try {
+          await supabase.from('dc_intake_records').delete().eq('record_name', cleanRecId);
+          if (targetRecName) await supabase.from('dc_intake_records').delete().eq('record_name', targetRecName);
+        } catch (e) {}
 
+        // Delete from saved_records table (individual batch docs)
+        try {
+          await supabase.from('saved_records').delete().eq('id', cleanRecId);
+          if (targetRecName && targetRecName !== cleanRecId) {
+            await supabase.from('saved_records').delete().eq('id', targetRecName);
+          }
+        } catch (e) {}
+
+        // Update master_dc_intakes_registry in saved_records
         await supabase.from('saved_records').upsert({
           id: 'master_dc_intakes_registry',
           record_type: 'intake_registry',
@@ -340,7 +373,7 @@ export function useIntakeRecords({
       if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_DELETED', { recordId });
     }
 
-    showToast(`Deleted Batch Record "${target?.record_name || recordId}". In-stock parts remain available in DC inventory.`, 'info');
+    showToast(`Deleted Parts Saved History Record "${target?.record_name || recordId}". In-stock parts remain available in DC inventory.`, 'info');
     return { success: true };
   };
 

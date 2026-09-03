@@ -24,7 +24,7 @@ export default function PurchaseOrders() {
               }}
             >
               <Barcode size={15} />
-              <span>Receive PO Units (F1)</span>
+              <span>Receive PO Units</span>
             </button>
           </div>
         </div>

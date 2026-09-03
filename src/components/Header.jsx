@@ -1,15 +1,13 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Layers, ChevronDown } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar } from 'lucide-react';
+import HeaderCategoryFilter from './HeaderCategoryFilter';
 
 export default function Header() {
   const {
     activeTab,
     setActiveTab,
-    selectedCategory,
-    setSelectedCategory,
-    categories,
     searchQuery,
     setSearchQuery,
     cloudSyncStatus,
@@ -46,7 +44,7 @@ export default function Header() {
   };
 
   const tabConfig = {
-    dashboard: { title: 'DC Overview & Analytics', section: 'Core', showCategories: true },
+    dashboard: { title: 'DC Overview & Analytics', section: 'Core', showCategories: false },
     import: { title: 'Fixably & GSX Data Import', section: 'Planning', showCategories: false },
     forecast: { title: 'Demand Forecasting & POs', section: 'Planning', showCategories: true },
     records: { title: 'Saved Period Records', section: 'Planning', showCategories: false },
@@ -98,28 +96,8 @@ export default function Header() {
           </h1>
         </div>
 
-        {/* Global Part Category Filter Dropdown (Space-efficient top bar selector) */}
-        {currentMeta.showCategories && (
-          <div className="header-category-dropdown-wrapper" title="Filter parts by hardware category">
-            <div className="header-category-dropdown">
-              <Layers size={13} className="header-category-icon" />
-              <select
-                className="header-category-select"
-                value={selectedCategory || 'ALL'}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                aria-label="Filter parts by category"
-              >
-                <option value="ALL">Both (Battery & Display)</option>
-                {categories && categories.length > 0 && categories.map(cat => (
-                  <option key={cat.id} value={cat.code}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={13} className="header-category-chevron" />
-            </div>
-          </div>
-        )}
+        {/* Global Part Category Multi-Select Filter Popover */}
+        {currentMeta.showCategories && <HeaderCategoryFilter />}
       </div>
 
       {/* Right: Active Period, Live Sync Badge, Global ⌘K Search, Force Sync & Scan Switcher */}
@@ -229,29 +207,29 @@ export default function Header() {
           <span className="btn-label-responsive">Sync DB</span>
         </button>
 
-        {/* Quick F1 / F2 Switcher Group */}
+        {/* Quick Scan Switcher Group */}
         {(canAccess('scan-in') || canAccess('scan-out')) && (
           <div className="header-scan-switcher">
             {canAccess('scan-in') && (
               <button
                 className={`header-scan-btn ${activeTab === 'scan-in' ? 'active' : ''}`}
                 onClick={() => setActiveTab('scan-in')}
-                title="Receive Scan-In (Shortcut: F1)"
+                title="Receive Scan-In"
               >
                 <Barcode size={13} />
-                <span className="scan-text-full">Scan-In (F1)</span>
-                <span className="scan-text-short">In (F1)</span>
+                <span className="scan-text-full">Scan-In</span>
+                <span className="scan-text-short">In</span>
               </button>
             )}
             {canAccess('scan-out') && (
               <button
                 className={`header-scan-btn ${activeTab === 'scan-out' ? 'active' : ''}`}
                 onClick={() => setActiveTab('scan-out')}
-                title="Pack Scan-Out (Shortcut: F2)"
+                title="Pack Scan-Out"
               >
                 <PackageCheck size={13} />
-                <span className="scan-text-full">Scan-Out (F2)</span>
-                <span className="scan-text-short">Out (F2)</span>
+                <span className="scan-text-full">Scan-Out</span>
+                <span className="scan-text-short">Out</span>
               </button>
             )}
           </div>

@@ -94,7 +94,6 @@ export default function PmgSidebar() {
       label: 'Receive Scan-In',
       section: 'Branch Operations',
       icon: Barcode,
-      hotkey: 'F1',
       onClick: () => {
         setActiveTab('scan-in');
       },

@@ -215,10 +215,12 @@ export function useCloudSync({
               updated_at: new Date().toISOString()
             }, { onConflict: 'id' });
           } else if (item.actionType === 'INTAKE_DELETE') {
-            if (isUUID(item.payload.recordId)) {
-              try { await supabase.from('dc_intake_records').delete().eq('id', item.payload.recordId); } catch (e) {}
+            const cleanRecId = String(item.payload.recordId || '').trim();
+            if (cleanRecId) {
+              try { await supabase.from('dc_intake_records').delete().eq('id', cleanRecId); } catch (e) {}
+              try { await supabase.from('dc_intake_records').delete().eq('record_name', cleanRecId); } catch (e) {}
+              try { await supabase.from('saved_records').delete().eq('id', cleanRecId); } catch (e) {}
             }
-            try { await supabase.from('saved_records').delete().eq('id', item.payload.recordId); } catch (e) {}
           } else if (item.actionType === 'SHIPMENT_UPSERT') {
             await supabase.from('saved_records').upsert(item.payload, { onConflict: 'id' });
           } else if (item.actionType === 'SHIPMENT_DELETE') {
@@ -991,14 +993,18 @@ export function useCloudSync({
         if (intakeRegistryDoc?.snapshot_data?.records && Array.isArray(intakeRegistryDoc.snapshot_data.records)) {
           intakeRegistryDoc.snapshot_data.records.forEach(rec => {
             const cleanId = String(rec.id || '').trim().toUpperCase();
-            if (cleanId) intakeMap.set(cleanId, rec);
+            const cleanName = String(rec.record_name || '').trim().toUpperCase();
+            if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName))) {
+              intakeMap.set(cleanId, rec);
+            }
           });
         }
 
         if (dbIntakes && dbIntakes.length > 0) {
           dbIntakes.forEach(rec => {
             const cleanId = String(rec.id || '').trim().toUpperCase();
-            if (cleanId && rec.notes !== '__DELETED__') {
+            const cleanName = String(rec.record_name || '').trim().toUpperCase();
+            if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName)) && rec.notes !== '__DELETED__') {
               const existing = intakeMap.get(cleanId);
               intakeMap.set(cleanId, { ...(existing || {}), ...rec });
             }
@@ -1008,26 +1014,20 @@ export function useCloudSync({
         intakeBatchDocs.forEach(doc => {
           const rec = doc.snapshot_data || doc;
           const cleanId = String(rec.id || doc.id || '').trim().toUpperCase();
-          if (cleanId && rec.notes !== '__DELETED__') {
+          const cleanName = String(rec.record_name || '').trim().toUpperCase();
+          if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName)) && rec.notes !== '__DELETED__') {
             const existing = intakeMap.get(cleanId);
             intakeMap.set(cleanId, { ...(existing || {}), ...rec, id: cleanId });
           }
         });
 
-        // Self-heal local deletion set
-        if (intakeMap.size > 0 && deletedIntakeIdsSet.size > 0) {
-          let modifiedDeleted = false;
-          intakeMap.forEach((_, activeId) => {
-            if (deletedIntakeIdsSet.has(activeId)) {
-              deletedIntakeIdsSet.delete(activeId);
-              modifiedDeleted = true;
-            }
+        // Actively purge any deleted IDs from Supabase database in the background
+        if (supabase && deletedIntakeIdsSet.size > 0) {
+          Array.from(deletedIntakeIdsSet).forEach(delId => {
+            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
           });
-          if (modifiedDeleted) {
-            try {
-              localStorage.setItem('mdc_deleted_intake_ids', JSON.stringify(Array.from(deletedIntakeIdsSet)));
-            } catch (e) {}
-          }
         }
 
         setDcIntakeRecords(prev => {

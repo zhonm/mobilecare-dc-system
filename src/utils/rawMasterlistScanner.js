@@ -1,4 +1,5 @@
 import rawData from '../data/rawMasterlistData.json';
+import { isPartMatchingCategoryFilter } from './categoryFilter.js';
 
 const USD_TO_PHP_RATE = 57;
 
@@ -67,7 +68,7 @@ export function getMasterlistSummary() {
 /**
  * Get all iPhone parts ranked with optional filtering by category, search text, and limit
  */
-export function getMasterlistParts({ category = 'ALL', search = '', limit = 10, sortBy = 'units' } = {}) {
+export function getMasterlistParts({ category = 'ALL', categories = null, search = '', limit = 10, sortBy = 'units' } = {}) {
   if (isMasterlistCleared()) {
     return {
       totalCount: 0,
@@ -83,6 +84,8 @@ export function getMasterlistParts({ category = 'ALL', search = '', limit = 10, 
 
   if (category !== 'ALL') {
     list = list.filter(p => p.category === category);
+  } else if (Array.isArray(categories) && categories.length > 0 && categories.length < 5) {
+    list = list.filter(p => isPartMatchingCategoryFilter(p, categories));
   }
 
   if (search && search.trim()) {

@@ -682,7 +682,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
               title="Return to Receive Scan-In Station"
             >
               <Barcode size={16} />
-              <span>{embeddedMode ? 'Switch to Scan-In Station (F1)' : '← Back to Receive Scan-In (F1)'}</span>
+              <span>{embeddedMode ? 'Switch to Scan-In Station' : '← Back to Receive Scan-In'}</span>
             </button>
           )}
 
@@ -701,10 +701,10 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                 gap: '6px',
                 fontWeight: 600
               }}
-              title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent dispatched batch record" : "Scan parts first in Receive Scan-In"}
+              title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent parts history record" : "Scan parts first in Receive Scan-In"}
             >
               <Plus size={16} />
-              <span>Save Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
+              <span>Save Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
             </button>
           )}
 
@@ -765,14 +765,14 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
 
         <div className="card" style={{ padding: '16px 20px', borderLeft: '4px solid #f59e0b' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12.5px', color: '#b45309', fontWeight: 600 }}>Dispatched Records (All Sites)</span>
+            <span style={{ fontSize: '12.5px', color: '#b45309', fontWeight: 600 }}>Parts Saved History Records</span>
             <BookmarkPlus size={18} color="#f59e0b" />
           </div>
           <h3 style={{ fontSize: '24px', margin: '6px 0 2px 0', fontWeight: 700, color: '#b45309' }}>
             {totalBatchesCount} <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-muted)' }}>batches</span>
           </h3>
           <span style={{ fontSize: '11.5px', color: 'var(--text-subtle)' }}>
-            {totalUnitsAcrossBatches} units dispatched to all sites
+            {totalUnitsAcrossBatches} units saved in history batches
           </span>
         </div>
       </div>
@@ -834,7 +834,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
               }}
             >
               <BookmarkPlus size={16} />
-              <span>Dispatched Already in All Sites</span>
+              <span>Parts Saved History Records</span>
               <span
                 style={{
                   background: activeView === 'batch_records' ? 'rgba(255,255,255,0.25)' : 'var(--bg-hover)',
@@ -1019,7 +1019,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                     </div>
                     <h4 style={{ fontSize: '17px', color: 'var(--text-main)', fontWeight: 700, marginBottom: '6px' }}>All DC Stock Parts Packed & Ready for Dispatch</h4>
                     <p style={{ fontSize: '13px', maxWidth: '520px', margin: '0 auto 20px auto', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-                      All received parts have been packed into Outbound Packing Lists and marked for branch dispatch. Their permanent historical batch records and manifests remain permanently recorded in the <strong>Dispatched Already in All Sites</strong> tab.
+                      All received parts have been packed into Outbound Packing Lists and marked for branch dispatch. Their permanent historical batch records and manifests remain permanently recorded in the <strong>Parts Saved History Records</strong> tab.
                     </p>
                     <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
                       <button
@@ -1028,7 +1028,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                       >
                         <BookmarkPlus size={15} />
-                        <span>View Dispatched Records ({totalBatchesCount})</span>
+                        <span>View Parts Saved History Records ({totalBatchesCount})</span>
                       </button>
                       <button
                         className="btn btn-secondary btn-sm"
@@ -1036,7 +1036,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                       >
                         <Package size={15} />
-                        <span>Open Packing Lists (F2)</span>
+                        <span>Open Packing Lists</span>
                       </button>
                       <button
                         className="btn btn-secondary btn-sm"
@@ -1044,7 +1044,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                       >
                         <Barcode size={15} />
-                        <span>Scan New Stock (F1)</span>
+                        <span>Scan New Stock</span>
                       </button>
                     </div>
                   </>
@@ -1055,7 +1055,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                     <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
                       {isAnyFilterActive
                         ? 'No stock parts match your active filters. Click Clear Filters below to view all stock.'
-                        : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In (F1) to receive inventory.'}
+                        : 'No serialized parts currently in warehouse stock. Scan parts in Receive Scan-In to receive inventory.'}
                     </p>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
                       {isAnyFilterActive && (
@@ -1082,7 +1082,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         onClick={() => setActiveTab('scan-in')}
                       >
                         <Barcode size={14} />
-                        <span>Go to Receive Scan-In (F1)</span>
+                        <span>Go to Receive Scan-In</span>
                       </button>
                     </div>
                   </>
@@ -1379,18 +1379,18 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         )}
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            VIEW 2: DISPATCHED ALREADY IN ALL SITES (PERMANENT PO RECORDS)
+            VIEW 2: PARTS SAVED HISTORY RECORDS (PERMANENT PO RECORDS)
         ═══════════════════════════════════════════════════════════════════════ */}
         {activeView === 'batch_records' && (
           <div>
             {filteredBatchRecords.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
                 <BookmarkPlus size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
-                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Dispatched Records Found</h4>
+                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Parts Saved History Records Found</h4>
                 <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
                   {isAnyFilterActive
                     ? `No batch records matching your active filters. Click Clear Filters below to reset.`
-                    : 'Save currently scanned stock parts into permanent dispatched batch records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
+                    : 'Save currently scanned stock parts into permanent parts history records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
                 </p>
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
                   {isAnyFilterActive && (
@@ -1421,7 +1421,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                       }}
                     >
                       <Plus size={14} />
-                      <span>Save New Dispatched Batch ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
+                      <span>Save New Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
                     </button>
                   )}
                 </div>
@@ -1448,7 +1448,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                           <strong style={{ color: '#0284c7' }}>{rec.id}</strong>
                         </td>
                         <td>
-                          <strong>{rec.record_name || 'Dispatched Batch'}</strong>
+                          <strong>{rec.record_name || 'Parts History Record'}</strong>
                           {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
                         </td>
                         <td>
@@ -1470,7 +1470,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         </td>
                         <td>{rec.po_number || 'Direct Intake'}</td>
                         <td>
-                          <span className="badge badge-success">Dispatched</span>
+                          <span className="badge badge-success">Saved History</span>
                         </td>
                         <td style={{ textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
@@ -1489,7 +1489,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => setRecordToDelete(rec)}
                                 style={{ padding: '3px 6px', color: '#ef4444', borderColor: '#fca5a5' }}
-                                title="Delete dispatched batch record"
+                                title="Delete parts history record"
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -1708,7 +1708,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         onClose={() => setIsSaveModalOpen(false)}
         initialUnits={modalInitialUnits}
         onSaved={(newRec) => {
-          showToast(`Created Dispatched Record ${newRec.id}`, 'success');
+          showToast(`Created Parts Saved History Record ${newRec.id}`, 'success');
           setActiveView('batch_records');
         }}
       />
@@ -1752,7 +1752,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <AlertCircle size={20} color="#ef4444" />
-                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Intake Batch Record?</h3>
+                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Parts Saved History Record?</h3>
               </div>
               <button
                 onClick={() => setRecordToDelete(null)}
@@ -1763,15 +1763,15 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
             </div>
             <div className="modal-body">
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
-                Are you sure you want to delete batch <strong>{recordToDelete.id}</strong> ({recordToDelete.record_name})?
+                Are you sure you want to delete history record <strong>{recordToDelete.id}</strong> ({recordToDelete.record_name})?
               </p>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                This action cannot be undone.
+                This action cannot be undone. In-stock parts remain preserved in DC inventory.
               </p>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setRecordToDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleConfirmDeleteBatch}>Delete Batch Record</button>
+              <button className="btn btn-danger" onClick={handleConfirmDeleteBatch}>Delete History Record</button>
             </div>
           </div>
         </div>

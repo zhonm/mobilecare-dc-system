@@ -1355,11 +1355,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   type="button"
                   className="btn btn-secondary btn-sm"
                   onClick={() => setIsSaveIntakeModalOpen(true)}
-                  title="Save current scanned parts into a named Dispatched Record (MDC202600015)"
+                  title="Save current scanned parts into a named Parts Saved History Record (MDC202600015)"
                   style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
                 >
                   <BookmarkPlus size={14} />
-                  <span>Save Dispatched Batch</span>
+                  <span>Save Parts History Record</span>
                 </button>
               )}
 
@@ -2552,7 +2552,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           try { localStorage.removeItem('mdc_recent_scans'); } catch (e) {}
           setScanResult({
             type: 'success',
-            message: `[DISPATCHED RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
+            message: `[PARTS SAVED HISTORY RECORD CREATED] Successfully created record ${newRec.id} with ${newRec.total_units} units!`
           });
           setActiveReceiveTab('records');
         }}

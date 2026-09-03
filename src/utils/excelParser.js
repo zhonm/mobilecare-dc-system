@@ -10,6 +10,7 @@ import {
 } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber } from './partResolver.js';
+import { getPartCategory } from './categoryFilter.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -358,13 +359,14 @@ export const EXCLUDED_BATTERY_DISPLAY_DESCS = new Set([
 export const LEGACY_EXCLUDE_REGEX = /^((Battery, iPhone (11|8|11 Pro|11 Pro Max|12 and 12 Pro|12 mini|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR))|(Display, iPhone (11|12|12 mini|12 Pro|12 Pro Max|13 mini|XR)))$/i;
 
 /**
- * Single source of truth predicate for in-scope genuine iPhone Battery & Display repair universe.
- * Exact Step 2 Rules:
- *   a. part_description ILIKE '%iphone%'
- *   b. part_description ILIKE '%battery%' OR part_description ILIKE '%display%'
- *   c. TRIM(part_description) does NOT case-insensitively equal any of the 20 legacy exclusions
+ * Predicate for genuine iPhone repair parts.
+ * Scope Modes:
+ *   - 'ALL_PARTS': Ingests every part in the file without filtering.
+ *   - 'IPHONE_13_PLUS_BATTERY_DISPLAY': Legacy restricted scope (only Battery & Display).
+ *   - 'ALL_IPHONE_PARTS' (Default): Ingests all iPhone parts across all 5 categories
+ *     (Battery, Display, Camera, Back Glass, Mid/Rear System, and iPhone components).
  */
-export function isTargetIPhonePart(desc, _pn = '', filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
+export function isTargetIPhonePart(desc, _pn = '', filterScope = 'ALL_IPHONE_PARTS') {
   if (filterScope === 'ALL_PARTS') return true;
 
   const d = String(desc || '').trim();
@@ -375,23 +377,38 @@ export function isTargetIPhonePart(desc, _pn = '', filterScope = 'IPHONE_13_PLUS
     return false;
   }
 
-  // Rule b: Must be Battery or Display
-  const isBattery = dLower.includes('battery');
-  const isDisplay = dLower.includes('display');
-  if (!isBattery && !isDisplay) {
-    return false;
+  // Legacy restricted scope: strictly Battery & Display
+  if (filterScope === 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
+    const isBattery = dLower.includes('battery');
+    const isDisplay = dLower.includes('display');
+    if (!isBattery && !isDisplay) {
+      return false;
+    }
+    if (EXCLUDED_BATTERY_DISPLAY_DESCS.has(dLower)) {
+      return false;
+    }
+    return true;
   }
 
-  // Rule c: Must not match any of the 20 excluded models
-  if (EXCLUDED_BATTERY_DISPLAY_DESCS.has(dLower)) {
-    return false;
+  // ALL_IPHONE_PARTS: Ingest all iPhone parts
+  const isBattery = dLower.includes('battery') || dLower.includes('batt');
+  const isDisplay = dLower.includes('display') || dLower.includes('screen');
+  const isCamera = dLower.includes('camera') || dLower.includes('sensor') || dLower.includes('truedepth') || dLower.includes('face id');
+  const isBackGlass = dLower.includes('back glass') || dLower.includes('rear glass');
+  const isMidRear = dLower.includes('rear system') || dLower.includes('logic board') || dLower.includes('mid/rear') || dLower.includes('mid rear') || dLower.includes('housing');
+
+  if (isBattery || isDisplay || isCamera || isBackGlass || isMidRear) {
+    if ((isBattery || isDisplay) && EXCLUDED_BATTERY_DISPLAY_DESCS.has(dLower)) {
+      return false;
+    }
+    return true;
   }
 
   return true;
 }
 
 export async function parseUniversalExcel(file, currentSites = [], currentParts = [], options = {}) {
-  const filterScope = options.filterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+  const filterScope = options.filterScope || 'ALL_IPHONE_PARTS';
   const selectedMonth = options.selectedMonth !== undefined ? options.selectedMonth : 'auto';
 
   return new Promise((resolve) => {
@@ -1308,20 +1325,20 @@ export function processRawUsageSheet(
   rawRows,
   existingSites = [],
   existingParts = [],
-  optionsOrFilterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+  optionsOrFilterScope = 'ALL_IPHONE_PARTS',
   maybeSelectedMonth = 'auto',
   maybeFileName = ''
 ) {
   const options = typeof optionsOrFilterScope === 'object' && optionsOrFilterScope !== null
     ? optionsOrFilterScope
     : {
-        filterScope: optionsOrFilterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+        filterScope: optionsOrFilterScope || 'ALL_IPHONE_PARTS',
         selectedMonth: maybeSelectedMonth || 'auto',
         fileName: maybeFileName || '',
         allocationMode: 'OPTION_B'
       };
 
-  const filterScope = options.filterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+  const filterScope = options.filterScope || 'ALL_IPHONE_PARTS';
   const selectedMonth = options.selectedMonth !== undefined ? options.selectedMonth : 'auto';
   const fileName = options.fileName || '';
   const allocationMode = options.allocationMode || 'OPTION_B';
@@ -1448,8 +1465,13 @@ export function processRawUsageSheet(
       if (mIdx >= 0) monthIdx = mIdx;
     }
 
-    const isDisplay = cleanDesc.toLowerCase().includes('display') || cleanDesc.toLowerCase().includes('screen');
-    const catId = isDisplay ? 'cat-display' : 'cat-battery';
+    const detectedCat = getPartCategory(cleanDesc);
+    let catId = 'cat-other';
+    if (detectedCat === 'DISPLAY') catId = 'cat-display';
+    else if (detectedCat === 'BATTERY') catId = 'cat-battery';
+    else if (detectedCat === 'CAMERA') catId = 'cat-camera';
+    else if (detectedCat === 'BACK_GLASS') catId = 'cat-backglass';
+    else if (detectedCat === 'MID_REAR') catId = 'cat-midrear';
 
     rawRepairRows.push({
       rawRowRef: r,
@@ -1746,6 +1768,101 @@ export function processRawUsageSheet(
       description: desc,
       category_id: 'cat-battery',
       iphone_model: desc.replace(/^(Battery),?\s*/i, ''),
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      safety_stock_pct: 0.05,
+      is_active: true
+    });
+
+    currentRowNumber++;
+  });
+
+  // 3. Process All Additional In-Scope iPhone Parts (Camera, Back Glass, Mid/Rear System, etc.)
+  const processedDescs = new Set([
+    ...CANONICAL_DISPLAY_DESCS.map(d => d.trim().toLowerCase()),
+    ...CANONICAL_BATTERY_DESCS.map(d => d.trim().toLowerCase())
+  ]);
+
+  const additionalPartsList = Array.from(partDataMap.values())
+    .filter(p => !processedDescs.has(p.description.trim().toLowerCase()))
+    .sort((a, b) => {
+      const sumA = a.months.reduce((acc, v) => acc + v, 0);
+      const sumB = b.months.reduce((acc, v) => acc + v, 0);
+      if (sumB !== sumA) return sumB - sumA;
+      return a.description.localeCompare(b.description);
+    });
+
+  additionalPartsList.forEach((pEntry) => {
+    const desc = pEntry.description;
+    const pn = pEntry.partNumber;
+    const catId = pEntry.category_id || 'cat-other';
+
+    const computedForecast = calculateForecastByModel(pEntry.months, forecastingModel, {
+      targetX: regressionTargetX,
+      filterAnomalies: forecastingModel !== 'linear',
+      categoryId: catId,
+      description: desc
+    });
+    const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
+    const pricing = lookupPartPrice(pn, desc, existingParts);
+
+    forecastItems.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: catId,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      ytd_monthly_counts: pEntry.months,
+      computed_forecast: computedForecast,
+      admin_override: null,
+      final_forecast: computedForecast,
+      safety_stock_units: recOrder.safetyUnits,
+      recommended_order: recOrder.recommendedOrder
+    });
+
+    const siteQuantities = {};
+    let totalAlloc = 0;
+
+    const allocResults = allocatePartToSites(computedForecast, { ...pEntry, description: desc }, activeServiceSites);
+    allocResults.forEach(res => {
+      siteQuantities[res.siteId] = res.allocatedQty;
+      const sObj = activeServiceSites.find(s => s.id === res.siteId);
+      if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+      totalAlloc += res.allocatedQty;
+    });
+
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+
+    allocations.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: catId,
+      forecasted_qty: computedForecast,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
+      site_quantities: siteQuantities,
+      remarks: getOrderRemark(totalAlloc)
+    });
+
+    parts.push({
+      id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: catId,
+      iphone_model: desc.replace(/^(Battery|Display|Camera|Back Glass|Rear System),?\s*/i, ''),
       stocking_price: pricing.stockingPrice,
       exchange_price: pricing.exchangePrice,
       safety_stock_pct: 0.05,

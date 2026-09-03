@@ -6,6 +6,7 @@ import {
   filterAnomaliesWinsorized
 } from '../utils/forecastEngine';
 import { exportForecastToExcel } from '../utils/excelParser';
+import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
@@ -33,6 +34,8 @@ export default function Forecasting() {
     forecastItems,
     parts,
     selectedCategory,
+    selectedCategories,
+    isPartMatchingCategoryFilter,
     updateForecastOverride,
     setActiveTab,
     isAutoRefreshing,
@@ -97,12 +100,15 @@ export default function Forecasting() {
   // Filter items by category & search query
   const filteredItems = useMemo(() => {
     return forecastItems.filter(item => {
-      // Category filter
-      if (selectedCategory !== 'ALL') {
+      // Category multi-select filter
+      if (isPartMatchingCategoryFilter && selectedCategories) {
+        if (!isPartMatchingCategoryFilter(item, selectedCategories)) return false;
+      } else if (selectedCategory !== 'ALL') {
         if (selectedCategory === 'BATTERY' && item.category_id !== 'cat-battery') return false;
         if (selectedCategory === 'DISPLAY' && item.category_id !== 'cat-display') return false;
         if (selectedCategory === 'CAMERA' && item.category_id !== 'cat-camera') return false;
         if (selectedCategory === 'BACK_GLASS' && item.category_id !== 'cat-backglass') return false;
+        if (selectedCategory === 'MID_REAR' && item.category_id !== 'cat-midrear') return false;
       }
       // Search filter
       if (tableSearch.trim()) {
@@ -113,7 +119,7 @@ export default function Forecasting() {
       }
       return true;
     });
-  }, [forecastItems, selectedCategory, tableSearch]);
+  }, [forecastItems, selectedCategories, isPartMatchingCategoryFilter, selectedCategory, tableSearch]);
 
   // Enriched items with metrics, sorting, pricing, and Forecast vs Actual Validation
   const enrichedItems = useMemo(() => {
@@ -180,11 +186,11 @@ export default function Forecasting() {
       totalEstimatedSpend += item.lineCost;
       if (item.hasOverride) overrideCount++;
 
-      const isDisplay = item.category_id === 'cat-display' || (item.description || '').toLowerCase().includes('display');
-      if (isDisplay) {
+      const cat = getPartCategory(item);
+      if (cat === 'DISPLAY') {
         displayUnits += item.finalVal;
         displaySpend += item.lineCost;
-      } else {
+      } else if (cat === 'BATTERY') {
         batteryUnits += item.finalVal;
         batterySpend += item.lineCost;
       }
@@ -729,8 +735,8 @@ export default function Forecasting() {
               </thead>
               <tbody>
                 {enrichedItems.map(item => {
-                  const isDisplay = item.category_id === 'cat-display' || (item.description || '').toLowerCase().includes('display');
-                  const commodityLabel = isDisplay ? 'DISPLAY' : 'BATTERY';
+                  const catCode = getPartCategory(item);
+                  const badgeStyle = getCategoryBadgeStyle(catCode);
 
                   return (
                     <tr key={item.part_id} style={{ background: item.hasOverride ? '#fffbeb' : '#ffffff' }}>
@@ -742,11 +748,12 @@ export default function Forecasting() {
                           fontWeight: 700,
                           padding: '2px 6px',
                           borderRadius: '4px',
-                          background: isDisplay ? '#e0f2fe' : '#dcfce7',
-                          color: isDisplay ? '#0369a1' : '#15803d',
+                          background: badgeStyle.bg,
+                          color: badgeStyle.color,
+                          border: `1px solid ${badgeStyle.border}`,
                           letterSpacing: '0.02em'
                         }}>
-                          {commodityLabel}
+                          {badgeStyle.label}
                         </span>
                       </td>
 

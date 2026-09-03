@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation';
 import {
   ROLE_PRESETS,
@@ -45,14 +45,23 @@ export {
   canUserDeleteRecord
 };
 
+import {
+  DEFAULT_SELECTED_CATEGORIES,
+  HARDWARE_CATEGORIES,
+  isPartMatchingCategoryFilter
+} from '../utils/categoryFilter.js';
+
+export { DEFAULT_SELECTED_CATEGORIES, HARDWARE_CATEGORIES, isPartMatchingCategoryFilter };
+
 const AppContext = createContext();
 
 export function AppProvider({ children }) {
-  // Navigation & UI State with URL Hash & LocalStorage persistence
-  const [activeTab, setActiveTab] = useState(() => {
-    const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '').trim() : '';
-    if (hash && ALL_PAGES.some(p => p.id === hash)) {
-      return hash;
+  const [activeTab, setActiveTabState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+      if (ALL_PAGES.some(p => p.id === hash)) {
+        return hash;
+      }
     }
     const saved = typeof window !== 'undefined' ? localStorage.getItem('mdc_active_tab') : null;
     if (saved && ALL_PAGES.some(p => p.id === saved)) {
@@ -61,7 +70,57 @@ export function AppProvider({ children }) {
     return 'dashboard';
   });
 
-  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const setActiveTab = (newTab) => {
+    setActiveTabState(newTab);
+  };
+
+  const [selectedCategories, setSelectedCategoriesState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_selected_categories');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return DEFAULT_SELECTED_CATEGORIES;
+    } catch {
+      return DEFAULT_SELECTED_CATEGORIES;
+    }
+  });
+
+  const setSelectedCategories = useCallback((newCats) => {
+    setSelectedCategoriesState((prev) => {
+      const resolved = typeof newCats === 'function' ? newCats(prev) : newCats;
+      const safeList = Array.isArray(resolved) && resolved.length > 0 ? resolved : DEFAULT_SELECTED_CATEGORIES;
+      try {
+        localStorage.setItem('mdc_selected_categories', JSON.stringify(safeList));
+      } catch (e) {}
+      return safeList;
+    });
+  }, []);
+
+  const selectedCategory = useMemo(() => {
+    if (selectedCategories.length === 2 && selectedCategories.includes('BATTERY') && selectedCategories.includes('DISPLAY')) {
+      return 'ALL';
+    }
+    if (selectedCategories.length === 1) {
+      return selectedCategories[0];
+    }
+    if (selectedCategories.length >= 5) {
+      return 'ALL_PARTS';
+    }
+    return 'CUSTOM';
+  }, [selectedCategories]);
+
+  const setSelectedCategory = useCallback((val) => {
+    if (val === 'ALL' || val === 'DEFAULT') {
+      setSelectedCategories(DEFAULT_SELECTED_CATEGORIES);
+    } else if (val === 'ALL_PARTS') {
+      setSelectedCategories(HARDWARE_CATEGORIES.map(c => c.code));
+    } else if (typeof val === 'string') {
+      setSelectedCategories([val]);
+    }
+  }, [setSelectedCategories]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [pmgSubTab, setPmgSubTab] = useState('requests_table');
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -303,6 +362,11 @@ export function AppProvider({ children }) {
         setActiveTab,
         selectedCategory,
         setSelectedCategory,
+        selectedCategories,
+        setSelectedCategories,
+        isPartMatchingCategoryFilter,
+        HARDWARE_CATEGORIES,
+        DEFAULT_SELECTED_CATEGORIES,
         searchQuery,
         setSearchQuery,
         toast,

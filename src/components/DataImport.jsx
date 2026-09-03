@@ -28,9 +28,9 @@ export default function DataImport() {
   const [lastFileObj, setLastFileObj] = useState(null);
   const [filterScope, setFilterScope] = useState(() => {
     try {
-      return localStorage.getItem('mdc_filter_scope') || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+      return localStorage.getItem('mdc_filter_scope') || 'ALL_IPHONE_PARTS';
     } catch {
-      return 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+      return 'ALL_IPHONE_PARTS';
     }
   });
 
@@ -358,20 +358,30 @@ export default function DataImport() {
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 type="button"
+                className={`btn btn-sm ${filterScope === 'ALL_IPHONE_PARTS' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleScopeChange('ALL_IPHONE_PARTS')}
+                disabled={!isSuperAdmin}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title="Forecast & allocate all iPhone parts (Battery, Display, Camera, Back Glass, Mid/Rear)"
+              >
+                All iPhone Parts
+              </button>
+              <button
+                type="button"
                 className={`btn btn-sm ${filterScope === 'IPHONE_13_PLUS_BATTERY_DISPLAY' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('IPHONE_13_PLUS_BATTERY_DISPLAY')}
                 disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                title="Filter for iPhone 13 and newer (Battery & Display parts)"
+                style={{ fontSize: '12px', padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}
+                title="Filter for iPhone Battery & Display parts only"
               >
-                iPhone (Batt & Disp)
+                Batt & Disp Only
               </button>
               <button
                 type="button"
                 className={`btn btn-sm ${filterScope === 'ALL_PARTS' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('ALL_PARTS')}
                 disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}
+                style={{ fontSize: '12px', padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}
                 title="Include all hardware categories in the file"
               >
                 All Parts
