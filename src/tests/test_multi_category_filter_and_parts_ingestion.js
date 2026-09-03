@@ -149,7 +149,16 @@ const userScreenshotParts = [
   { part_number: 'TA661-45263', description: '256GB, Desert Titanium, ROW, iPhone 16 Pro Max', category_id: 'cat-midrear' },
   // Even if legacy data had category_id set to 'cat-battery' for an enclosure or speaker:
   { part_number: 'CORRUPTED-1', description: 'Speaker, iPhone XR', category_id: 'cat-battery' },
-  { part_number: 'CORRUPTED-2', description: 'Silver, Enclosure, iPhone 17 Pro Max, ROW', category_id: 'cat-battery' }
+  { part_number: 'CORRUPTED-2', description: 'Silver, Enclosure, iPhone 17 Pro Max, ROW', category_id: 'cat-battery' },
+  // User reported issue: Main Microphone with pSIM must NEVER match Battery & Display, even if category_id was cat-battery
+  { part_number: '923-13582', description: 'Main Microphone, pSIM, iPhone 17 Pro Max', category_id: 'cat-battery' },
+  { part_number: '923-13580', description: 'Main Microphone, pSIM, iPhone 17 Pro', category_id: 'cat-other' },
+  { part_number: '923-99991', description: 'SIM Tray, pSIM, iPhone 17 Pro', category_id: 'cat-other' },
+  { part_number: '923-99992', description: 'Battery Adhesive Strips, iPhone 15', category_id: 'cat-other' },
+  // Genuine Battery pSIM parts must continue to match
+  { part_number: '661-56121', description: 'Battery, pSIM, iPhone 17 Pro', category_id: 'cat-battery' },
+  { part_number: '661-56849', description: 'Battery, pSIM, iPhone 17 Pro Max', category_id: 'cat-battery' },
+  { part_number: '661-38397', description: 'SVC, IPHONE 14 PRO MAX, BATTERY', category_id: 'cat-battery' }
 ];
 
 const battAndDisp = ['BATTERY', 'DISPLAY'];
@@ -165,6 +174,17 @@ assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[7], battAndD
 assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[8], battAndDisp), false, 'Corrupted speaker is strictly excluded from Battery & Display');
 assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[9], battAndDisp), false, 'Corrupted enclosure is strictly excluded from Battery & Display');
 
-console.log('✓ Test 4 Passed: Strict isolation verified - Speakers, Enclosures, and non-battery parts are 100% excluded when only Battery & Display are selected.');
+// User reported Microphone assertions
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[10], battAndDisp), false, '923-13582 Main Microphone with cat-battery is strictly excluded from Battery & Display');
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[11], battAndDisp), false, 'Main Microphone 17 Pro is strictly excluded');
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[12], battAndDisp), false, 'SIM Tray is strictly excluded');
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[13], battAndDisp), false, 'Battery Adhesive is strictly excluded');
+
+// Genuine Battery assertions
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[14], battAndDisp), true, 'Battery, pSIM, iPhone 17 Pro is admitted');
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[15], battAndDisp), true, 'Battery, pSIM, iPhone 17 Pro Max is admitted');
+assert.strictEqual(isPartMatchingCategoryFilter(userScreenshotParts[16], battAndDisp), true, 'SVC, IPHONE 14 PRO MAX, BATTERY is admitted');
+
+console.log('✓ Test 4 Passed: Strict isolation verified - Main Microphone, Speakers, Enclosures, and non-battery parts are 100% excluded when only Battery & Display are selected.');
 
 console.log('\nALL MULTI-CATEGORY FILTER & INGESTION TESTS PASSED SUCCESSFULLY!');

@@ -10,6 +10,7 @@ import {
 } from '../utils/allocationEngine';
 import { calculateItemForecast } from '../utils/forecastEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';
+import { getPartCategory } from '../utils/categoryFilter';
 
 export function useForecastingAndAllocation({
   parts = [],
@@ -269,7 +270,16 @@ export function useForecastingAndAllocation({
     const stockingPrice = (typeof targetItem?.stocking_price === 'number' && targetItem.stocking_price > 0)
       ? targetItem.stocking_price
       : (targetPart?.stocking_price || (desc.toLowerCase().includes('display') ? 279 : 99));
-    const categoryId = targetItem?.category_id || targetPart?.category_id || (desc.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery');
+    const resolvedCat = getPartCategory(targetItem || targetPart || desc);
+    let categoryId = targetItem?.category_id || targetPart?.category_id;
+    if (!categoryId || (categoryId === 'cat-battery' && resolvedCat !== 'BATTERY')) {
+      if (resolvedCat === 'DISPLAY') categoryId = 'cat-display';
+      else if (resolvedCat === 'BATTERY') categoryId = 'cat-battery';
+      else if (resolvedCat === 'CAMERA') categoryId = 'cat-camera';
+      else if (resolvedCat === 'BACK_GLASS') categoryId = 'cat-backglass';
+      else if (resolvedCat === 'MID_REAR') categoryId = 'cat-midrear';
+      else categoryId = 'cat-other';
+    }
 
     let currentAllocations;
     try {
@@ -300,11 +310,22 @@ export function useForecastingAndAllocation({
           ((fi.description || '').toLowerCase().includes('display') && !fi.category_id?.includes('battery'));
         const rowParityOffset = isDisplayItem ? 3 : 4;
         const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + rowParityOffset);
+        const fiCat = getPartCategory(fi);
+        let fiCatId = fi.category_id;
+        if (!fiCatId || (fiCatId === 'cat-battery' && fiCat !== 'BATTERY')) {
+          if (fiCat === 'DISPLAY') fiCatId = 'cat-display';
+          else if (fiCat === 'BATTERY') fiCatId = 'cat-battery';
+          else if (fiCat === 'CAMERA') fiCatId = 'cat-camera';
+          else if (fiCat === 'BACK_GLASS') fiCatId = 'cat-backglass';
+          else if (fiCat === 'MID_REAR') fiCatId = 'cat-midrear';
+          else fiCatId = 'cat-other';
+        }
+
         return {
           part_id: fi.part_id,
           part_number: fi.part_number,
           description: fi.description,
-          category_id: fi.category_id || (fi.description?.toLowerCase().includes('display') ? 'cat-display' : 'cat-battery'),
+          category_id: fiCatId,
           forecasted_qty: fiQty,
           stocking_price: fiPrice,
           exchange_price: fi.exchange_price || 0,

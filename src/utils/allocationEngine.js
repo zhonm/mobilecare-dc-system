@@ -13,6 +13,7 @@ import {
 const _N_DISPLAY_ROWS = CANONICAL_DISPLAY_DESCS.length;
 import { displayShares, batteryShares } from '../data/canonicalShares.js';
 import { calculateItemForecast, roundExcel } from './forecastEngine.js';
+import { getPartCategory } from './categoryFilter.js';
 
 /**
  * Allocation Engine for Multi-Site Distribution
@@ -532,11 +533,22 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
     const rowParityOffset = getRowParityOffset(fi);
     const fiSplit = calculateWeeklySplit(tAlloc, tCost, rIdx + rowParityOffset);
 
+    const resolvedCat = getPartCategory(fi);
+    let assignedCatId = fi.category_id;
+    if (!assignedCatId || (assignedCatId === 'cat-battery' && resolvedCat !== 'BATTERY')) {
+      if (resolvedCat === 'DISPLAY') assignedCatId = 'cat-display';
+      else if (resolvedCat === 'BATTERY') assignedCatId = 'cat-battery';
+      else if (resolvedCat === 'CAMERA') assignedCatId = 'cat-camera';
+      else if (resolvedCat === 'BACK_GLASS') assignedCatId = 'cat-backglass';
+      else if (resolvedCat === 'MID_REAR') assignedCatId = 'cat-midrear';
+      else assignedCatId = 'cat-other';
+    }
+
     return {
       part_id: fi.part_id,
       part_number: fi.part_number,
       description: fi.description,
-      category_id: fi.category_id || (isDisplayCategoryOrDesc(fi) ? 'cat-display' : 'cat-battery'),
+      category_id: assignedCatId,
       forecasted_qty: fiQty,
       stocking_price: fiPrice,
       exchange_price: fi.exchange_price || existingAlloc?.exchange_price || 0,

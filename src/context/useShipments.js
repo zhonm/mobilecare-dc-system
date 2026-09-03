@@ -54,9 +54,10 @@ export function useShipments({
             .map(s => {
               if (!s) return s;
               const cleanPreparedBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois');
+              const isReceived = isLockedConfirmedShipment(s) || s.status === 'received_confirmed' || s.status === 'delivered';
               return {
                 ...s,
-                status: s.status || 'pending_pickup',
+                status: isReceived ? 'received_confirmed' : (s.status || 'pending_pickup'),
                 prepared_by_name: cleanPreparedBy,
                 saved_by_name: cleanPreparedBy
               };

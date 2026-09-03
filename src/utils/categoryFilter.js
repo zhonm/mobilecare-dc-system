@@ -12,6 +12,30 @@ export const HARDWARE_CATEGORIES = [
   { code: 'MID_REAR', id: 'cat-midrear', name: 'Mid/Rear System', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' }
 ];
 
+// Common component disqualifiers that prevent accessories, consumables, and sub-modules from being misclassified
+const UNRELATED_COMPONENT_TERMS = [
+  'microphone',
+  'mic,',
+  ', mic',
+  'speaker',
+  'earpiece',
+  'receiver',
+  'taptic',
+  'vibrat',
+  'sim tray',
+  'sim-tray',
+  'tray,',
+  'screw',
+  'bracket',
+  'adhesive',
+  'tape',
+  'shim',
+  'cushion',
+  'gasket',
+  'antenna',
+  'flex cable'
+];
+
 /**
  * Resolves the genuine hardware category for any iPhone part by inspecting
  * both its description and its stored category_id.
@@ -37,59 +61,81 @@ export function getPartCategory(itemOrDesc) {
     ? String(itemOrDesc.category_id || itemOrDesc.category || '').toLowerCase().trim()
     : '';
 
+  // Check if description has an unrelated component term (e.g. microphone, speaker, screw, bracket)
+  const hasUnrelatedTerm = UNRELATED_COMPONENT_TERMS.some(term => desc.includes(term)) ||
+    desc.startsWith('mic ') ||
+    desc.startsWith('main microphone') ||
+    desc.includes('pSIM tray');
+
   // 1. DISPLAY: screens, displays, front panels
-  if (
-    desc.includes('display') ||
-    desc.includes('screen') ||
-    cat === 'cat-display' ||
-    cat === 'display'
-  ) {
-    if (!desc.includes('battery') && !desc.includes('camera') && !desc.includes('back glass') && !desc.includes('enclosure')) {
+  // MUST have 'display' or 'screen' in description.
+  const hasDisplayKeyword = desc.includes('display') || desc.includes('screen');
+  if (hasDisplayKeyword && !hasUnrelatedTerm) {
+    const isDisplayDisqualified =
+      desc.includes('battery') ||
+      desc.includes('camera') ||
+      desc.includes('back glass') ||
+      desc.includes('rear glass') ||
+      desc.includes('enclosure') ||
+      desc.includes('rear system') ||
+      desc.includes('housing') ||
+      desc.includes('chassis') ||
+      desc.includes('logic board');
+
+    if (!isDisplayDisqualified) {
       return 'DISPLAY';
     }
   }
 
-  // 2. BATTERY: must genuinely be a battery
-  if (
-    desc.includes('battery') ||
-    desc.includes('batt,') ||
-    desc.includes(', batt') ||
-    desc.startsWith('battery') ||
-    desc.includes('psim, iphone') || // canonical: 'Battery, pSIM, iPhone 17 Pro'
-    desc.includes('svc,iphone') // canonical: 'SVC,IPHONE 14 PRO MAX, BATTERY'
-  ) {
-    if (!desc.includes('speaker') && !desc.includes('enclosure') && !desc.includes('rear system') && !desc.includes('camera') && !desc.includes('glass')) {
+  // 2. BATTERY: must genuinely be a battery cell / assembly
+  // MUST explicitly contain 'battery' or word-boundary 'batt' in description.
+  const hasBatteryKeyword = desc.includes('battery') || /\bbatt\b/.test(desc) || desc.startsWith('battery');
+
+  if (hasBatteryKeyword && !hasUnrelatedTerm) {
+    const isBatteryDisqualified =
+      desc.includes('speaker') ||
+      desc.includes('enclosure') ||
+      desc.includes('rear system') ||
+      desc.includes('camera') ||
+      desc.includes('glass') ||
+      desc.includes('display') ||
+      desc.includes('screen') ||
+      desc.includes('housing') ||
+      desc.includes('chassis') ||
+      desc.includes('logic board');
+
+    if (!isBatteryDisqualified) {
       return 'BATTERY';
     }
   }
 
   // 3. CAMERA: cameras, TrueDepth, sensors, LiDAR
-  if (
-    desc.includes('camera') ||
+  const hasCameraKeyword = desc.includes('camera') ||
     desc.includes('sensor') ||
     desc.includes('truedepth') ||
     desc.includes('face id') ||
-    desc.includes('lidar') ||
-    cat === 'cat-camera' ||
-    cat === 'camera'
-  ) {
-    return 'CAMERA';
+    desc.includes('lidar');
+
+  if (hasCameraKeyword && !hasUnrelatedTerm) {
+    if (!desc.includes('battery') && !desc.includes('display') && !desc.includes('screen') && !desc.includes('microphone') && !desc.includes('speaker') && !desc.includes('screw') && !desc.includes('adhesive')) {
+      return 'CAMERA';
+    }
   }
 
   // 4. BACK GLASS: rear glass, back glass
-  if (
-    desc.includes('back glass') ||
+  const hasGlassKeyword = desc.includes('back glass') ||
     desc.includes('rear glass') ||
     desc.includes('back-glass') ||
-    cat === 'cat-backglass' ||
-    cat === 'cat-back-glass' ||
-    cat === 'back glass'
-  ) {
-    return 'BACK_GLASS';
+    desc.includes('rear-glass');
+
+  if (hasGlassKeyword && !hasUnrelatedTerm) {
+    if (!desc.includes('battery') && !desc.includes('display') && !desc.includes('screen') && !desc.includes('camera') && !desc.includes('microphone') && !desc.includes('speaker') && !desc.includes('screw')) {
+      return 'BACK_GLASS';
+    }
   }
 
-  // 5. MID_REAR SYSTEM: rear systems, logic boards, enclosures, housings, chassis
-  if (
+  // 5. MID_REAR SYSTEM: rear systems, logic boards, enclosures, housings, chassis, and storage/color enclosure units (e.g. 128GB, Desert Titanium, ROW, CI/AR)
+  const isMidRearCandidate =
     desc.includes('rear system') ||
     desc.includes('mid/rear') ||
     desc.includes('mid rear') ||
@@ -100,11 +146,16 @@ export function getPartCategory(itemOrDesc) {
     desc.includes('housing') ||
     desc.includes('chassis') ||
     desc.includes('rear cover') ||
+    /\b(64\s*gb|128\s*gb|256\s*gb|512\s*gb|1\s*tb)\b/i.test(desc) ||
+    desc.includes('ci/ar') ||
     cat === 'cat-midrear' ||
     cat === 'cat-logic-mid' ||
-    cat === 'cat-rearsystem'
-  ) {
-    return 'MID_REAR';
+    cat === 'cat-rearsystem';
+
+  if (isMidRearCandidate && !hasUnrelatedTerm) {
+    if (!desc.includes('battery') && !desc.includes('display') && !desc.includes('screen') && !desc.includes('camera') && !desc.includes('microphone') && !desc.includes('speaker') && !desc.includes('screw') && !desc.includes('adhesive')) {
+      return 'MID_REAR';
+    }
   }
 
   return 'OTHER';
@@ -122,6 +173,9 @@ export function isPartMatchingCategoryFilter(item, selectedCats = DEFAULT_SELECT
   if (!item) return false;
   if (!Array.isArray(selectedCats) || selectedCats.length === 0) return true;
 
+  // Explicit 'ALL' or 'ALL_PARTS' bypasses filter
+  if (selectedCats.includes('ALL') || selectedCats.includes('ALL_PARTS')) return true;
+
   const partCat = getPartCategory(item);
 
   // If part is recognized in the 5 main categories
@@ -129,9 +183,9 @@ export function isPartMatchingCategoryFilter(item, selectedCats = DEFAULT_SELECT
     return selectedCats.includes(partCat);
   }
 
-  // For unclassified 'OTHER' parts (speakers, trays, screws)
-  // Only include if all categories are checked or explicitly in an 'ALL_PARTS' scope
-  return selectedCats.length >= HARDWARE_CATEGORIES.length || selectedCats.includes('OTHER');
+  // For unclassified 'OTHER' parts (microphones, speakers, trays, screws, brackets)
+  // Only include if explicitly requested via 'OTHER' category
+  return selectedCats.includes('OTHER');
 }
 
 /**

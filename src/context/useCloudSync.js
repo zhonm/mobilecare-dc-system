@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { normalizeInventoryUnits } from '../utils/partResolver';
+import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { reconcileUnitsWithPackedDrafts, toValidUUID, isUUID, safeUUID, formatShipmentForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
@@ -522,7 +522,9 @@ export function useCloudSync({
             id: s.id,
             code: s.code,
             name: s.name,
-            region: s.region || 'Metro Manila',
+            region: (s.code === 'ASP LAU' || s.code === 'LAU' || s.code === 'ASP NAG' || s.code === 'NAG')
+              ? 'Camarines Sur'
+              : (s.region || (isProvincialSite(s) ? 'Provincial' : 'Metro Manila')),
             address: s.address || s.full_address || '',
             full_address: s.full_address || s.address || '',
             contact_person: s.contact_person || '',
@@ -936,12 +938,6 @@ export function useCloudSync({
                 const existing = shipmentMap.get(canonicalRef);
                 if (!existing) {
                   shipmentMap.set(canonicalRef, s);
-                } else {
-                  const existingTime = new Date(existing.updated_at || existing.created_at || 0).getTime();
-                  const localTime = new Date(s.updated_at || s.created_at || 0).getTime();
-                  if (localTime >= existingTime || (Array.isArray(s.items) && s.items.length >= (existing.items?.length || 0))) {
-                    shipmentMap.set(canonicalRef, { ...existing, ...s });
-                  }
                 }
               }
             });
@@ -956,7 +952,8 @@ export function useCloudSync({
               ? s.prepared_by_name
               : (s.saved_by_name && s.saved_by_name !== 'Warehouse Staff' ? s.saved_by_name : (currentUser?.fullName || 'Zhon Manaois'));
 
-            const resolvedStatus = s.status || (isLockedConfirmedShipment(s) || s.received_at || s.received_date ? 'received_confirmed' : 'pending_pickup');
+            const isConfirmed = isLockedConfirmedShipment(s) || s.status === 'received_confirmed' || s.status === 'delivered';
+            const resolvedStatus = isConfirmed ? 'received_confirmed' : (s.status || 'pending_pickup');
             return {
               ...s,
               status: resolvedStatus,

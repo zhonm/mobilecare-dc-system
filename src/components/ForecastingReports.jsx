@@ -550,11 +550,10 @@ export default function ForecastingReports() {
     activeAllocations.forEach(alloc => {
       const siteQtys = alloc.site_quantities || {};
       const allocPrice = getPartStockPrice(alloc);
-      const desc = (alloc.description || '').toLowerCase();
-      const cat = (alloc.category_id || '').toLowerCase();
-      const isBattery = desc.includes('battery') || cat === 'cat-battery';
-      const isDisplay = desc.includes('display') || cat === 'cat-display';
-      const isCamera = desc.includes('camera') || cat === 'cat-camera';
+      const partCat = getPartCategory(alloc);
+      const isBattery = partCat === 'BATTERY';
+      const isDisplay = partCat === 'DISPLAY';
+      const isCamera = partCat === 'CAMERA';
 
       Object.entries(siteQtys).forEach(([siteKey, q]) => {
         const qty = Number(q) || 0;

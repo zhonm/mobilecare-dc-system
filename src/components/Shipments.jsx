@@ -16,9 +16,22 @@ import {
   Truck,
   Clock,
   PackageCheck,
+  Hash,
+  Copy,
+  Building2,
+  MapPin,
+  Layers,
+  CheckCheck,
+  ListFilter
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
-import { isLockedConfirmedShipment } from '../utils/appContextHelpers';
+import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
+import {
+  isShipmentMetroManila,
+  isShipmentProvince,
+  extractShipmentSerials,
+  formatSerialsForExport
+} from '../utils/shipmentHelpers';
 
 export default function Shipments() {
   const {
@@ -37,8 +50,21 @@ export default function Shipments() {
     supervisorSettings
   } = useApp();
 
+  // Regional Tab State: 'ALL' | 'METRO_MANILA' | 'PROVINCE'
+  const [regionTab, setRegionTab] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
+
+  // Serials Modal State (View & Copy Plain Text for GSX / Fixably)
+  const [serialsModalState, setSerialsModalState] = useState(null);
+  const [serialsFormat, setSerialsFormat] = useState('lines'); // 'lines' | 'csv' | 'tsv'
+  const [serialsModalSearch, setSerialsModalSearch] = useState('');
+  const [showPlainTextArea, setShowPlainTextArea] = useState(false);
+  const [copiedSerialToken, setCopiedSerialToken] = useState(null); // 'ALL' | specific serial string
+
+  // Site Serials Aggregator Modal State
+  const [isSiteSerialsModalOpen, setIsSiteSerialsModalOpen] = useState(false);
+  const [selectedAggSiteId, setSelectedAggSiteId] = useState('');
 
   // Courier Pickup Handover Modal State
   const [pickupModalState, setPickupModalState] = useState(null);
@@ -84,7 +110,26 @@ export default function Shipments() {
     return 'pending_pickup';
   };
 
-  // Status Summary Counts
+  // Regional Summary Counts
+  const regionalCounts = useMemo(() => {
+    let all = 0;
+    let mm = 0;
+    let prov = 0;
+
+    (shipments || []).forEach(sh => {
+      if (!sh.items || sh.items.length === 0) return;
+      all++;
+      if (isShipmentMetroManila(sh, sites)) {
+        mm++;
+      } else {
+        prov++;
+      }
+    });
+
+    return { all, mm, prov };
+  }, [shipments, sites]);
+
+  // Status Summary Counts (dynamically scoped by active regional tab)
   const statusCounts = useMemo(() => {
     let pending = 0;
     let shipped = 0;
@@ -93,6 +138,11 @@ export default function Shipments() {
 
     (shipments || []).forEach(sh => {
       if (!sh.items || sh.items.length === 0) return;
+
+      // Filter by active region tab
+      if (regionTab === 'METRO_MANILA' && !isShipmentMetroManila(sh, sites)) return;
+      if (regionTab === 'PROVINCE' && !isShipmentProvince(sh, sites)) return;
+
       validTotal++;
       const norm = getNormalizedStatus(sh);
       if (norm === 'received_confirmed') received++;
@@ -101,14 +151,19 @@ export default function Shipments() {
     });
 
     return { total: validTotal, pending, shipped, received };
-  }, [shipments]);
+  }, [shipments, regionTab, sites]);
 
-  // Filtered shipments list
+  // Filtered shipments list (regional tab + status pill + search query)
   const filteredShipments = useMemo(() => {
     return (shipments || []).filter(s => {
       if (!s.items || s.items.length === 0) return false;
-      const norm = getNormalizedStatus(s);
 
+      // 1. Regional Tab Filter
+      if (regionTab === 'METRO_MANILA' && !isShipmentMetroManila(s, sites)) return false;
+      if (regionTab === 'PROVINCE' && !isShipmentProvince(s, sites)) return false;
+
+      // 2. Status Filter
+      const norm = getNormalizedStatus(s);
       if (filterStatus !== 'ALL') {
         if (filterStatus === 'pending_pickup' && norm !== 'pending_pickup' && norm !== 'draft' && norm !== 'packing') return false;
         if (filterStatus === 'shipped' && norm !== 'shipped') return false;
@@ -116,23 +171,123 @@ export default function Shipments() {
         if (filterStatus === 'draft' && norm !== 'draft') return false;
       }
 
+      // 3. Search Filter (searches Invoice Ref, TS#, Tracking, Site, Courier, Rider, and Serial Numbers)
       if (search.trim()) {
         const q = search.toLowerCase();
         const refMatch = s.invoice_ref?.toLowerCase().includes(q) || s.shipment_number?.toLowerCase().includes(q);
+        const tsMatch = s.transfer_slip_number?.toLowerCase().includes(q);
         const trackMatch = s.tracking_number?.toLowerCase().includes(q);
         const siteMatch = s.site_name?.toLowerCase().includes(q);
         const carrierMatch = (s.carrier || s.courier)?.toLowerCase().includes(q);
         const pickupMatch = s.pickup_by_name?.toLowerCase().includes(q);
         const receivedMatch = s.received_by_name?.toLowerCase().includes(q);
-        if (!refMatch && !trackMatch && !siteMatch && !carrierMatch && !pickupMatch && !receivedMatch) return false;
+        const serialMatch = s.items?.some(it => {
+          const sn = String(it.serial_number || it.serialNumber || it.serial || '').toLowerCase();
+          const pn = String(it.part_number || it.partNumber || '').toLowerCase();
+          return sn.includes(q) || pn.includes(q);
+        });
+        if (!refMatch && !tsMatch && !trackMatch && !siteMatch && !carrierMatch && !pickupMatch && !receivedMatch && !serialMatch) return false;
       }
       return true;
     });
-  }, [shipments, filterStatus, search]);
+  }, [shipments, regionTab, filterStatus, search, sites]);
+
+  // Aggregate sites with active shipments for site-level serial viewer
+  const availableSitesWithShipments = useMemo(() => {
+    const siteMap = new Map();
+    (shipments || []).forEach(s => {
+      if (!s.items || s.items.length === 0) return;
+      const resolved = resolveSite(s.site_id || s.site_name, sites);
+      if (!siteMap.has(resolved.id)) {
+        siteMap.set(resolved.id, {
+          site: resolved,
+          shipments: [s],
+          totalUnits: s.items.length,
+          isMM: isShipmentMetroManila(s, sites)
+        });
+      } else {
+        const entry = siteMap.get(resolved.id);
+        entry.shipments.push(s);
+        entry.totalUnits += s.items.length;
+      }
+    });
+    return Array.from(siteMap.values());
+  }, [shipments, sites]);
+
+  // --- Packing List Serial Numbers Modal Handlers ---
+  const handleOpenSerialsModal = (shipment) => {
+    const destSite = resolveSite(shipment.site_id || shipment.site_name, sites);
+    setSerialsModalState({
+      shipment,
+      site: destSite
+    });
+    setSerialsFormat('lines');
+    setSerialsModalSearch('');
+    setShowPlainTextArea(false);
+  };
+
+  const handleCopySerials = (shipment, format = serialsFormat) => {
+    if (!shipment || !Array.isArray(shipment.items)) return;
+    const serials = extractShipmentSerials(shipment);
+
+    if (serials.length === 0) {
+      showToast('No serial numbers found in this packing list.', 'warning');
+      return;
+    }
+
+    let textToCopy = '';
+    if (format === 'lines') {
+      textToCopy = serials.join('\n');
+    } else if (format === 'csv') {
+      textToCopy = serials.join(', ');
+    } else if (format === 'tsv') {
+      const rows = shipment.items.map((it, idx) => {
+        const pn = it.part_number || it.partNumber || 'N/A';
+        const desc = it.description || it.partDescription || '';
+        const sn = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+        const box = it.box_number ? `${it.box_number}/${shipment.total_boxes || 1}` : '1/1';
+        return `${idx + 1}\t${pn}\t${desc}\t${sn}\t${box}`;
+      });
+      textToCopy = `NO\tPART NUMBER\tDESCRIPTION\tSERIAL NUMBER\tBOX #\n${rows.join('\n')}`;
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = textToCopy;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+
+    setCopiedSerialToken('ALL');
+    showToast(`Copied ${serials.length} serials to clipboard (${format === 'lines' ? 'GSX/Fixably plain text' : format.toUpperCase()})`, 'success');
+    setTimeout(() => setCopiedSerialToken(null), 2500);
+  };
+
+  const handleCopySingleSerial = (sn) => {
+    if (!sn) return;
+    const clean = String(sn).trim().toUpperCase();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(clean);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = clean;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    setCopiedSerialToken(clean);
+    showToast(`Copied ${clean} to clipboard`, 'info');
+    setTimeout(() => setCopiedSerialToken(null), 2000);
+  };
 
   // --- Courier Handover: Open Modal ---
   const handleOpenPickupModal = (shipment) => {
-    const isMM = sites.find(st => st.id === shipment.site_id)?.region === 'Metro Manila';
+    const isMM = isShipmentMetroManila(shipment, sites);
     setPickupModalState({
       shipment,
       carrier: shipment.carrier || shipment.courier || (isMM ? 'Lalamove' : 'Lite Express'),
@@ -339,6 +494,24 @@ export default function Shipments() {
 
             <button
               className="btn btn-secondary btn-sm"
+              onClick={() => setIsSiteSerialsModalOpen(true)}
+              style={{
+                background: '#f8fafc',
+                color: '#0f172a',
+                borderColor: '#cbd5e1',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="View all serial numbers grouped by site"
+            >
+              <Hash size={15} color="#0284c7" />
+              <span>Serials by Site</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
               onClick={() => setIsImportModalOpen(true)}
               style={{
                 background: '#f8fafc',
@@ -368,8 +541,116 @@ export default function Shipments() {
           </div>
         </div>
 
-        {/* 2. Interactive Status Filter Pills */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '14px' }}>
+        {/* 2. Regional Navigation Tabs (Metro Manila vs Province) */}
+        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '14px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginRight: '4px' }}>
+            Region:
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setRegionTab('ALL')}
+            style={{
+              background: regionTab === 'ALL' ? '#0f172a' : '#f8fafc',
+              color: regionTab === 'ALL' ? '#ffffff' : '#475569',
+              borderColor: regionTab === 'ALL' ? '#0f172a' : '#e2e8f0',
+              fontWeight: 700,
+              fontSize: '12px',
+              borderRadius: '8px',
+              padding: '5px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: regionTab === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+            }}
+          >
+            <Layers size={13} />
+            <span>All Sites</span>
+            <span style={{
+              background: regionTab === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+              color: regionTab === 'ALL' ? '#fff' : '#475569',
+              padding: '1px 6px',
+              borderRadius: '10px',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              marginLeft: '2px'
+            }}>
+              {regionalCounts.all}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setRegionTab('METRO_MANILA')}
+            style={{
+              background: regionTab === 'METRO_MANILA' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#f8fafc',
+              color: regionTab === 'METRO_MANILA' ? '#ffffff' : '#475569',
+              borderColor: regionTab === 'METRO_MANILA' ? '#0284c7' : '#e2e8f0',
+              fontWeight: 700,
+              fontSize: '12px',
+              borderRadius: '8px',
+              padding: '5px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: regionTab === 'METRO_MANILA' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+            }}
+          >
+            <Building2 size={13} />
+            <span>Metro Manila</span>
+            <span style={{
+              background: regionTab === 'METRO_MANILA' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+              color: regionTab === 'METRO_MANILA' ? '#fff' : '#475569',
+              padding: '1px 6px',
+              borderRadius: '10px',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              marginLeft: '2px'
+            }}>
+              {regionalCounts.mm}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setRegionTab('PROVINCE')}
+            style={{
+              background: regionTab === 'PROVINCE' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : '#f8fafc',
+              color: regionTab === 'PROVINCE' ? '#ffffff' : '#475569',
+              borderColor: regionTab === 'PROVINCE' ? '#7c3aed' : '#e2e8f0',
+              fontWeight: 700,
+              fontSize: '12px',
+              borderRadius: '8px',
+              padding: '5px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: regionTab === 'PROVINCE' ? '0 2px 6px rgba(124,58,237,0.25)' : 'none'
+            }}
+          >
+            <MapPin size={13} />
+            <span>Province</span>
+            <span style={{
+              background: regionTab === 'PROVINCE' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+              color: regionTab === 'PROVINCE' ? '#fff' : '#475569',
+              padding: '1px 6px',
+              borderRadius: '10px',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              marginLeft: '2px'
+            }}>
+              {regionalCounts.prov}
+            </span>
+          </button>
+        </div>
+
+        {/* 3. Interactive Status Filter Pills */}
+        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
           <button
             className="btn btn-sm"
             onClick={() => setFilterStatus('ALL')}
@@ -473,7 +754,7 @@ export default function Shipments() {
                 </tr>
               ) : (
                 filteredShipments.map(sh => {
-                  const destSite = sites.find(s => s.id === sh.site_id) || {};
+                  const destSite = resolveSite(sh.site_id || sh.site_name, sites);
                   const normStatus = getNormalizedStatus(sh);
 
                   return (
@@ -487,7 +768,22 @@ export default function Shipments() {
                         )}
                       </td>
                       <td>
-                        <strong>{destSite.code || 'ASP'}</strong>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <strong>{destSite.code || 'ASP'}</strong>
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: '9.5px',
+                              padding: '1px 5px',
+                              background: isShipmentMetroManila(sh, sites) ? '#e0f2fe' : '#f3e8ff',
+                              color: isShipmentMetroManila(sh, sites) ? '#0369a1' : '#6b21a8',
+                              border: `1px solid ${isShipmentMetroManila(sh, sites) ? '#bae6fd' : '#e9d5ff'}`,
+                              fontWeight: 600
+                            }}
+                          >
+                            {isShipmentMetroManila(sh, sites) ? 'Metro Manila' : 'Province'}
+                          </span>
+                        </div>
                         <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
                           {destSite.name || sh.site_name}
                         </div>
@@ -601,6 +897,24 @@ export default function Shipments() {
 
                       <td style={{ textAlign: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleOpenSerialsModal(sh)}
+                            title="View Serial Numbers inside Packing List & Copy for GSX / Fixably"
+                            style={{
+                              background: '#f8fafc',
+                              color: '#0f172a',
+                              borderColor: '#cbd5e1',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            <Hash size={13} color="#0284c7" />
+                            <span>Serials</span>
+                          </button>
+
                           <button
                             className="btn btn-secondary btn-sm"
                             onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
@@ -1323,6 +1637,588 @@ export default function Shipments() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- Packing List Serial Numbers Modal (View & Plain-Text Copy for GSX/Fixably) --- */}
+      {serialsModalState && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setSerialsModalState(null); }}>
+          <div className="modal-content" style={{ maxWidth: '780px', width: '95%' }}>
+            <div className="modal-header" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderBottom: '1px solid #334155' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '8px', borderRadius: '8px' }}>
+                  <Hash size={22} color="#38bdf8" />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Packing List Serial Numbers</h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Manifest: <strong style={{ color: '#f8fafc' }}>{serialsModalState.shipment?.invoice_ref || serialsModalState.shipment?.shipment_number}</strong>
+                    {serialsModalState.shipment?.transfer_slip_number && (
+                      <span> • TS: <strong style={{ color: '#38bdf8' }}>{serialsModalState.shipment?.transfer_slip_number}</strong></span>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSerialsModalState(null)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
+              {/* Manifest Details Ribbon */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '12px 16px',
+                  marginBottom: '16px',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: '12px'
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Destination Site</div>
+                  <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
+                    {serialsModalState.site?.name || serialsModalState.shipment?.site_name}
+                  </div>
+                  <div style={{ marginTop: '3px' }}>
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: '10px',
+                        background: isShipmentMetroManila(serialsModalState.shipment, sites) ? '#e0f2fe' : '#f3e8ff',
+                        color: isShipmentMetroManila(serialsModalState.shipment, sites) ? '#0369a1' : '#6b21a8',
+                        border: `1px solid ${isShipmentMetroManila(serialsModalState.shipment, sites) ? '#bae6fd' : '#e9d5ff'}`,
+                        fontWeight: 600
+                      }}
+                    >
+                      {isShipmentMetroManila(serialsModalState.shipment, sites) ? 'Metro Manila' : 'Province'}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Courier &amp; Tracking</div>
+                  <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                    {serialsModalState.shipment?.carrier || serialsModalState.shipment?.courier || 'Lite Express'}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+                    {serialsModalState.shipment?.tracking_number ? `#${serialsModalState.shipment?.tracking_number}` : 'Hand Carry / Direct'}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Dispatched Units</div>
+                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#0284c7', marginTop: '2px' }}>
+                    {extractShipmentSerials(serialsModalState.shipment).length} Serialized Units
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b' }}>
+                    {serialsModalState.shipment?.total_boxes || 1} Box{(serialsModalState.shipment?.total_boxes || 1) > 1 ? 'es' : ''}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Shipment Status</div>
+                  <div style={{ marginTop: '3px' }}>
+                    <span className="badge" style={{
+                      background: getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#ecfdf5' : '#f0f9ff',
+                      color: getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#047857' : '#0369a1',
+                      border: `1px solid ${getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#a7f3d0' : '#bae6fd'}`,
+                      fontWeight: 700,
+                      fontSize: '11px'
+                    }}>
+                      {getNormalizedStatus(serialsModalState.shipment).toUpperCase().replace('_', ' ')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* GSX / Fixably Copy Control Card */}
+              <div
+                style={{
+                  background: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: '10px',
+                  padding: '14px 16px',
+                  marginBottom: '16px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <strong style={{ fontSize: '13.5px', color: '#14532d' }}>GSX / Fixably Plain Text Export</strong>
+                      <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontSize: '10px', border: '1px solid #86efac' }}>
+                        Ready to Paste
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '11.5px', color: '#166534', margin: '2px 0 0 0' }}>
+                      Copies plain-text serials formatted for instant insertion into Apple GSX or Fixably Transfer tickets.
+                    </p>
+                  </div>
+
+                  {/* Copy All Button */}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => handleCopySerials(serialsModalState.shipment, serialsFormat)}
+                    style={{
+                      background: copiedSerialToken === 'ALL' ? '#15803d' : '#16a34a',
+                      color: '#ffffff',
+                      borderColor: '#15803d',
+                      fontWeight: 700,
+                      fontSize: '12.5px',
+                      padding: '8px 16px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                      boxShadow: '0 2px 5px rgba(22, 163, 74, 0.25)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {copiedSerialToken === 'ALL' ? (
+                      <>
+                        <Check size={15} />
+                        <span>Copied {extractShipmentSerials(serialsModalState.shipment).length} Serials!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={15} />
+                        <span>Copy All Serials ({extractShipmentSerials(serialsModalState.shipment).length})</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Format Options & Plain Text Preview Toggle */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', borderTop: '1px solid #dcfce7', paddingTop: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#166534' }}>Format:</span>
+                    <button
+                      type="button"
+                      onClick={() => setSerialsFormat('lines')}
+                      style={{
+                        background: serialsFormat === 'lines' ? '#166534' : '#ffffff',
+                        color: serialsFormat === 'lines' ? '#ffffff' : '#166534',
+                        border: '1px solid #86efac',
+                        borderRadius: '6px',
+                        padding: '3px 9px',
+                        fontSize: '11px',
+                        fontWeight: serialsFormat === 'lines' ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      1 Per Line (GSX/Fixably Bulk)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSerialsFormat('csv')}
+                      style={{
+                        background: serialsFormat === 'csv' ? '#166534' : '#ffffff',
+                        color: serialsFormat === 'csv' ? '#ffffff' : '#166534',
+                        border: '1px solid #86efac',
+                        borderRadius: '6px',
+                        padding: '3px 9px',
+                        fontSize: '11px',
+                        fontWeight: serialsFormat === 'csv' ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Comma Separated (CSV)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSerialsFormat('tsv')}
+                      style={{
+                        background: serialsFormat === 'tsv' ? '#166534' : '#ffffff',
+                        color: serialsFormat === 'tsv' ? '#ffffff' : '#166534',
+                        border: '1px solid #86efac',
+                        borderRadius: '6px',
+                        padding: '3px 9px',
+                        fontSize: '11px',
+                        fontWeight: serialsFormat === 'tsv' ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      TSV Table (Part No + Serials)
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowPlainTextArea(prev => !prev)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#15803d',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textDecoration: 'underline'
+                    }}
+                  >
+                    {showPlainTextArea ? 'Hide Plain-Text Area' : 'Show Plain-Text Area'}
+                  </button>
+                </div>
+
+                {/* Collapsible Plain Textarea Box */}
+                {showPlainTextArea && (
+                  <div style={{ marginTop: '12px' }}>
+                    <textarea
+                      readOnly
+                      rows={Math.min(8, Math.max(3, extractShipmentSerials(serialsModalState.shipment).length))}
+                      value={
+                        serialsFormat === 'lines'
+                          ? extractShipmentSerials(serialsModalState.shipment).join('\n')
+                          : serialsFormat === 'csv'
+                          ? extractShipmentSerials(serialsModalState.shipment).join(', ')
+                          : (serialsModalState.shipment?.items || []).map((it, idx) => `${idx + 1}\t${it.part_number || ''}\t${it.description || ''}\t${it.serial_number || it.serialNumber || ''}\t${it.box_number || 1}`).join('\n')
+                      }
+                      onFocus={(e) => e.target.select()}
+                      style={{
+                        width: '100%',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '11.5px',
+                        background: '#ffffff',
+                        border: '1px solid #86efac',
+                        borderRadius: '6px',
+                        padding: '8px 10px',
+                        color: '#0f172a'
+                      }}
+                    />
+                    <div style={{ fontSize: '10.5px', color: '#166534', marginTop: '2px', textAlign: 'right' }}>
+                      Click inside the box to select all text.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Serials Table Header & In-Modal Search */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: '10px' }}>
+                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a' }}>
+                  Packing List Items ({serialsModalState.shipment?.items?.length || 0})
+                </div>
+                <div style={{ position: 'relative', width: '220px' }}>
+                  <Search size={12} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Filter serials or part codes..."
+                    value={serialsModalSearch}
+                    onChange={(e) => setSerialsModalSearch(e.target.value)}
+                    style={{ paddingLeft: '26px', height: '30px', fontSize: '11.5px', width: '100%' }}
+                  />
+                </div>
+              </div>
+
+              {/* Table of Serial Numbers */}
+              <div className="table-container" style={{ border: '1px solid #e2e8f0', borderRadius: '8px', maxHeight: '340px', overflowY: 'auto' }}>
+                <table className="data-table" style={{ margin: 0 }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f8fafc' }}>
+                    <tr>
+                      <th style={{ width: '40px', textAlign: 'center' }}>#</th>
+                      <th style={{ width: '120px' }}>Part Number</th>
+                      <th>Description</th>
+                      <th>Serial Number</th>
+                      <th style={{ width: '70px', textAlign: 'center' }}>Box #</th>
+                      <th style={{ width: '80px', textAlign: 'center' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(serialsModalState.shipment?.items || [])
+                      .filter(it => {
+                        if (!serialsModalSearch.trim()) return true;
+                        const q = serialsModalSearch.toLowerCase();
+                        const sn = String(it.serial_number || it.serialNumber || it.serial || '').toLowerCase();
+                        const pn = String(it.part_number || it.partNumber || '').toLowerCase();
+                        const desc = String(it.description || it.partDescription || '').toLowerCase();
+                        return sn.includes(q) || pn.includes(q) || desc.includes(q);
+                      })
+                      .map((it, idx) => {
+                        const serialVal = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+                        const isCopied = copiedSerialToken === serialVal;
+
+                        return (
+                          <tr key={idx}>
+                            <td style={{ textAlign: 'center', fontSize: '11px', color: '#64748b' }}>{idx + 1}</td>
+                            <td className="font-mono" style={{ fontWeight: 600, fontSize: '12px' }}>
+                              {it.part_number || it.partNumber || 'N/A'}
+                            </td>
+                            <td style={{ fontSize: '11.5px', color: '#334155' }}>
+                              {it.description || it.partDescription || 'Service Part'}
+                            </td>
+                            <td>
+                              <span
+                                className="font-mono"
+                                style={{
+                                  background: '#f1f5f9',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                  color: '#0f172a',
+                                  border: '1px solid #e2e8f0',
+                                  letterSpacing: '0.5px'
+                                }}
+                              >
+                                {serialVal || 'NO SERIAL'}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px' }}>
+                              {it.box_number ? `${it.box_number}/${serialsModalState.shipment.total_boxes || 1}` : '1/1'}
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleCopySingleSerial(serialVal)}
+                                title={`Copy ${serialVal}`}
+                                style={{
+                                  padding: '2px 8px',
+                                  fontSize: '11px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  borderColor: isCopied ? '#86efac' : '#cbd5e1',
+                                  background: isCopied ? '#f0fdf4' : '#ffffff',
+                                  color: isCopied ? '#16a34a' : '#475569'
+                                }}
+                              >
+                                {isCopied ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
+                                <span>{isCopied ? 'Copied' : 'Copy'}</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleRequestPrintOrPDF(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site, 'pdf')}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Download size={14} />
+                <span>Download PDF Packing List</span>
+              </button>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setSerialsModalState(null)}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleCopySerials(serialsModalState.shipment, serialsFormat)}
+                  style={{
+                    background: '#16a34a',
+                    borderColor: '#16a34a',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Copy size={14} />
+                  <span>Copy Plain Text Serials</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Site Serials Aggregator Modal (All Shipments per Site) --- */}
+      {isSiteSerialsModalOpen && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setIsSiteSerialsModalOpen(false); }}>
+          <div className="modal-content" style={{ maxWidth: '780px', width: '95%' }}>
+            <div className="modal-header" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderBottom: '1px solid #334155' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '8px', borderRadius: '8px' }}>
+                  <Building2 size={22} color="#38bdf8" />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>View All Serial Numbers by Site</h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Aggregate and copy serial numbers across all shipments for a branch
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSiteSerialsModalOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
+              {/* Site Selector */}
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                  Select Destination Site / Branch:
+                </label>
+                <select
+                  className="form-select"
+                  value={selectedAggSiteId}
+                  onChange={(e) => setSelectedAggSiteId(e.target.value)}
+                  style={{ fontSize: '13px', height: '38px', fontWeight: 600 }}
+                >
+                  <option value="">-- Choose a Site ({availableSitesWithShipments.length} sites with active dispatches) --</option>
+                  {availableSitesWithShipments.map(s => (
+                    <option key={s.site.id} value={s.site.id}>
+                      {s.site.code} - {s.site.name} ({s.isMM ? 'Metro Manila' : 'Province'}) • {s.totalUnits} Units ({s.shipments.length} Manifest{s.shipments.length > 1 ? 's' : ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedAggSiteId && (() => {
+                const targetEntry = availableSitesWithShipments.find(e => e.site.id === selectedAggSiteId);
+                if (!targetEntry) return null;
+
+                const aggregatedSerials = targetEntry.shipments.flatMap(s => extractShipmentSerials(s));
+
+                const copySiteSerials = () => {
+                  if (aggregatedSerials.length === 0) return;
+                  const text = aggregatedSerials.join('\n');
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(text);
+                  }
+                  setCopiedSerialToken(`SITE-${selectedAggSiteId}`);
+                  showToast(`Copied ${aggregatedSerials.length} serials for ${targetEntry.site.name} to clipboard!`, 'success');
+                  setTimeout(() => setCopiedSerialToken(null), 2500);
+                };
+
+                return (
+                  <div>
+                    {/* Site Summary Box */}
+                    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px', marginBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>
+                          {targetEntry.site.name}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                          Region: <strong style={{ color: targetEntry.isMM ? '#0369a1' : '#7c3aed' }}>{targetEntry.isMM ? 'Metro Manila' : 'Province'}</strong> • {targetEntry.shipments.length} Dispatches • {aggregatedSerials.length} Total Serials
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={copySiteSerials}
+                        style={{
+                          background: copiedSerialToken === `SITE-${selectedAggSiteId}` ? '#15803d' : '#16a34a',
+                          color: '#fff',
+                          borderColor: '#15803d',
+                          fontWeight: 700,
+                          fontSize: '12px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        {copiedSerialToken === `SITE-${selectedAggSiteId}` ? (
+                          <>
+                            <Check size={14} />
+                            <span>Copied {aggregatedSerials.length} Serials!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={14} />
+                            <span>Copy All Site Serials ({aggregatedSerials.length})</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Shipments breakdown */}
+                    <div style={{ marginBottom: '14px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '8px' }}>
+                        Shipments for this site:
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {targetEntry.shipments.map(s => {
+                          const sSerials = extractShipmentSerials(s);
+                          return (
+                            <div key={s.id} style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <span className="font-mono" style={{ fontWeight: 700, fontSize: '12.5px', color: '#0f172a' }}>
+                                  {s.invoice_ref || s.shipment_number}
+                                </span>
+                                {s.transfer_slip_number && (
+                                  <span style={{ fontSize: '11px', color: '#0284c7', marginLeft: '8px' }}>TS: {s.transfer_slip_number}</span>
+                                )}
+                                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                                  Date: {s.shipment_date || s.pickup_date || 'N/A'} • {s.carrier || 'Lite Express'} {s.tracking_number ? `#${s.tracking_number}` : ''} • <strong>{sSerials.length} serials</strong>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  setIsSiteSerialsModalOpen(false);
+                                  handleOpenSerialsModal(s);
+                                }}
+                                style={{ fontSize: '11px', padding: '4px 10px' }}
+                              >
+                                View Packing List
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Aggregated Serial Numbers Preview */}
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                        Plain Text Serials (1 per line for GSX / Fixably Bulk):
+                      </div>
+                      <textarea
+                        readOnly
+                        rows={6}
+                        value={aggregatedSerials.join('\n')}
+                        onFocus={(e) => e.target.select()}
+                        style={{
+                          width: '100%',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '11.5px',
+                          background: '#f8fafc',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          color: '#0f172a'
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="modal-footer" style={{ justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIsSiteSerialsModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

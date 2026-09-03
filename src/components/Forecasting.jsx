@@ -104,11 +104,8 @@ export default function Forecasting() {
       if (isPartMatchingCategoryFilter && selectedCategories) {
         if (!isPartMatchingCategoryFilter(item, selectedCategories)) return false;
       } else if (selectedCategory !== 'ALL') {
-        if (selectedCategory === 'BATTERY' && item.category_id !== 'cat-battery') return false;
-        if (selectedCategory === 'DISPLAY' && item.category_id !== 'cat-display') return false;
-        if (selectedCategory === 'CAMERA' && item.category_id !== 'cat-camera') return false;
-        if (selectedCategory === 'BACK_GLASS' && item.category_id !== 'cat-backglass') return false;
-        if (selectedCategory === 'MID_REAR' && item.category_id !== 'cat-midrear') return false;
+        const itemCat = getPartCategory(item);
+        if (selectedCategory !== itemCat) return false;
       }
       // Search filter
       if (tableSearch.trim()) {
