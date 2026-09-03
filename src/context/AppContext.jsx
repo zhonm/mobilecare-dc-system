@@ -304,6 +304,7 @@ export function AppProvider({ children }) {
   const cloudSync = useCloudSync({
     currentUser: auth.currentUser,
     setCurrentUser: auth.setCurrentUser,
+    setPendingFirstTimeUser: auth.setPendingFirstTimeUser,
     activeTab,
     setActiveTab,
     activePeriod,

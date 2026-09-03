@@ -527,14 +527,23 @@ export function useUserManagement({
         const { error } = await statusUpdateQuery;
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          if (!nextState) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Account deactivated by administrator' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+        }
       } catch (e) {
         console.error('Supabase status sync error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          if (!nextState) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Account deactivated by administrator' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+        }
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+      if (broadcastCloudEvent) {
+        if (!nextState) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Account deactivated by administrator' });
+        broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, isActive: nextState, table: 'saved_records' });
+      }
     }
 
     showToast(`Account for ${target.fullName} is now ${nextState ? 'Active' : 'Deactivated'}`, 'info');
@@ -776,14 +785,23 @@ export function useUserManagement({
         const { error } = await passUpdateQuery;
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          if (requireNextLoginReset) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Password reset: Please set a new password' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+        }
       } catch (dbErr) {
         console.error('Supabase password reset sync error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          if (requireNextLoginReset) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Password reset: Please set a new password' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+        }
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+      if (broadcastCloudEvent) {
+        if (requireNextLoginReset) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Password reset: Please set a new password' });
+        broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId, table: 'saved_records' });
+      }
     }
 
     if (requireNextLoginReset) {
@@ -882,15 +900,24 @@ export function useUserManagement({
           await supabase.from('profiles').delete().ilike('email', cleanEmail);
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          broadcastCloudEvent('FORCE_LOGOUT_USER', { userId: targetId, email: cleanEmail, reason: 'Account deleted by administrator' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+        }
       } catch (e) {
         console.error('Supabase delete user error:', e.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) enqueueOfflineAction('PROFILE_DELETE', { id: targetId, email: cleanEmail });
-        if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+        if (broadcastCloudEvent) {
+          broadcastCloudEvent('FORCE_LOGOUT_USER', { userId: targetId, email: cleanEmail, reason: 'Account deleted by administrator' });
+          broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+        }
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+      if (broadcastCloudEvent) {
+        broadcastCloudEvent('FORCE_LOGOUT_USER', { userId: targetId, email: cleanEmail, reason: 'Account deleted by administrator' });
+        broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: targetId, email: cleanEmail, action: 'DELETE', table: 'saved_records' });
+      }
     }
 
     showToast(`Deleted user ${target.fullName}`, 'success');

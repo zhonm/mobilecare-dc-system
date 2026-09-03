@@ -9,10 +9,12 @@ import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_I
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
+import { clearStoredUserSession } from '../utils/security';
 
 export function useCloudSync({
   currentUser,
   setCurrentUser,
+  setPendingFirstTimeUser,
   activeTab,
   setActiveTab,
   activePeriod,
@@ -437,8 +439,46 @@ export function useCloudSync({
           );
 
           if (currentUser && currentUser.email) {
-            const freshCurrent = merged.find(u => u.email?.toLowerCase() === currentUser.email.toLowerCase());
-            if (freshCurrent && (freshCurrent.siteId !== currentUser.siteId || freshCurrent.role !== currentUser.role || freshCurrent.rolePosition !== currentUser.rolePosition)) {
+            const cleanCurEmail = currentUser.email.toLowerCase();
+            const cleanCurId = currentUser.id?.toLowerCase();
+            const isDeleted = mergedDeletedUserIds.includes(cleanCurEmail) ||
+              (cleanCurId && mergedDeletedUserIds.includes(cleanCurId));
+
+            const freshCurrent = merged.find(u =>
+              u.email?.toLowerCase() === cleanCurEmail ||
+              (cleanCurId && u.id?.toLowerCase() === cleanCurId)
+            );
+
+            if (isDeleted || !freshCurrent || freshCurrent.isActive === false || freshCurrent.hasSetPassword === false) {
+              console.warn('[Security Guard] Active session invalidated on cloud sync:', {
+                isDeleted,
+                exists: Boolean(freshCurrent),
+                isActive: freshCurrent?.isActive,
+                hasSetPassword: freshCurrent?.hasSetPassword
+              });
+
+              clearStoredUserSession();
+              try { dbStorage.removeItem('mdc_current_user'); } catch (e) {}
+              if (supabase?.auth?.signOut) {
+                supabase.auth.signOut().catch(() => {});
+              }
+              if (setCurrentUser) {
+                setCurrentUser(null);
+              }
+              if (freshCurrent && freshCurrent.hasSetPassword === false && setPendingFirstTimeUser) {
+                setPendingFirstTimeUser(freshCurrent);
+              }
+              if (showToast) {
+                showToast(
+                  isDeleted || !freshCurrent
+                    ? 'Your account was removed by an administrator. You have been signed out.'
+                    : freshCurrent.isActive === false
+                      ? 'Your account was deactivated. You have been signed out.'
+                      : 'Password configuration required before system access.',
+                  'warning'
+                );
+              }
+            } else if (freshCurrent && (freshCurrent.siteId !== currentUser.siteId || freshCurrent.role !== currentUser.role || freshCurrent.rolePosition !== currentUser.rolePosition)) {
               const updatedSession = { ...currentUser, ...freshCurrent };
               if (setCurrentUser) setCurrentUser(updatedSession);
               try {
@@ -1378,7 +1418,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, currentUser, setCurrentUser, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, currentUser, setCurrentUser, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1739,6 +1779,27 @@ export function useCloudSync({
                   setActivePeriod(bPayload.period);
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+              }
+            } else if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
+              const targetUserId = String(bPayload?.userId || '').trim().toLowerCase();
+              const targetEmail = String(bPayload?.email || '').trim().toLowerCase();
+              const curUserId = String(currentUser?.id || '').trim().toLowerCase();
+              const curEmail = String(currentUser?.email || '').trim().toLowerCase();
+
+              const isMatch = (targetUserId && (targetUserId === curUserId || targetUserId === curEmail)) ||
+                (targetEmail && (targetEmail === curEmail || targetEmail === curUserId));
+
+              if (isMatch) {
+                console.warn('[Security Guard] Active session forcefully terminated via Realtime broadcast.');
+                clearStoredUserSession();
+                try { dbStorage.removeItem('mdc_current_user'); } catch (e) {}
+                if (supabase?.auth?.signOut) {
+                  supabase.auth.signOut().catch(() => {});
+                }
+                if (setCurrentUser) {
+                  setCurrentUser(null);
+                }
+                showToast(`Your session was terminated: ${bPayload?.reason || 'Account deleted or modified by administrator.'}`, 'warning');
               }
             }
 

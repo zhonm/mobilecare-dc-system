@@ -39,9 +39,9 @@ function MainApp() {
     setIsCommandPaletteOpen
   } = useApp();
 
-  // 1. Auth Guard: Show CreatePassword or Login if not authenticated
-  if (!currentUser) {
-    if (pendingFirstTimeUser) {
+  // 1. Auth Guard: Show CreatePassword or Login if not authenticated or password not set
+  if (!currentUser || currentUser.hasSetPassword === false || !currentUser.hasSetPassword) {
+    if (pendingFirstTimeUser || (currentUser && !currentUser.hasSetPassword)) {
       return <CreatePassword />;
     }
     return <Login />;

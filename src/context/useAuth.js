@@ -94,6 +94,29 @@ export function useAuth({
                 ? dbPerms.map(p => p.page_id)
                 : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
 
+              const hasSet = Boolean(dbProf.has_set_password || dbProf.password_hash);
+              const isDeleted = dbProf.is_deleted === true ||
+                deletedIds.includes(cleanAuthEmail) ||
+                deletedIds.includes(dbProf.id?.toLowerCase());
+
+              if (!hasSet || dbProf.is_active === false || isDeleted) {
+                clearStoredUserSession();
+                await dbStorage.removeItem('mdc_current_user');
+                setCurrentUser(null);
+                if (!hasSet && dbProf.is_active !== false && !isDeleted) {
+                  setPendingFirstTimeUser({
+                    id: dbProf.id,
+                    email: dbProf.email,
+                    fullName: dbProf.full_name || cleanAuthEmail.split('@')[0],
+                    role: resolvedRole,
+                    rolePosition: resolvedPosition,
+                    siteId: dbProf.site_id || 'site-dc',
+                    hasSetPassword: false
+                  });
+                }
+                return;
+              }
+
               const recoveredUser = {
                 id: dbProf.id,
                 email: dbProf.email,
@@ -101,9 +124,9 @@ export function useAuth({
                 role: resolvedRole,
                 rolePosition: resolvedPosition,
                 siteId: dbProf.site_id || 'site-dc',
-                hasSetPassword: Boolean(dbProf.has_set_password || dbProf.password_hash),
+                hasSetPassword: true,
                 passwordHash: dbProf.password_hash || null,
-                isActive: dbProf.is_active ?? true,
+                isActive: true,
                 permittedPages: perms
               };
 
@@ -114,7 +137,21 @@ export function useAuth({
             }
 
             const matched = matchUserByEmail(usersList, cleanAuthEmail);
-            if (isMounted && matched && !deletedIds.includes(matched.id?.toLowerCase()) && !deletedIds.includes(matched.email?.toLowerCase())) {
+            if (isMounted && matched) {
+              const isDeleted = deletedIds.includes(matched.id?.toLowerCase()) ||
+                deletedIds.includes(matched.email?.toLowerCase()) ||
+                matched.isDeleted === true;
+
+              if (isDeleted || !matched.hasSetPassword || matched.isActive === false) {
+                clearStoredUserSession();
+                await dbStorage.removeItem('mdc_current_user');
+                setCurrentUser(null);
+                if (!matched.hasSetPassword && matched.isActive !== false && !isDeleted) {
+                  setPendingFirstTimeUser(matched);
+                }
+                return;
+              }
+
               persistUserSession(matched);
               dbStorage.setItem('mdc_current_user', matched);
               setCurrentUser(matched);
@@ -130,16 +167,28 @@ export function useAuth({
       try {
         const dbUser = await dbStorage.getItem('mdc_current_user');
         if (isMounted && dbUser && typeof dbUser === 'object' && dbUser.email) {
-          if (deletedIds.includes(dbUser.id?.toLowerCase()) || deletedIds.includes(dbUser.email?.toLowerCase())) {
+          const isDeleted = deletedIds.includes(dbUser.id?.toLowerCase()) ||
+            deletedIds.includes(dbUser.email?.toLowerCase()) ||
+            dbUser.isDeleted === true;
+
+          if (isDeleted || !dbUser.hasSetPassword || dbUser.isActive === false) {
             clearStoredUserSession();
+            await dbStorage.removeItem('mdc_current_user');
+            setCurrentUser(null);
+            if (!dbUser.hasSetPassword && dbUser.isActive !== false && !isDeleted) {
+              setPendingFirstTimeUser(dbUser);
+            }
             return;
           }
+
           // If Supabase is connected, verify we have an active backend session before trusting stale local storage
           if (supabase) {
             const { data: sessionData } = await supabase.auth.getSession();
             if (!sessionData?.session?.user) {
               // Stale unauthenticated session; clear and require fresh login
               clearStoredUserSession();
+              await dbStorage.removeItem('mdc_current_user');
+              setCurrentUser(null);
               return;
             }
           }
@@ -190,9 +239,32 @@ export function useAuth({
 
       if (Array.isArray(usersList) && usersList.length > 0) {
         const match = usersList.find(u =>
-          u.id === currentUser.id ||
+          (currentUser.id && u.id?.toLowerCase() === currentUser.id.toLowerCase()) ||
           (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
         );
+
+        // Security Guard 1: If usersList is populated and current user is NOT in the list, they have been deleted!
+        if (!match || match.isDeleted === true) {
+          signOut();
+          showToast('Your account is no longer registered. You have been signed out.', 'warning');
+          return;
+        }
+
+        // Security Guard 2: If user was deactivated
+        if (match.isActive === false) {
+          signOut();
+          showToast('Your account has been deactivated. You have been signed out.', 'warning');
+          return;
+        }
+
+        // Security Guard 3: If user has not created a password or is pending password creation, they cannot have an active session!
+        if (match.hasSetPassword === false || !match.hasSetPassword) {
+          signOut();
+          if (setPendingFirstTimeUser) setPendingFirstTimeUser(match);
+          showToast('Password creation pending: Please set your password before logging in.', 'info');
+          return;
+        }
+
         if (match) {
           const permsMatch = Array.isArray(match.permittedPages) && Array.isArray(currentUser.permittedPages)
             ? match.permittedPages.length === currentUser.permittedPages.length && match.permittedPages.every((p, i) => p === currentUser.permittedPages[i])
@@ -222,7 +294,7 @@ export function useAuth({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usersList, currentUser?.id, currentUser?.email, currentUser?.role, currentUser?.isActive, currentUser?.rolePosition]);
 
-  // Revoke an active local session when another client deletes or deactivates it.
+  // Revoke an active local session when another client deletes, deactivates, or resets it.
   useEffect(() => {
     if (!currentUser) return undefined;
 
@@ -236,7 +308,7 @@ export function useAuth({
     const revokeIfCurrentUser = async (userId, email, reason) => {
       if (matchesCurrentUser(userId, email)) {
         await signOut();
-        showToast(`Your account was ${reason}. You have been signed out.`, 'warning');
+        showToast(`Your session was terminated: ${reason}. You have been signed out.`, 'warning');
       }
     };
 
@@ -248,7 +320,9 @@ export function useAuth({
         broadcastBus.onmessage = (event) => {
           const payload = event.data?.payload;
           if (event.data?.type === 'USER_REGISTRY_UPDATED' && payload?.action === 'DELETE') {
-            revokeIfCurrentUser(payload.userId, payload.email, 'deleted');
+            revokeIfCurrentUser(payload.userId, payload.email, 'Account deleted');
+          } else if (event.data?.type === 'FORCE_LOGOUT_USER') {
+            revokeIfCurrentUser(payload?.userId, payload?.email, payload?.reason || 'Terminated by administrator');
           }
         };
       }
@@ -258,8 +332,12 @@ export function useAuth({
           .channel(`mdc-session-guard-${currentUser.id || currentUser.email}`)
           .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (event) => {
             const record = event.new || event.old || {};
-            if (event.eventType === 'DELETE' || record.is_deleted === true || record.is_active === false) {
-              revokeIfCurrentUser(record.id, record.email, event.eventType === 'DELETE' || record.is_deleted ? 'deleted' : 'deactivated');
+            if (event.eventType === 'DELETE' || record.is_deleted === true || record.is_active === false || record.has_set_password === false) {
+              revokeIfCurrentUser(
+                record.id,
+                record.email,
+                event.eventType === 'DELETE' || record.is_deleted ? 'Account deleted' : record.is_active === false ? 'Account deactivated' : 'Password creation required'
+              );
             }
           })
           .subscribe();
