@@ -432,60 +432,116 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
   }).filter(r => r.serial_number);
 }
 
-// Generate auto-sequenced Invoice Reference: DCOWNED# + MMDDYY + Letter (e.g. DCOWNED#082726A, DCOWNED#082726B)
+/**
+ * Convert a positive 1-based integer to bijective base-26 alphabetic sequence
+ * 1 -> A, 2 -> B, ..., 26 -> Z, 27 -> AA, 28 -> AB, ..., 52 -> AZ, 53 -> BA, ..., 702 -> ZZ, 703 -> AAA
+ */
+export function indexToSequenceLetters(n) {
+  let num = Number(n);
+  if (!num || num < 1 || isNaN(num)) return 'A';
+  let result = '';
+  while (num > 0) {
+    const rem = (num - 1) % 26;
+    result = String.fromCharCode(65 + rem) + result;
+    num = Math.floor((num - 1) / 26);
+  }
+  return result;
+}
+
+/**
+ * Convert an alphabetic sequence to 1-based index
+ * A -> 1, B -> 2, ..., Z -> 26, AA -> 27, AB -> 28, ..., ZZ -> 702, AAA -> 703
+ */
+export function sequenceLettersToIndex(str) {
+  if (!str || typeof str !== 'string') return 0;
+  const clean = str.trim().toUpperCase();
+  let result = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const code = clean.charCodeAt(i);
+    if (code < 65 || code > 90) return 0;
+    result = result * 26 + (code - 64);
+  }
+  return result;
+}
+
+/**
+ * Extracts sequence letters from an invoice reference token for a specific dateCode (MMDDYY)
+ */
+export function extractSeqLettersFromRef(refStr, targetDateCode) {
+  if (!refStr || typeof refStr !== 'string') return null;
+  const clean = refStr.trim().toUpperCase();
+  // Matches DCOWNED#MMDDYY[LETTERS] or variants, with letters at the end or cleanly delimited
+  const regex = new RegExp(`(?:DCOWNED[#\\-_]?)?${targetDateCode}([A-Z]+)(?:[^A-Z0-9]|$)`, 'i');
+  const match = clean.match(regex);
+  if (match && match[1]) {
+    return match[1].toUpperCase();
+  }
+  return null;
+}
+
+// Generate auto-sequenced Invoice Reference: DCOWNED# + MMDDYY + Letters (e.g. DCOWNED#090326A ... DCOWNED#090326Z -> DCOWNED#090326AA, DCOWNED#090326AB)
 export function generateNextInvoiceRef(shipmentsList = [], date = new Date()) {
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
   const yy = String(date.getFullYear()).slice(-2);
-  const dateCode = `${mm}${dd}${yy}`; // e.g. "082726"
+  const dateCode = `${mm}${dd}${yy}`; // e.g. "090326"
 
-  const usedLetters = new Set();
+  const usedIndices = new Set();
   const list = Array.isArray(shipmentsList) ? shipmentsList : [];
 
+  const checkAndRecordRef = (rawRef) => {
+    if (!rawRef) return;
+    const letters = extractSeqLettersFromRef(String(rawRef), dateCode);
+    if (letters) {
+      const idx = sequenceLettersToIndex(letters);
+      if (idx > 0) {
+        usedIndices.add(idx);
+      }
+    }
+  };
+
   list.forEach(s => {
-    const ref = String(s.invoice_ref || s.invoiceRef || s.id || '').toUpperCase();
-    const regex = new RegExp(`(?:DCOWNED[#\\-_]?)?${dateCode}([A-Z]+)`);
-    const match = ref.match(regex);
-    if (match && match[1]) {
-      usedLetters.add(match[1]);
+    checkAndRecordRef(s.invoice_ref);
+    checkAndRecordRef(s.invoiceRef);
+    checkAndRecordRef(s.shipment_number);
+    // Only check s.id if it contains DCOWNED to avoid false matches on UUIDs or random timestamps
+    if (s.id && String(s.id).toUpperCase().includes('DCOWNED')) {
+      checkAndRecordRef(s.id);
     }
   });
 
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (key && (key.startsWith('mdc_pack_draft_') || key === 'mdc_active_pack_draft')) {
           const d = JSON.parse(localStorage.getItem(key) || '{}');
-          const ref = String(d.invoice_ref || '').toUpperCase();
-          const regex = new RegExp(`(?:DCOWNED[#\\-_]?)?${dateCode}([A-Z]+)`);
-          const match = ref.match(regex);
-          if (match && match[1]) {
-            usedLetters.add(match[1]);
-          }
+          checkAndRecordRef(d.invoice_ref);
+          checkAndRecordRef(d.invoiceRef);
         }
+      }
+      // Check deleted shipment IDs registry
+      const deletedList = JSON.parse(localStorage.getItem('mdc_deleted_shipment_ids') || '[]');
+      if (Array.isArray(deletedList)) {
+        deletedList.forEach(token => checkAndRecordRef(token));
       }
     } catch (e) {}
   }
 
-  // Assign next sequential letter (A, B, C, ... Z)
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  for (let i = 0; i < alphabet.length; i++) {
-    const letter = alphabet[i];
-    if (!usedLetters.has(letter)) {
-      return `DCOWNED#${dateCode}${letter}`;
+  // Find the highest sequence index used for this date
+  let maxIndex = 0;
+  usedIndices.forEach(idx => {
+    if (idx > maxIndex) {
+      maxIndex = idx;
     }
+  });
+
+  // Calculate next sequential index: strictly monotonic (A -> B ... Z -> AA -> AB ...)
+  let nextIndex = maxIndex + 1;
+  while (usedIndices.has(nextIndex)) {
+    nextIndex++;
   }
 
-  // Fallback for > 26 shipments on the same date (AA, AB, etc.)
-  for (let i = 0; i < alphabet.length; i++) {
-    for (let j = 0; j < alphabet.length; j++) {
-      const combo = `${alphabet[i]}${alphabet[j]}`;
-      if (!usedLetters.has(combo)) {
-        return `DCOWNED#${dateCode}${combo}`;
-      }
-    }
-  }
-
-  return `DCOWNED#${dateCode}${Date.now().toString().slice(-2)}`;
+  const nextSeqLetters = indexToSequenceLetters(nextIndex);
+  return `DCOWNED#${dateCode}${nextSeqLetters}`;
 }
