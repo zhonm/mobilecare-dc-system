@@ -1043,35 +1043,37 @@ export default function SettingsCatalog() {
       {/* --- Modal: Confirm Delete Part --- */}
       {deletingPart && (
         <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setDeletingPart(null); }}>
-          <div className="modal-content" style={{ maxWidth: '460px' }}>
-            <div className="modal-header" style={{ background: '#991b1b' }}>
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ background: '#991b1b', color: '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <AlertTriangle size={20} color="#fff" />
-                <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>Delete Part from Catalog?</h3>
+                <AlertTriangle size={20} color="#fca5a5" />
+                <h3 style={{ color: '#fff', fontSize: '16px', margin: 0, fontWeight: 700 }}>Confirm Part Deletion</h3>
               </div>
-              <button onClick={() => setDeletingPart(null)} style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer' }}>
+              <button onClick={() => setDeletingPart(null)} style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}>
                 <X size={18} />
               </button>
             </div>
             <div className="modal-body" style={{ padding: '20px' }}>
-              <p style={{ fontSize: '13.5px', color: 'var(--text-main)', marginBottom: '12px' }}>
-                Are you sure you want to delete part <strong className="font-mono">{deletingPart.part_number}</strong>?
+              <p style={{ fontSize: '13.5px', color: '#1e293b', margin: '0 0 14px' }}>
+                Are you sure you want to permanently delete part <strong className="font-mono" style={{ color: '#b91c1c' }}>{deletingPart.part_number}</strong>?
               </p>
-              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px 14px', borderRadius: 'var(--radius-md)', fontSize: '12.5px', marginBottom: '12px' }}>
-                <div><strong>Description:</strong> {deletingPart.description}</div>
-                <div><strong>iPhone Model:</strong> {deletingPart.iphone_model || 'iPhone'}</div>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px 14px', borderRadius: '8px', fontSize: '12.5px', marginBottom: '14px' }}>
+                <div style={{ marginBottom: '4px' }}><strong>Part Number:</strong> <span className="font-mono">{deletingPart.part_number}</span></div>
+                <div style={{ marginBottom: '4px' }}><strong>Description:</strong> {deletingPart.description}</div>
+                <div style={{ marginBottom: '4px' }}><strong>iPhone Model:</strong> {deletingPart.iphone_model || 'iPhone'}</div>
                 <div><strong>Stock Price:</strong> ${deletingPart.stocking_price || 0}</div>
               </div>
-              <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '10px 14px', borderRadius: 'var(--radius-md)', fontSize: '12px', color: '#991b1b' }}>
-                <strong>Warning:</strong> This will remove this part definition from the master catalog across the system.
+              <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '11px 14px', borderRadius: '8px', fontSize: '12px', color: '#991b1b', lineHeight: 1.5 }}>
+                <strong>Accidental Deletion Protection:</strong> This component will be removed from master catalog indexing. This deletion will be <strong>permanently logged in the system Audit Trail</strong>.
               </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setDeletingPart(null)}>
+            <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setDeletingPart(null)}>
                 Cancel
               </button>
-              <button className="btn btn-danger" onClick={handleConfirmDeletePart}>
-                Yes, Delete Part
+              <button className="btn btn-danger btn-sm" onClick={handleConfirmDeletePart} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <Trash2 size={13} />
+                <span>Yes, Permanently Delete Part</span>
               </button>
             </div>
           </div>
@@ -1212,27 +1214,36 @@ export default function SettingsCatalog() {
           {/* ── Delete Branch Confirmation Modal ──────────────────────────── */}
           {deletingSite && (
             <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setDeletingSite(null); }}>
-              <div className="modal-content" style={{ maxWidth: '440px' }}>
-                <div className="modal-header" style={{ background: '#7f1d1d' }}>
+              <div className="modal-content" style={{ maxWidth: '480px' }}>
+                <div className="modal-header" style={{ background: '#991b1b', color: '#fff' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <AlertTriangle size={18} color="#fca5a5" />
-                    <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>Delete Service Branch</h3>
+                    <AlertTriangle size={20} color="#fca5a5" />
+                    <h3 style={{ color: '#fff', fontSize: '16px', margin: 0, fontWeight: 700 }}>Confirm Branch Deletion</h3>
                   </div>
                   <button onClick={() => setDeletingSite(null)} style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}>
                     <X size={18} />
                   </button>
                 </div>
                 <div className="modal-body" style={{ padding: '20px' }}>
-                  <p style={{ margin: '0 0 10px', fontSize: '13.5px', color: '#1e293b' }}>
-                    Are you sure you want to permanently delete <strong>{deletingSite.name}</strong> (<code>{deletingSite.code}</code>)?
+                  <p style={{ margin: '0 0 14px', fontSize: '13.5px', color: '#1e293b' }}>
+                    Are you sure you want to permanently delete service branch <strong style={{ color: '#b91c1c' }}>{deletingSite.name}</strong>?
                   </p>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
-                    This branch will be removed from all active allocations, catalogs, and cloud database records.
-                  </p>
+                  <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px 14px', borderRadius: '8px', fontSize: '12.5px', marginBottom: '14px' }}>
+                    <div style={{ marginBottom: '4px' }}><strong>Branch Code:</strong> <span className="font-mono">{deletingSite.code}</span></div>
+                    <div style={{ marginBottom: '4px' }}><strong>Branch Name:</strong> {deletingSite.name}</div>
+                    <div style={{ marginBottom: '4px' }}><strong>Region:</strong> {deletingSite.region || 'Metro Manila'}</div>
+                    <div><strong>Address:</strong> {deletingSite.address || deletingSite.full_address || '—'}</div>
+                  </div>
+                  <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '11px 14px', borderRadius: '8px', fontSize: '12px', color: '#991b1b', lineHeight: 1.5 }}>
+                    <strong>Accidental Deletion Protection:</strong> This branch will be removed from all active matrices, allocations, and site catalogs. This deletion will be <strong>permanently logged in the system Audit Trail</strong>.
+                  </div>
                 </div>
                 <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                   <button className="btn btn-secondary btn-sm" onClick={() => setDeletingSite(null)}>Cancel</button>
-                  <button className="btn btn-danger btn-sm" onClick={handleConfirmDeleteSite}>Delete Branch</button>
+                  <button className="btn btn-danger btn-sm" onClick={handleConfirmDeleteSite} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <Trash2 size={13} />
+                    <span>Yes, Permanently Delete Branch</span>
+                  </button>
                 </div>
               </div>
             </div>

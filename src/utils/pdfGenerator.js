@@ -1511,6 +1511,10 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
     const tableRows = data.map((d, i) => {
       let impact = [];
       if (d.summary?.itemsCount !== undefined) impact.push(`${d.summary.itemsCount} units purged`);
+      if (d.summary?.description) impact.push(d.summary.description);
+      if (d.summary?.iphone_model) impact.push(`Model: ${d.summary.iphone_model}`);
+      if (d.summary?.site_name) impact.push(d.summary.site_name);
+      if (d.summary?.region) impact.push(`Region: ${d.summary.region}`);
       if (d.summary?.poNumber) impact.push(`PO: ${d.summary.poNumber}`);
       if (d.summary?.destinationSite) impact.push(`Dest: ${d.summary.destinationSite}`);
       if (d.summary?.forecastPartsCount !== undefined) impact.push(`${d.summary.forecastPartsCount} parts`);

@@ -16,8 +16,11 @@ function normalizeSiteCode(rawCode) {
 }
 
 export function useCatalogAndSites({
+  currentUser,
+  getCurrentUser,
   showToast,
   broadcastCloudEvent,
+  logDeletionAudit,
   enqueueOfflineAction,
   setCloudSyncStatus
 }) {
@@ -253,6 +256,31 @@ export function useCatalogAndSites({
       } else {
         if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
       }
+
+      if (typeof logDeletionAudit === 'function') {
+        const activeUser = (typeof getCurrentUser === 'function' ? getCurrentUser() : currentUser) || null;
+        try {
+          await logDeletionAudit({
+            entityType: 'Part Catalog',
+            entityId: deletedPart.part_number,
+            entityLabel: `${deletedPart.part_number} - ${deletedPart.description} (${deletedPart.iphone_model || 'iPhone'})`,
+            reason: 'Part permanently removed from catalog by user',
+            summary: {
+              part_id: deletedPart.id,
+              part_number: deletedPart.part_number,
+              description: deletedPart.description,
+              iphone_model: deletedPart.iphone_model || 'iPhone',
+              category_id: deletedPart.category_id,
+              stocking_price: deletedPart.stocking_price,
+              exchange_price: deletedPart.exchange_price,
+              deleted_by: activeUser?.fullName || 'Specialist'
+            }
+          });
+        } catch (auditErr) {
+          console.warn('Part deletion audit logging note:', auditErr);
+        }
+      }
+
       showToast(`Deleted part ${deletedPart.part_number} (${deletedPart.description}) from catalog`, 'info');
       return { success: true, part: deletedPart };
     }
@@ -401,6 +429,31 @@ export function useCatalogAndSites({
     } else {
       if (broadcastCloudEvent) broadcastCloudEvent('SITE_DELETED', { code: normCode, id: siteId });
     }
+
+    if (typeof logDeletionAudit === 'function') {
+      const activeUser = (typeof getCurrentUser === 'function' ? getCurrentUser() : currentUser) || null;
+      try {
+        await logDeletionAudit({
+          entityType: 'Service Site',
+          entityId: target.code,
+          entityLabel: `${target.name} (${target.code})`,
+          reason: 'Service site permanently removed from directory by user',
+          summary: {
+            site_id: target.id,
+            site_code: target.code,
+            site_name: target.name,
+            region: target.region,
+            address: target.address || target.full_address,
+            contact_person: target.contact_person,
+            is_dc: target.is_dc,
+            deleted_by: activeUser?.fullName || 'Specialist'
+          }
+        });
+      } catch (auditErr) {
+        console.warn('Site deletion audit logging note:', auditErr);
+      }
+    }
+
     showToast(`Deleted site ${target.name} (${target.code})`, 'success');
     return { success: true };
   };

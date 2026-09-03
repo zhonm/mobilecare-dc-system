@@ -226,6 +226,11 @@ export default function AuditTrail() {
       'Deleted By (Email)': d.deleted_by_email || '',
       'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
       'Reason / Note': d.reason || 'User initiated deletion',
+      'Part Description': d.summary?.description ?? '',
+      'iPhone Model': d.summary?.iphone_model ?? '',
+      'Stocking Price': d.summary?.stocking_price !== undefined ? `$${Number(d.summary.stocking_price).toFixed(2)}` : '',
+      'Site Name': d.summary?.site_name ?? '',
+      'Site Region': d.summary?.region ?? '',
       'Items Purged': d.summary?.itemsCount ?? '',
       'PO Reference': d.summary?.poNumber ?? '',
       'Destination Site': d.summary?.destinationSite ?? '',
@@ -1202,6 +1207,8 @@ export default function AuditTrail() {
                 style={{ height: '34px', fontSize: '12px', width: '160px', borderRadius: '6px' }}
               >
                 <option value="ALL">All Entities ({deletionAuditLogs.length})</option>
+                <option value="Part Catalog">Parts Catalog</option>
+                <option value="Service Site">Service Sites &amp; Branches</option>
                 <option value="DC Intake Record">Intake Records</option>
                 <option value="Period Snapshot">Period Snapshots</option>
                 <option value="Shipment Manifest">Shipments</option>
@@ -1278,9 +1285,16 @@ export default function AuditTrail() {
                   </tr>
                 ) : (
                   filteredDeletions.map((log, index) => {
+                    const isPart = log.entity_type === 'Part Catalog' || log.entity_type === 'Part';
+                    const isSite = log.entity_type === 'Service Site' || log.entity_type === 'Site';
                     const isIntake = log.entity_type === 'DC Intake Record';
                     const isSnapshot = log.entity_type === 'Period Snapshot';
                     const isShipment = log.entity_type === 'Shipment Manifest';
+                    const isPO = log.entity_type === 'Purchase Order';
+
+                    const badgeBg = isPart ? '#f3e8ff' : isSite ? '#e0e7ff' : isIntake ? '#fffbeb' : isSnapshot ? '#eff6ff' : isShipment ? '#f0fdf4' : isPO ? '#fef3c7' : '#fee2e2';
+                    const badgeColor = isPart ? '#7e22ce' : isSite ? '#3730a3' : isIntake ? '#b45309' : isSnapshot ? '#1d4ed8' : isShipment ? '#15803d' : isPO ? '#92400e' : '#b91c1c';
+                    const badgeBorder = isPart ? '#e9d5ff' : isSite ? '#c7d2fe' : isIntake ? '#fde68a' : isSnapshot ? '#bfdbfe' : isShipment ? '#bbf7d0' : isPO ? '#fde68a' : '#fecaca';
 
                     return (
                       <tr
@@ -1308,9 +1322,9 @@ export default function AuditTrail() {
                               fontWeight: 700,
                               padding: '2px 7px',
                               borderRadius: '5px',
-                              background: isIntake ? '#fffbeb' : isSnapshot ? '#eff6ff' : isShipment ? '#f0fdf4' : '#fee2e2',
-                              color: isIntake ? '#b45309' : isSnapshot ? '#1d4ed8' : isShipment ? '#15803d' : '#b91c1c',
-                              border: `1px solid ${isIntake ? '#fde68a' : isSnapshot ? '#bfdbfe' : isShipment ? '#bbf7d0' : '#fecaca'}`,
+                              background: badgeBg,
+                              color: badgeColor,
+                              border: `1px solid ${badgeBorder}`,
                               display: 'inline-block'
                             }}
                           >
@@ -1363,6 +1377,31 @@ export default function AuditTrail() {
                           {log.summary?.itemsCount !== undefined && (
                             <div style={{ fontWeight: 600 }}>
                               <strong>{log.summary.itemsCount}</strong> units purged
+                            </div>
+                          )}
+                          {log.summary?.description && (
+                            <div style={{ fontWeight: 600, color: '#0f172a' }}>
+                              {log.summary.description}
+                            </div>
+                          )}
+                          {log.summary?.iphone_model && (
+                            <div style={{ color: '#64748b' }}>
+                              Model: {log.summary.iphone_model}
+                            </div>
+                          )}
+                          {log.summary?.stocking_price !== undefined && (
+                            <div className="font-mono" style={{ color: '#0284c7', fontSize: '10.5px' }}>
+                              Stock: ${Number(log.summary.stocking_price).toFixed(2)}
+                            </div>
+                          )}
+                          {log.summary?.site_name && (
+                            <div style={{ fontWeight: 600, color: '#0f172a' }}>
+                              {log.summary.site_name}
+                            </div>
+                          )}
+                          {log.summary?.region && (
+                            <div style={{ color: '#64748b' }}>
+                              Region: {log.summary.region}
                             </div>
                           )}
                           {log.summary?.poNumber && (

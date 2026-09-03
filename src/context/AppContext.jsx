@@ -180,8 +180,10 @@ export function AppProvider({ children }) {
 
   // 1. Catalog & Sites Domain
   const catalogAndSites = useCatalogAndSites({
+    getCurrentUser: () => auth.currentUser,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    logDeletionAudit: (...args) => auditLogs.logDeletionAudit(...args),
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
