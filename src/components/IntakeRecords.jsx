@@ -3,6 +3,10 @@ import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import * as XLSX from 'xlsx';
 import {
+  exportDcCompleteStockInventoryToExcel,
+  exportDcStockReceiptsToExcel
+} from '../utils/stockExportUtils';
+import {
   BookmarkPlus,
   Package,
   Calendar,
@@ -382,62 +386,34 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     });
   }, [dcIntakeRecords, yearFilter, searchQuery]);
 
-  // Export Date Group to Excel (.xlsx)
-  const handleExportDateExcel = (dateGroup) => {
+  // Export Date Group to Excel (.xlsx) with optimized layout and system UI styling
+  const handleExportDateExcel = async (dateGroup) => {
     if (!dateGroup || !dateGroup.items || dateGroup.items.length === 0) {
       showToast('No items to export for this date', 'error');
       return;
     }
-
-    const rows = dateGroup.items.map((it, idx) => ({
-      '#': idx + 1,
-      'Receipt Date': it.dateKey,
-      'Time Received': it.timeStr,
-      'Part Number': it.part_number,
-      'Description': it.description,
-      'Category': it.category,
-      'Serial Number': it.serial_number,
-      'Assignment / Destination': it.intake_assignment || 'MDC - Forecasting',
-      'Stocking Value ($)': it.price,
-      'Linked PO': it.po_number || it.po_id || 'Direct Intake',
-      'Intake Source': it.intake_source || 'Barcode Scan',
-      'Status': 'IN STOCK'
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `Stock_${dateGroup.dateKey}`);
-    XLSX.writeFile(wb, `DC_Stock_Receipts_${dateGroup.dateKey}.xlsx`);
-    showToast(`Downloaded Excel manifest for ${dateGroup.dateLabel}`, 'success');
+    try {
+      await exportDcStockReceiptsToExcel(dateGroup);
+      showToast(`Downloaded styled Excel manifest for ${dateGroup.dateLabel}`, 'success');
+    } catch (err) {
+      console.error('Failed to export date manifest to Excel:', err);
+      showToast('Error generating Excel file. Please try again.', 'error');
+    }
   };
 
-  // Export All In-Stock Inventory to Excel (.xlsx)
-  const handleExportAllStockExcel = () => {
+  // Export All In-Stock Inventory to Excel (.xlsx) with optimized layout and system UI styling
+  const handleExportAllStockExcel = async () => {
     if (enrichedStockUnits.length === 0) {
       showToast('No in-stock parts in warehouse to export', 'error');
       return;
     }
-
-    const rows = enrichedStockUnits.map((it, idx) => ({
-      '#': idx + 1,
-      'Receipt Date': it.dateKey,
-      'Time Received': it.timeStr,
-      'Part Number': it.part_number,
-      'Description': it.description,
-      'Category': it.category,
-      'Serial Number': it.serial_number,
-      'Assignment / Destination': it.intake_assignment || 'MDC - Forecasting',
-      'Stocking Value ($)': it.price,
-      'Linked PO': it.po_number || it.po_id || 'Direct Intake',
-      'Intake Source': it.intake_source || 'Barcode Scan',
-      'Status': 'IN STOCK'
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'DC In-Stock Inventory');
-    XLSX.writeFile(wb, `DC_Complete_Stock_Inventory_${todayDateStr}.xlsx`);
-    showToast(`Downloaded complete stock manifest (${enrichedStockUnits.length} units)`, 'success');
+    try {
+      await exportDcCompleteStockInventoryToExcel(enrichedStockUnits, todayDateStr);
+      showToast(`Downloaded styled complete stock manifest (${enrichedStockUnits.length} units)`, 'success');
+    } catch (err) {
+      console.error('Failed to export complete stock manifest to Excel:', err);
+      showToast('Error generating complete Excel manifest. Please try again.', 'error');
+    }
   };
 
   // Print Date Group Slip
@@ -1236,14 +1212,14 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                             <thead>
                               <tr>
                                 <th style={{ width: '45px' }}>#</th>
+                                <th>Time Received</th>
+                                <th>Category</th>
                                 <th>Part Number</th>
                                 <th>Description / Model</th>
                                 <th>Serial Number</th>
                                 <th>Assignment / Destination</th>
-                                <th>Category</th>
-                                <th>Time Received</th>
-                                <th>Linked PO / Source</th>
                                 <th>Stock Valuation</th>
+                                <th>Linked PO / Source</th>
                                 <th>Status</th>
                                 <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
                               </tr>
@@ -1252,6 +1228,23 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                               {group.items.map((u, idx) => (
                                 <tr key={u.id || `${u.serial_number}-${idx}`}>
                                   <td className="font-mono" style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
+                                  <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                                    {u.timeStr}
+                                  </td>
+                                  <td>
+                                    <span
+                                      className="badge"
+                                      style={{
+                                        background: u.category === 'Display' ? '#eff6ff' : u.category === 'Battery' ? '#f0fdf4' : '#faf5ff',
+                                        color: u.category === 'Display' ? '#1e40af' : u.category === 'Battery' ? '#166534' : '#6b21a8',
+                                        border: `1px solid ${u.category === 'Display' ? '#bfdbfe' : u.category === 'Battery' ? '#bbf7d0' : '#e9d5ff'}`,
+                                        fontSize: '11px',
+                                        fontWeight: 600
+                                      }}
+                                    >
+                                      {u.category}
+                                    </span>
+                                  </td>
                                   <td className="font-mono">
                                     <span style={{ fontWeight: 700, color: '#0f172a' }}>{u.part_number}</span>
                                   </td>
@@ -1315,28 +1308,11 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                                       <span>{u.isSvnr ? 'SVNR - Service Non-Repair' : u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
                                     </button>
                                   </td>
-                                  <td>
-                                    <span
-                                      className="badge"
-                                      style={{
-                                        background: u.category === 'Display' ? '#eff6ff' : u.category === 'Battery' ? '#f0fdf4' : '#faf5ff',
-                                        color: u.category === 'Display' ? '#1e40af' : u.category === 'Battery' ? '#166534' : '#6b21a8',
-                                        border: `1px solid ${u.category === 'Display' ? '#bfdbfe' : u.category === 'Battery' ? '#bbf7d0' : '#e9d5ff'}`,
-                                        fontSize: '11px',
-                                        fontWeight: 600
-                                      }}
-                                    >
-                                      {u.category}
-                                    </span>
-                                  </td>
-                                  <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                                    {u.timeStr}
+                                  <td style={{ fontWeight: 600, color: '#047857' }}>
+                                    ${Number(u.price || 0).toFixed(2)}
                                   </td>
                                   <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
                                     {u.po_number || u.po_id || u.intake_source || 'Direct Barcode Intake'}
-                                  </td>
-                                  <td style={{ fontWeight: 600, color: '#047857' }}>
-                                    ${Number(u.price || 0).toFixed(2)}
                                   </td>
                                   <td>
                                     <span className="badge badge-success" style={{ fontSize: '11px' }}>
