@@ -248,7 +248,9 @@ export function AppProvider({ children }) {
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     logDeletionAudit: auditLogs.logDeletionAudit,
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
-    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
+    getMasterlistData: () => inventory?.masterlistData,
+    setMasterlistData: (...args) => inventory?.setMasterlistData?.(...args)
   });
 
   // 7. Intake Records Domain
@@ -341,6 +343,8 @@ export function AppProvider({ children }) {
     setScanLogs: inventory.setScanLogs,
     repairUsageRecords: inventory.repairUsageRecords,
     setRepairUsageRecords: inventory.setRepairUsageRecords,
+    masterlistData: inventory.masterlistData,
+    setMasterlistData: inventory.setMasterlistData,
     savedRecords: periodRecords.savedRecords,
     setSavedRecords: periodRecords.setSavedRecords,
     stockTransferReports: periodRecords.stockTransferReports,
@@ -425,6 +429,8 @@ export function AppProvider({ children }) {
         shipments: shipmentsDomain.shipments,
         scanLogs: inventory.scanLogs,
         repairUsageRecords: inventory.repairUsageRecords,
+        masterlistData: inventory.masterlistData,
+        setMasterlistData: inventory.setMasterlistData,
         savedRecords: periodRecords.savedRecords,
         dcIntakeRecords: intakeRecords.dcIntakeRecords,
         setDcIntakeRecords: intakeRecords.setDcIntakeRecords,

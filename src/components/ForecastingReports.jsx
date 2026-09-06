@@ -196,6 +196,7 @@ export default function ForecastingReports() {
     sites,
     parts,
     activePeriod,
+    masterlistData,
     selectedCategories,
     isPartMatchingCategoryFilter,
     showToast,
@@ -752,12 +753,12 @@ export default function ForecastingReports() {
       search: accuracySearch,
       limit: accuracyLimit,
       sortBy: 'units'
-    });
-  }, [accuracyAuditSite, accuracyCategory, accuracySearch, accuracyLimit]);
+    }, masterlistData, activePeriod);
+  }, [accuracyAuditSite, accuracyCategory, accuracySearch, accuracyLimit, masterlistData, activePeriod]);
 
   const masterSitesList = useMemo(() => {
-    return getMasterlistSites().all;
-  }, []);
+    return getMasterlistSites({ limit: 'ALL' }, masterlistData, activePeriod).all;
+  }, [masterlistData, activePeriod]);
 
   // ── Pagination Calculation for Ledger ───────────────────────────────────────
   const totalPages = Math.ceil(filteredItems.length / pageSize) || 1;

@@ -10,6 +10,7 @@ import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
+import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 
 export function useCloudSync({
   currentUser,
@@ -56,6 +57,8 @@ export function useCloudSync({
   setDcIntakeRecords,
   _partsRequests,
   setPartsRequests,
+  masterlistData,
+  setMasterlistData,
   uploadAuditLogs,
   setUploadAuditLogs,
   deletionAuditLogs,
@@ -272,6 +275,8 @@ export function useCloudSync({
         shouldFetch('saved_records') ? (async () => {
           const SYSTEM_DOC_IDS = [
             LIVE_MASTER_RECORD_ID,
+            'master_masterlist_data_registry',
+            'master_upload_audit_logs_registry',
             'master_users_registry',
             'master_deletion_audit_logs_registry',
             'master_deleted_shipments_registry',
@@ -549,18 +554,22 @@ export function useCloudSync({
           const map = new Map((prev || []).map(p => [p.part_number, p]));
           dbParts.forEach(p => {
             const existing = map.get(p.part_number);
-            map.set(p.part_number, {
+            const numPrice = parseFloat(p.stocking_price ?? existing?.stocking_price);
+            const defaultMatch = defaultPartsCatalog?.find(d => d.part_number === p.part_number);
+            const validStockPrice = (numPrice && numPrice > 0) ? numPrice : (defaultMatch?.stocking_price || 99);
+            const updatedPart = {
               ...(existing || {}),
               id: p.id || existing?.id,
               part_number: p.part_number,
               description: p.description || existing?.description,
               iphone_model: p.iphone_model || existing?.iphone_model || 'iPhone',
-              stocking_price: parseFloat(p.stocking_price ?? existing?.stocking_price) || 0,
-              exchange_price: parseFloat(p.exchange_price ?? existing?.exchange_price) || 0,
+              stocking_price: validStockPrice,
               category_id: p.category_id || existing?.category_id || 'cat-battery',
               safety_stock_pct: p.safety_stock_pct || existing?.safety_stock_pct || 0.05,
               is_active: p.is_active ?? existing?.is_active ?? true
-            });
+            };
+            delete updatedPart.exchange_price;
+            map.set(p.part_number, updatedPart);
           });
           const merged = Array.from(map.values());
           try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
@@ -585,18 +594,22 @@ export function useCloudSync({
             setAllocations([]);
             setInventoryUnits([]);
             setRepairUsageRecords([]);
+            if (setMasterlistData) setMasterlistData(null);
+            setActiveScannedMasterlist(null);
             if (setUploadAuditLogs) setUploadAuditLogs([]);
             try {
               localStorage.setItem('mdc_forecast', '[]');
               localStorage.setItem('mdc_allocations', '[]');
               localStorage.setItem('mdc_inventory', '[]');
               localStorage.setItem('mdc_repair_usage', '[]');
+              localStorage.removeItem('mdc_masterlist_data');
               localStorage.setItem('mdc_upload_audit_logs', '[]');
             } catch (e) {}
             dbStorage.setItem('mdc_forecast', []);
             dbStorage.setItem('mdc_allocations', []);
             dbStorage.setItem('mdc_inventory', []);
             dbStorage.setItem('mdc_repair_usage', []);
+            dbStorage.removeItem('mdc_masterlist_data');
             dbStorage.setItem('mdc_upload_audit_logs', []);
           } else {
             localStorage.removeItem('mdc_is_cleared');
@@ -641,6 +654,18 @@ export function useCloudSync({
                 setAllocations(snap.allocations);
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
                 dbStorage.setItem('mdc_allocations', snap.allocations);
+              }
+
+              const masterlistRegistryDoc = dbSavedRecords.find(r => r.id === 'master_masterlist_data_registry');
+              const cloudMasterlist = masterlistRegistryDoc?.snapshot_data?.masterlistData || snap.masterlistData;
+              const targetPeriodToMatch = cloudPeriod || (typeof activePeriod === 'object' ? activePeriod : null);
+              const resolvedMasterlist = getActiveMasterlist(cloudMasterlist, targetPeriodToMatch);
+
+              if (resolvedMasterlist && setMasterlistData) {
+                setMasterlistData(resolvedMasterlist);
+                setActiveScannedMasterlist(resolvedMasterlist);
+                try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(resolvedMasterlist)); } catch (e) {}
+                dbStorage.setItem('mdc_masterlist_data', resolvedMasterlist);
               }
             }
           }
@@ -1414,7 +1439,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, currentUser, setCurrentUser, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, activePeriod, currentUser, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -1969,6 +1994,7 @@ export function useCloudSync({
     const currentSites = overrideData?.sites || sites;
     const currentUploadLogs = overrideData?.uploadAuditLogs || uploadAuditLogs;
     const currentDeletionLogs = overrideData?.deletionAuditLogs || deletionAuditLogs;
+    const currentMasterlistData = overrideData?.masterlistData || masterlistData;
 
     try {
       showToast('Syncing master data to Supabase cloud...', 'info');
@@ -1992,6 +2018,15 @@ export function useCloudSync({
             allocations: currentAllocs || [],
             parts: currentParts || [],
             sites: currentSites || [],
+            masterlistSummary: currentMasterlistData ? {
+              totalUnits: currentMasterlistData.totalUnits,
+              totalDistinctParts: currentMasterlistData.totalDistinctParts,
+              totalSites: currentMasterlistData.totalSites,
+              totalValUSD: currentMasterlistData.totalValUSD,
+              totalValPHP: currentMasterlistData.totalValPHP,
+              periodLabel: currentMasterlistData.periodLabel
+            } : null,
+            masterlistData: currentMasterlistData || null,
             uploadAuditLogs: currentUploadLogs || [],
             deletionAuditLogs: currentDeletionLogs || []
           },
@@ -1999,6 +2034,23 @@ export function useCloudSync({
         };
 
         await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
+
+        if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
+          await supabase.from('saved_records').upsert({
+            id: 'master_masterlist_data_registry',
+            record_type: 'masterlist_data_registry',
+            period_label: `${resolvedActivePeriod.label || 'September 2026'} Masterlist Data Registry`,
+            period_year: resolvedActivePeriod?.year || 2026,
+            period_month: resolvedActivePeriod?.month || 9,
+            notes: `Scanned masterlist intelligence (${currentMasterlistData.totalUnits} units, ${currentMasterlistData.totalDistinctParts} SKUs)`,
+            saved_by_name: currentUser?.fullName || 'Superadmin User',
+            snapshot_data: {
+              masterlistData: currentMasterlistData,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        }
 
         if (currentUploadLogs && currentUploadLogs.length > 0) {
           await supabase.from('saved_records').upsert({
@@ -2219,9 +2271,14 @@ export function useCloudSync({
       localStorage.setItem('mdc_stock_transfer_reports', '[]');
       localStorage.removeItem('mdc_stock_transfer_metadata');
       localStorage.setItem('mdc_upload_audit_logs', '[]');
+      localStorage.removeItem('mdc_masterlist_data');
     } catch (e) {
       console.warn('LocalStorage clear error:', e);
     }
+
+    dbStorage.removeItem('mdc_masterlist_data');
+    if (setMasterlistData) setMasterlistData(null);
+    setActiveScannedMasterlist(null);
 
     setForecastItems([]);
     setAllocations([]);
@@ -2291,6 +2348,7 @@ export function useCloudSync({
         try { await supabase.from('forecast_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('allocation_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('repair_usage_records').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
+        try { await supabase.from('saved_records').delete().eq('id', 'master_masterlist_data_registry'); } catch (e) {}
 
         setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });
@@ -2320,6 +2378,7 @@ export function useCloudSync({
 
     try {
       const { type, payload, sheetName } = dataset;
+      let scannedMasterlist = null;
       try {
         localStorage.removeItem('mdc_is_cleared');
       } catch (e) {}
@@ -2467,7 +2526,6 @@ export function useCloudSync({
               description: a.description,
               category_id: a.category_id,
               stocking_price: a.stocking_price,
-              exchange_price: a.exchange_price,
               computed_forecast: a.forecasted_qty || a.total_allocated_qty,
               final_forecast: a.forecasted_qty || a.total_allocated_qty,
               ytd_monthly_counts: []
@@ -2527,6 +2585,12 @@ export function useCloudSync({
           // Non-blocking background sync to Supabase repair_usage_records
           (async () => {
             try {
+              try {
+                await supabase.from('repair_usage_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+              } catch (delErr) {
+                console.warn('Previous repair_usage_records purge note:', delErr?.message || delErr);
+              }
+
               const importBatchId = crypto?.randomUUID ? crypto.randomUUID() : `batch-${Date.now()}`;
               const dbRecords = payload.records.slice(0, 5000).map(r => ({
                 import_batch_id: importBatchId,
@@ -2556,6 +2620,15 @@ export function useCloudSync({
         // Clean fresh forecasts from the uploaded raw file without stale cache overrides
         const finalForecastItems = payload.forecastItems || [];
 
+        // Scan masterlist intelligence from ingested records
+        scannedMasterlist = payload.masterlistData || scanMasterlistData(payload.records, { periodLabel: resolvedTargetMonth });
+        if (scannedMasterlist && scannedMasterlist.totalUnits > 0) {
+          if (setMasterlistData) setMasterlistData(scannedMasterlist);
+          setActiveScannedMasterlist(scannedMasterlist);
+          dbStorage.setItem('mdc_masterlist_data', scannedMasterlist);
+          try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(scannedMasterlist)); } catch (e) {}
+        }
+
         if (finalForecastItems.length > 0) {
           setForecastItems(finalForecastItems);
           dbStorage.setItem('mdc_forecast', finalForecastItems);
@@ -2582,6 +2655,7 @@ export function useCloudSync({
         allocations: payload.allocations || allocations,
         parts: payload.parts || parts,
         sites: payload.sites || sites,
+        masterlistData: scannedMasterlist || masterlistData || null,
         uploadAuditLogs: updatedAuditLogs,
         deletionAuditLogs: deletionAuditLogs || []
       };

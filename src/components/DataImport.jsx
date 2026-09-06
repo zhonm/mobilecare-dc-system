@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
@@ -16,11 +16,27 @@ import {
   Smartphone,
   Calendar,
   ShieldAlert,
-  Lock
+  Lock,
+  Trash2
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod, setActiveTab, forecastingModel } = useApp();
+  const {
+    applyParsedDataset,
+    resetToDefaultData,
+    sites,
+    parts,
+    currentUser,
+    showToast,
+    activePeriod,
+    setActivePeriod,
+    setActiveTab,
+    forecastingModel,
+    forecastItems = [],
+    allocations = [],
+    repairUsageRecords = [],
+    masterlistData
+  } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [parsedData, setParsedData] = useState(null);
@@ -71,9 +87,37 @@ export default function DataImport() {
     }
   }, [activePeriod?.month]);
 
+  // Determine if active operational data exists inside the system
+  const hasExistingData = useMemo(() => {
+    const isCleared = typeof window !== 'undefined' && localStorage.getItem('mdc_is_cleared') === 'true';
+    if (isCleared) return false;
+    return Boolean(
+      (forecastItems && forecastItems.length > 0) ||
+      (allocations && allocations.length > 0) ||
+      (repairUsageRecords && repairUsageRecords.length > 0) ||
+      (masterlistData && masterlistData.totalUnits > 0)
+    );
+  }, [forecastItems, allocations, repairUsageRecords, masterlistData]);
+
+  // Aggregate metrics summary of existing data in the system
+  const existingDataStats = useMemo(() => {
+    const fc = forecastItems?.length || 0;
+    const al = allocations?.length || 0;
+    const units = masterlistData?.totalUnits || repairUsageRecords?.length || (allocations || []).reduce((s, a) => s + (a.total_allocated_qty || 0), 0);
+    const period = activePeriod?.label || 'Current Period';
+    return { fc, al, units, period };
+  }, [forecastItems, allocations, masterlistData, repairUsageRecords, activePeriod]);
+
   const handleFileUpload = async (e) => {
     if (!isSuperAdmin) {
       showToast('Access restricted: Only Superadmin can upload forecasting and allocation data.', 'error');
+      if (e.target) e.target.value = '';
+      return;
+    }
+
+    if (hasExistingData) {
+      showToast('Upload Locked: Existing system data detected. You must delete current data first before uploading a new dataset.', 'error');
+      if (e.target) e.target.value = '';
       return;
     }
 
@@ -164,6 +208,10 @@ export default function DataImport() {
     if (!parsedData) return;
     if (!isSuperAdmin) {
       showToast('Action restricted: Only Superadmin is authorized to apply datasets.', 'error');
+      return;
+    }
+    if (hasExistingData) {
+      showToast('Action restricted: Current system data must be deleted first before applying a new dataset.', 'error');
       return;
     }
 
@@ -423,66 +471,129 @@ export default function DataImport() {
         </div>
 
         {/* Universal Dropzone */}
-        <div
-          style={{
-            border: isSuperAdmin ? '2px dashed var(--primary)' : '2px dashed #cbd5e1',
-            borderRadius: 'var(--radius-md)',
-            padding: '40px 20px',
-            textAlign: 'center',
-            background: isSuperAdmin ? 'var(--bg-primary)' : '#f8fafc',
-            cursor: isSuperAdmin ? 'pointer' : 'not-allowed',
-            position: 'relative',
-            marginTop: '16px',
-            transition: 'all 0.2s ease',
-            opacity: isSuperAdmin ? 1 : 0.75
-          }}
-        >
-          {isSuperAdmin && (
-            <input
-              type="file"
-              accept=".xlsx, .xls, .csv"
-              onChange={handleFileUpload}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                opacity: 0,
-                cursor: 'pointer'
-              }}
-            />
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
-            <div
-              style={{
-                width: '56px',
-                height: '56px',
-                borderRadius: '50%',
-                background: isSuperAdmin ? 'var(--primary-light)' : '#f1f5f9',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: isSuperAdmin ? 'var(--primary)' : '#94a3b8',
-                boxShadow: isSuperAdmin ? '0 4px 12px rgba(2, 132, 199, 0.2)' : 'none'
-              }}
-            >
-              {!isSuperAdmin ? <Lock size={24} /> : isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
-            </div>
-            <div>
-              <strong style={{ fontSize: '16px', color: isSuperAdmin ? 'var(--text-main)' : 'var(--text-muted)' }}>
-                {!isSuperAdmin
-                  ? 'Upload Disabled — Super Admin Permission Required'
-                  : fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
-              </strong>
-              <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                {!isSuperAdmin
-                  ? 'Please log in with a Superadmin account to upload new forecast and allocation masterlists.'
-                  : <>Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong></>}
-              </p>
+        {hasExistingData ? (
+          <div
+            style={{
+              border: '2px dashed #f87171',
+              borderRadius: 'var(--radius-md)',
+              padding: '36px 20px',
+              textAlign: 'center',
+              background: '#fef2f2',
+              position: 'relative',
+              marginTop: '16px',
+              boxShadow: '0 4px 12px rgba(239, 68, 68, 0.08)'
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+              <div
+                style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '50%',
+                  background: '#fee2e2',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#dc2626',
+                  boxShadow: '0 4px 12px rgba(220, 38, 38, 0.2)'
+                }}
+              >
+                <Lock size={26} />
+              </div>
+              <div style={{ maxWidth: '640px' }}>
+                <strong style={{ fontSize: '16.5px', color: '#991b1b', display: 'block' }}>
+                  Upload Locked: Existing System Data Detected
+                </strong>
+                <p style={{ fontSize: '13px', color: '#b91c1c', marginTop: '6px', lineHeight: '1.5' }}>
+                  The system currently holds active operational data for <strong>{existingDataStats.period}</strong> ({existingDataStats.fc.toLocaleString()} Forecast SKUs, {existingDataStats.al.toLocaleString()} Allocations, {existingDataStats.units.toLocaleString()} Records).
+                  To maintain data integrity and prevent cross-period duplication, you cannot upload new Fixably or GSX datasets until the current system data has been deleted.
+                </p>
+              </div>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={() => setShowClearModal(true)}
+                  style={{
+                    marginTop: '8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 20px',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                  title="Wipe current forecasting, allocation, and masterlist data to unlock uploads"
+                >
+                  <Trash2 size={16} />
+                  <span>Delete Current Data to Unlock Upload</span>
+                </button>
+              )}
             </div>
           </div>
-        </div>
+        ) : (
+          <div
+            style={{
+              border: isSuperAdmin ? '2px dashed var(--primary)' : '2px dashed #cbd5e1',
+              borderRadius: 'var(--radius-md)',
+              padding: '40px 20px',
+              textAlign: 'center',
+              background: isSuperAdmin ? 'var(--bg-primary)' : '#f8fafc',
+              cursor: isSuperAdmin ? 'pointer' : 'not-allowed',
+              position: 'relative',
+              marginTop: '16px',
+              transition: 'all 0.2s ease',
+              opacity: isSuperAdmin ? 1 : 0.75
+            }}
+          >
+            {isSuperAdmin && (
+              <input
+                type="file"
+                accept=".xlsx, .xls, .csv"
+                onChange={handleFileUpload}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  opacity: 0,
+                  cursor: 'pointer'
+                }}
+              />
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+              <div
+                style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '50%',
+                  background: isSuperAdmin ? 'var(--primary-light)' : '#f1f5f9',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: isSuperAdmin ? 'var(--primary)' : '#94a3b8',
+                  boxShadow: isSuperAdmin ? '0 4px 12px rgba(2, 132, 199, 0.2)' : 'none'
+                }}
+              >
+                {!isSuperAdmin ? <Lock size={24} /> : isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
+              </div>
+              <div>
+                <strong style={{ fontSize: '16px', color: isSuperAdmin ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                  {!isSuperAdmin
+                    ? 'Upload Disabled — Super Admin Permission Required'
+                    : fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
+                </strong>
+                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {!isSuperAdmin
+                    ? 'Please log in with a Superadmin account to upload new forecast and allocation masterlists.'
+                    : <>Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong></>}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Auto-Detection & Calculation Preview Card */}

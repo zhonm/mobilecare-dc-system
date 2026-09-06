@@ -4,6 +4,7 @@ import dbStorage from '../utils/dbStorage';
 import { isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+import { getActiveMasterlist, setActiveScannedMasterlist } from '../utils/rawMasterlistScanner';
 
 export function usePeriodRecordsAndReports({
   currentUser,
@@ -24,7 +25,10 @@ export function usePeriodRecordsAndReports({
   broadcastCloudEvent,
   logDeletionAudit,
   enqueueOfflineAction,
-  setCloudSyncStatus
+  setCloudSyncStatus,
+  masterlistData = null,
+  getMasterlistData = null,
+  setMasterlistData = null
 }) {
   const [savedRecords, setSavedRecords] = useState(() => {
     try {
@@ -98,17 +102,23 @@ export function usePeriodRecordsAndReports({
       grandTotalValue += (item.total_allocated_qty || 0) * price;
     });
 
+    const targetPeriodObj = {
+      month: parseInt(periodMonth) || activePeriod?.month || (new Date().getMonth() + 1),
+      year: parseInt(periodYear) || activePeriod?.year || new Date().getFullYear(),
+      label: cleanLabel
+    };
+
+    const activeMasterlist = (typeof getMasterlistData === 'function' ? getMasterlistData() : masterlistData) ||
+      getActiveMasterlist(null, targetPeriodObj);
+
     const snapshotData = {
       forecastItems: recordType !== 'allocation' ? JSON.parse(JSON.stringify(forecastItems || [])) : [],
       allocations: recordType !== 'forecast' ? JSON.parse(JSON.stringify(allocations || [])) : [],
       parts: JSON.parse(JSON.stringify(parts || [])),
       sites: JSON.parse(JSON.stringify(sites || [])),
+      masterlistData: activeMasterlist,
       forecastingModel: forecastingModel || 'linear',
-      activePeriod: {
-        month: parseInt(periodMonth) || activePeriod?.month || (new Date().getMonth() + 1),
-        year: parseInt(periodYear) || activePeriod?.year || new Date().getFullYear(),
-        label: cleanLabel
-      },
+      activePeriod: targetPeriodObj,
       summary: {
         totalForecastUnits,
         totalAllocatedUnits,
@@ -286,6 +296,17 @@ export function usePeriodRecordsAndReports({
     dbStorage.setItem('mdc_active_period', restoredPeriod);
     try { localStorage.setItem('mdc_active_period', JSON.stringify(restoredPeriod)); } catch (e) {}
 
+    // Restore masterlistData matching the restored period
+    const restoredMasterlist = snap.masterlistData || getActiveMasterlist(null, restoredPeriod);
+    if (setMasterlistData) {
+      setMasterlistData(restoredMasterlist);
+      setActiveScannedMasterlist(restoredMasterlist);
+      try {
+        localStorage.setItem('mdc_masterlist_data', JSON.stringify(restoredMasterlist));
+      } catch (e) {}
+      dbStorage.setItem('mdc_masterlist_data', restoredMasterlist);
+    }
+
     // Restore calculation model if preserved in snapshot
     const restoredModel = snap.forecastingModel || 'linear';
     if (setForecastingModel) {
@@ -315,6 +336,7 @@ export function usePeriodRecordsAndReports({
           allocations: restoredAllocations,
           parts: snap.parts || parts,
           sites: snap.sites || sites,
+          masterlistData: restoredMasterlist,
           forecastingModel: restoredModel,
           activePeriod: restoredPeriod
         },
@@ -327,6 +349,18 @@ export function usePeriodRecordsAndReports({
           supabase.from('saved_records').delete().eq('id', 'live_master_state_v1').then(() => {}).catch(() => {});
         })
         .catch(err => console.warn('Cloud sync error on restore:', err));
+
+      if (restoredMasterlist) {
+        supabase.from('saved_records').upsert([{
+          id: 'master_masterlist_data_registry',
+          record_type: 'masterlist_registry',
+          period_label: `${restoredPeriod.label} Masterlist Registry`,
+          period_year: restoredPeriod.year,
+          period_month: restoredPeriod.month,
+          snapshot_data: { masterlistData: restoredMasterlist },
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'id' }).catch(err => console.warn('Masterlist registry sync error on restore:', err));
+      }
     }
 
     if (broadcastCloudEvent) {

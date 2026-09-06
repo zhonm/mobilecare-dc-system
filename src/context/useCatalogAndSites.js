@@ -108,7 +108,12 @@ export function useCatalogAndSites({
   const [parts, setParts] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_parts');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      return parsed.map(p => {
+        const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
+        const { exchange_price, ...rest } = p;
+        return { ...rest, stocking_price: cleanPrice };
+      });
     } catch {
       return [];
     }
@@ -134,29 +139,31 @@ export function useCatalogAndSites({
       let updated;
       if (existingIdx >= 0) {
         const existing = prev[existingIdx];
+        const sp = parseFloat(partData.stocking_price ?? existing.stocking_price);
         savedPartObj = {
           ...existing,
           ...partData,
           part_number: cleanPN,
           description: cleanDesc || existing.description,
-          stocking_price: parseFloat(partData.stocking_price ?? existing.stocking_price) || 0,
-          exchange_price: parseFloat(partData.exchange_price ?? existing.exchange_price) || 0,
+          stocking_price: sp > 0 ? sp : 99,
           updated_at: new Date().toISOString()
         };
+        delete savedPartObj.exchange_price;
         updated = [...prev];
         updated[existingIdx] = savedPartObj;
       } else {
+        const sp = parseFloat(partData.stocking_price);
         savedPartObj = {
           ...partData,
           id: partData.id || `part-${Date.now()}`,
           part_number: cleanPN,
           description: cleanDesc || 'Service Replacement Part',
           category_id: partData.category_id || 'cat-battery',
-          stocking_price: parseFloat(partData.stocking_price) || 0,
-          exchange_price: parseFloat(partData.exchange_price) || 0,
+          stocking_price: sp > 0 ? sp : 99,
           is_active: partData.is_active ?? true,
           created_at: new Date().toISOString()
         };
+        delete savedPartObj.exchange_price;
         updated = [savedPartObj, ...prev];
       }
 
@@ -272,7 +279,6 @@ export function useCatalogAndSites({
               iphone_model: deletedPart.iphone_model || 'iPhone',
               category_id: deletedPart.category_id,
               stocking_price: deletedPart.stocking_price,
-              exchange_price: deletedPart.exchange_price,
               deleted_by: activeUser?.fullName || 'Specialist'
             }
           });

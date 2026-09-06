@@ -102,7 +102,6 @@ export default function SettingsCatalog() {
   const [newModel, setNewModel] = useState('iPhone 15');
   const [newCatId, setNewCatId] = useState(categories[0]?.id || 'cat-battery');
   const [newStockPrice, setNewStockPrice] = useState(150);
-  const [newExchangePrice, setNewExchangePrice] = useState(100);
   const [showAddPartCard, setShowAddPartCard] = useState(true);
 
   // Edit Part Modal State
@@ -205,7 +204,6 @@ export default function SettingsCatalog() {
       iphone_model: newModel.trim() || 'iPhone',
       category_id: newCatId,
       stocking_price: parseFloat(newStockPrice) || 0,
-      exchange_price: parseFloat(newExchangePrice) || 0,
       is_active: true
     });
     setNewPn('');
@@ -241,8 +239,7 @@ export default function SettingsCatalog() {
       part_number: cleanPn,
       description: cleanDesc,
       iphone_model: editingPart.iphone_model?.trim() || 'iPhone',
-      stocking_price: parseFloat(editingPart.stocking_price) || 0,
-      exchange_price: parseFloat(editingPart.exchange_price) || 0
+      stocking_price: parseFloat(editingPart.stocking_price) || 0
     });
     setEditingPart(null);
   };
@@ -635,24 +632,6 @@ export default function SettingsCatalog() {
                     </div>
                   </div>
 
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
-                      Exchange Price ($)
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 600, fontSize: '13px' }}>$</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="form-input font-mono"
-                        placeholder="0.00"
-                        value={newExchangePrice}
-                        onChange={(e) => setNewExchangePrice(e.target.value)}
-                        style={{ paddingLeft: '24px', height: '38px', fontSize: '13px', fontWeight: 600, color: '#475569' }}
-                      />
-                    </div>
-                  </div>
-
                   <div style={{ display: 'flex', justifyContent: 'flex-end', height: '38px' }}>
                     <button
                       type="submit"
@@ -718,7 +697,7 @@ export default function SettingsCatalog() {
                     </span>
                   </div>
                   <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
-                    Standardized Apple component SKUs, exchange rates, and category definitions
+                    Standardized Apple component SKUs, stock prices, and category definitions
                   </p>
                 </div>
               </div>
@@ -791,7 +770,6 @@ export default function SettingsCatalog() {
                       <th style={{ width: '130px', textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>iPhone Model</th>
                       <th style={{ width: '120px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Category</th>
                       <th style={{ width: '110px', textAlign: 'right', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Stock Price</th>
-                      <th style={{ width: '110px', textAlign: 'right', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Exchange Price</th>
                       <th style={{ width: '90px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
                       <th style={{ width: '90px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Actions</th>
                     </tr>
@@ -862,9 +840,6 @@ export default function SettingsCatalog() {
                           </td>
                           <td style={{ textAlign: 'right', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#047857', fontSize: '13px' }}>
                             ${parseFloat(p.stocking_price || 0).toFixed(2)}
-                          </td>
-                          <td style={{ textAlign: 'right', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#64748b', fontSize: '13px' }}>
-                            ${parseFloat(p.exchange_price || 0).toFixed(2)}
                           </td>
                           <td style={{ textAlign: 'center', padding: '12px 8px' }}>
                             <span
@@ -975,7 +950,7 @@ export default function SettingsCatalog() {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '14px', marginBottom: '14px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">Category</label>
                     <select
@@ -997,17 +972,6 @@ export default function SettingsCatalog() {
                       className="form-input font-mono"
                       value={editingPart.stocking_price}
                       onChange={(e) => setEditingPart({ ...editingPart, stocking_price: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label">Exchange Price ($)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="form-input font-mono"
-                      value={editingPart.exchange_price || 0}
-                      onChange={(e) => setEditingPart({ ...editingPart, exchange_price: e.target.value })}
                     />
                   </div>
                 </div>

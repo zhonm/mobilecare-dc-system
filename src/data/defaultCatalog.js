@@ -6,8 +6,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 15 Plus",
     "category_id": "cat-display",
     "iphone_model": "iPhone 15 Plus",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -16,8 +15,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 16 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 16 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 379,
     "is_active": true
   },
   {
@@ -26,8 +24,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 13 mini",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 13 mini",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -36,8 +33,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 14 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 14 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 379,
     "is_active": true
   },
   {
@@ -46,8 +42,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 13",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 13",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -57,7 +52,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -67,7 +61,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -77,7 +70,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -87,7 +79,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -96,8 +87,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 16 Pro",
     "category_id": "cat-display",
     "iphone_model": "iPhone 16 Pro",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -107,7 +97,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 14 Pro Max",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -116,8 +105,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 13 Pro",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 13 Pro",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -126,8 +114,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 13 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 13 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -137,7 +124,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 14",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -147,7 +133,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -157,7 +142,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -166,8 +150,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 12 Pro Max",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 12 Pro Max",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -176,8 +159,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 12 and 12 Pro",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 12 and 12 Pro",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -187,7 +169,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 15",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -196,8 +177,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 13 Pro Max",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 13 Pro Max",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -207,7 +187,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 13 Pro",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -216,8 +195,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 17",
     "category_id": "cat-display",
     "iphone_model": "iPhone 17",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -226,8 +204,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 11",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 11",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -236,8 +213,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 16 Plus",
     "category_id": "cat-display",
     "iphone_model": "iPhone 16 Plus",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -246,8 +222,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 16 Pro Max",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 16 Pro Max",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 119,
     "is_active": true
   },
   {
@@ -257,7 +232,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 14 Pro",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -267,7 +241,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 15",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -276,8 +249,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone SE 2nd gen",
     "category_id": "cat-battery",
     "iphone_model": "iPhone SE 2nd gen",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 69,
     "is_active": true
   },
   {
@@ -287,7 +259,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 12 Pro",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -296,8 +267,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 17 Pro",
     "category_id": "cat-display",
     "iphone_model": "iPhone 17 Pro",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -307,7 +277,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -316,8 +285,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 12 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 12 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -327,7 +295,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 14",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -336,8 +303,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 15 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 15 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 379,
     "is_active": true
   },
   {
@@ -346,8 +312,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 17 Pro Max",
     "category_id": "cat-display",
     "iphone_model": "iPhone 17 Pro Max",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 379,
     "is_active": true
   },
   {
@@ -356,8 +321,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 15 Pro",
     "category_id": "cat-display",
     "iphone_model": "iPhone 15 Pro",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -366,8 +330,7 @@ export const defaultPartsCatalog = [
     "description": "Front Camera, iPhone 17 Pro Max",
     "category_id": "cat-camera-front",
     "iphone_model": "iPhone 17 Pro Max",
-    "stocking_price": 398,
-    "exchange_price": 11,
+    "stocking_price": 199,
     "is_active": true
   },
   {
@@ -377,7 +340,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 16",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -387,7 +349,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 13",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -397,7 +358,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -406,8 +366,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone SE 3rd generation",
     "category_id": "cat-battery",
     "iphone_model": "iPhone SE 3rd generation",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 69,
     "is_active": true
   },
   {
@@ -416,8 +375,7 @@ export const defaultPartsCatalog = [
     "description": "Camera, iPhone 16",
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 16",
-    "stocking_price": 338,
-    "exchange_price": 128,
+    "stocking_price": 169,
     "is_active": true
   },
   {
@@ -426,8 +384,7 @@ export const defaultPartsCatalog = [
     "description": "Camera, iPhone 17 Pro Max",
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 17 Pro Max",
-    "stocking_price": 996,
-    "exchange_price": 15,
+    "stocking_price": 249,
     "is_active": true
   },
   {
@@ -436,8 +393,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 12 mini",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 12 mini",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -446,8 +402,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 11 Pro",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 11 Pro",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -457,7 +412,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, Natural, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 845,
-    "exchange_price": 380,
     "is_active": true
   },
   {
@@ -466,8 +420,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 11 Pro Max",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 11 Pro Max",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -476,8 +429,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 14 Plus",
     "category_id": "cat-display",
     "iphone_model": "iPhone 14 Plus",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -487,7 +439,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, Natural, 512GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 1035,
-    "exchange_price": 79,
     "is_active": true
   },
   {
@@ -497,7 +448,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -507,7 +457,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -517,7 +466,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -526,8 +474,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone XR",
     "category_id": "cat-battery",
     "iphone_model": "iPhone XR",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -537,7 +484,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 15",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -547,7 +493,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 249,
-    "exchange_price": 189,
     "is_active": true
   },
   {
@@ -557,7 +502,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 15",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -566,8 +510,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone X",
     "category_id": "cat-battery",
     "iphone_model": "iPhone X",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 89,
     "is_active": true
   },
   {
@@ -577,7 +520,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 13 Pro and 13 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -586,8 +528,7 @@ export const defaultPartsCatalog = [
     "description": "Camera, iPhone 17",
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 17",
-    "stocking_price": 507,
-    "exchange_price": 128,
+    "stocking_price": 169,
     "is_active": true
   },
   {
@@ -597,7 +538,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -607,7 +547,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 16",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -616,8 +555,7 @@ export const defaultPartsCatalog = [
     "description": "Front Camera, iPhone 17",
     "category_id": "cat-camera-front",
     "iphone_model": "iPhone 17",
-    "stocking_price": 398,
-    "exchange_price": 151,
+    "stocking_price": 199,
     "is_active": true
   },
   {
@@ -626,8 +564,7 @@ export const defaultPartsCatalog = [
     "description": "iPhone 13, Midnight, 128GB, Logic Board Assy Rear System, ROW",
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
-    "stocking_price": 1556,
-    "exchange_price": 16,
+    "stocking_price": 389,
     "is_active": true
   },
   {
@@ -637,7 +574,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 630,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -647,7 +583,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -657,7 +592,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -667,7 +601,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -677,7 +610,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, Black, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 845,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -687,7 +619,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 249,
-    "exchange_price": 189,
     "is_active": true
   },
   {
@@ -697,7 +628,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 630,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -707,7 +637,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 535,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -717,7 +646,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -727,7 +655,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 815,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -737,7 +664,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -747,7 +673,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Black, 128GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 489,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -757,7 +682,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 14",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -767,7 +691,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -777,7 +700,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -787,7 +709,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -797,7 +718,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -807,7 +727,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Pink, 128GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 489,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -817,7 +736,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -827,7 +745,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-front",
     "iphone_model": "iPhone 17 Pro",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -837,7 +754,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 995,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -847,7 +763,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 16",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -857,7 +772,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -866,8 +780,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 16e",
     "category_id": "cat-display",
     "iphone_model": "iPhone 16e",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 229,
     "is_active": true
   },
   {
@@ -877,7 +790,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-display",
     "iphone_model": "iPhone 12",
     "stocking_price": 279,
-    "exchange_price": 234,
     "is_active": true
   },
   {
@@ -887,7 +799,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -897,7 +808,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -907,7 +817,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -917,7 +826,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -927,7 +835,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 13",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -937,7 +844,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 249,
-    "exchange_price": 189,
     "is_active": true
   },
   {
@@ -947,7 +853,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 905,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -957,7 +862,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 1180,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -967,7 +871,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 535,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -977,7 +880,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -987,7 +889,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 219,
-    "exchange_price": 166,
     "is_active": true
   },
   {
@@ -997,7 +898,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1007,7 +907,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 169,
-    "exchange_price": 38,
     "is_active": true
   },
   {
@@ -1017,7 +916,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Green, 128GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 489,
-    "exchange_price": 68,
     "is_active": true
   },
   {
@@ -1027,7 +925,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1037,7 +934,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Black, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1046,8 +942,7 @@ export const defaultPartsCatalog = [
     "description": "iPhone 14, Midnight, 128GB, Logic Board Assy Mid System, ROW",
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
-    "stocking_price": 878,
-    "exchange_price": 367,
+    "stocking_price": 439,
     "is_active": true
   },
   {
@@ -1057,7 +952,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 14 Pro Max",
     "stocking_price": 219,
-    "exchange_price": 166,
     "is_active": true
   },
   {
@@ -1067,7 +961,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 630,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1077,7 +970,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 535,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1086,8 +978,7 @@ export const defaultPartsCatalog = [
     "description": "iPhone 14, Starlight, 128GB, Logic Board Assy Mid System, ROW",
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
-    "stocking_price": 1317,
-    "exchange_price": 367,
+    "stocking_price": 439,
     "is_active": true
   },
   {
@@ -1097,7 +988,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1107,7 +997,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 17 Pro",
     "stocking_price": 249,
-    "exchange_price": 189,
     "is_active": true
   },
   {
@@ -1117,7 +1006,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 14",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -1127,7 +1015,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1137,7 +1024,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 535,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1147,7 +1033,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-battery",
     "iphone_model": "iPhone 17",
     "stocking_price": 99,
-    "exchange_price": 51,
     "is_active": true
   },
   {
@@ -1157,7 +1042,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 815,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1167,7 +1051,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1177,7 +1060,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Blue, 128GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 489,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1187,7 +1069,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1197,7 +1078,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1207,7 +1087,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1217,7 +1096,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1226,8 +1104,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 14 Pro",
     "category_id": "cat-display",
     "iphone_model": "iPhone 14 Pro",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -1236,8 +1113,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 11",
     "category_id": "cat-display",
     "iphone_model": "iPhone 11",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 199,
     "is_active": true
   },
   {
@@ -1247,7 +1123,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1256,8 +1131,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, pSIM, iPhone 17 Pro Max",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 17 Pro Max",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 119,
     "is_active": true
   },
   {
@@ -1267,7 +1141,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1276,8 +1149,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 16 Pro",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 16 Pro",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 119,
     "is_active": true
   },
   {
@@ -1287,7 +1159,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 12",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -1297,7 +1168,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1307,7 +1177,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1316,8 +1185,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 13 mini",
     "category_id": "cat-display",
     "iphone_model": "iPhone 13 mini",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 229,
     "is_active": true
   },
   {
@@ -1327,7 +1195,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -1337,7 +1204,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 14 Pro",
     "stocking_price": 219,
-    "exchange_price": 166,
     "is_active": true
   },
   {
@@ -1346,8 +1212,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone Air",
     "category_id": "cat-display",
     "iphone_model": "iPhone Air",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 329,
     "is_active": true
   },
   {
@@ -1357,7 +1222,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -1367,7 +1231,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1377,7 +1240,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 16e",
     "stocking_price": 129,
-    "exchange_price": 98,
     "is_active": true
   },
   {
@@ -1387,7 +1249,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone Air",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1397,7 +1258,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1406,8 +1266,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, pSIM, iPhone 17 Pro",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 17 Pro",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 119,
     "is_active": true
   },
   {
@@ -1417,7 +1276,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1427,7 +1285,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 535,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1437,7 +1294,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 535,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -1447,7 +1303,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1457,7 +1312,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 720,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1467,7 +1321,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1477,7 +1330,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1487,7 +1339,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 630,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1497,7 +1348,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, White, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 845,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1507,7 +1357,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 720,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1517,7 +1366,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 630,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1527,7 +1375,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1537,7 +1384,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Pink, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 535,
-    "exchange_price": 79,
     "is_active": true
   },
   {
@@ -1547,7 +1393,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 720,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1557,7 +1402,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1567,7 +1411,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 630,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1577,7 +1420,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1586,8 +1428,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone Air",
     "category_id": "cat-battery",
     "iphone_model": "iPhone Air",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 119,
     "is_active": true
   },
   {
@@ -1597,7 +1438,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "12 Pro, Gold, 256GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 750,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1607,7 +1447,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1617,7 +1456,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "13 Pro, Silver, 256GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 750,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1627,7 +1465,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 630,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1637,7 +1474,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -1647,7 +1483,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "13 Pro Max, Silver, 256GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 845,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1657,7 +1492,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 630,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1666,8 +1500,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone XR",
     "category_id": "cat-display",
     "iphone_model": "iPhone XR",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 199,
     "is_active": true
   },
   {
@@ -1677,7 +1510,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 720,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1687,7 +1519,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 630,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1697,7 +1528,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 995,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1707,7 +1537,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "13 Pro, Gold, 256GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 750,
-    "exchange_price": 17.1,
     "is_active": true
   },
   {
@@ -1717,7 +1546,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1727,7 +1555,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "14 Pro, Silver, 256GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 750,
-    "exchange_price": 129,
     "is_active": true
   },
   {
@@ -1737,7 +1564,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1747,7 +1573,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16",
     "stocking_price": 720,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1757,7 +1582,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, Blue, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 845,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1767,7 +1591,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1777,7 +1600,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1787,7 +1609,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1797,7 +1618,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 815,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1807,7 +1627,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 905,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1817,7 +1636,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -1827,7 +1645,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro Max, Black, 512GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 1035,
-    "exchange_price": 68,
     "is_active": true
   },
   {
@@ -1837,7 +1654,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 15",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1847,7 +1663,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 445,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1857,7 +1672,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 439,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1867,7 +1681,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1877,7 +1690,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16e",
     "stocking_price": 415,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -1887,7 +1699,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1897,7 +1708,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro",
     "stocking_price": 905,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -1907,7 +1717,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 815,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1917,7 +1726,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "14 Plus, Midnight, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -1927,7 +1735,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 14",
     "stocking_price": 630,
-    "exchange_price": 367,
     "is_active": true
   },
   {
@@ -1937,7 +1744,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1947,7 +1753,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Pro Max",
     "stocking_price": 995,
-    "exchange_price": 505,
     "is_active": true
   },
   {
@@ -1957,7 +1762,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1967,7 +1771,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-front",
     "iphone_model": "iPhone Air",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -1977,7 +1780,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -1986,8 +1788,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 17e",
     "category_id": "cat-display",
     "iphone_model": "iPhone 17e",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 229,
     "is_active": true
   },
   {
@@ -1997,7 +1798,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16e",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -2007,7 +1807,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16e",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -2017,7 +1816,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 14 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -2027,7 +1825,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "14 Plus, Starlight, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 535,
-    "exchange_price": 14.4,
     "is_active": true
   },
   {
@@ -2037,7 +1834,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 14",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2047,7 +1843,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 16e",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -2057,7 +1852,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 815,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -2067,7 +1861,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2077,7 +1870,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Pro, Natural, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 750,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -2087,7 +1879,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2097,7 +1888,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 13 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -2107,7 +1897,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 12 Pro",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -2116,8 +1905,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 8",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 8",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 69,
     "is_active": true
   },
   {
@@ -2126,8 +1914,7 @@ export const defaultPartsCatalog = [
     "description": "Battery, iPhone 8 Plus",
     "category_id": "cat-battery",
     "iphone_model": "iPhone 8 Plus",
-    "stocking_price": 99,
-    "exchange_price": 51,
+    "stocking_price": 69,
     "is_active": true
   },
   {
@@ -2137,7 +1924,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 16 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2147,7 +1933,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "13 Pro Max, Sierra Blue, 512GB, Logic Board Assy Rear System, ROW",
     "stocking_price": 1035,
-    "exchange_price": 459,
     "is_active": true
   },
   {
@@ -2157,7 +1942,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "14 Plus, Purple, 128GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 489,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -2167,7 +1951,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17 Pro",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2177,7 +1960,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2187,7 +1969,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-rear",
     "iphone_model": "iPhone 13",
     "stocking_price": 389,
-    "exchange_price": 321,
     "is_active": true
   },
   {
@@ -2197,7 +1978,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2207,7 +1987,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2217,7 +1996,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 14",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2227,7 +2005,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 12 Pro Max",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -2237,7 +2014,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-rear",
     "iphone_model": "iPhone 12 Pro Max",
     "stocking_price": 199,
-    "exchange_price": 151,
     "is_active": true
   },
   {
@@ -2247,7 +2023,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 15 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2257,7 +2032,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-camera-truedepth",
     "iphone_model": "iPhone 12 and 12 Pro",
     "stocking_price": 169,
-    "exchange_price": 128,
     "is_active": true
   },
   {
@@ -2266,8 +2040,7 @@ export const defaultPartsCatalog = [
     "description": "Display, iPhone 12 mini",
     "category_id": "cat-display",
     "iphone_model": "iPhone 12 mini",
-    "stocking_price": 279,
-    "exchange_price": 234,
+    "stocking_price": 229,
     "is_active": true
   },
   {
@@ -2277,7 +2050,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 14 Plus",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   },
   {
@@ -2287,7 +2059,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-logic-mid",
     "iphone_model": "15 Plus, Green, 256GB, Logic Board Assy Mid System, ROW",
     "stocking_price": 535,
-    "exchange_price": 413,
     "is_active": true
   },
   {
@@ -2297,7 +2068,6 @@ export const defaultPartsCatalog = [
     "category_id": "cat-back-glass",
     "iphone_model": "iPhone 17 Pro Max",
     "stocking_price": 159,
-    "exchange_price": 121,
     "is_active": true
   }
 ];

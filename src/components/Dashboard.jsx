@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Boxes,
@@ -23,7 +23,8 @@ import {
   Sparkles,
   Smartphone,
   FileSpreadsheet,
-  Download
+  Download,
+  Upload
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -50,9 +51,14 @@ import {
   getMasterlistParts,
   getMasterlistSites,
   getMasterlistPartsForSite,
+  scanMasterlistData,
+  getActiveMasterlist,
+  setActiveScannedMasterlist,
   IPHONE_CATEGORIES,
-  getCategoryBadge
+  getCategoryBadge,
+  isPeriodMatching
 } from '../utils/rawMasterlistScanner';
+import { parseUniversalExcel } from '../utils/excelParser';
 
 const USD_TO_PHP_RATE = 57;
 
@@ -75,12 +81,17 @@ export default function Dashboard() {
     sites = [],
     currentUser,
     activePeriod,
+    setActivePeriod,
     setActiveTab,
     isAutoRefreshing,
     autoRefreshData,
     activePackDraft,
     supervisorSettings,
-    showToast
+    showToast,
+    masterlistData,
+    setMasterlistData,
+    repairUsageRecords = [],
+    applyParsedDataset
   } = useApp();
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -96,6 +107,10 @@ export default function Dashboard() {
   // DC Snapshot Table State
   const [tableSearch, setTableSearch] = useState('');
   const [activeSnapshotFilter, setActiveSnapshotFilter] = useState('ALL');
+
+  // Masterlist Direct Ingestion State
+  const fileInputRef = useRef(null);
+  const [isUploadingMasterlist, setIsUploadingMasterlist] = useState(false);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DC WAREHOUSE INVENTORY TELEMETRY & 4-DAY AGING
@@ -154,9 +169,26 @@ export default function Dashboard() {
   }, [inventoryUnits, packedSerialsSet]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // IPHONE MASTERLIST SCANNED QUERIES (8,295 REPAIRS, 415 SKUs, 28 HUBS)
+  // DYNAMIC IPHONE MASTERLIST SCANNED QUERIES (BASED ON USER UPLOADED MASTERLIST)
   // ─────────────────────────────────────────────────────────────────────────
-  const masterSummary = useMemo(() => getMasterlistSummary(), []);
+  const activeMasterlist = useMemo(() => {
+    if (masterlistData && masterlistData.totalUnits !== undefined && masterlistData.totalUnits > 0) {
+      if (!activePeriod || !masterlistData.periodLabel || isPeriodMatching(masterlistData.periodLabel, activePeriod)) {
+        return masterlistData;
+      }
+    }
+    if (repairUsageRecords && repairUsageRecords.length > 0) {
+      const scanned = scanMasterlistData(repairUsageRecords, {
+        periodLabel: typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || 'Current Period')
+      });
+      if (scanned && scanned.totalUnits > 0 && (!activePeriod || !scanned.periodLabel || isPeriodMatching(scanned.periodLabel, activePeriod))) {
+        return scanned;
+      }
+    }
+    return getActiveMasterlist(null, activePeriod);
+  }, [masterlistData, repairUsageRecords, activePeriod]);
+
+  const masterSummary = useMemo(() => getMasterlistSummary(activeMasterlist, activePeriod), [activeMasterlist, activePeriod]);
 
   const masterPartsReport = useMemo(() => {
     return getMasterlistParts({
@@ -164,15 +196,15 @@ export default function Dashboard() {
       search: reportSearch,
       limit: reportLimit,
       sortBy: reportSortBy
-    });
-  }, [reportCategory, reportSearch, reportLimit, reportSortBy]);
+    }, activeMasterlist, activePeriod);
+  }, [reportCategory, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
 
   const masterSitesReport = useMemo(() => {
     return getMasterlistSites({
       search: reportSearch,
       limit: reportLimit
-    });
-  }, [reportSearch, reportLimit]);
+    }, activeMasterlist, activePeriod);
+  }, [reportSearch, reportLimit, activeMasterlist, activePeriod]);
 
   const sitePartsReport = useMemo(() => {
     return getMasterlistPartsForSite(selectedSiteName, {
@@ -180,8 +212,8 @@ export default function Dashboard() {
       search: reportSearch,
       limit: reportLimit,
       sortBy: reportSortBy
-    });
-  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy]);
+    }, activeMasterlist, activePeriod);
+  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
 
   // Category Distribution for Donut Chart
   const categoryChartData = useMemo(() => {
@@ -385,6 +417,98 @@ export default function Dashboard() {
     }
   };
 
+  const handleQuickMasterlistUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isCleared = typeof window !== 'undefined' && localStorage.getItem('mdc_is_cleared') === 'true';
+    const hasData = !isCleared && Boolean(
+      (masterlistData && masterlistData.totalUnits > 0) ||
+      (repairUsageRecords && repairUsageRecords.length > 0)
+    );
+
+    if (hasData) {
+      showToast?.('Upload Locked: Existing operational data detected. Please delete current data in Fixably & GSX Data Import before uploading a new dataset.', 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    try {
+      setIsUploadingMasterlist(true);
+      const parsed = await parseUniversalExcel(file);
+
+      // Determine rows/records to scan
+      let rowsToScan = [];
+      if (parsed.payload?.records && parsed.payload.records.length > 0) {
+        rowsToScan = parsed.payload.records;
+      } else if (parsed.records && parsed.records.length > 0) {
+        rowsToScan = parsed.records;
+      } else if (parsed.rawMasterlistRecords && parsed.rawMasterlistRecords.length > 0) {
+        rowsToScan = parsed.rawMasterlistRecords;
+      } else if (parsed.rawMasterlistRows && parsed.rawMasterlistRows.length > 0) {
+        rowsToScan = parsed.rawMasterlistRows;
+      } else if (parsed.rawUsageRows && parsed.rawUsageRows.length > 0) {
+        rowsToScan = parsed.rawUsageRows;
+      } else if (parsed.allocationRows && parsed.allocationRows.length > 0) {
+        rowsToScan = parsed.allocationRows;
+      }
+
+      // Dynamically resolve target period from uploaded file (October, November, etc.)
+      const detectedPeriod = parsed.detectedPeriod || (
+        typeof activePeriod === 'object' && activePeriod?.label
+          ? activePeriod
+          : { month: 10, year: 2026, label: typeof activePeriod === 'string' ? activePeriod : 'Current Period' }
+      );
+      const periodLabel = detectedPeriod.label || (typeof activePeriod === 'string' ? activePeriod : activePeriod?.label) || 'Current Period';
+
+      const scanned = scanMasterlistData(rowsToScan, {
+        periodLabel
+      });
+
+      if (scanned && scanned.totalUnits > 0) {
+        setMasterlistData(scanned);
+        setActiveScannedMasterlist(scanned);
+        if (setActivePeriod) {
+          setActivePeriod(detectedPeriod);
+        }
+        try {
+          localStorage.setItem('mdc_masterlist_data', JSON.stringify(scanned));
+          localStorage.setItem('mdc_active_period', JSON.stringify(detectedPeriod));
+        } catch (_) {}
+
+        // If user is superadmin/admin and applyParsedDataset is available, also apply to pipeline
+        if (applyParsedDataset && (currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || !currentUser?.role)) {
+          try {
+            await applyParsedDataset(parsed, {
+              period: periodLabel,
+              target_month: periodLabel,
+              period_month: detectedPeriod.month,
+              period_year: detectedPeriod.year,
+              filename: file.name
+            });
+          } catch (syncErr) {
+            console.warn('Pipeline background sync notice:', syncErr);
+          }
+        }
+
+        showToast?.(
+          `Masterlist loaded successfully: ${scanned.totalUnits.toLocaleString()} units, ${scanned.totalDistinctParts} SKUs across ${scanned.totalSites} hubs`,
+          'success'
+        );
+      } else {
+        showToast?.('No valid iPhone repair records found in the uploaded file.', 'error');
+      }
+    } catch (err) {
+      console.error('Error importing masterlist file:', err);
+      showToast?.('Failed to import masterlist: ' + (err.message || 'File read error'), 'error');
+    } finally {
+      setIsUploadingMasterlist(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   return (
     <div className="dashboard-view" style={{ animation: 'fadeIn 0.2s ease-out', display: 'flex', flexDirection: 'column', gap: '22px' }}>
       
@@ -408,7 +532,7 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Smartphone size={20} color="#38bdf8" />
                 <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
-                  Distribution Center Operations • iPhone Intelligence
+                  Distribution Center Operations
                 </h2>
               </div>
               <span
@@ -435,6 +559,37 @@ export default function Dashboard() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              accept=".xlsx,.xls,.csv"
+              onChange={handleQuickMasterlistUpload}
+            />
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploadingMasterlist}
+              title="Upload Fixably/GSX raw masterlist or allocation file (.xlsx / .csv) to dynamically update dashboard analytics"
+              style={{
+                background: 'rgba(56, 189, 248, 0.12)',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                color: '#38bdf8',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: isUploadingMasterlist ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <Upload size={13} className={isUploadingMasterlist ? 'spin' : ''} />
+              <span>{isUploadingMasterlist ? 'Importing Masterlist...' : 'Import Masterlist File'}</span>
+            </button>
+
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Dashboard manual refresh' })}
@@ -625,11 +780,11 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {(shipments || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>manifests</span>
+            {(shipments || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>shipments</span>
           </div>
           <div className="kpi-sub">
             <span style={{ color: '#b45309', fontWeight: 700 }}>
-              {packedUnits.length} in queue
+              {packedUnits.length} parts in queue
             </span>{' '}
             • Dispatched via Lalamove / Lite Exp
           </div>
@@ -967,7 +1122,7 @@ export default function Dashboard() {
                   fontWeight: 600,
                   cursor: isExportingExcel ? 'not-allowed' : 'pointer'
                 }}
-                title="Export Complete Multi-Sheet Masterlist Package (All 415 Parts + 28 Hubs + Summary) to Excel (.xlsx)"
+                title={`Export Complete Multi-Sheet Masterlist Package (All ${masterSummary.totalDistinctParts} Parts + ${masterSummary.totalSites} Hubs + Summary) to Excel (.xlsx)`}
               >
                 <Layers size={13} />
                 <span>Full Package</span>
@@ -1639,7 +1794,8 @@ export default function Dashboard() {
             {/* Custom Legend */}
             <div style={{ width: '48%', display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '230px', overflowY: 'auto' }}>
               {categoryChartData.map(item => {
-                const pct = Math.round((item.count / 8295) * 100);
+                const totalDemand = masterSummary.totalUnits || 1;
+                const pct = Math.round((item.count / totalDemand) * 100);
                 return (
                   <div key={item.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11.5px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

@@ -89,6 +89,20 @@ export function useInventory({
     }
   });
 
+  const [masterlistData, setMasterlistData] = useState(() => {
+    try {
+      if (isExplicitlyCleared()) return null;
+      const saved = localStorage.getItem('mdc_masterlist_data');
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.totalUnits !== undefined) return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  });
+
   const logScan = (scanType, partNumber, serialNumber, isValid, errorMessage = null) => {
     const logEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -1494,6 +1508,8 @@ export function useInventory({
     setPurchaseOrders,
     repairUsageRecords,
     setRepairUsageRecords,
+    masterlistData,
+    setMasterlistData,
     addScanInUnit,
     deleteScanInUnit,
     updateUnitAssignment,

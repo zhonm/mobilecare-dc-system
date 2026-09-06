@@ -42,11 +42,11 @@ export async function exportDashboardReportToExcel({
   workbook.lastModifiedBy = 'MDC DC System 2';
   workbook.created = new Date();
 
-  const totalDemand = masterSummary?.totalUnits || 8295;
-  const totalValUSD = masterSummary?.totalValuationUSD || 1632575;
-  const totalValPHP = masterSummary?.totalValuationPHP || (totalValUSD * USD_TO_PHP_RATE);
-  const totalSKUs = masterSummary?.totalDistinctParts || 415;
-  const totalSites = masterSummary?.totalSites || 28;
+  const totalDemand = typeof masterSummary?.totalUnits === 'number' ? masterSummary.totalUnits : (masterPartsReport?.totalFilteredUnits || 0);
+  const totalValUSD = typeof masterSummary?.totalValuationUSD === 'number' ? masterSummary.totalValuationUSD : (masterPartsReport?.totalFilteredValUSD || 0);
+  const totalValPHP = typeof masterSummary?.totalValuationPHP === 'number' ? masterSummary.totalValuationPHP : (totalValUSD * USD_TO_PHP_RATE);
+  const totalSKUs = typeof masterSummary?.totalDistinctParts === 'number' ? masterSummary.totalDistinctParts : (masterPartsReport?.totalCount || 0);
+  const totalSites = typeof masterSummary?.totalSites === 'number' ? masterSummary.totalSites : (masterSitesReport?.totalSitesCount || 0);
 
   // ── Helper: Style Table Header ─────────────────────────────────────────────
   const applyHeaderStyles = (row, bgArgb = 'FF0F172A') => {
@@ -621,11 +621,11 @@ export function exportDashboardReportToPDF({
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 10;
 
-  const totalDemand = masterSummary?.totalUnits || 8295;
-  const totalValUSD = masterSummary?.totalValuationUSD || 1632575;
-  const totalValPHP = masterSummary?.totalValuationPHP || (totalValUSD * USD_TO_PHP_RATE);
-  const totalSKUs = masterSummary?.totalDistinctParts || 415;
-  const totalSites = masterSummary?.totalSites || 28;
+  const totalDemand = typeof masterSummary?.totalUnits === 'number' ? masterSummary.totalUnits : (masterPartsReport?.totalFilteredUnits || 0);
+  const totalValUSD = typeof masterSummary?.totalValuationUSD === 'number' ? masterSummary.totalValuationUSD : (masterPartsReport?.totalFilteredValUSD || 0);
+  const totalValPHP = typeof masterSummary?.totalValuationPHP === 'number' ? masterSummary.totalValuationPHP : (totalValUSD * USD_TO_PHP_RATE);
+  const totalSKUs = typeof masterSummary?.totalDistinctParts === 'number' ? masterSummary.totalDistinctParts : (masterPartsReport?.totalCount || 0);
+  const totalSites = typeof masterSummary?.totalSites === 'number' ? masterSummary.totalSites : (masterSitesReport?.totalSitesCount || 0);
 
   // ── Header Helper ──────────────────────────────────────────────────────────
   const renderHeader = (title, subtitle) => {

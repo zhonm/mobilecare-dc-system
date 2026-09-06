@@ -258,7 +258,7 @@ export default function CommandPalette({ isOpen, onClose }) {
           id: `part-${p.id}`,
           title: `${p.part_number} — ${p.description}`,
           subtitle: hasFinancialAccess
-            ? `Stocking: $${p.stocking_price || 0} • Exchange: $${p.exchange_price || 0}`
+            ? `Stocking: $${parseFloat(p.stocking_price || 0).toFixed(2)}`
             : `Apple Replacement Part • ${p.iphone_model || 'Hardware Module'}`,
           icon: Package,
           action: () => {

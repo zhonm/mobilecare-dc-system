@@ -430,21 +430,41 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         const ALL_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
         let detectedMonthIdx = 8; // Default to September (Month index 8, 9th month)
 
+        const nameToSearch = `${file.name} ${sheetNames.join(' ')}`.toLowerCase();
+
         if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
           const parsedM = parseInt(selectedMonth, 10);
           detectedMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? 8 : parsedM));
         } else {
-          const nameToSearch = `${file.name} ${sheetNames.join(' ')}`.toLowerCase();
           const fIdx = ALL_MONTH_NAMES.findIndex(m => nameToSearch.includes(m.toLowerCase()));
           if (fIdx >= 0) {
             detectedMonthIdx = fIdx;
+          } else {
+            // Check month abbreviations (e.g. oct, nov, dec)
+            const ALL_MONTH_ABBRS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            const abbrIdx = ALL_MONTH_ABBRS.findIndex(a => new RegExp(`\\b${a}\\b|_${a}_|-${a}-`, 'i').test(nameToSearch));
+            if (abbrIdx >= 0) {
+              detectedMonthIdx = abbrIdx;
+            } else {
+              // Check 20th-of-the-month date patterns (e.g. 2026-10-20 or 10-20-2026)
+              const isoMatch = nameToSearch.match(/\b(202[0-9]|203[0-9])[-_](0[1-9]|1[0-2])[-_](0[1-9]|[12][0-9]|3[01])\b/);
+              const usMatch = nameToSearch.match(/\b(0[1-9]|1[0-2])[-_](0[1-9]|[12][0-9]|3[01])[-_](202[0-9]|203[0-9])\b/);
+              if (isoMatch) {
+                detectedMonthIdx = parseInt(isoMatch[2], 10) - 1;
+              } else if (usMatch) {
+                detectedMonthIdx = parseInt(usMatch[1], 10) - 1;
+              }
+            }
           }
         }
 
+        const yearMatch = nameToSearch.match(/\b(202[0-9]|203[0-9])\b/);
+        const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : 2026;
+
         const detectedPeriod = {
           month: detectedMonthIdx + 1,
-          year: 2026,
-          label: `${ALL_MONTH_NAMES[detectedMonthIdx]} 2026`
+          year: detectedYear,
+          label: `${ALL_MONTH_NAMES[detectedMonthIdx]} ${detectedYear}`
         };
 
         // Check for Multi-Tab Comprehensive Workbook (.xlsx)
@@ -1498,12 +1518,23 @@ export function processRawUsageSheet(
   let maxMonthIdx = validMonthIndices.length > 0 ? Math.max(...validMonthIndices) : 7;
   let targetMonthIdx = Math.min(11, maxMonthIdx + 1);
 
-  if (validMonthIndices.length === 0 && fileName) {
+  if (fileName) {
     const fnLower = fileName.toLowerCase();
     const fnMonthIdx = MONTH_NAMES.findIndex(m => fnLower.includes(m.toLowerCase()));
     if (fnMonthIdx >= 0) {
       targetMonthIdx = fnMonthIdx;
       maxMonthIdx = Math.max(0, fnMonthIdx - 1);
+    } else {
+      // Check abbreviations and date patterns (e.g. 20th of the month: 2026-10-20)
+      const isoMatch = fnLower.match(/\b(202[0-9]|203[0-9])[-_](0[1-9]|1[0-2])[-_](0[1-9]|[12][0-9]|3[01])\b/);
+      const usMatch = fnLower.match(/\b(0[1-9]|1[0-2])[-_](0[1-9]|[12][0-9]|3[01])[-_](202[0-9]|203[0-9])\b/);
+      if (isoMatch) {
+        targetMonthIdx = parseInt(isoMatch[2], 10) - 1;
+        maxMonthIdx = Math.max(0, targetMonthIdx - 1);
+      } else if (usMatch) {
+        targetMonthIdx = parseInt(usMatch[1], 10) - 1;
+        maxMonthIdx = Math.max(0, targetMonthIdx - 1);
+      }
     }
   }
 
@@ -1872,10 +1903,13 @@ export function processRawUsageSheet(
     currentRowNumber++;
   });
 
+  const yearMatch = fileName ? String(fileName).match(/\b(202[0-9]|203[0-9])\b/) : null;
+  const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : 2026;
+
   const detectedPeriod = {
     month: targetMonthIdx + 1,
-    year: 2026,
-    label: `${MONTH_NAMES[targetMonthIdx]} 2026`
+    year: detectedYear,
+    label: `${MONTH_NAMES[targetMonthIdx]} ${detectedYear}`
   };
 
   return {
