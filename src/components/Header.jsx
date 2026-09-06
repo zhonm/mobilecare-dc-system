@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
 import HeaderCategoryFilter from './HeaderCategoryFilter';
 
 export default function Header() {
@@ -21,7 +21,9 @@ export default function Header() {
     offlineQueue,
     processOfflineSyncQueue,
     activePeriod,
-    canAccess
+    canAccess,
+    isMobileNavOpen,
+    setIsMobileNavOpen
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -85,8 +87,18 @@ export default function Header() {
 
   return (
     <header className="header-bar">
-      {/* Left: Section Breadcrumb, Page Title & Category Filters */}
+      {/* Left: Hamburger, Section Breadcrumb, Page Title & Category Filters */}
       <div className="header-left">
+        <button
+          type="button"
+          className={`header-mobile-toggle-btn ${isMobileNavOpen ? 'active' : ''}`}
+          onClick={() => setIsMobileNavOpen(prev => !prev)}
+          aria-label="Toggle navigation menu"
+          title={isMobileNavOpen ? 'Close Menu' : 'Open Menu'}
+        >
+          <Menu size={20} />
+        </button>
+
         <div className="header-title-container">
           <div className="header-section-breadcrumb">
             <span>{currentMeta.section}</span>
@@ -176,6 +188,17 @@ export default function Header() {
             </>
           )}
         </div>
+
+        {/* Mobile Search Icon Button */}
+        <button
+          type="button"
+          className="header-mobile-search-btn"
+          onClick={() => setIsCommandPaletteOpen(true)}
+          title="Search parts, serials (Cmd+K)"
+          aria-label="Search"
+        >
+          <Search size={15} />
+        </button>
 
         {/* Global Command Palette / Search Trigger */}
         <div

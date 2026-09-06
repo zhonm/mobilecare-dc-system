@@ -20,17 +20,14 @@ import {
   Copy,
   Building2,
   MapPin,
-  Layers,
-  CheckCheck,
-  ListFilter
+  Layers
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
 import {
   isShipmentMetroManila,
   isShipmentProvince,
-  extractShipmentSerials,
-  formatSerialsForExport
+  extractShipmentSerials
 } from '../utils/shipmentHelpers';
 
 export default function Shipments() {

@@ -23,6 +23,18 @@
   gap: 12px;
 }
 
+.sidebar-mobile-close {
+  display: none;
+}
+
+.header-mobile-toggle-btn {
+  display: none;
+}
+
+.header-mobile-search-btn {
+  display: none;
+}
+
 .sidebar-logo-img-wrapper {
   width: 38px;
   height: 38px;
@@ -1098,37 +1110,325 @@
   }
 }
 
-/* Mobile & Narrow Split Screen (<= 860px) */
-@media (max-width: 860px) {
+/* Mobile & Narrow Screen Rules (<= 768px) */
+@media (max-width: 768px) {
+  /* Off-Canvas Slide-out Navigation Drawer */
+  .sidebar,
+  .pmg-sidebar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    height: 100vh !important;
+    width: 285px !important;
+    max-width: 86vw !important;
+    z-index: 1000 !important;
+    transform: translateX(-100%) !important;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: none !important;
+  }
+
+  .sidebar.mobile-open,
+  .pmg-sidebar.mobile-open {
+    transform: translateX(0) !important;
+    box-shadow: 10px 0 35px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  .sidebar-header {
+    justify-content: space-between;
+    padding: 16px 14px;
+  }
+
+  .sidebar-mobile-close {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #cbd5e1;
+    width: 32px;
+    height: 32px;
+    margin-left: auto;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .sidebar-mobile-close:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+  }
+
+  /* Header Bar Layout */
   .header-bar {
     flex-wrap: wrap;
     min-height: auto;
     padding: 8px 12px;
     gap: 8px;
   }
+
+  .header-mobile-toggle-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #0f172a;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .header-mobile-toggle-btn:active {
+    background: #e2e8f0;
+    transform: scale(0.96);
+  }
+
   .header-left {
-    width: 100%;
-    justify-content: space-between;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    width: auto;
+    justify-content: flex-start;
   }
-  .header-category-dropdown-wrapper {
-    margin-left: 0;
+
+  .header-section-breadcrumb {
+    display: none;
   }
-  .category-pills {
-    max-width: 60%;
-    margin-left: 0;
+
+  .header-page-title {
+    font-size: 13.5px;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+
+  .header-category-dropdown {
+    height: 30px;
+    padding: 0 8px 0 24px;
+    font-size: 11px;
+  }
+
+  .header-category-label-text {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .category-popover-menu {
+    width: calc(100vw - 24px) !important;
+    max-width: 320px !important;
+    left: 0 !important;
+    right: auto !important;
+  }
+
   .header-right {
-    width: 100%;
-    justify-content: space-between;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    width: auto;
+    justify-content: flex-end;
   }
+
   .search-input-box {
-    flex: 1;
+    display: none; /* Replaced by header-mobile-search-btn */
   }
-  .search-input-box input {
+
+  .header-mobile-search-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #475569;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .header-period-badge .period-label {
+    display: none;
+  }
+
+  .header-period-badge {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+
+  .header-sync-badge {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+
+  .header-scan-switcher {
+    gap: 4px;
+  }
+
+  .header-scan-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  /* Scanner Workstation */
+  .scanner-hero {
+    padding: 16px 14px !important;
+    margin-bottom: 16px !important;
+    border-radius: 12px !important;
+  }
+
+  .scanner-hero-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 16px !important;
+  }
+
+  .scan-input-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .scanner-input {
+    padding: 10px 14px !important;
+    font-size: 16px !important;
+  }
+
+  .workstation-controls-bar {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    padding: 12px 14px !important;
+  }
+
+  /* Allocation Matrix */
+  .matrix-header-card {
+    padding: 14px 12px !important;
+  }
+
+  .matrix-header-top {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+
+  .matrix-header-actions {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+  }
+
+  .matrix-toolbar-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .matrix-toolbar-left,
+  .matrix-toolbar-right {
+    width: 100% !important;
+    flex-wrap: wrap !important;
+  }
+
+  /* Unfreeze sticky 398px columns on mobile to allow smooth touch swiping */
+  .matrix-col-sticky-1,
+  .matrix-col-sticky-2,
+  .matrix-col-sticky-3,
+  .matrix-th-sticky-1,
+  .matrix-th-sticky-2,
+  .matrix-th-sticky-3 {
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  /* Universal Modals */
+  .modal-backdrop {
+    padding: 10px !important;
+  }
+
+  .modal-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 94vh !important;
+    border-radius: 12px !important;
+  }
+
+  .modal-header {
+    padding: 12px 14px !important;
+  }
+
+  .modal-body {
+    padding: 14px 12px !important;
+  }
+
+  .modal-footer {
+    padding: 12px 14px !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .modal-footer .btn {
+    flex: 1 1 auto;
+    min-height: 38px;
+  }
+
+  /* Command Palette */
+  .cmd-palette-backdrop {
+    padding: 30px 10px 16px !important;
+  }
+
+  .cmd-palette-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 88vh !important;
+  }
+
+  /* Auth / Login Card */
+  .auth-card {
+    max-width: 100% !important;
+    padding: 24px 18px !important;
+    border-radius: 18px !important;
+  }
+
+  .auth-logo-badge {
+    width: 64px !important;
+    height: 64px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .auth-title {
+    font-size: 15px !important;
+  }
+}
+
+/* Small Smartphone Rules (<= 480px) */
+@media (max-width: 480px) {
+  .header-page-title {
+    max-width: 110px;
+  }
+
+  .header-category-label-text {
+    max-width: 75px;
+  }
+
+  .btn {
+    font-size: 12.5px;
+  }
+
+  .matrix-btn-group {
+    flex-wrap: wrap;
     width: 100%;
   }
-  .search-input-box input:focus {
-    width: 100%;
+
+  .matrix-btn-group .btn {
+    flex: 1 1 auto;
   }
 }
 
@@ -3167,4 +3467,460 @@ input[type="password"]::-ms-clear {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   MOBILE & TABLET RESPONSIVE SYSTEM (<= 768px and <= 480px)
+   ========================================================================== */
+@media (max-width: 768px) {
+  /* 1. App Shell & Mobile Slide-Out Drawer Navigation */
+  .sidebar,
+  .pmg-sidebar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    bottom: 0 !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    width: 285px !important;
+    max-width: 86vw !important;
+    z-index: 1000 !important;
+    transform: translateX(-100%) !important;
+    transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: none !important;
+  }
+
+  .sidebar.mobile-open,
+  .pmg-sidebar.mobile-open {
+    transform: translateX(0) !important;
+    box-shadow: 12px 0 35px rgba(0, 0, 0, 0.55) !important;
+  }
+
+  .sidebar-header {
+    justify-content: space-between !important;
+    padding: 16px 14px !important;
+  }
+
+  .sidebar-mobile-close {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: #cbd5e1;
+    width: 32px;
+    height: 32px;
+    margin-left: auto;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .sidebar-mobile-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+  }
+
+  .sidebar-search-container {
+    padding: 8px 12px 4px !important;
+  }
+
+  .sidebar-nav {
+    padding: 6px 10px 14px !important;
+  }
+
+  .sidebar-footer {
+    padding: 12px 14px !important;
+  }
+
+  /* 2. Top Header Navigation Bar */
+  .header-bar {
+    padding: 8px 10px !important;
+    min-height: auto !important;
+    gap: 8px !important;
+  }
+
+  .header-left {
+    gap: 8px !important;
+    width: auto !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  .header-mobile-toggle-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #0f172a;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .header-mobile-toggle-btn:active {
+    background: #e2e8f0;
+    transform: scale(0.95);
+  }
+
+  .header-section-breadcrumb {
+    display: none !important;
+  }
+
+  .header-page-title {
+    font-size: 13.5px !important;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-category-dropdown {
+    height: 30px !important;
+    padding: 0 8px 0 24px !important;
+    font-size: 11px !important;
+  }
+
+  .header-category-label-text {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .category-popover-menu {
+    width: calc(100vw - 20px) !important;
+    max-width: 320px !important;
+    left: 0 !important;
+    right: auto !important;
+  }
+
+  .header-right {
+    gap: 6px !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+  }
+
+  .search-input-box {
+    display: none !important; /* Hide desktop text field */
+  }
+
+  .header-mobile-search-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #475569;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .header-period-badge .period-label {
+    display: none !important;
+  }
+
+  .header-period-badge {
+    padding: 3px 6px !important;
+    font-size: 10.5px !important;
+  }
+
+  .header-sync-badge {
+    padding: 3px 6px !important;
+    font-size: 10.5px !important;
+  }
+
+  .header-icon-btn {
+    padding: 6px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+  }
+
+  .btn-label-responsive {
+    display: none !important;
+  }
+
+  .header-scan-switcher {
+    gap: 4px !important;
+  }
+
+  .header-scan-btn {
+    padding: 4px 8px !important;
+    font-size: 11px !important;
+  }
+
+  /* 3. Dashboard KPI Grids & Charts */
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px !important;
+    margin-bottom: 16px !important;
+  }
+
+  .kpi-card {
+    padding: 12px 10px !important;
+  }
+
+  .kpi-value {
+    font-size: 20px !important;
+  }
+
+  .chart-card {
+    padding: 14px 10px !important;
+    margin-bottom: 16px !important;
+  }
+
+  .chart-container {
+    min-width: 0 !important;
+    width: 100% !important;
+    overflow-x: hidden !important;
+  }
+
+  .recharts-wrapper {
+    max-width: 100% !important;
+  }
+
+  /* 4. Scanner Workstation (Scan In & Scan Out) */
+  .scanner-hero {
+    padding: 16px 14px !important;
+    margin-bottom: 14px !important;
+    border-radius: 12px !important;
+  }
+
+  .scanner-hero-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+    margin-bottom: 14px !important;
+  }
+
+  .scan-input-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .scanner-input {
+    padding: 10px 14px !important;
+    font-size: 16px !important; /* Prevents iOS Safari input zoom */
+  }
+
+  .workstation-controls-bar {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+    padding: 12px 14px !important;
+  }
+
+  .scanin-top-tabs {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap !important;
+    padding-bottom: 6px !important;
+    width: 100% !important;
+  }
+
+  .scanin-tab-btn {
+    padding: 7px 12px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+  }
+
+  .scanin-top-tabs-actions {
+    width: 100% !important;
+    justify-content: stretch !important;
+  }
+
+  .scanin-top-tabs-actions .btn {
+    flex: 1 1 auto !important;
+  }
+
+  /* 5. Inventory Allocation Matrix */
+  .matrix-header-card {
+    padding: 14px 10px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .matrix-header-top {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .matrix-header-title {
+    font-size: 16px !important;
+  }
+
+  .matrix-header-actions {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+    flex-wrap: wrap !important;
+  }
+
+  .matrix-header-actions .btn {
+    flex: 1 1 auto !important;
+    font-size: 12px !important;
+  }
+
+  .matrix-toolbar-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .matrix-toolbar-left,
+  .matrix-toolbar-right {
+    width: 100% !important;
+    flex-wrap: wrap !important;
+  }
+
+  .matrix-model-selector {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+
+  /* Release 398px sticky columns on mobile for smooth horizontal touch swiping */
+  .matrix-col-sticky-1,
+  .matrix-col-sticky-2,
+  .matrix-col-sticky-3,
+  .matrix-th-sticky-1,
+  .matrix-th-sticky-2,
+  .matrix-th-sticky-3 {
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .allocation-matrix-container {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    max-height: 75vh !important;
+  }
+
+  /* 6. Universal Modal Dialogs */
+  .modal-backdrop {
+    padding: 10px !important;
+  }
+
+  .modal-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 94vh !important;
+    max-height: 94dvh !important;
+    border-radius: 12px !important;
+  }
+
+  .modal-header {
+    padding: 12px 14px !important;
+  }
+
+  .modal-body {
+    padding: 14px 12px !important;
+  }
+
+  .modal-footer {
+    padding: 12px 14px !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+
+  .modal-footer .btn {
+    flex: 1 1 auto !important;
+    min-height: 38px !important;
+  }
+
+  /* 7. Command Palette */
+  .cmd-palette-backdrop {
+    padding: 24px 10px 16px !important;
+  }
+
+  .cmd-palette-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 88vh !important;
+  }
+
+  /* 8. Auth & Login */
+  .auth-card {
+    max-width: 100% !important;
+    padding: 24px 16px !important;
+    border-radius: 18px !important;
+  }
+
+  .auth-logo-badge {
+    width: 60px !important;
+    height: 60px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .auth-title {
+    font-size: 14px !important;
+  }
+
+  /* 9. Data Import & Forecasting */
+  .import-zone-container {
+    padding: 16px 12px !important;
+  }
+
+  .import-zone-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .forecasting-controls-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .forecasting-controls-bar .form-select,
+  .forecasting-controls-bar .btn {
+    width: 100% !important;
+  }
+
+  /* 10. Parts Requests & PMG Portal */
+  .pmg-branch-top {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .pmg-telemetry-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+
+  .pmg-action-secondary-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
+/* Very Small Phones (<= 480px) */
+@media (max-width: 480px) {
+  .header-page-title {
+    max-width: 105px !important;
+  }
+
+  .header-category-label-text {
+    max-width: 70px !important;
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .matrix-btn-group {
+    flex-wrap: wrap !important;
+    width: 100% !important;
+  }
+
+  .matrix-btn-group .btn {
+    flex: 1 1 auto !important;
+  }
+
+  .pmg-telemetry-grid {
+    grid-template-columns: 1fr !important;
+  }
 }

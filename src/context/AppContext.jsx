@@ -70,8 +70,11 @@ export function AppProvider({ children }) {
     return 'dashboard';
   });
 
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
   const setActiveTab = (newTab) => {
     setActiveTabState(newTab);
+    setIsMobileNavOpen(false);
   };
 
   const [selectedCategories, setSelectedCategoriesState] = useState(() => {
@@ -507,6 +510,8 @@ export function AppProvider({ children }) {
         broadcastPackingPresence: cloudSync.broadcastPackingPresence,
         isCommandPaletteOpen,
         setIsCommandPaletteOpen,
+        isMobileNavOpen,
+        setIsMobileNavOpen,
         pmgSubTab,
         setPmgSubTab
       }}

@@ -23,7 +23,6 @@ import SettingsCatalog from './components/SettingsCatalog';
 import UserAccessManagement from './components/UserAccessManagement';
 import RequestParts from './components/RequestParts';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
-import MobileWarning from './components/MobileWarning';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import './App.css';
 
@@ -182,7 +181,6 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AppProvider>
-        <MobileWarning />
         <MainApp />
       </AppProvider>
     </ErrorBoundary>

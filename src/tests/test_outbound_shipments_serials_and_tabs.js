@@ -2,8 +2,7 @@ import assert from 'assert';
 import {
   isShipmentMetroManila,
   isShipmentProvince,
-  extractShipmentSerials,
-  formatSerialsForExport
+  extractShipmentSerials
 } from '../utils/shipmentHelpers.js';
 
 console.log('====================================================');

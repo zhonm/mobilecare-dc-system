@@ -34,7 +34,9 @@ export default function Sidebar() {
     purchaseOrders,
     shipments,
     partsRequests,
-    sites = []
+    sites = [],
+    isMobileNavOpen,
+    setIsMobileNavOpen
   } = useApp();
 
   const [navSearch, setNavSearch] = useState('');
@@ -88,24 +90,40 @@ export default function Sidebar() {
   ];
 
   return (
-    <aside className="sidebar">
-      {/* Brand Header */}
-      <div className="sidebar-header">
-        <div className="sidebar-logo-img-wrapper">
-          <img
-            src={mobileCareLogo}
-            alt="Mobile Care"
-            className="sidebar-logo-img"
-          />
+    <>
+      {isMobileNavOpen && (
+        <div
+          className="mobile-nav-backdrop"
+          onClick={() => setIsMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={`sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
+        {/* Brand Header */}
+        <div className="sidebar-header">
+          <div className="sidebar-logo-img-wrapper">
+            <img
+              src={mobileCareLogo}
+              alt="Mobile Care"
+              className="sidebar-logo-img"
+            />
+          </div>
+          <div className="sidebar-brand">
+            <h2>DC System</h2>
+            <p className="sidebar-subtitle">
+              <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
+              Mobile Care Services Phils.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="sidebar-mobile-close"
+            onClick={() => setIsMobileNavOpen(false)}
+            aria-label="Close navigation"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div className="sidebar-brand">
-          <h2>DC System</h2>
-          <p className="sidebar-subtitle">
-            <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
-            Mobile Care Services Phils.
-          </p>
-        </div>
-      </div>
 
       {/* Quick Search Bar */}
       <div className="sidebar-search-container">
@@ -211,5 +229,6 @@ export default function Sidebar() {
         </button>
       </div>
     </aside>
+    </>
   );
 }

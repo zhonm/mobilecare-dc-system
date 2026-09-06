@@ -344,19 +344,19 @@ export default function CommandPalette({ isOpen, onClose }) {
 
   return (
     <div
-      className="modal-backdrop"
+      className="modal-backdrop cmd-palette-backdrop"
       style={{
         zIndex: 9999,
         display: 'flex',
         alignItems: 'flex-start',
-        justifyContent: 'center',
-        paddingTop: '80px'
+        justifyContent: 'center'
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) handleClose();
       }}
     >
       <div
+        className="cmd-palette-card"
         style={{
           background: '#0f172a',
           color: '#f8fafc',

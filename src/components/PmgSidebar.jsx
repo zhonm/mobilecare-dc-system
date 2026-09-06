@@ -27,7 +27,9 @@ export default function PmgSidebar() {
     partsRequests = [],
     getStockOnHandForSite,
     inventoryUnits = [],
-    isAutoRefreshing
+    isAutoRefreshing,
+    isMobileNavOpen,
+    setIsMobileNavOpen
   } = useApp();
 
   const [navSearch, setNavSearch] = useState('');
@@ -132,27 +134,43 @@ export default function PmgSidebar() {
   const sections = ['Branch Operations', 'Network Visibility'];
 
   return (
-    <aside className="sidebar pmg-sidebar">
-      {/* Brand Header */}
-      <div className="sidebar-header">
-        <div className="sidebar-logo-img-wrapper">
-          <img
-            src={mobileCareLogo}
-            alt="Mobile Care"
-            className="sidebar-logo-img"
-          />
-        </div>
-        <div className="sidebar-brand">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <h2>MobileCare</h2>
-            <span className="pmg-role-badge">PMG</span>
+    <>
+      {isMobileNavOpen && (
+        <div
+          className="mobile-nav-backdrop"
+          onClick={() => setIsMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={`sidebar pmg-sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
+        {/* Brand Header */}
+        <div className="sidebar-header">
+          <div className="sidebar-logo-img-wrapper">
+            <img
+              src={mobileCareLogo}
+              alt="Mobile Care"
+              className="sidebar-logo-img"
+            />
           </div>
-          <p className="sidebar-subtitle">
-            <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
-            Branch Operations Portal
-          </p>
+          <div className="sidebar-brand">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <h2>MobileCare</h2>
+              <span className="pmg-role-badge">PMG</span>
+            </div>
+            <p className="sidebar-subtitle">
+              <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
+              Branch Operations Portal
+            </p>
+          </div>
+          <button
+            type="button"
+            className="sidebar-mobile-close"
+            onClick={() => setIsMobileNavOpen(false)}
+            aria-label="Close navigation"
+          >
+            <X size={18} />
+          </button>
         </div>
-      </div>
 
       {/* Quick Search Bar */}
       <div className="sidebar-search-container">
@@ -282,5 +300,6 @@ export default function PmgSidebar() {
         </button>
       </div>
     </aside>
+    </>
   );
 }

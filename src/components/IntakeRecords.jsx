@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
-import * as XLSX from 'xlsx';
 import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
