@@ -15,6 +15,7 @@ import {
   Files
 } from 'lucide-react';
 import { parseGsxInvoicePdf, parseGsxExcelOrCsv } from '../utils/gsxPdfParser';
+import { getBasePoNumber } from '../utils/appContextHelpers';
 
 export default function PurchaseOrders() {
   const {
@@ -234,23 +235,58 @@ export default function PurchaseOrders() {
   const handleBatchImportAll = async () => {
     if (stagedPOs.length === 0) return;
     setIsBatchImporting(true);
-    let count = 0;
 
-    for (const staged of stagedPOs) {
-      const calculatedTotal = staged.items.reduce((sum, it) => sum + (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)), 0);
+    // Consolidate staged POs by base PO number so multiple invoices for the same PO are imported into one
+    const poMap = new Map();
+    stagedPOs.forEach(staged => {
+      const rawPoNum = (staged.po_number || `PO-${Date.now()}`).trim();
+      const basePoNum = getBasePoNumber(rawPoNum);
+
+      if (!poMap.has(basePoNum)) {
+        poMap.set(basePoNum, {
+          ...staged,
+          po_number: basePoNum,
+          items: [...staged.items],
+          invoice_refs: staged.invoice_ref ? [String(staged.invoice_ref).trim()] : [],
+          sales_order_nos: staged.sales_order_no ? [String(staged.sales_order_no).trim()] : [],
+          fileNames: staged.fileName ? [staged.fileName] : []
+        });
+      } else {
+        const existing = poMap.get(basePoNum);
+        existing.items.push(...staged.items);
+        if (staged.invoice_ref && !existing.invoice_refs.includes(String(staged.invoice_ref).trim())) {
+          existing.invoice_refs.push(String(staged.invoice_ref).trim());
+        }
+        if (staged.sales_order_no && !existing.sales_order_nos.includes(String(staged.sales_order_no).trim())) {
+          existing.sales_order_nos.push(String(staged.sales_order_no).trim());
+        }
+        if (staged.fileName && !existing.fileNames.includes(staged.fileName)) {
+          existing.fileNames.push(staged.fileName);
+        }
+      }
+    });
+
+    let count = 0;
+    for (const [basePoNum, consolidatedStaged] of poMap.entries()) {
+      const calculatedTotal = consolidatedStaged.items.reduce((sum, it) => sum + (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)), 0);
+      const combinedInvoiceRef = consolidatedStaged.invoice_refs.join(', ') || null;
+      const combinedSalesOrderNo = consolidatedStaged.sales_order_nos.join(', ') || null;
+      const combinedFileNames = consolidatedStaged.fileNames.join(', ') || 'Batch_Import';
+
       const poPayload = {
-        po_number: (staged.po_number || `PO-${Date.now()}-${count}`).trim(),
-        invoice_ref: staged.invoice_ref ? String(staged.invoice_ref).trim() : null,
-        sales_order_no: staged.sales_order_no ? String(staged.sales_order_no).trim() : null,
-        supplier: staged.supplier || 'Apple South Asia Pte Ltd',
-        order_date: staged.order_date || new Date().toISOString().split('T')[0],
-        expected_date: staged.expected_date || staged.order_date || new Date().toISOString().split('T')[0],
+        po_number: basePoNum,
+        invoice_ref: combinedInvoiceRef,
+        sales_order_no: combinedSalesOrderNo,
+        supplier: consolidatedStaged.supplier || 'Apple South Asia Pte Ltd',
+        order_date: consolidatedStaged.order_date || new Date().toISOString().split('T')[0],
+        expected_date: consolidatedStaged.expected_date || consolidatedStaged.order_date || new Date().toISOString().split('T')[0],
         status: 'pending',
-        currency: staged.currency || 'USD',
+        currency: consolidatedStaged.currency || 'USD',
         total_amount: calculatedTotal,
-        remarks: staged.remarks || '',
-        source_filename: staged.fileName || 'Batch_Import',
-        items: staged.items.map(it => ({
+        remarks: consolidatedStaged.remarks || '',
+        source_filename: combinedFileNames,
+        items: consolidatedStaged.items.map((it, idx) => ({
+          id: it.id || `po-item-${idx}-${Date.now()}`,
           part_number: String(it.part_number || '').trim().toUpperCase(),
           description: it.description || `Apple Genuine Part ${it.part_number}`,
           quantity_ordered: parseInt(it.quantity_ordered, 10) || 1,
@@ -270,7 +306,7 @@ export default function PurchaseOrders() {
     setIsBatchImporting(false);
     setIsUploadModalOpen(false);
     resetUploadForm();
-    showToast(`Successfully imported ${count} Purchase Orders! All parts are now expected and registered in Parts Saved History Records.`, 'success');
+    showToast(`Successfully imported ${count} Purchase Order${count > 1 ? 's' : ''}! All parts consolidated into single POs.`, 'success');
   };
 
   const handleRemoveStagedPO = (index) => {
@@ -346,9 +382,10 @@ export default function PurchaseOrders() {
     }
 
     const calculatedTotal = items.reduce((sum, it) => sum + (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)), 0);
+    const basePoNum = getBasePoNumber(poNumber);
 
     const poPayload = {
-      po_number: poNumber.trim(),
+      po_number: basePoNum,
       invoice_ref: invoiceRef.trim() || null,
       sales_order_no: salesOrderNo.trim() || null,
       supplier: supplier.trim() || 'Apple South Asia Pte Ltd',

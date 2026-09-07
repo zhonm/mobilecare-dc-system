@@ -4,7 +4,18 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
-import { reconcileUnitsWithPackedDrafts, toValidUUID, isUUID, safeUUID, formatShipmentForDb, formatDcIntakeRecordForDb, isLockedConfirmedShipment } from '../utils/appContextHelpers';
+import {
+  reconcileUnitsWithPackedDrafts,
+  toValidUUID,
+  isUUID,
+  safeUUID,
+  formatShipmentForDb,
+  formatDcIntakeRecordForDb,
+  isLockedConfirmedShipment,
+  getBasePoNumber,
+  consolidatePurchaseOrdersList,
+  consolidateDcIntakeRecordsList
+} from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
@@ -1168,6 +1179,12 @@ export function useCloudSync({
       }
 
       // 5.5. Process Master Purchase Orders Registry
+      let activeCloudOrLocalPOs = [];
+      try {
+        const localSavedPos = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
+        if (Array.isArray(localSavedPos)) activeCloudOrLocalPOs = [...localSavedPos];
+      } catch (e) {}
+
       if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && setPurchaseOrders) {
         const cloudPoRegistryDoc = dbSavedRecords.find(r => r.id === 'master_purchase_orders_registry');
         if (cloudPoRegistryDoc?.snapshot_data?.orders && Array.isArray(cloudPoRegistryDoc.snapshot_data.orders)) {
@@ -1187,7 +1204,8 @@ export function useCloudSync({
             }
           });
 
-          const mergedOrders = Array.from(orderMap.values());
+          const mergedOrders = consolidatePurchaseOrdersList(Array.from(orderMap.values()));
+          activeCloudOrLocalPOs = mergedOrders;
           setPurchaseOrders(mergedOrders);
           try { localStorage.setItem('mdc_pos', JSON.stringify(mergedOrders)); } catch (e) {}
           dbStorage.setItem('mdc_pos', mergedOrders);
@@ -1214,38 +1232,42 @@ export function useCloudSync({
           deletedIntakeIdsSet = new Set(cloudDeletedIntakes.map(id => String(id).trim().toUpperCase()));
         }
 
-        const intakeRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_dc_intakes_registry');
-        const intakeBatchDocs = dbSavedRecords?.filter(r => (r.record_type === 'intake_batch' || r.record_type === 'intake_record' || r.id?.startsWith('MDC')) && r.notes !== '__DELETED__') || [];
-
         const intakeMap = new Map();
-        if (intakeRegistryDoc?.snapshot_data?.records && Array.isArray(intakeRegistryDoc.snapshot_data.records)) {
-          intakeRegistryDoc.snapshot_data.records.forEach(rec => {
-            const cleanId = String(rec.id || '').trim().toUpperCase();
-            const cleanName = String(rec.record_name || '').trim().toUpperCase();
-            if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName))) {
-              intakeMap.set(cleanId, rec);
+        if (dbIntakes && Array.isArray(dbIntakes)) {
+          dbIntakes.forEach(row => {
+            const parsed = parseDcIntakeRecordFromDb(row);
+            if (parsed && parsed.id) {
+              const cleanId = String(parsed.id).trim().toUpperCase();
+              if (!deletedIntakeIdsSet.has(cleanId)) {
+                intakeMap.set(cleanId, parsed);
+              }
             }
           });
         }
 
-        if (dbIntakes && dbIntakes.length > 0) {
-          dbIntakes.forEach(rec => {
-            const cleanId = String(rec.id || '').trim().toUpperCase();
-            const cleanName = String(rec.record_name || '').trim().toUpperCase();
-            if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName)) && rec.notes !== '__DELETED__') {
-              const existing = intakeMap.get(cleanId);
-              intakeMap.set(cleanId, { ...(existing || {}), ...rec });
+        (dbSavedRecords || []).forEach(r => {
+          if (r.id && (r.id.startsWith('INTAKE-') || r.id.startsWith('saved-batch-') || r.record_type === 'intake_batch')) {
+            const cleanId = String(r.id).trim().toUpperCase();
+            if (!deletedIntakeIdsSet.has(cleanId) && !intakeMap.has(cleanId)) {
+              intakeMap.set(cleanId, {
+                id: cleanId,
+                record_name: r.record_name || r.id,
+                intake_date: r.intake_date || r.period_label || r.created_at?.split('T')[0],
+                po_number: r.snapshot_data?.po_number || null,
+                po_id: r.snapshot_data?.po_id || null,
+                invoice_ref: r.snapshot_data?.invoice_ref || null,
+                supplier_name: r.snapshot_data?.supplier_name || 'Direct Intake',
+                notes: r.notes || '',
+                status: r.snapshot_data?.status || 'completed',
+                items: r.snapshot_data?.items || [],
+                total_units: r.snapshot_data?.total_units || (r.snapshot_data?.items?.length || 0),
+                expected_units: r.snapshot_data?.expected_units || null,
+                total_value: r.snapshot_data?.total_value || 0,
+                saved_by_id: r.saved_by_id || null,
+                saved_by_name: r.saved_by_name || 'Warehouse Staff',
+                created_at: r.created_at || new Date().toISOString()
+              });
             }
-          });
-        }
-
-        intakeBatchDocs.forEach(doc => {
-          const rec = doc.snapshot_data || doc;
-          const cleanId = String(rec.id || doc.id || '').trim().toUpperCase();
-          const cleanName = String(rec.record_name || '').trim().toUpperCase();
-          if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName)) && rec.notes !== '__DELETED__') {
-            const existing = intakeMap.get(cleanId);
-            intakeMap.set(cleanId, { ...(existing || {}), ...rec, id: cleanId });
           }
         });
 
@@ -1290,9 +1312,71 @@ export function useCloudSync({
             }
           });
 
-          effectiveIntakeRecords = Array.from(map.values())
-            .filter(rec => !deletedIntakeIdsSet.has(String(rec.id).trim().toUpperCase()))
-            .sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
+          // 3. Ensure ALL Purchase Orders from local and cloud registry are preserved in effectiveIntakeRecords!
+          activeCloudOrLocalPOs.forEach(po => {
+            const poNumClean = String(po.po_number || '').trim().toUpperCase();
+            const poInvClean = po.invoice_ref ? String(po.invoice_ref).trim().toUpperCase() : null;
+            const targetUniqueId = poInvClean ? `${poNumClean}-${poInvClean}` : poNumClean;
+
+            let exists = false;
+            map.forEach(rec => {
+              if (rec.po_id && po.id && rec.po_id === po.id) exists = true;
+              if (rec.id && String(rec.id).trim().toUpperCase() === targetUniqueId) exists = true;
+              if (poInvClean && rec.invoice_ref && String(rec.invoice_ref).trim().toUpperCase() === poInvClean && rec.po_number && String(rec.po_number).trim().toUpperCase() === poNumClean) exists = true;
+            });
+
+            if (!exists && !deletedIntakeIdsSet.has(targetUniqueId)) {
+              const poExpectedUnits = (po.items || []).reduce((sum, it) => sum + (Number(it.quantity_ordered) || 0), 0);
+              const poExpectedValue = po.total_amount || (po.items || []).reduce((sum, it) => sum + (Number(it.extended_price) || 0), 0);
+              map.set(targetUniqueId, {
+                id: targetUniqueId,
+                record_name: `${po.po_number}${po.invoice_ref ? ` - ${po.invoice_ref}` : ''} (Apple GSX PO)`,
+                intake_date: po.order_date || new Date().toISOString().split('T')[0],
+                po_id: po.id,
+                po_number: po.po_number,
+                invoice_ref: po.invoice_ref || null,
+                sales_order_no: po.sales_order_no || null,
+                supplier_name: po.supplier || 'Apple South Asia Pte Ltd',
+                supplier: po.supplier || 'Apple South Asia Pte Ltd',
+                notes: po.remarks || `Auto-registered from PO ${po.po_number} (${poExpectedUnits} units expected from Apple)`,
+                status: 'in_progress',
+                items: [],
+                expected_items: (po.items || []).map(it => ({
+                  part_number: it.part_number,
+                  description: it.description,
+                  quantity_ordered: it.quantity_ordered,
+                  unit_price: it.unit_price
+                })),
+                total_units: 0,
+                expected_units: poExpectedUnits,
+                total_value: 0,
+                expected_value: poExpectedValue,
+                saved_by_id: 'usr-system',
+                saved_by_name: 'Superadmin',
+                created_at: po.created_at || new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+            }
+          });
+
+          const rawIntakeList = Array.from(map.values())
+            .filter(rec => !deletedIntakeIdsSet.has(String(rec.id).trim().toUpperCase()));
+
+          const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
+            rawIntakeList,
+            activeCloudOrLocalPOs,
+            currentUser
+          );
+
+          if (supabase && obsoleteIdsToPurge.length > 0) {
+            obsoleteIdsToPurge.forEach(delId => {
+              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            });
+          }
+
+          effectiveIntakeRecords = consolidatedRecords.sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
 
           try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(effectiveIntakeRecords)); } catch (e) {}
           dbStorage.setItem('mdc_dc_intake_records', effectiveIntakeRecords);

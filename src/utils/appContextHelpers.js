@@ -589,3 +589,237 @@ export function generateNextInvoiceRef(shipmentsList = [], date = new Date()) {
   const nextSeqLetters = indexToSequenceLetters(nextIndex);
   return `DCOWNED#${dateCode}${nextSeqLetters}`;
 }
+
+// Universal Purchase Order Normalizer: extracts canonical base PO Number (e.g. 'MDC202600018' from 'MDC202600018-1' or 'MDC202600018-MD03875753')
+export const getBasePoNumber = (poStr) => {
+  if (!poStr) return '';
+  let str = String(poStr).trim();
+  if (str.includes('(Apple GSX PO)')) {
+    str = str.replace(/\(Apple GSX PO\)/gi, '').trim();
+  }
+  if (/^po-/i.test(str)) {
+    str = str.replace(/^po-/i, '');
+  }
+  str = str.replace(/[\s-]*MD\d+$/i, '').trim();
+  if (/^[A-Za-z0-9_-]+-\d{1,3}$/.test(str) && !/^(PO|SITE|BATCH|INTAKE)-\d{1,3}$/i.test(str)) {
+    str = str.replace(/-\d{1,3}$/, '');
+  }
+  return str.trim().toUpperCase();
+};
+
+// Consolidates multiple PO objects belonging to the same base PO into a single unified PO
+export const consolidatePurchaseOrdersList = (orders) => {
+  if (!Array.isArray(orders) || orders.length === 0) return [];
+  const map = new Map();
+
+  orders.forEach(po => {
+    if (!po) return;
+    const basePoNum = getBasePoNumber(po.po_number || po.id);
+    if (!basePoNum) return;
+
+    if (!map.has(basePoNum)) {
+      map.set(basePoNum, {
+        ...po,
+        id: `po-${basePoNum.toLowerCase()}`,
+        po_number: basePoNum,
+        items: [...(po.items || [])],
+        invoice_ref: po.invoice_ref || null,
+        sales_order_no: po.sales_order_no || null,
+        source_filename: po.source_filename || null,
+        total_amount: Number(po.total_amount) || 0
+      });
+    } else {
+      const existing = map.get(basePoNum);
+      const existingRefs = (existing.invoice_ref || '').split(',').map(s => s.trim()).filter(Boolean);
+      const newRefs = (po.invoice_ref || '').split(',').map(s => s.trim()).filter(Boolean);
+      const combinedRefs = Array.from(new Set([...existingRefs, ...newRefs])).join(', ');
+
+      const existingSos = (existing.sales_order_no || '').split(',').map(s => s.trim()).filter(Boolean);
+      const newSos = (po.sales_order_no || '').split(',').map(s => s.trim()).filter(Boolean);
+      const combinedSos = Array.from(new Set([...existingSos, ...newSos])).join(', ');
+
+      const existingFiles = (existing.source_filename || '').split(',').map(s => s.trim()).filter(Boolean);
+      const newFiles = (po.source_filename || '').split(',').map(s => s.trim()).filter(Boolean);
+      const combinedFiles = Array.from(new Set([...existingFiles, ...newFiles])).join(', ');
+
+      const existingItemIds = new Set(existing.items.map(it => it.id));
+      const mergedItems = [...existing.items];
+      (po.items || []).forEach(it => {
+        if (!existingItemIds.has(it.id)) {
+          mergedItems.push(it);
+        } else {
+          mergedItems.push({
+            ...it,
+            id: `po-item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`
+          });
+        }
+      });
+
+      const combinedTotal = mergedItems.reduce((sum, it) => sum + (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0)), 0);
+
+      map.set(basePoNum, {
+        ...existing,
+        invoice_ref: combinedRefs || existing.invoice_ref,
+        sales_order_no: combinedSos || existing.sales_order_no,
+        source_filename: combinedFiles || existing.source_filename,
+        items: mergedItems,
+        total_amount: combinedTotal || existing.total_amount + (Number(po.total_amount) || 0),
+        status: mergedItems.every(it => (it.quantity_received || 0) >= (it.quantity_ordered || 0)) ? 'received' : 
+                mergedItems.some(it => (it.quantity_received || 0) > 0) ? 'partially_received' : 'pending'
+      });
+    }
+  });
+
+  return Array.from(map.values());
+};
+
+// Consolidates Parts Saved History Records (dcIntakeRecords) by base PO Number, merging duplicate rows
+export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], currentUser = null) => {
+  if (!Array.isArray(records)) return { consolidatedRecords: [], obsoleteIdsToPurge: [] };
+
+  const nonPoRecords = [];
+  const poRecordsMap = new Map();
+  const obsoleteIdsToPurge = new Set();
+
+  const poMap = new Map();
+  (purchaseOrders || []).forEach(po => {
+    const basePo = getBasePoNumber(po.po_number || po.id);
+    if (basePo && !poMap.has(basePo)) {
+      poMap.set(basePo, po);
+    }
+  });
+
+  records.forEach(r => {
+    if (!r) return;
+    const isPoBatch = Boolean(
+      (r.po_number && r.po_number.trim()) ||
+      (r.po_id && String(r.po_id).trim()) ||
+      (r.record_name && r.record_name.includes('(Apple GSX PO)')) ||
+      (String(r.id || '').toUpperCase().startsWith('MDC'))
+    );
+
+    if (!isPoBatch) {
+      nonPoRecords.push(r);
+      return;
+    }
+
+    const basePo = getBasePoNumber(r.po_number) ||
+      getBasePoNumber(r.id) ||
+      (r.record_name ? getBasePoNumber(r.record_name.split(' ')[0]) : '');
+
+    if (!basePo) {
+      nonPoRecords.push(r);
+      return;
+    }
+
+    if (!poRecordsMap.has(basePo)) {
+      poRecordsMap.set(basePo, []);
+    }
+    poRecordsMap.get(basePo).push(r);
+  });
+
+  // Ensure any active PO in purchaseOrders has a batch in history
+  poMap.forEach((po, basePo) => {
+    if (!poRecordsMap.has(basePo)) {
+      poRecordsMap.set(basePo, []);
+    }
+  });
+
+  const consolidatedPoRecords = [];
+
+  poRecordsMap.forEach((group, basePo) => {
+    const matchingPo = poMap.get(basePo);
+    const canonicalId = basePo;
+    const canonicalPoId = matchingPo?.id || `po-${basePo.toLowerCase()}`;
+
+    group.forEach(r => {
+      if (r.id && String(r.id).trim().toUpperCase() !== canonicalId) {
+        obsoleteIdsToPurge.add(String(r.id).trim());
+      }
+    });
+
+    const seenSerials = new Set();
+    const mergedItems = [];
+    group.forEach(r => {
+      (r.items || []).forEach(item => {
+        const serial = item.serial_number ? String(item.serial_number).trim().toUpperCase() : null;
+        if (serial) {
+          if (!seenSerials.has(serial)) {
+            seenSerials.add(serial);
+            mergedItems.push(item);
+          }
+        } else {
+          mergedItems.push(item);
+        }
+      });
+    });
+
+    let expectedUnits = 0;
+    let expectedValue = 0;
+    let expectedItems = [];
+    let invoiceRef = matchingPo?.invoice_ref || null;
+    let salesOrderNo = matchingPo?.sales_order_no || null;
+    let orderDate = matchingPo?.order_date || null;
+    let supplier = matchingPo?.supplier || 'Apple South Asia Pte Ltd';
+
+    if (matchingPo && Array.isArray(matchingPo.items) && matchingPo.items.length > 0) {
+      expectedUnits = matchingPo.items.reduce((s, it) => s + (Number(it.quantity_ordered) || 0), 0);
+      expectedValue = matchingPo.total_amount || matchingPo.items.reduce((s, it) => s + (Number(it.extended_price) || 0), 0);
+      expectedItems = matchingPo.items.map(it => ({
+        part_number: it.part_number,
+        description: it.description,
+        quantity_ordered: it.quantity_ordered,
+        unit_price: it.unit_price
+      }));
+    } else {
+      group.forEach(r => {
+        expectedUnits += (Number(r.expected_units) || 0);
+        expectedValue += (Number(r.expected_value) || 0);
+        if (r.expected_items && Array.isArray(r.expected_items)) {
+          r.expected_items.forEach(eit => {
+            if (!expectedItems.some(x => x.part_number === eit.part_number)) {
+              expectedItems.push(eit);
+            }
+          });
+        }
+        if (!invoiceRef && r.invoice_ref) invoiceRef = r.invoice_ref;
+        if (!salesOrderNo && r.sales_order_no) salesOrderNo = r.sales_order_no;
+        if (!orderDate && r.intake_date) orderDate = r.intake_date;
+        if (r.supplier) supplier = r.supplier;
+      });
+    }
+
+    const firstRec = group[0] || {};
+    const status = expectedUnits > 0 && mergedItems.length >= expectedUnits ? 'completed' : 'in_progress';
+
+    consolidatedPoRecords.push({
+      ...firstRec,
+      id: canonicalId,
+      record_name: `${basePo} (Apple GSX PO)`,
+      intake_date: orderDate || firstRec.intake_date || new Date().toISOString().split('T')[0],
+      po_id: canonicalPoId,
+      po_number: basePo,
+      invoice_ref: invoiceRef,
+      sales_order_no: salesOrderNo,
+      supplier_name: supplier,
+      supplier: supplier,
+      notes: `Purchase Order ${basePo} (${expectedUnits} units expected from Apple)`,
+      status: status,
+      items: mergedItems,
+      expected_items: expectedItems,
+      total_units: mergedItems.length,
+      expected_units: expectedUnits,
+      total_value: mergedItems.reduce((s, it) => s + (Number(it.stocking_price || it.price || 99)), 0),
+      expected_value: expectedValue,
+      saved_by_id: firstRec.saved_by_id || currentUser?.id || 'usr-system',
+      saved_by_name: firstRec.saved_by_name || currentUser?.fullName || 'Superadmin',
+      created_at: firstRec.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+  });
+
+  return {
+    consolidatedRecords: [...consolidatedPoRecords, ...nonPoRecords],
+    obsoleteIdsToPurge: Array.from(obsoleteIdsToPurge)
+  };
+};

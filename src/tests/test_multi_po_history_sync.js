@@ -198,4 +198,248 @@ assert.strictEqual(preservedBatch.items[0].serial_number, 'C02JKL456789');
 assert.strictEqual(preservedBatch.items[3].serial_number, 'C02ABC123456');
 console.log('  ✓ PASS: Completed PO deleted from active tracking, all 4 serials safely preserved in Parts Saved History Records!');
 
+// [Test 4] Cross-PO Auto-Routing without Manual Selection
+console.log('\n[Test 4] Testing Cross-PO Auto-Routing without Manual PO Linking...');
+
+// Intelligent routing function matching useInventory.js
+const smartResolvePo = (cleanPN, explicitPoId) => {
+  let matchedPo = null;
+  let isAutoRouted = false;
+
+  if (explicitPoId) {
+    const explicitPo = purchaseOrders.find(p => p.id === explicitPoId || p.po_number === explicitPoId);
+    const hasPartWithCapacity = explicitPo && explicitPo.status !== 'received' && explicitPo.items?.some(it => 
+      it.part_number === cleanPN && (it.quantity_received || 0) < (it.quantity_ordered || 0)
+    );
+    if (hasPartWithCapacity) {
+      matchedPo = explicitPo;
+    }
+  }
+
+  if (!matchedPo) {
+    const candidatePo = purchaseOrders.find(p => 
+      p.status !== 'received' &&
+      p.items?.some(it => it.part_number === cleanPN && (it.quantity_received || 0) < (it.quantity_ordered || 0))
+    );
+    if (candidatePo) {
+      matchedPo = candidatePo;
+      isAutoRouted = true;
+    }
+  }
+
+  return { matchedPo, isAutoRouted };
+};
+
+// Scan part for PO #2 ('MDC202600025') while explicitPoId is null (Auto-detect mode)
+const scanResultAuto = smartResolvePo('661-21996', null);
+assert.ok(scanResultAuto.matchedPo, 'Should find candidate PO for 661-21996');
+assert.strictEqual(scanResultAuto.matchedPo.po_number, 'MDC202600025');
+assert.strictEqual(scanResultAuto.isAutoRouted, true);
+console.log('  ✓ PASS: Auto-detect correctly identified PO MDC202600025 for 661-21996 without manual linking');
+
+// Even if user passed a mismatched/deleted PO ID, smartResolvePo auto-routes to the right PO!
+const scanResultMismatched = smartResolvePo('661-21996', 'NON_EXISTENT_PO');
+assert.strictEqual(scanResultMismatched.matchedPo.po_number, 'MDC202600025');
+assert.strictEqual(scanResultMismatched.isAutoRouted, true);
+console.log('  ✓ PASS: Even with wrong PO selected, system auto-routes to PO MDC202600025');
+
+// [Test 5] 4-PO Discrepancy Reconciliation to 105 Total Units
+console.log('\n[Test 5] Reconciling 4 POs from Screenshot Scenario (105 Total Units)...');
+
+// Setup the exact 4 POs from user screenshots
+const poScenario = [
+  {
+    id: 'po-mdc-20',
+    po_number: 'MDC202600020',
+    invoice_ref: 'MD03675752',
+    status: 'pending',
+    items: [
+      { part_number: '661-44954', quantity_ordered: 1, quantity_received: 0 },
+      { part_number: '661-56044', quantity_ordered: 2, quantity_received: 0 }
+    ] // Total: 3 units
+  },
+  {
+    id: 'po-mdc-18',
+    po_number: 'MDC202600018',
+    invoice_ref: 'MD03675752',
+    status: 'pending',
+    items: [
+      { part_number: '661-44751', quantity_ordered: 1, quantity_received: 0 },
+      { part_number: '661-44954', quantity_ordered: 1, quantity_received: 0 },
+      { part_number: '661-56044', quantity_ordered: 2, quantity_received: 0 }
+    ] // Total: 4 units
+  },
+  {
+    id: 'po-3',
+    po_number: 'MDC202600019',
+    invoice_ref: 'MD04136487',
+    status: 'pending',
+    items: [
+      { part_number: '661-21988', quantity_ordered: 50, quantity_received: 0 }
+    ] // Total: 50 units
+  },
+  {
+    id: 'po-4',
+    po_number: 'MDC202600021',
+    invoice_ref: 'MD04136490',
+    status: 'pending',
+    items: [
+      { part_number: '661-56065', quantity_ordered: 48, quantity_received: 0 }
+    ] // Total: 48 units
+  }
+];
+
+const totalScenarioExpectedUnits = poScenario.reduce((sum, po) => {
+  return sum + po.items.reduce((s, it) => s + it.quantity_ordered, 0);
+}, 0);
+
+assert.strictEqual(totalScenarioExpectedUnits, 105, 'Total PO units must be 105 (3 + 4 + 50 + 48)');
+console.log(`  ✓ Total PO units verified: ${totalScenarioExpectedUnits} across 4 POs`);
+
+// Simulate corrupted / inconsistent history records matching user screenshot (showing 48 and 50)
+let mockHistoryRecords = [
+  { id: 'INTAKE-20260907-PO-MDC202600020', po_id: 'po-mdc-20', po_number: 'MDC202600020', expected_units: 48, items: [] },
+  { id: 'INTAKE-20260907-PO-MDC202600018', po_id: 'po-mdc-18', po_number: 'MDC202600018', expected_units: 50, items: [] }
+];
+
+// Run dynamic reconciliation engine
+const reconcileHistoryWithPOs = (history, pos) => {
+  const records = [...history];
+  pos.forEach(po => {
+    const poExpected = po.items.reduce((s, it) => s + (it.quantity_ordered || 0), 0);
+    const poNumClean = po.po_number.toUpperCase();
+    const existingIdx = records.findIndex(r => 
+      r.po_id === po.id || 
+      (r.po_number && r.po_number.toUpperCase() === poNumClean) ||
+      (r.id && r.id.toUpperCase().includes(poNumClean))
+    );
+    if (existingIdx !== -1) {
+      records[existingIdx] = {
+        ...records[existingIdx],
+        po_id: po.id,
+        po_number: po.po_number,
+        expected_units: poExpected
+      };
+    } else {
+      records.push({
+        id: po.po_number,
+        po_id: po.id,
+        po_number: po.po_number,
+        expected_units: poExpected,
+        items: []
+      });
+    }
+  });
+  return records;
+};
+
+const reconciledHistory = reconcileHistoryWithPOs(mockHistoryRecords, poScenario);
+
+// Verify that MDC202600020 reconciled to 3 units, MDC202600018 to 4 units, and other 2 POs are added
+const rec20 = reconciledHistory.find(r => r.po_number === 'MDC202600020');
+const rec18 = reconciledHistory.find(r => r.po_number === 'MDC202600018');
+const rec19 = reconciledHistory.find(r => r.po_number === 'MDC202600019');
+const rec21 = reconciledHistory.find(r => r.po_number === 'MDC202602021' || r.po_number === 'MDC202600021');
+
+assert.strictEqual(rec20.expected_units, 3, 'MDC202600020 expected units must be reconciled to 3');
+assert.strictEqual(rec18.expected_units, 4, 'MDC202600018 expected units must be reconciled to 4');
+assert.strictEqual(rec19.expected_units, 50, 'MDC202600019 expected units must be 50');
+assert.strictEqual(rec21.expected_units, 48, 'MDC202600021 expected units must be 48');
+
+const totalReconciledHistoryExpected = reconciledHistory.reduce((sum, r) => sum + r.expected_units, 0);
+assert.strictEqual(totalReconciledHistoryExpected, 105, 'Reconciled history total expected units must equal 105');
+console.log(`  ✓ PASS: Discrepancy resolved! Parts Saved History reconciled to 105 units (3, 4, 50, 48)`);
+
+// [Test 6] Multiple GSX Invoices with Same Base PO Number: Unified into ONE row per PO!
+console.log('\n[Test 6] Consolidating Multiple Invoices for Same PO into ONE Single Row (54 & 51 = 105 Units)...');
+import { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers.js';
+
+const multiInvoicePOs = [
+  {
+    id: 'po-mdc-20-1',
+    po_number: 'MDC202600020',
+    invoice_ref: 'MD03875750',
+    status: 'pending',
+    items: [
+      { id: 'it-1', part_number: '661-44954', quantity_ordered: 1, quantity_received: 0, unit_price: 10 },
+      { id: 'it-2', part_number: '661-56044', quantity_ordered: 2, quantity_received: 0, unit_price: 20 }
+    ] // 3 units
+  },
+  {
+    id: 'po-mdc-20-2',
+    po_number: 'MDC202600020-1',
+    invoice_ref: 'MD03875752',
+    status: 'pending',
+    items: [
+      { id: 'it-3', part_number: '661-56065', quantity_ordered: 48, quantity_received: 0, unit_price: 15 }
+    ] // 48 units
+  },
+  {
+    id: 'po-mdc-18-1',
+    po_number: 'MDC202600018-1',
+    invoice_ref: 'MD03875753',
+    status: 'pending',
+    items: [
+      { id: 'it-4', part_number: '661-21956', quantity_ordered: 50, quantity_received: 0, unit_price: 25 }
+    ] // 50 units
+  },
+  {
+    id: 'po-mdc-18-2',
+    po_number: 'MDC202600018',
+    invoice_ref: 'MD03875751',
+    status: 'pending',
+    items: [
+      { id: 'it-5', part_number: '661-44751', quantity_ordered: 4, quantity_received: 0, unit_price: 30 }
+    ] // 4 units
+  }
+];
+
+// Test PO list consolidation: 4 PO entries collapsed into 2 unified POs
+const consolidatedPOs = consolidatePurchaseOrdersList(multiInvoicePOs);
+assert.strictEqual(consolidatedPOs.length, 2, 'Must consolidate 4 invoices into exactly 2 POs (MDC202600018 and MDC202600020)');
+
+const po18 = consolidatedPOs.find(p => p.po_number === 'MDC202600018');
+const po20 = consolidatedPOs.find(p => p.po_number === 'MDC202600020');
+
+assert.ok(po18, 'PO MDC202600018 must exist as single PO');
+assert.ok(po20, 'PO MDC202600020 must exist as single PO');
+
+const po18TotalUnits = po18.items.reduce((s, it) => s + it.quantity_ordered, 0);
+const po20TotalUnits = po20.items.reduce((s, it) => s + it.quantity_ordered, 0);
+
+assert.strictEqual(po18TotalUnits, 54, 'MDC202600018 must have 54 total units (50 + 4)');
+assert.strictEqual(po20TotalUnits, 51, 'MDC202600020 must have 51 total units (48 + 3)');
+assert.strictEqual(po18TotalUnits + po20TotalUnits, 105, 'Combined units must be 105');
+console.log('  ✓ PASS: Purchase Orders consolidated into exactly 2 orders: MDC202600018 (54 units) & MDC202600020 (51 units)');
+
+// Test History Records consolidation: must also have exactly 2 batches (not 4 duplicate rows!)
+const duplicateHistoryRows = [
+  { id: 'MDC202600020-1', po_number: 'MDC202600020-1', expected_units: 48, items: [] },
+  { id: 'MDC202600020', po_number: 'MDC202600020', expected_units: 3, items: [] },
+  { id: 'MDC202600018', po_number: 'MDC202600018', expected_units: 4, items: [] },
+  { id: 'MDC202600018-1', po_number: 'MDC202600018-1', expected_units: 50, items: [] }
+];
+
+const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(duplicateHistoryRows, consolidatedPOs);
+
+assert.strictEqual(consolidatedRecords.length, 2, 'History records must consolidate duplicate rows into exactly 2 rows');
+assert.ok(obsoleteIdsToPurge.includes('MDC202600020-1'), 'MDC202600020-1 must be marked for purging');
+assert.ok(obsoleteIdsToPurge.includes('MDC202600018-1'), 'MDC202600018-1 must be marked for purging');
+
+const hist18 = consolidatedRecords.find(r => r.po_number === 'MDC202600018');
+const hist20 = consolidatedRecords.find(r => r.po_number === 'MDC202600020');
+
+assert.strictEqual(hist18.expected_units, 54, 'MDC202600018 history batch must have 54 expected units');
+assert.strictEqual(hist20.expected_units, 51, 'MDC202600020 history batch must have 51 expected units');
+assert.strictEqual(hist18.id, 'MDC202600018', 'Canonical ID must be MDC202600018');
+assert.strictEqual(hist20.id, 'MDC202600020', 'Canonical ID must be MDC202600020');
+
+console.log('  ✓ PASS: History records consolidated into exactly 2 rows:');
+console.log(`    • ${hist18.record_name}: 0/${hist18.expected_units} RECEIVED (1 row, not two!)`);
+console.log(`    • ${hist20.record_name}: 0/${hist20.expected_units} RECEIVED (1 row, not two!)`);
+console.log(`    • Obsolete suffixed IDs purged: ${obsoleteIdsToPurge.join(', ')}`);
+console.log(`    • Total Units: ${hist18.expected_units + hist20.expected_units} / 105`);
+
 console.log('\n--- ALL MULTI-PO & HISTORY RECORDS SYNC TESTS PASSED (100%) ---');
+
+

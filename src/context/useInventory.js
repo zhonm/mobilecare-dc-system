@@ -1,10 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
-import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord, formatDcIntakeRecordForDb, isUUID, toValidUUID } from '../utils/appContextHelpers';
+import {
+  reconcileUnitsWithPackedDrafts,
+  isExplicitlyCleared,
+  canUserDeleteRecord,
+  formatDcIntakeRecordForDb,
+  isUUID,
+  toValidUUID,
+  getBasePoNumber,
+  consolidatePurchaseOrdersList,
+  consolidateDcIntakeRecordsList
+} from '../utils/appContextHelpers';
 import { getPartCategory } from '../utils/categoryFilter';
+
+export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
+
 
 export function useInventory({
   parts = [],
@@ -54,7 +67,7 @@ export function useInventory({
       const saved = localStorage.getItem('mdc_pos');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) return consolidatePurchaseOrdersList(parsed);
       }
       return [];
     } catch {
@@ -207,81 +220,66 @@ export function useInventory({
       }))
     };
 
+    const basePoNum = getBasePoNumber(newPo.po_number);
+    newPo.po_number = basePoNum;
+    newPo.id = `po-${basePoNum.toLowerCase()}`;
+
+    let consolidatedPos = [];
     setPurchaseOrders(prev => {
-      const filtered = (prev || []).filter(p => p.id !== newPo.id && p.po_number.toUpperCase() !== newPo.po_number.toUpperCase());
-      const updated = [newPo, ...filtered];
-      persistPurchaseOrders(updated);
-      return updated;
+      consolidatedPos = consolidatePurchaseOrdersList([newPo, ...(prev || [])]);
+      persistPurchaseOrders(consolidatedPos);
+      return consolidatedPos;
     });
 
-    // Auto-save each uploaded PO directly into Parts Saved History Records (dcIntakeRecords)
-    const expectedUnits = newPo.items.reduce((s, it) => s + (it.quantity_ordered || 0), 0);
-    const expectedValue = newPo.total_amount || newPo.items.reduce((s, it) => s + (it.extended_price || 0), 0);
-    const poHistoryBatchId = newPo.po_number.toUpperCase();
-    const poHistoryBatchName = `${newPo.po_number}${newPo.invoice_ref ? ` - ${newPo.invoice_ref}` : ''} (Apple GSX PO)`;
-
-    const initialHistoryRecord = {
-      id: poHistoryBatchId,
-      record_name: poHistoryBatchName,
-      intake_date: newPo.order_date || new Date().toISOString().split('T')[0],
-      po_id: newPo.id,
-      po_number: newPo.po_number,
-      invoice_ref: newPo.invoice_ref || null,
-      sales_order_no: newPo.sales_order_no || null,
-      supplier_name: newPo.supplier,
-      supplier: newPo.supplier,
-      notes: newPo.remarks || `Auto-registered from PO ${newPo.po_number} (${expectedUnits} units expected from Apple)`,
-      status: 'in_progress',
-      items: [], // Strictly empty initially! Never auto-confirm pre-existing stock!
-      expected_items: newPo.items.map(it => ({
-        part_number: it.part_number,
-        description: it.description,
-        quantity_ordered: it.quantity_ordered,
-        unit_price: it.unit_price
-      })),
-      total_units: 0,
-      expected_units: expectedUnits,
-      total_value: 0,
-      expected_value: expectedValue,
-      saved_by_id: currentUser?.id || 'usr-system',
-      saved_by_name: currentUser?.fullName || 'Superadmin',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
+    // Auto-save and consolidate directly into Parts Saved History Records (dcIntakeRecords)
     if (setDcIntakeRecords) {
       setDcIntakeRecords(prev => {
-        const filtered = (prev || []).filter(r => r.id !== initialHistoryRecord.id && r.po_number !== newPo.po_number);
-        const nextRecords = [initialHistoryRecord, ...filtered];
+        const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
+          prev || [],
+          consolidatedPos.length > 0 ? consolidatedPos : [newPo],
+          currentUser
+        );
         try {
-          localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+          localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
         } catch (e) {}
-        dbStorage.setItem('mdc_dc_intake_records', nextRecords);
-        return nextRecords;
-      });
-      if (supabase) {
-        const formattedRow = formatDcIntakeRecordForDb(initialHistoryRecord, currentUser);
-        if (formattedRow) {
-          supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+        dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
+
+        if (supabase && obsoleteIdsToPurge.length > 0) {
+          obsoleteIdsToPurge.forEach(delId => {
+            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+          });
         }
-      }
+
+        const canonicalHistoryRecord = consolidatedRecords.find(r => r.id === basePoNum);
+        if (supabase && canonicalHistoryRecord) {
+          const formattedRow = formatDcIntakeRecordForDb(canonicalHistoryRecord, currentUser);
+          if (formattedRow) {
+            supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+          }
+        }
+        return consolidatedRecords;
+      });
     }
 
-    showToast(`Purchase Order ${newPo.po_number} added (${newPo.items.length} parts) and auto-saved to Parts Saved History Records`, 'success');
+    showToast(`Purchase Order ${basePoNum} saved (${newPo.items.length} parts) and synchronized in Parts Saved History Records`, 'success');
     return newPo;
   };
 
   const deletePurchaseOrder = async (poId) => {
+    const targetBasePo = getBasePoNumber(poId);
     setPurchaseOrders(prev => {
-      const targetPo = (prev || []).find(p => p.id === poId || p.po_number.toUpperCase() === String(poId).toUpperCase());
-      const updated = (prev || []).filter(p => p.id !== poId && p.po_number.toUpperCase() !== String(poId).toUpperCase());
+      const targetPo = (prev || []).find(p => p.id === poId || getBasePoNumber(p.po_number || p.id) === targetBasePo);
+      const updated = (prev || []).filter(p => p.id !== poId && getBasePoNumber(p.po_number || p.id) !== targetBasePo);
       persistPurchaseOrders(updated);
 
       // Preserve permanent record in Parts Saved History Records (dcIntakeRecords)
-      if (setDcIntakeRecords && targetPo) {
+      if (setDcIntakeRecords && (targetPo || targetBasePo)) {
         setDcIntakeRecords(prevRecords => {
           const nextRecords = (prevRecords || []).map(r => {
-            if (r.po_id === poId || (r.po_number && targetPo.po_number && r.po_number.toUpperCase() === targetPo.po_number.toUpperCase())) {
+            const rBase = getBasePoNumber(r.po_number || r.id);
+            if (r.po_id === poId || (rBase && targetBasePo && rBase === targetBasePo)) {
               return {
                 ...r,
                 status: 'completed',
@@ -314,10 +312,11 @@ export function useInventory({
       persistPurchaseOrders(remaining);
 
       if (setDcIntakeRecords) {
-        const completedPoNumbers = new Set(completed.map(p => p.po_number.toUpperCase()));
+        const completedPoBases = new Set(completed.map(p => getBasePoNumber(p.po_number || p.id)));
         setDcIntakeRecords(prevRecords => {
           const nextRecords = (prevRecords || []).map(r => {
-            if (r.po_number && completedPoNumbers.has(r.po_number.toUpperCase())) {
+            const rBase = getBasePoNumber(r.po_number || r.id);
+            if (rBase && completedPoBases.has(rBase)) {
               return {
                 ...r,
                 status: 'completed',
@@ -340,6 +339,42 @@ export function useInventory({
       showToast(`Cleared ${clearedCount} completed Purchase Order${clearedCount > 1 ? 's' : ''} from active tracking`, 'success');
     }
   };
+
+  // Dynamic Self-Healing Reconciliation Engine:
+  // Continuously ensure that every PO in purchaseOrders has an accurate, synchronized batch record in dcIntakeRecords.
+  // Consolidates multiple invoices or suffixed PO records into 1 canonical history record per base PO (e.g. 54 and 51 units).
+  useEffect(() => {
+    if (!setDcIntakeRecords) return;
+
+    setDcIntakeRecords(prevRecords => {
+      const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(prevRecords || [], purchaseOrders || [], currentUser);
+
+      const hasLengthDiff = (prevRecords || []).length !== consolidatedRecords.length;
+      const hasObsolete = obsoleteIdsToPurge.length > 0;
+      const hasContentDiff = consolidatedRecords.some(cr => {
+        const orig = (prevRecords || []).find(r => r.id === cr.id);
+        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units;
+      });
+
+      if (hasLengthDiff || hasObsolete || hasContentDiff) {
+        try {
+          localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
+        } catch (e) {}
+        dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
+
+        if (supabase && obsoleteIdsToPurge.length > 0) {
+          obsoleteIdsToPurge.forEach(delId => {
+            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+          });
+        }
+        return consolidatedRecords;
+      }
+
+      return prevRecords;
+    });
+  }, [purchaseOrders, currentUser, setDcIntakeRecords]);
 
   const saveUnitsToSupabase = async (units) => {
     if (!supabase || !units || units.length === 0) return;
@@ -573,6 +608,48 @@ export function useInventory({
       : 'MDC - Forecasting';
     const effectiveNotes = notes || effectiveAssignment;
 
+    // Intelligent Multi-PO Cross-Order Auto-Routing Engine:
+    // 1. If an explicit poId was passed, verify whether that PO has pending capacity for cleanPN
+    let matchedPo = null;
+    let isAutoRouted = false;
+
+    if (poId) {
+      const explicitPo = purchaseOrders.find(p => p.id === poId || String(p.po_number).toUpperCase() === String(poId).toUpperCase());
+      const hasPartWithCapacity = explicitPo && explicitPo.status !== 'received' && explicitPo.items?.some(it => 
+        (it.part_number.toUpperCase() === cleanPN || it.part_number.toUpperCase() === rawPN.toUpperCase()) &&
+        (it.quantity_received || 0) < (it.quantity_ordered || 0)
+      );
+      if (hasPartWithCapacity) {
+        matchedPo = explicitPo;
+      }
+    }
+
+    // 2. If no explicit PO or the selected PO does NOT contain this part with pending capacity,
+    // automatically search across ALL active pending POs for an order expecting this part!
+    if (!matchedPo) {
+      const candidatePo = purchaseOrders.find(p => 
+        p.status !== 'received' &&
+        p.items?.some(it => 
+          (it.part_number.toUpperCase() === cleanPN || it.part_number.toUpperCase() === rawPN.toUpperCase()) &&
+          (it.quantity_received || 0) < (it.quantity_ordered || 0)
+        )
+      );
+      if (candidatePo) {
+        matchedPo = candidatePo;
+        isAutoRouted = true;
+      }
+    }
+
+    // 3. Fallback: If not found with remaining unfulfilled capacity, check if explicit PO lists it
+    if (!matchedPo && poId) {
+      const explicitPo = purchaseOrders.find(p => p.id === poId || String(p.po_number).toUpperCase() === String(poId).toUpperCase());
+      if (explicitPo?.items?.some(it => it.part_number.toUpperCase() === cleanPN || it.part_number.toUpperCase() === rawPN.toUpperCase())) {
+        matchedPo = explicitPo;
+      }
+    }
+
+    const targetPoId = matchedPo ? matchedPo.id : null;
+
     const newUnit = {
       id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       part_id: part.id || `part-${part.part_number}`,
@@ -585,7 +662,8 @@ export function useInventory({
       current_site_id: resolvedSiteId,
       site_code: resolvedSiteCode,
       site_name: targetSiteName || null,
-      po_id: poId || null,
+      po_id: targetPoId || null,
+      po_number: matchedPo?.po_number || null,
       status: 'in_stock',
       box_number: 1,
       received_at: new Date().toISOString(),
@@ -614,8 +692,6 @@ export function useInventory({
     });
 
     saveUnitsToSupabase([newUnit]);
-
-    const targetPoId = poId || purchaseOrders.find(p => p.status !== 'received' && p.items?.some(it => (it.part_number.toUpperCase() === cleanPN || it.part_number.toUpperCase() === rawPN.toUpperCase()) && (it.quantity_received || 0) < (it.quantity_ordered || 0)))?.id;
 
     if (targetPoId) {
       let matchedPoNumber = null;
@@ -648,11 +724,13 @@ export function useInventory({
       if (setDcIntakeRecords) {
         setDcIntakeRecords(prev => {
           let found = false;
+          const targetBasePo = getBasePoNumber(matchedPoNumber || targetPoId);
+
           const nextRecords = (prev || []).map(rec => {
-            const isMatch = rec.po_id === targetPoId || 
-                            (rec.po_number && matchedPoNumber && rec.po_number.toUpperCase() === matchedPoNumber.toUpperCase()) ||
-                            (rec.po_number && rec.po_number.toUpperCase() === String(targetPoId).toUpperCase()) ||
-                            (rec.id && rec.id.toUpperCase() === String(targetPoId).toUpperCase());
+            const recBasePo = getBasePoNumber(rec.po_number || rec.id);
+            const isMatch = (targetBasePo && recBasePo && targetBasePo === recBasePo) ||
+                            (targetPoId && rec.po_id === targetPoId) || 
+                            (targetPoId && rec.id && rec.id.toUpperCase() === String(targetPoId).toUpperCase());
             if (isMatch) {
               found = true;
               const existingItems = Array.isArray(rec.items) ? rec.items : [];
@@ -679,18 +757,23 @@ export function useInventory({
             return rec;
           });
 
-          if (!found && matchedPoNumber) {
+          if (!found && targetBasePo) {
             const autoRec = {
-              id: matchedPoNumber.toUpperCase(),
-              record_name: `${matchedPoNumber} (Apple GSX PO)`,
+              id: targetBasePo,
+              record_name: `${targetBasePo} (Apple GSX PO)`,
               intake_date: new Date().toISOString().split('T')[0],
-              po_id: targetPoId,
-              po_number: matchedPoNumber,
+              po_id: targetPoId || `po-${targetBasePo.toLowerCase()}`,
+              po_number: targetBasePo,
+              invoice_ref: matchedPo?.invoice_ref || null,
+              sales_order_no: matchedPo?.sales_order_no || null,
               supplier_name: matchedPoSupplier || 'Apple South Asia Pte Ltd',
+              supplier: matchedPoSupplier || 'Apple South Asia Pte Ltd',
               status: 'in_progress',
               items: [newUnit],
               total_units: 1,
+              expected_units: (matchedPo?.items || []).reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 1,
               total_value: Number(newUnit.stocking_price || 99),
+              expected_value: matchedPo?.total_amount || 0,
               saved_by_id: currentUser?.id || 'usr-system',
               saved_by_name: currentUser?.fullName || 'Warehouse Staff',
               created_at: new Date().toISOString(),
@@ -716,7 +799,7 @@ export function useInventory({
     barcodeAudio.playSuccess();
     logScan('RECEIVE_IN', cleanPN, cleanSerial, true);
     showToast(`Received ${part.part_number} — ${part.description} (${cleanSerial})`, 'success');
-    return { success: true, unit: newUnit };
+    return { success: true, unit: newUnit, matchedPo, isAutoRouted };
   };
 
   const updateUnitAssignment = async (serialNumber, newAssignment) => {
@@ -933,7 +1016,20 @@ export function useInventory({
       if (!serialValidation.isValid) continue;
       const validatedSerial = serialValidation.cleanSerial;
 
-      const assignedPoId = item.poId || defaultPoId || null;
+      let effectivePoId = item.poId || defaultPoId || null;
+      if (effectivePoId) {
+        const explicitPo = purchaseOrders.find(p => p.id === effectivePoId || p.po_number === effectivePoId);
+        const hasPart = explicitPo?.items?.some(it => it.part_number.toUpperCase() === cleanPN);
+        if (!hasPart) effectivePoId = null;
+      }
+      if (!effectivePoId) {
+        const candidatePo = purchaseOrders.find(p => 
+          p.status !== 'received' &&
+          p.items?.some(it => it.part_number.toUpperCase() === cleanPN && (it.quantity_received || 0) < (it.quantity_ordered || 0))
+        );
+        if (candidatePo) effectivePoId = candidatePo.id;
+      }
+      const assignedPoId = effectivePoId || existingUnit?.po_id || null;
       const existingUnit = existingInventoryMap.get(validatedSerial);
 
       const assignedType = item.intake_assignment || item.intakeAssignment || item.notes || defaultAssignment || (isDcDest ? 'MDC - Forecasting' : 'Branch Stock');
@@ -961,7 +1057,7 @@ export function useInventory({
         current_site_id: itemSiteId,
         site_code: itemSiteCode,
         site_name: targetSiteName || item.site_name || (isDcDest ? 'Distribution Center (DC)' : null),
-        po_id: assignedPoId || existingUnit?.po_id || null,
+        po_id: assignedPoId || null,
         status: 'in_stock',
         box_number: item.boxNumber || item.box_number || existingUnit?.box_number || 1,
         received_at: existingUnit?.received_at || new Date().toISOString(),

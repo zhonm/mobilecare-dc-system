@@ -1,6 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
+import dbStorage from '../utils/dbStorage';
 import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
@@ -31,12 +32,16 @@ import {
   Check,
   Filter
 } from 'lucide-react';
+import { supabase } from '../supabase/client';
 import { normalizeInventoryUnits } from '../utils/partResolver';
+import { getBasePoNumber, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
     dcIntakeRecords,
+    setDcIntakeRecords,
     deleteIntakeRecord,
+    purchaseOrders,
     inventoryUnits,
     deleteScanInUnit,
     updateUnitAssignment,
@@ -242,10 +247,57 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return enrichedStockUnits.filter(u => u.dateKey === todayDateStr);
   }, [enrichedStockUnits, todayDateStr]);
 
-  const totalBatchesCount = dcIntakeRecords.length;
+  // Dynamic consolidated batch list: guarantees every active PO in purchaseOrders is present in history records and deduplicated into a single row per base PO
+  const allBatchRecords = useMemo(() => {
+    const { consolidatedRecords } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser);
+    return consolidatedRecords;
+  }, [dcIntakeRecords, purchaseOrders, currentUser]);
+
+  // Self-heal: persist consolidated records and purge obsolete suffixed records from local storage & Supabase
+  useEffect(() => {
+    if (!setDcIntakeRecords) return;
+    const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser);
+    const hasDiff = (dcIntakeRecords || []).length !== consolidatedRecords.length ||
+      obsoleteIdsToPurge.length > 0 ||
+      consolidatedRecords.some(cr => {
+        const orig = (dcIntakeRecords || []).find(r => r.id === cr.id);
+        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units;
+      });
+
+    if (hasDiff) {
+      setDcIntakeRecords(consolidatedRecords);
+      try {
+        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
+      } catch (e) {}
+      dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
+
+      if (supabase && obsoleteIdsToPurge.length > 0) {
+        obsoleteIdsToPurge.forEach(delId => {
+          supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+          supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+          supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+        });
+      }
+    }
+  }, [allBatchRecords, dcIntakeRecords?.length, purchaseOrders, setDcIntakeRecords, currentUser]);
+
+  const totalBatchesCount = allBatchRecords.length;
   const totalUnitsAcrossBatches = useMemo(() => {
-    return dcIntakeRecords.reduce((sum, r) => sum + (r.total_units || (r.items ? r.items.length : 0)), 0);
-  }, [dcIntakeRecords]);
+    return allBatchRecords.reduce((sum, r) => sum + (r.total_units || (r.items ? r.items.length : 0)), 0);
+  }, [allBatchRecords]);
+
+  // Total Expected & Received across authoritative Purchase Orders
+  const totalPoExpectedUnits = useMemo(() => {
+    return (purchaseOrders || []).reduce((sum, po) => {
+      return sum + (po.items || []).reduce((s, it) => s + (Number(it.quantity_ordered) || 0), 0);
+    }, 0);
+  }, [purchaseOrders]);
+
+  const totalPoReceivedUnits = useMemo(() => {
+    return (purchaseOrders || []).reduce((sum, po) => {
+      return sum + (po.items || []).reduce((s, it) => s + (Number(it.quantity_received) || 0), 0);
+    }, 0);
+  }, [purchaseOrders]);
 
   // Unique list of dates present in in-stock inventory
   const availableStockDates = useMemo(() => {
@@ -348,18 +400,18 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Unique years for batch records
   const availableBatchYears = useMemo(() => {
     const years = new Set();
-    dcIntakeRecords.forEach(r => {
+    allBatchRecords.forEach(r => {
       if (r.intake_date) {
         const y = new Date(r.intake_date).getFullYear();
         if (!isNaN(y)) years.add(y);
       }
     });
     return Array.from(years).sort((a, b) => b - a);
-  }, [dcIntakeRecords]);
+  }, [allBatchRecords]);
 
   // Filtered batch records
   const filteredBatchRecords = useMemo(() => {
-    return dcIntakeRecords.filter(rec => {
+    return allBatchRecords.filter(rec => {
       if (yearFilter !== 'ALL' && rec.intake_date) {
         const y = new Date(rec.intake_date).getFullYear();
         if (String(y) !== String(yearFilter)) return false;
@@ -383,7 +435,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       }
       return true;
     });
-  }, [dcIntakeRecords, yearFilter, searchQuery]);
+  }, [allBatchRecords, yearFilter, searchQuery]);
 
   // Export Date Group to Excel (.xlsx) with optimized layout and system UI styling
   const handleExportDateExcel = async (dateGroup) => {
@@ -747,7 +799,13 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
             {totalBatchesCount} <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-muted)' }}>batches</span>
           </h3>
           <span style={{ fontSize: '11.5px', color: 'var(--text-subtle)' }}>
-            {totalUnitsAcrossBatches} units saved in history batches
+            {totalPoExpectedUnits > 0 ? (
+              <span style={{ color: '#0369a1', fontWeight: 600 }}>
+                {totalPoReceivedUnits} / {totalPoExpectedUnits} PO Units Received
+              </span>
+            ) : (
+              `${totalUnitsAcrossBatches} units saved in history batches`
+            )}
           </span>
         </div>
       </div>
@@ -1417,51 +1475,64 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredBatchRecords.map(rec => (
-                      <tr key={rec.id}>
-                        <td className="font-mono">
-                          <strong style={{ color: '#0284c7' }}>{rec.id}</strong>
-                        </td>
-                        <td>
-                          <strong>{rec.record_name || 'Parts History Record'}</strong>
-                          {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <Calendar size={13} color="var(--text-muted)" />
-                            <span>{rec.intake_date || 'Recent'}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
-                            {rec.total_units || (rec.items ? rec.items.length : 0)} units
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <User size={13} color="var(--text-muted)" />
-                            <span>{rec.saved_by_name || 'Warehouse Staff'}</span>
-                          </div>
-                        </td>
-                        <td>
-                          {rec.po_number && rec.po_number !== 'Direct Receiving' && rec.po_number !== 'Direct Intake' ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                              <strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{rec.po_number}</strong>
-                              {rec.invoice_ref && <span style={{ fontSize: '11px', color: '#64748b' }}>Ref: {rec.invoice_ref}</span>}
+                    {filteredBatchRecords.map(rec => {
+                      const baseRecPo = getBasePoNumber(rec.po_number || rec.id);
+                      const linkedPo = (purchaseOrders || []).find(p => 
+                        (baseRecPo && getBasePoNumber(p.po_number || p.id) === baseRecPo) ||
+                        (rec.po_id && p.id === rec.po_id) ||
+                        (rec.invoice_ref && p.invoice_ref && p.invoice_ref.toUpperCase() === rec.invoice_ref.toUpperCase() && rec.po_number && p.po_number && rec.po_number.toUpperCase() === p.po_number.toUpperCase())
+                      );
+                      const effectiveExpectedUnits = linkedPo
+                        ? (linkedPo.items || []).reduce((s, it) => s + (Number(it.quantity_ordered) || 0), 0)
+                        : rec.expected_units;
+                      const effectivePoNumber = linkedPo?.po_number || rec.po_number || baseRecPo;
+                      const effectiveInvoiceRef = linkedPo?.invoice_ref || rec.invoice_ref;
+
+                      return (
+                        <tr key={rec.id}>
+                          <td className="font-mono">
+                            <strong style={{ color: '#0284c7' }}>{rec.id}</strong>
+                          </td>
+                          <td>
+                            <strong>{rec.record_name || 'Parts History Record'}</strong>
+                            {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <Calendar size={13} color="var(--text-muted)" />
+                              <span>{rec.intake_date || 'Recent'}</span>
                             </div>
-                          ) : (
-                            <span style={{ color: '#64748b' }}>Direct Intake</span>
-                          )}
-                        </td>
-                        <td>
-                          {rec.expected_units ? (
-                            <span className={`badge ${rec.total_units >= rec.expected_units ? 'badge-success' : rec.total_units > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
-                              {rec.total_units >= rec.expected_units ? 'Fulfilled (Saved)' : `${rec.total_units}/${rec.expected_units} Received`}
+                          </td>
+                          <td>
+                            <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                              {rec.total_units || (rec.items ? rec.items.length : 0)} units
                             </span>
-                          ) : (
-                            <span className="badge badge-success">Saved History</span>
-                          )}
-                        </td>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <User size={13} color="var(--text-muted)" />
+                              <span>{rec.saved_by_name || 'Warehouse Staff'}</span>
+                            </div>
+                          </td>
+                          <td>
+                            {effectivePoNumber && effectivePoNumber !== 'Direct Receiving' && effectivePoNumber !== 'Direct Intake' ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{effectivePoNumber}</strong>
+                                {effectiveInvoiceRef && <span style={{ fontSize: '11px', color: '#64748b' }}>Ref: {effectiveInvoiceRef}</span>}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#64748b' }}>Direct Intake</span>
+                            )}
+                          </td>
+                          <td>
+                            {effectiveExpectedUnits ? (
+                              <span className={`badge ${rec.total_units >= effectiveExpectedUnits ? 'badge-success' : rec.total_units > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
+                                {rec.total_units >= effectiveExpectedUnits ? 'Fulfilled (Saved)' : `${rec.total_units}/${effectiveExpectedUnits} Received`}
+                              </span>
+                            ) : (
+                              <span className="badge badge-success">Saved History</span>
+                            )}
+                          </td>
                         <td style={{ textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                             <button
@@ -1496,7 +1567,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    );
+                  })}
                   </tbody>
                 </table>
               </div>

@@ -127,7 +127,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   
   const [selectedPoId, setSelectedPoId] = useState(() => {
-    return globalSelectedPoId || purchaseOrders[0]?.id || '';
+    return globalSelectedPoId || '';
   });
 
   useEffect(() => {
@@ -529,23 +529,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     const snToUse = validation.cleanSerial;
     const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
 
-    // Auto-detect target PO if none selected or if part belongs to an active pending PO
-    let effectivePoId = selectedPoId;
-    if (!effectivePoId) {
-      const candidatePo = purchaseOrders.find(po =>
-        po.status !== 'received' &&
-        po.items?.some(it => it.part_number.toUpperCase() === pnToUse.toUpperCase() && (it.quantity_received || 0) < (it.quantity_ordered || 0))
-      );
-      if (candidatePo) {
-        effectivePoId = candidatePo.id;
-        handlePoChange(candidatePo.id);
-      }
-    }
-
     const res = addScanInUnit({
       partNumber: pnToUse,
       serialNumber: snToUse,
-      poId: effectivePoId || null,
+      poId: selectedPoId || null,
       intakeAssignment: currentAssignment,
       notes: currentAssignment,
       targetSiteId: activeReceivingSite.id,
@@ -555,16 +542,16 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     if (res.success) {
       let poDetail = '';
-      const targetPoObj = purchaseOrders.find(p => p.id === effectivePoId) || activePo;
-      if (targetPoObj) {
-        const poItem = targetPoObj.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
-        if (poItem) {
-          const recCount = (poItem.quantity_received || 0) + 1;
-          const isDone = recCount >= (poItem.quantity_ordered || 0);
-          poDetail = ` [PO ${targetPoObj.po_number}: ${recCount}/${poItem.quantity_ordered} fulfilled${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
-        } else {
-          poDetail = ` [⚠️ Note: Part not listed in PO ${targetPoObj.po_number}]`;
-        }
+      const matchedPo = res.matchedPo;
+      if (matchedPo) {
+        const poItem = matchedPo.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
+        const recCount = poItem ? (poItem.quantity_received || 0) + 1 : 1;
+        const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
+        const isDone = recCount >= totalOrd;
+        const routeLabel = res.isAutoRouted ? ` ➜ Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
+        poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
+      } else {
+        poDetail = ` [Direct Stock Intake — Added to DC Warehouse]`;
       }
 
       setScanResult({
@@ -1248,27 +1235,32 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
         {/* Workstation Controls & Actions Toolbar */}
         <div className="workstation-controls-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          {/* Column 1: PO Selector (DC Only) */}
+          {/* Column 1: PO Auto-Detection & Routing (DC Only) */}
           {!isPmgUser && (
             <div>
-              <label className="workstation-col-label">
-                <Building2 size={13} color="#38bdf8" />
-                <span>1. Linked Purchase Order</span>
-              </label>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <label className="workstation-col-label" style={{ margin: 0 }}>
+                  <Building2 size={13} color="#38bdf8" />
+                  <span>1. Purchase Order Routing</span>
+                </label>
+                <span className="badge" style={{ background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0', fontSize: '10.5px', padding: '1px 6px', fontWeight: 600 }}>
+                  ⚡ Auto-Assign Active
+                </span>
+              </div>
               <select
                 className="form-select"
                 style={{ width: '100%', background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1', height: '42px', fontSize: '13px' }}
                 value={selectedPoId}
                 onChange={(e) => handlePoChange(e.target.value)}
               >
-                <option value="">-- Direct Intake (Auto-Detect PO) --</option>
+                <option value="">⚡ Auto-Route to Designated PO ({purchaseOrders.filter(p => p.status !== 'received').length} Pending Orders)</option>
                 {purchaseOrders.map(po => {
                   const totalOrd = po.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 0;
                   const totalRec = po.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) || 0;
                   const statusLabel = po.status === 'received' ? 'Fully Received' : `${totalRec}/${totalOrd} received`;
                   return (
                     <option key={po.id} value={po.id}>
-                      {po.po_number} {po.invoice_ref ? `(${po.invoice_ref})` : ''} — {statusLabel}
+                      Focus PO: {po.po_number} {po.invoice_ref ? `(${po.invoice_ref})` : ''} — {statusLabel}
                     </option>
                   );
                 })}

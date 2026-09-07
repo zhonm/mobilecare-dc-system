@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { safeUUID, canUserDeleteRecord } from '../utils/appContextHelpers';
+import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 
 export function useIntakeRecords({
@@ -17,7 +17,13 @@ export function useIntakeRecords({
   const [dcIntakeRecords, setDcIntakeRecords] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_dc_intake_records');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      let pos = [];
+      try {
+        pos = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
+      } catch (e) {}
+      const { consolidatedRecords } = consolidateDcIntakeRecordsList(parsed, pos);
+      return consolidatedRecords;
     } catch {
       return [];
     }
