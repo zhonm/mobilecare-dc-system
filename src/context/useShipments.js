@@ -665,22 +665,53 @@ export function useShipments({
         : ((newShipment.status === 'shipped' || newShipment.status === 'in_transit') ? 'shipped' : 'packed');
       
       setInventoryUnits(prev => {
+        const existingMatched = new Set();
         updatedInv = (prev || []).map(u => {
           const s = String(u.serial_number || '').trim().toUpperCase();
           if (serialsInShipment.has(s)) {
+            existingMatched.add(s);
             return {
               ...u,
               status: targetUnitStatus,
               box_number: u.box_number || 1,
               current_site_id: newShipment.site_id || u.current_site_id,
-              shipped_at: newShipment.shipment_date || new Date().toISOString(),
+              site_code: newShipment.site_code || u.site_code,
+              shipped_at: newShipment.shipment_date || u.shipped_at || new Date().toISOString(),
               shipped_by: resolvedPreparedBy,
               received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
-              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || currentUser?.fullName || 'Superadmin') : u.received_by
+              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || currentUser?.fullName || 'Branch Staff') : u.received_by
             };
           }
           return u;
         });
+
+        // Add any shipment items that were not already in inventoryUnits
+        if (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') {
+          newShipment.items.forEach(it => {
+            const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+            if (s && !existingMatched.has(s)) {
+              updatedInv.push({
+                id: it.id || `unit-${s}`,
+                part_id: it.part_id || null,
+                part_number: it.part_number || '',
+                description: it.description || '',
+                serial_number: s,
+                status: 'in_stock',
+                box_number: it.box_number || 1,
+                current_site_id: newShipment.site_id,
+                site_code: newShipment.site_code || null,
+                shipped_at: newShipment.shipment_date || new Date().toISOString(),
+                shipped_by: resolvedPreparedBy,
+                received_at: newShipment.received_at || new Date().toISOString(),
+                received_by: newShipment.received_by_name || currentUser?.fullName || 'Branch Staff',
+                created_at: newShipment.created_at || new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+              existingMatched.add(s);
+            }
+          });
+        }
+
         try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInv)); } catch (e) {}
         dbStorage.setItem('mdc_inventory', updatedInv);
         return updatedInv;
@@ -937,7 +968,7 @@ export function useShipments({
     return newShipment;
   };
 
-  // Dedicated Superadmin Site Receipt Confirmation Handler
+  // Dedicated Site Receipt & Package Confirmation Handler (Superadmin & PMG branch users)
   const confirmSiteReceive = async (shipmentId, receiveDetails = {}, { partsRequests = [], updatePartsRequestStatus = null } = {}) => {
     const target = shipments.find(s => s.id === shipmentId || s.shipment_number === shipmentId || s.invoice_ref === shipmentId);
     if (!target) {
@@ -945,7 +976,7 @@ export function useShipments({
       return { success: false, error: 'Shipment not found' };
     }
 
-    const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || 'Superadmin';
+    const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Branch Staff');
     const cleanDate = String(receiveDetails.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
     const cleanCondition = receiveDetails.receivedCondition || 'Good Condition (All parts intact & verified)';
     const cleanNotes = receiveDetails.receivingNotes || 'Confirmed physical receipt of package and parts at branch.';
@@ -992,7 +1023,7 @@ export function useShipments({
       }
     }
 
-    showToast?.(`Confirmed Receipt at site! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} parts are now ACTIVE & IN STOCK at branch.`, 'success');
+    showToast?.(`Confirmed Site Package! Package ${updatedShipment.invoice_ref || updatedShipment.shipment_number} parts are now ACTIVE & IN STOCK at branch.`, 'success');
     return { success: true, shipment: updatedShipment };
   };
 

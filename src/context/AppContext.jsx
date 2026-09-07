@@ -138,6 +138,22 @@ export function AppProvider({ children }) {
     }
   });
 
+  const [selectedPoId, setSelectedPoId] = useState(() => {
+    try {
+      return localStorage.getItem('mdc_selected_po_id') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const receivePo = useCallback((poId) => {
+    if (poId) {
+      setSelectedPoId(poId);
+      try { localStorage.setItem('mdc_selected_po_id', poId); } catch (e) {}
+    }
+    setActiveTab('scan-in');
+  }, [setActiveTab]);
+
   // Sync activeTab to URL Hash and LocalStorage so page refreshes stay on the exact active page
   useEffect(() => {
     if (activeTab) {
@@ -297,6 +313,7 @@ export function AppProvider({ children }) {
   const partsRequestsDomain = usePartsRequests({
     currentUser: auth.currentUser,
     parts: catalogAndSites.parts,
+    categories: catalogAndSites.categories,
     sites: catalogAndSites.sites,
     inventoryUnits: inventory.inventoryUnits,
     setInventoryUnits: inventory.setInventoryUnits,
@@ -426,6 +443,13 @@ export function AppProvider({ children }) {
         inventoryUnits: inventory.inventoryUnits,
         setInventoryUnits: inventory.setInventoryUnits,
         purchaseOrders: inventory.purchaseOrders,
+        setPurchaseOrders: inventory.setPurchaseOrders,
+        addPurchaseOrder: inventory.addPurchaseOrder,
+        deletePurchaseOrder: inventory.deletePurchaseOrder,
+        clearCompletedPurchaseOrders: inventory.clearCompletedPurchaseOrders,
+        selectedPoId,
+        setSelectedPoId,
+        receivePo,
         shipments: shipmentsDomain.shipments,
         scanLogs: inventory.scanLogs,
         repairUsageRecords: inventory.repairUsageRecords,
@@ -444,6 +468,7 @@ export function AppProvider({ children }) {
         isFulfillmentUser: partsRequestsDomain.isFulfillmentUser,
         fetchPartsRequests: partsRequestsDomain.fetchPartsRequests,
         submitPartsRequest: partsRequestsDomain.submitPartsRequest,
+        submitBatchPartsRequests: partsRequestsDomain.submitBatchPartsRequests,
         cancelPartsRequest: partsRequestsDomain.cancelPartsRequest,
         updatePartsRequestStatus: partsRequestsDomain.updatePartsRequestStatus,
         getStockOnHandForSite: partsRequestsDomain.getStockOnHandForSite,

@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isUUID } from '../utils/appContextHelpers';
+import {
+  DEFAULT_PART_CATEGORIES,
+  resolvePartCategoryId,
+  getCategoryForPart,
+  getPartCategory
+} from '../utils/categoryFilter';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: '',
   supervisor_title: 'MDC Supervisor of DC',
@@ -43,9 +49,18 @@ export function useCatalogAndSites({
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_categories');
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const hasOther = parsed.some(c => String(c.code || '').toUpperCase() === 'OTHER');
+        if (!hasOther) {
+          const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
+          if (otherCat) parsed.push(otherCat);
+        }
+        return parsed;
+      }
+      return DEFAULT_PART_CATEGORIES;
     } catch {
-      return [];
+      return DEFAULT_PART_CATEGORIES;
     }
   });
 
@@ -102,6 +117,27 @@ export function useCatalogAndSites({
           dbStorage.setItem('mdc_sites', authoritative);
         }
       }).catch(() => {});
+
+      // Fetch authoritative categories from Supabase
+      supabase.from('part_categories').select('*').then(({ data: dbCats, error }) => {
+        if (!error && dbCats && dbCats.length > 0) {
+          const authoritativeCats = dbCats.map(c => ({
+            id: c.id,
+            code: c.code,
+            name: c.name,
+            has_imei: c.has_imei || false,
+            is_serialized: c.is_serialized ?? true,
+            sort_order: c.sort_order || 1
+          }));
+          if (!authoritativeCats.some(c => c.code === 'OTHER')) {
+            const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
+            if (otherCat) authoritativeCats.push(otherCat);
+          }
+          setCategories(authoritativeCats);
+          try { localStorage.setItem('mdc_categories', JSON.stringify(authoritativeCats)); } catch (e) {}
+          dbStorage.setItem('mdc_categories', authoritativeCats);
+        }
+      }).catch(() => {});
     }
   }, []);
 
@@ -109,15 +145,71 @@ export function useCatalogAndSites({
     try {
       const saved = localStorage.getItem('mdc_parts');
       const parsed = saved ? JSON.parse(saved) : [];
+      let activeCats = DEFAULT_PART_CATEGORIES;
+      try {
+        const rawCats = localStorage.getItem('mdc_categories');
+        if (rawCats) activeCats = JSON.parse(rawCats);
+      } catch (e) {}
+
       return parsed.map(p => {
         const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
         const { exchange_price, ...rest } = p;
-        return { ...rest, stocking_price: cleanPrice };
+        const correctCatId = resolvePartCategoryId(p, activeCats);
+        return {
+          ...rest,
+          stocking_price: cleanPrice,
+          category_id: correctCatId
+        };
       });
     } catch {
       return [];
     }
   });
+
+  // Auto-heal part categories if any are misassigned to Battery
+  useEffect(() => {
+    if (!parts || parts.length === 0) return;
+    let hasMismatches = false;
+    const healed = parts.map(p => {
+      const genuineCode = getPartCategory(p);
+      const currentCat = categories.find(c => c.id === p.category_id);
+      const currentCode = currentCat ? String(currentCat.code || '').toUpperCase() : '';
+
+      if (currentCode !== genuineCode && !(genuineCode === 'OTHER' && (currentCode === 'GEN' || currentCode === 'ACC'))) {
+        hasMismatches = true;
+        const targetCatId = resolvePartCategoryId(p, categories);
+        return { ...p, category_id: targetCatId };
+      }
+      return p;
+    });
+
+    if (hasMismatches) {
+      setParts(healed);
+      try { localStorage.setItem('mdc_parts', JSON.stringify(healed)); } catch (e) {}
+      dbStorage.setItem('mdc_parts', healed);
+
+      if (supabase) {
+        const catMap = new Map((categories || []).map(c => [c.code, c.id]));
+        const updates = healed
+          .filter(p => p.part_number)
+          .map(p => {
+            const catCode = getPartCategory(p);
+            const catId = catMap.get(catCode) || p.category_id;
+            return {
+              part_number: p.part_number,
+              category_id: catId
+            };
+          });
+
+        (async () => {
+          for (let i = 0; i < updates.length; i += 50) {
+            const chunk = updates.slice(i, i + 50);
+            await supabase.from('parts').upsert(chunk, { onConflict: 'part_number' }).catch(() => {});
+          }
+        })();
+      }
+    }
+  }, [categories, parts.length]);
 
   const savePart = async (partData) => {
     const cleanPN = String(partData.part_number || '').trim();
@@ -129,6 +221,7 @@ export function useCatalogAndSites({
     }
 
     let savedPartObj = null;
+    const resolvedCatId = partData.category_id || resolvePartCategoryId({ part_number: cleanPN, description: cleanDesc }, categories);
 
     setParts(prev => {
       const existingIdx = prev.findIndex(p =>
@@ -145,6 +238,7 @@ export function useCatalogAndSites({
           ...partData,
           part_number: cleanPN,
           description: cleanDesc || existing.description,
+          category_id: partData.category_id || existing.category_id || resolvedCatId,
           stocking_price: sp > 0 ? sp : 99,
           updated_at: new Date().toISOString()
         };
@@ -158,7 +252,7 @@ export function useCatalogAndSites({
           id: partData.id || `part-${Date.now()}`,
           part_number: cleanPN,
           description: cleanDesc || 'Service Replacement Part',
-          category_id: partData.category_id || 'cat-battery',
+          category_id: resolvedCatId,
           stocking_price: sp > 0 ? sp : 99,
           is_active: partData.is_active ?? true,
           created_at: new Date().toISOString()
@@ -179,13 +273,22 @@ export function useCatalogAndSites({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
+        const targetCat = categories.find(c => c.id === (partData.category_id || savedPartObj?.category_id));
+        const catCode = targetCat?.code || getPartCategory({ part_number: cleanPN, description: cleanDesc });
+        let dbCatId = (targetCat && isUUID(targetCat.id)) ? targetCat.id : null;
+        if (!dbCatId) {
+          const { data: matchedDbCat } = await supabase.from('part_categories').select('id').eq('code', catCode).maybeSingle();
+          dbCatId = matchedDbCat?.id || null;
+        }
+
         const { error } = await supabase.from('parts').upsert({
-          ...(partData.id && !partData.id.startsWith('part-') ? { id: partData.id } : {}),
+          ...(partData.id && isUUID(partData.id) ? { id: partData.id } : {}),
           part_number: cleanPN,
           description: cleanDesc,
           iphone_model: partData.iphone_model || 'iPhone',
           stocking_price: parseFloat(partData.stocking_price) || 0,
           is_active: partData.is_active ?? true,
+          ...(dbCatId ? { category_id: dbCatId } : {}),
           updated_at: new Date().toISOString()
         }, { onConflict: 'part_number' });
 

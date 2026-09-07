@@ -11,6 +11,7 @@ import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
+import { resolvePartCategoryId, getCategoryForPart, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 
 export function useCloudSync({
   currentUser,
@@ -293,7 +294,8 @@ export function useCloudSync({
             'master_deleted_intakes_registry',
             'master_shipments_registry',
             'live_master_dc_inventory',
-            'deleted_period_record_ids_registry'
+            'deleted_period_record_ids_registry',
+            'master_purchase_orders_registry'
           ];
           const [resSystem, resPeriods, resStockHeader] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
@@ -571,14 +573,19 @@ export function useCloudSync({
 
       // 2. Process Categories
       if (shouldFetch('part_categories') && dbCats && dbCats.length > 0) {
-        setCategories(dbCats.map(c => ({
+        const catRows = dbCats.map(c => ({
           id: c.id,
           code: c.code,
           name: c.name,
           has_imei: c.has_imei || false,
           is_serialized: c.is_serialized ?? true,
           sort_order: c.sort_order || 1
-        })));
+        }));
+        if (!catRows.some(c => c.code === 'OTHER')) {
+          const otherCat = DEFAULT_PART_CATEGORIES.find(c => c.code === 'OTHER');
+          if (otherCat) catRows.push(otherCat);
+        }
+        setCategories(catRows);
       }
 
       // 3. Process Sites (Authoritative sync from Supabase; purge deleted sites)
@@ -622,6 +629,16 @@ export function useCloudSync({
             const numPrice = parseFloat(p.stocking_price ?? existing?.stocking_price);
             const defaultMatch = defaultPartsCatalog?.find(d => d.part_number === p.part_number);
             const validStockPrice = (numPrice && numPrice > 0) ? numPrice : (defaultMatch?.stocking_price || 99);
+
+            // Auto-heal category_id so no part is falsely tagged under Battery
+            const trueCatCode = getPartCategory({ ...p, description: p.description || existing?.description });
+            const currentCat = categories.find(c => c.id === p.category_id);
+            const currentCode = currentCat ? String(currentCat.code || '').toUpperCase() : '';
+            let resolvedCatId = p.category_id || existing?.category_id;
+            if (currentCode !== trueCatCode && !(trueCatCode === 'OTHER' && (currentCode === 'GEN' || currentCode === 'ACC')) || !resolvedCatId) {
+              resolvedCatId = resolvePartCategoryId({ ...p, description: p.description || existing?.description }, categories);
+            }
+
             const updatedPart = {
               ...(existing || {}),
               id: p.id || existing?.id,
@@ -629,7 +646,7 @@ export function useCloudSync({
               description: p.description || existing?.description,
               iphone_model: p.iphone_model || existing?.iphone_model || 'iPhone',
               stocking_price: validStockPrice,
-              category_id: p.category_id || existing?.category_id || 'cat-battery',
+              category_id: resolvedCatId,
               safety_stock_pct: p.safety_stock_pct || existing?.safety_stock_pct || 0.05,
               is_active: p.is_active ?? existing?.is_active ?? true
             };
@@ -1150,6 +1167,33 @@ export function useCloudSync({
         }
       }
 
+      // 5.5. Process Master Purchase Orders Registry
+      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && setPurchaseOrders) {
+        const cloudPoRegistryDoc = dbSavedRecords.find(r => r.id === 'master_purchase_orders_registry');
+        if (cloudPoRegistryDoc?.snapshot_data?.orders && Array.isArray(cloudPoRegistryDoc.snapshot_data.orders)) {
+          const cloudOrders = cloudPoRegistryDoc.snapshot_data.orders;
+          let localOrders = [];
+          try {
+            localOrders = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
+          } catch (e) {}
+
+          const orderMap = new Map();
+          cloudOrders.forEach(po => {
+            if (po && (po.id || po.po_number)) orderMap.set(po.id || po.po_number, po);
+          });
+          localOrders.forEach(po => {
+            if (po && (po.id || po.po_number) && !orderMap.has(po.id || po.po_number)) {
+              orderMap.set(po.id || po.po_number, po);
+            }
+          });
+
+          const mergedOrders = Array.from(orderMap.values());
+          setPurchaseOrders(mergedOrders);
+          try { localStorage.setItem('mdc_pos', JSON.stringify(mergedOrders)); } catch (e) {}
+          dbStorage.setItem('mdc_pos', mergedOrders);
+        }
+      }
+
       // 6. Process Intake Records & Inventory Units
       let effectiveIntakeRecords = [];
       if (shouldFetch('dc_intake_records') || shouldFetch('saved_records')) {
@@ -1284,11 +1328,13 @@ export function useCloudSync({
           ].map(s => String(s).trim().toUpperCase()));
           localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(Array.from(deletedSerialsSet)));
         } catch (e) {
-          deletedSerialsSet = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
+        deletedSerialsSet = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
         }
 
         // Serials that are already shipped, dispatched, or packed in active drafts:
         const shippedOrPackedSerials = new Set();
+        // Serials that are confirmed received at destination sites:
+        const receivedShipmentsMap = new Map();
 
         // 1. Gather all shipments from effectiveShipments, _shipments prop, and localStorage
         const allShipmentsToCheck = [
@@ -1302,10 +1348,26 @@ export function useCloudSync({
 
         allShipmentsToCheck.forEach(sh => {
           if (sh && Array.isArray(sh.items)) {
-            sh.items.forEach(it => {
-              const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-              if (s) shippedOrPackedSerials.add(s);
-            });
+            const isCompleted = sh.status === 'received_confirmed' || sh.status === 'delivered' || sh.status === 'received';
+            if (isCompleted) {
+              sh.items.forEach(it => {
+                const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+                if (s) {
+                  receivedShipmentsMap.set(s, {
+                    site_id: sh.site_id,
+                    site_code: sh.site_code,
+                    received_at: sh.received_at || sh.received_date,
+                    received_by: sh.received_by_name || 'Branch Staff',
+                    box_number: it.box_number || 1
+                  });
+                }
+              });
+            } else if (sh.status !== 'cancelled') {
+              sh.items.forEach(it => {
+                const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+                if (s) shippedOrPackedSerials.add(s);
+              });
+            }
           }
         });
 
@@ -1365,15 +1427,19 @@ export function useCloudSync({
             dbUnits.filter(u => !u.is_deleted && u.status !== 'deleted').forEach(dbU => {
               const cleanSerial = String(dbU.serial_number || '').trim().toUpperCase();
               if (cleanSerial) {
-                const isPackedOrShipped = shippedOrPackedSerials.has(cleanSerial);
-                const targetStatus = isPackedOrShipped
-                  ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
-                  : (dbU.status || 'in_stock');
+                const recvInfo = receivedShipmentsMap.get(cleanSerial);
+                const isPackedOrShipped = !recvInfo && shippedOrPackedSerials.has(cleanSerial);
+                const targetStatus = recvInfo
+                  ? 'in_stock'
+                  : (isPackedOrShipped
+                      ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
+                      : (dbU.status || 'in_stock'));
 
                 const cloudAssign = dbU.intake_assignment || (dbU.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : dbU.notes?.includes('CRBR') ? 'DC - CRBR' : dbU.notes?.includes('Forecasting') ? 'MDC - Forecasting' : null);
                 const assign = cloudAssign || (dbU.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : dbU.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
 
-                const siteJoined = dbU.sites || (dbSites || sites || []).find(s => s.id === dbU.current_site_id || s.code === dbU.current_site_id) || null;
+                const targetSiteId = recvInfo ? recvInfo.site_id : (dbU.current_site_id || 'site-dc');
+                const siteJoined = (dbSites || sites || []).find(s => s.id === targetSiteId || s.code === targetSiteId) || dbU.sites || null;
                 const partJoined = dbU.parts || null;
                 const rawPn = dbU.part_number || partJoined?.part_number;
                 const rawDesc = dbU.description || partJoined?.description;
@@ -1389,22 +1455,19 @@ export function useCloudSync({
                   serial_number: cleanSerial,
                   intake_assignment: assign,
                   notes: dbU.notes && !dbU.notes.includes('CRBR') && !dbU.notes.includes('SVNR') && !dbU.notes.includes('Forecasting') ? `${assign} | ${dbU.notes}` : assign,
-                  current_site_id: siteJoined?.id || dbU.current_site_id || 'site-dc',
-                  site_code: siteJoined?.code || dbU.site_code || 'DC-MDC',
+                  current_site_id: siteJoined?.id || targetSiteId,
+                  site_code: siteJoined?.code || recvInfo?.site_code || dbU.site_code || 'DC-MDC',
                   site_name: siteJoined?.name || null,
                   po_id: dbU.po_id || null,
                   status: targetStatus,
-                  box_number: dbU.box_number || 1,
-                  received_at: dbU.received_at || new Date().toISOString(),
-                  received_by: dbU.received_by_name || dbU.received_by || 'Warehouse Staff',
+                  box_number: recvInfo?.box_number || dbU.box_number || 1,
+                  received_at: recvInfo?.received_at || dbU.received_at || new Date().toISOString(),
+                  received_by: recvInfo?.received_by || dbU.received_by_name || dbU.received_by || 'Warehouse Staff',
                   allocated_at: dbU.allocated_at || null,
-                  shipped_at: dbU.shipped_at || null,
-                  used_at: dbU.used_at || null,
-                  used_by: dbU.used_by || null,
-                  used_by_name: dbU.used_by_name || null,
-                  work_order_number: dbU.work_order_number || null,
-                  usage_notes: dbU.usage_notes || null,
-                  intake_record_id: dbU.intake_record_id || null
+                  allocated_by: dbU.allocated_by || null,
+                  allocated_site_id: dbU.allocated_site_id || null,
+                  is_deleted: false,
+                  updated_at: dbU.updated_at || new Date().toISOString()
                 });
               }
             });
@@ -1429,13 +1492,17 @@ export function useCloudSync({
                 localSaved.forEach(u => {
                   const s = String(u.serial_number || '').trim().toUpperCase();
                   if (s && !deletedSerialsSet.has(s) && !map.has(s)) {
-                    const isPackedOrShipped = shippedOrPackedSerials.has(s);
-                    const targetStatus = isPackedOrShipped
-                      ? (u.status === 'shipped' ? 'shipped' : 'packed')
-                      : (u.status || 'in_stock');
+                    const recvInfo = receivedShipmentsMap.get(s);
+                    const isPackedOrShipped = !recvInfo && shippedOrPackedSerials.has(s);
+                    const targetStatus = recvInfo
+                      ? 'in_stock'
+                      : (isPackedOrShipped
+                          ? (u.status === 'shipped' ? 'shipped' : 'packed')
+                          : (u.status || 'in_stock'));
                     map.set(s, {
                       ...u,
-                      status: targetStatus
+                      status: targetStatus,
+                      ...(recvInfo ? { current_site_id: recvInfo.site_id, site_code: recvInfo.site_code || u.site_code } : {})
                     });
                   }
                 });
@@ -2266,7 +2333,9 @@ export function useCloudSync({
           const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
 
           const partRows = currentParts.map(p => {
-            const catCode = categories.find(c => c.id === p.category_id)?.code || 'BATTERY';
+            const trueCode = getPartCategory(p);
+            const catObj = categories.find(c => c.id === p.category_id);
+            const catCode = (catObj && catObj.code === trueCode) ? catObj.code : trueCode;
             const catId = catMap.get(catCode) || null;
             return {
               part_number: p.part_number,

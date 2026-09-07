@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -20,7 +20,10 @@ import {
   Copy,
   Building2,
   MapPin,
-  Layers
+  Layers,
+  ChevronDown,
+  ChevronUp,
+  Calendar
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
@@ -188,6 +191,28 @@ export default function Shipments() {
       return true;
     });
   }, [shipments, regionTab, filterStatus, search, sites]);
+
+  // Today's Shipments: all manifests created today, sorted newest → oldest
+  const todaysShipments = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+    return (shipments || [])
+      .filter(s => {
+        if (!s.items || s.items.length === 0) return false;
+        const d = (s.created_at || s.shipment_date || s.pickup_date || '').slice(0, 10);
+        return d === today;
+      })
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }, [shipments]);
+
+  // Accordion state: ID of the currently expanded today's shipment (null = all collapsed)
+  const [expandedTodayId, setExpandedTodayId] = useState(null);
+
+  // Auto-expand the latest (first) shipment whenever today's list changes
+  useEffect(() => {
+    if (todaysShipments.length > 0) {
+      setExpandedTodayId(prev => prev ?? todaysShipments[0].id);
+    }
+  }, [todaysShipments]);
 
   // Aggregate sites with active shipments for site-level serial viewer
   const availableSitesWithShipments = useMemo(() => {
@@ -725,6 +750,283 @@ export default function Shipments() {
           </button>
         </div>
       </div>
+
+      {/* ── Today's Shipments Accordion Panel ─────────────────────── */}
+      {todaysShipments.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px', border: '1.5px solid #e2e8f0' }}>
+          {/* Panel Header */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '12px 16px',
+            background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+            borderBottom: '1px solid #e2e8f0'
+          }}>
+            <div style={{ background: '#dbeafe', padding: '6px', borderRadius: '8px', display: 'flex' }}>
+              <Calendar size={15} color="#1d4ed8" />
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>
+                Today&apos;s Shipments
+              </span>
+              <span style={{
+                marginLeft: '8px',
+                background: '#dbeafe',
+                color: '#1d4ed8',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: '10px'
+              }}>
+                {todaysShipments.length} manifest{todaysShipments.length !== 1 ? 's' : ''}
+              </span>
+              <span style={{ marginLeft: '6px', fontSize: '11.5px', color: '#64748b' }}>
+                · {new Date().toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })}
+              </span>
+            </div>
+            <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+              Latest auto-expanded
+            </span>
+          </div>
+
+          {/* Accordion Entries */}
+          {todaysShipments.map((sh, idx) => {
+            const isLatest = idx === 0;
+            const isOpen = expandedTodayId === sh.id;
+            const destSite = resolveSite(sh.site_id || sh.site_name, sites);
+            const normStatus = getNormalizedStatus(sh);
+
+            const statusBadge = normStatus === 'received_confirmed'
+              ? { bg: '#ecfdf5', color: '#047857', border: '#a7f3d0', label: 'RECEIVED CONFIRMED', Icon: CheckCircle }
+              : normStatus === 'shipped'
+              ? { bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd', label: 'SHIPPED', Icon: Truck }
+              : { bg: '#fffbeb', color: '#b45309', border: '#fde68a', label: 'PENDING PICKUP', Icon: Clock };
+
+            return (
+              <div
+                key={sh.id}
+                style={{ borderBottom: idx < todaysShipments.length - 1 ? '1px solid #f1f5f9' : 'none' }}
+              >
+                {/* Row Header — always visible, click to toggle */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedTodayId(isOpen ? null : sh.id)}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '10px 16px',
+                    background: isOpen ? '#f8fafc' : 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'background 0.15s'
+                  }}
+                >
+                  {/* Expand/Collapse chevron */}
+                  <span style={{ color: '#64748b', flexShrink: 0 }}>
+                    {isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                  </span>
+
+                  {/* Invoice Ref */}
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '12.5px', color: '#0f172a', minWidth: '150px' }}>
+                    {sh.invoice_ref || sh.shipment_number}
+                    {isLatest && (
+                      <span style={{
+                        marginLeft: '6px',
+                        background: '#1d4ed8',
+                        color: '#fff',
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        padding: '1px 6px',
+                        borderRadius: '8px',
+                        letterSpacing: '0.3px',
+                        verticalAlign: 'middle'
+                      }}>
+                        LATEST
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Site */}
+                  <span style={{ fontSize: '12.5px', color: '#334155', flex: 1 }}>
+                    <strong>{destSite.code || 'ASP'}</strong>
+                    <span style={{ color: '#94a3b8', marginLeft: '4px' }}>·</span>
+                    <span style={{ color: '#64748b', marginLeft: '4px' }}>{destSite.name || sh.site_name}</span>
+                  </span>
+
+                  {/* Units */}
+                  <span style={{ fontSize: '12px', color: '#475569', marginRight: '4px', whiteSpace: 'nowrap' }}>
+                    <strong>{sh.items?.length || 0}</strong> units
+                  </span>
+
+                  {/* Status badge */}
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    background: statusBadge.bg,
+                    color: statusBadge.color,
+                    border: `1px solid ${statusBadge.border}`,
+                    fontSize: '10.5px',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '8px',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    <statusBadge.Icon size={10} />
+                    {statusBadge.label}
+                  </span>
+                </button>
+
+                {/* Expanded Details */}
+                <div style={{
+                  maxHeight: isOpen ? '400px' : '0px',
+                  overflow: 'hidden',
+                  transition: 'max-height 0.22s ease',
+                }}>
+                  <div style={{
+                    padding: '12px 16px 14px 42px',
+                    background: '#f8fafc',
+                    borderTop: '1px solid #f1f5f9',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '24px',
+                    flexWrap: 'wrap'
+                  }}>
+                    {/* Left: Detail columns */}
+                    <div style={{ display: 'flex', gap: '24px', flex: 1, flexWrap: 'wrap' }}>
+                      {/* Courier & Tracking */}
+                      <div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
+                          Courier &amp; Tracking
+                        </div>
+                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0f172a' }}>
+                          {sh.carrier || sh.courier || 'Lite Express'}
+                        </div>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0284c7' }}>
+                          {sh.tracking_number ? `#${sh.tracking_number}` : <em style={{ color: '#94a3b8', fontStyle: 'italic' }}>No tracking #</em>}
+                        </div>
+                        {sh.pickup_by_name && (
+                          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                            Rider: {sh.pickup_by_name}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Dates */}
+                      <div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
+                          Shipment Date
+                        </div>
+                        <div style={{ fontSize: '12.5px', color: '#334155' }}>
+                          {sh.pickup_date || sh.shipment_date || (
+                            <span style={{ color: '#d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Clock size={11} /> Pending Dispatch
+                            </span>
+                          )}
+                        </div>
+                        {sh.received_date && (
+                          <div style={{ fontSize: '11px', color: '#059669', marginTop: '2px' }}>
+                            Received: {sh.received_date}
+                          </div>
+                        )}
+                        {sh.received_by_name && (
+                          <div style={{ fontSize: '11px', color: '#059669' }}>
+                            By: {sh.received_by_name}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* TS Number */}
+                      {sh.transfer_slip_number && (
+                        <div>
+                          <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
+                            Transfer Slip
+                          </div>
+                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0284c7' }}>
+                            {sh.transfer_slip_number}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Boxes */}
+                      <div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
+                          Box(es)
+                        </div>
+                        <div style={{ fontSize: '12.5px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
+                          {sh.box_number_label || (sh.total_boxes ? `${sh.total_boxes} box(es)` : '1 box')}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: Action buttons */}
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleOpenSerialsModal(sh)}
+                        title="View Serial Numbers"
+                        style={{ background: '#fff', color: '#0f172a', borderColor: '#cbd5e1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <Hash size={13} color="#0284c7" />
+                        <span>Serials</span>
+                      </button>
+
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
+                        title="Download PDF Manifest"
+                        style={{ background: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <Download size={13} />
+                        <span>PDF</span>
+                      </button>
+
+                      {normStatus === 'pending_pickup' && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => handleOpenPickupModal(sh)}
+                          title="Handover to Courier"
+                          style={{ background: '#f59e0b', color: '#fff', border: '1px solid #d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <Truck size={13} />
+                          <span>Pick Up</span>
+                        </button>
+                      )}
+
+                      {normStatus === 'shipped' && (
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => handleOpenReceiveModal(sh)}
+                          title="Confirm Branch Receipt"
+                          style={{ background: '#10b981', color: '#fff', border: '1px solid #059669', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <PackageCheck size={13} />
+                          <span>Receive</span>
+                        </button>
+                      )}
+
+                      {isLockedConfirmedShipment(sh) && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          disabled
+                          style={{ opacity: 0.85, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                          title="Locked: Received Confirmed"
+                        >
+                          <Lock size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* 3. Shipment Manifests Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>

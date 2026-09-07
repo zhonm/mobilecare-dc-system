@@ -430,3 +430,78 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       };
     });
 }
+
+/**
+ * Restricts parts catalog strictly to Displays and Batteries for iPhone 13 series and newer models
+ * (iPhone 13, 14, 15, 16, 17 series and above).
+ * Excludes all older models (iPhone 12, 11, X, 8, SE, etc.) and all other part categories.
+ *
+ * @param {Object} part - Part object containing description, category_id, iphone_model, etc.
+ * @returns {boolean}
+ */
+export function isDisplayOrBatteryForIPhone13Plus(part) {
+  if (!part) return false;
+
+  const desc = String(part.description || '').toLowerCase();
+  const cat = String(part.category_id || part.category || '').toLowerCase();
+  const model = String(part.iphone_model || part.model || desc || '').toLowerCase();
+
+  // 1. Must be a Display or Battery component
+  const isDisplay = cat.includes('display') || desc.includes('display') || desc.includes('screen') || desc.includes('oled');
+  const isBattery = cat.includes('battery') || desc.includes('battery');
+
+  if (!isDisplay && !isBattery) {
+    return false;
+  }
+
+  // 2. Reject non-display/battery components that might have "display" or "battery" in their text
+  if (
+    desc.includes('camera') ||
+    desc.includes('truedepth') ||
+    desc.includes('back glass') ||
+    desc.includes('rear glass') ||
+    desc.includes('rear system') ||
+    desc.includes('enclosure') ||
+    desc.includes('housing') ||
+    desc.includes('screw') ||
+    desc.includes('speaker') ||
+    desc.includes('receiver') ||
+    desc.includes('taptic') ||
+    desc.includes('bracket') ||
+    desc.includes('flex') ||
+    cat.includes('camera') ||
+    cat.includes('enclosure') ||
+    cat.includes('backglass')
+  ) {
+    return false;
+  }
+
+  // 3. Must be iPhone 13 series or newer (13, 14, 15, 16, 17, ...)
+  const is13Plus = (
+    model.includes('iphone 13') ||
+    model.includes('iphone 14') ||
+    model.includes('iphone 15') ||
+    model.includes('iphone 16') ||
+    model.includes('iphone 17') ||
+    /iphone\s*(1[3-9]|[2-9][0-9])/i.test(model) ||
+    /iphone\s*(1[3-9]|[2-9][0-9])/i.test(desc)
+  );
+
+  // 4. Reject older iPhone models if they don't match 13+
+  const isLegacy = (
+    model.includes('iphone 12') ||
+    model.includes('iphone 11') ||
+    model.includes('iphone se') ||
+    model.includes('iphone x') ||
+    model.includes('iphone 8') ||
+    model.includes('iphone 7') ||
+    model.includes('iphone 6')
+  );
+
+  if (isLegacy && !is13Plus) {
+    return false;
+  }
+
+  return Boolean(is13Plus);
+}
+

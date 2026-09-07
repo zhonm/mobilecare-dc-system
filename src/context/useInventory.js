@@ -4,6 +4,7 @@ import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 import { reconcileUnitsWithPackedDrafts, isExplicitlyCleared, canUserDeleteRecord, formatDcIntakeRecordForDb, isUUID, toValidUUID } from '../utils/appContextHelpers';
+import { getPartCategory } from '../utils/categoryFilter';
 
 export function useInventory({
   parts = [],
@@ -145,23 +146,209 @@ export function useInventory({
     }
   };
 
+  const persistPurchaseOrders = async (orders) => {
+    try {
+      localStorage.setItem('mdc_pos', JSON.stringify(orders));
+    } catch (e) {
+      console.warn('Error saving POs to localStorage:', e);
+    }
+    try {
+      dbStorage.setItem('mdc_pos', orders);
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        await supabase.from('saved_records').upsert({
+          id: 'master_purchase_orders_registry',
+          record_type: 'purchase_orders_registry',
+          period_label: 'Master Purchase Orders Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { orders },
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (err) {
+        console.warn('master_purchase_orders_registry sync note:', err.message);
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('PURCHASE_ORDERS_UPDATED', { count: orders.length, timestamp: Date.now() });
+    }
+  };
+
+  const addPurchaseOrder = async (poData) => {
+    const newPo = {
+      id: poData.id || `po-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      po_number: String(poData.po_number || `PO-${Date.now()}`).trim(),
+      invoice_ref: poData.invoice_ref ? String(poData.invoice_ref).trim() : null,
+      sales_order_no: poData.sales_order_no ? String(poData.sales_order_no).trim() : null,
+      customer_no: poData.customer_no ? String(poData.customer_no).trim() : null,
+      supplier: poData.supplier || 'Apple South Asia Pte Ltd',
+      order_date: poData.order_date || new Date().toISOString().split('T')[0],
+      expected_date: poData.expected_date || poData.order_date || new Date().toISOString().split('T')[0],
+      status: 'pending', // Strictly pending initially, zero auto-confirmation!
+      currency: poData.currency || 'USD',
+      total_amount: poData.total_amount || 0,
+      remarks: poData.remarks || '',
+      source_filename: poData.source_filename || null,
+      created_at: poData.created_at || new Date().toISOString(),
+      created_by: currentUser?.fullName || 'Superadmin',
+      items: (poData.items || []).map((it, idx) => ({
+        id: it.id || `po-item-${idx}-${Date.now()}`,
+        part_number: String(it.part_number || '').trim().toUpperCase(),
+        description: it.description || `Apple Genuine Part ${it.part_number}`,
+        quantity_ordered: Number(it.quantity_ordered) || 0,
+        quantity_shipped: Number(it.quantity_shipped) || Number(it.quantity_ordered) || 0,
+        quantity_received: 0, // Always 0 on initial upload
+        unit_price: Number(it.unit_price) || 0,
+        extended_price: Number(it.extended_price) || (Number(it.quantity_ordered || 0) * Number(it.unit_price || 0))
+      }))
+    };
+
+    setPurchaseOrders(prev => {
+      const filtered = (prev || []).filter(p => p.id !== newPo.id && p.po_number.toUpperCase() !== newPo.po_number.toUpperCase());
+      const updated = [newPo, ...filtered];
+      persistPurchaseOrders(updated);
+      return updated;
+    });
+
+    // Auto-save each uploaded PO directly into Parts Saved History Records (dcIntakeRecords)
+    const expectedUnits = newPo.items.reduce((s, it) => s + (it.quantity_ordered || 0), 0);
+    const expectedValue = newPo.total_amount || newPo.items.reduce((s, it) => s + (it.extended_price || 0), 0);
+    const poHistoryBatchId = newPo.po_number.toUpperCase();
+    const poHistoryBatchName = `${newPo.po_number}${newPo.invoice_ref ? ` - ${newPo.invoice_ref}` : ''} (Apple GSX PO)`;
+
+    const initialHistoryRecord = {
+      id: poHistoryBatchId,
+      record_name: poHistoryBatchName,
+      intake_date: newPo.order_date || new Date().toISOString().split('T')[0],
+      po_id: newPo.id,
+      po_number: newPo.po_number,
+      invoice_ref: newPo.invoice_ref || null,
+      sales_order_no: newPo.sales_order_no || null,
+      supplier_name: newPo.supplier,
+      supplier: newPo.supplier,
+      notes: newPo.remarks || `Auto-registered from PO ${newPo.po_number} (${expectedUnits} units expected from Apple)`,
+      status: 'in_progress',
+      items: [], // Strictly empty initially! Never auto-confirm pre-existing stock!
+      expected_items: newPo.items.map(it => ({
+        part_number: it.part_number,
+        description: it.description,
+        quantity_ordered: it.quantity_ordered,
+        unit_price: it.unit_price
+      })),
+      total_units: 0,
+      expected_units: expectedUnits,
+      total_value: 0,
+      expected_value: expectedValue,
+      saved_by_id: currentUser?.id || 'usr-system',
+      saved_by_name: currentUser?.fullName || 'Superadmin',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    if (setDcIntakeRecords) {
+      setDcIntakeRecords(prev => {
+        const filtered = (prev || []).filter(r => r.id !== initialHistoryRecord.id && r.po_number !== newPo.po_number);
+        const nextRecords = [initialHistoryRecord, ...filtered];
+        try {
+          localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+        } catch (e) {}
+        dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+        return nextRecords;
+      });
+      if (supabase) {
+        const formattedRow = formatDcIntakeRecordForDb(initialHistoryRecord, currentUser);
+        if (formattedRow) {
+          supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+        }
+      }
+    }
+
+    showToast(`Purchase Order ${newPo.po_number} added (${newPo.items.length} parts) and auto-saved to Parts Saved History Records`, 'success');
+    return newPo;
+  };
+
+  const deletePurchaseOrder = async (poId) => {
+    setPurchaseOrders(prev => {
+      const targetPo = (prev || []).find(p => p.id === poId || p.po_number.toUpperCase() === String(poId).toUpperCase());
+      const updated = (prev || []).filter(p => p.id !== poId && p.po_number.toUpperCase() !== String(poId).toUpperCase());
+      persistPurchaseOrders(updated);
+
+      // Preserve permanent record in Parts Saved History Records (dcIntakeRecords)
+      if (setDcIntakeRecords && targetPo) {
+        setDcIntakeRecords(prevRecords => {
+          const nextRecords = (prevRecords || []).map(r => {
+            if (r.po_id === poId || (r.po_number && targetPo.po_number && r.po_number.toUpperCase() === targetPo.po_number.toUpperCase())) {
+              return {
+                ...r,
+                status: 'completed',
+                notes: r.notes ? `${r.notes} (PO completed & cleared from active tracking)` : 'PO completed & cleared from active tracking',
+                updated_at: new Date().toISOString()
+              };
+            }
+            return r;
+          });
+          try {
+            localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+          } catch (e) {}
+          dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+          return nextRecords;
+        });
+      }
+
+      return updated;
+    });
+    showToast('Purchase Order removed from active tracking. History record safely preserved in Parts Saved History Records.', 'info');
+  };
+
+  const clearCompletedPurchaseOrders = async () => {
+    let clearedCount = 0;
+    setPurchaseOrders(prev => {
+      const completed = (prev || []).filter(p => p.status === 'received');
+      clearedCount = completed.length;
+      if (clearedCount === 0) return prev;
+      const remaining = (prev || []).filter(p => p.status !== 'received');
+      persistPurchaseOrders(remaining);
+
+      if (setDcIntakeRecords) {
+        const completedPoNumbers = new Set(completed.map(p => p.po_number.toUpperCase()));
+        setDcIntakeRecords(prevRecords => {
+          const nextRecords = (prevRecords || []).map(r => {
+            if (r.po_number && completedPoNumbers.has(r.po_number.toUpperCase())) {
+              return {
+                ...r,
+                status: 'completed',
+                updated_at: new Date().toISOString()
+              };
+            }
+            return r;
+          });
+          try {
+            localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+          } catch (e) {}
+          dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+          return nextRecords;
+        });
+      }
+
+      return remaining;
+    });
+    if (clearedCount > 0) {
+      showToast(`Cleared ${clearedCount} completed Purchase Order${clearedCount > 1 ? 's' : ''} from active tracking`, 'success');
+    }
+  };
+
   const saveUnitsToSupabase = async (units) => {
     if (!supabase || !units || units.length === 0) return;
     unmarkDeletedSerials(units.map(u => u.serial_number));
     if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
     try {
-      let defaultCatId = null;
-      const { data: dbCats } = await supabase.from('part_categories').select('id').limit(1);
-      if (dbCats && dbCats.length > 0) {
-        defaultCatId = dbCats[0].id;
-      } else {
-        const { data: newCat } = await supabase
-          .from('part_categories')
-          .insert({ code: 'cat-general', name: 'General Parts' })
-          .select('id')
-          .maybeSingle();
-        defaultCatId = newCat?.id || null;
-      }
+      const { data: dbCats } = await supabase.from('part_categories').select('id, code');
+      const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
+      const defaultCatId = dbCats?.[0]?.id || null;
 
       // Fetch all sites to resolve UUIDs accurately
       const { data: dbSites } = await supabase.from('sites').select('id, code, name, is_dc');
@@ -183,10 +370,12 @@ export function useInventory({
       for (const u of units) {
         const cleanPN = String(u.part_number || '').trim().toUpperCase();
         if (cleanPN && !pMap.has(cleanPN) && !missingPartsMap.has(cleanPN)) {
+          const catCode = getPartCategory({ part_number: cleanPN, description: u.description });
+          const partCatId = catMap.get(catCode) || defaultCatId;
           missingPartsMap.set(cleanPN, {
             part_number: cleanPN,
             description: u.description || `Part ${cleanPN}`,
-            ...(defaultCatId ? { category_id: defaultCatId } : {})
+            ...(partCatId ? { category_id: partCatId } : {})
           });
         }
       }
@@ -426,24 +615,102 @@ export function useInventory({
 
     saveUnitsToSupabase([newUnit]);
 
-    if (poId) {
-      setPurchaseOrders(prev => prev.map(po => {
-        if (po.id === poId) {
-          const updatedItems = po.items.map(item => {
-            if (item.part_number.toUpperCase() === cleanPN || item.part_number.toUpperCase() === rawPN.toUpperCase()) {
-              return { ...item, quantity_received: item.quantity_received + 1 };
+    const targetPoId = poId || purchaseOrders.find(p => p.status !== 'received' && p.items?.some(it => (it.part_number.toUpperCase() === cleanPN || it.part_number.toUpperCase() === rawPN.toUpperCase()) && (it.quantity_received || 0) < (it.quantity_ordered || 0)))?.id;
+
+    if (targetPoId) {
+      let matchedPoNumber = null;
+      let matchedPoSupplier = null;
+      setPurchaseOrders(prev => {
+        const nextOrders = prev.map(po => {
+          if (po.id === targetPoId || po.po_number.toUpperCase() === String(targetPoId).toUpperCase()) {
+            matchedPoNumber = po.po_number;
+            matchedPoSupplier = po.supplier;
+            const updatedItems = po.items.map(item => {
+              if (item.part_number.toUpperCase() === cleanPN || item.part_number.toUpperCase() === rawPN.toUpperCase()) {
+                return { ...item, quantity_received: (item.quantity_received || 0) + 1 };
+              }
+              return item;
+            });
+            const allReceived = updatedItems.every(it => (it.quantity_received || 0) >= it.quantity_ordered);
+            return {
+              ...po,
+              items: updatedItems,
+              status: allReceived ? 'received' : 'partially_received'
+            };
+          }
+          return po;
+        });
+        persistPurchaseOrders(nextOrders);
+        return nextOrders;
+      });
+
+      // Automatically append this scanned part & serial into the PO's batch in Parts Saved History Records!
+      if (setDcIntakeRecords) {
+        setDcIntakeRecords(prev => {
+          let found = false;
+          const nextRecords = (prev || []).map(rec => {
+            const isMatch = rec.po_id === targetPoId || 
+                            (rec.po_number && matchedPoNumber && rec.po_number.toUpperCase() === matchedPoNumber.toUpperCase()) ||
+                            (rec.po_number && rec.po_number.toUpperCase() === String(targetPoId).toUpperCase()) ||
+                            (rec.id && rec.id.toUpperCase() === String(targetPoId).toUpperCase());
+            if (isMatch) {
+              found = true;
+              const existingItems = Array.isArray(rec.items) ? rec.items : [];
+              const updatedItems = [newUnit, ...existingItems.filter(it => it.serial_number !== newUnit.serial_number)];
+              const totalUnits = updatedItems.length;
+              const totalValue = updatedItems.reduce((acc, it) => acc + Number(it.stocking_price || 99), 0);
+              const isAllDone = rec.expected_units ? totalUnits >= rec.expected_units : false;
+              const updatedRec = {
+                ...rec,
+                items: updatedItems,
+                total_units: totalUnits,
+                total_value: totalValue,
+                status: isAllDone ? 'completed' : 'in_progress',
+                updated_at: new Date().toISOString()
+              };
+              if (supabase) {
+                const formattedRow = formatDcIntakeRecordForDb(updatedRec, currentUser);
+                if (formattedRow) {
+                  supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+                }
+              }
+              return updatedRec;
             }
-            return item;
+            return rec;
           });
-          const allReceived = updatedItems.every(it => it.quantity_received >= it.quantity_ordered);
-          return {
-            ...po,
-            items: updatedItems,
-            status: allReceived ? 'received' : 'partially_received'
-          };
-        }
-        return po;
-      }));
+
+          if (!found && matchedPoNumber) {
+            const autoRec = {
+              id: matchedPoNumber.toUpperCase(),
+              record_name: `${matchedPoNumber} (Apple GSX PO)`,
+              intake_date: new Date().toISOString().split('T')[0],
+              po_id: targetPoId,
+              po_number: matchedPoNumber,
+              supplier_name: matchedPoSupplier || 'Apple South Asia Pte Ltd',
+              status: 'in_progress',
+              items: [newUnit],
+              total_units: 1,
+              total_value: Number(newUnit.stocking_price || 99),
+              saved_by_id: currentUser?.id || 'usr-system',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            const nextList = [autoRec, ...prev];
+            try {
+              localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
+            } catch (e) {}
+            dbStorage.setItem('mdc_dc_intake_records', nextList);
+            return nextList;
+          }
+
+          try {
+            localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
+          } catch (e) {}
+          dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+          return nextRecords;
+        });
+      }
     }
 
     barcodeAudio.playSuccess();
@@ -765,25 +1032,29 @@ export function useInventory({
     saveUnitsToSupabase(newUnits);
 
     if (poMap.size > 0) {
-      setPurchaseOrders(prev => prev.map(po => {
-        if (poMap.has(po.id)) {
-          const pnIncrements = poMap.get(po.id);
-          const updatedItems = po.items.map(it => {
-            const inc = pnIncrements.get(it.part_number.toUpperCase()) || 0;
-            if (inc > 0) {
-              return { ...it, quantity_received: it.quantity_received + inc };
-            }
-            return it;
-          });
-          const allReceived = updatedItems.every(it => it.quantity_received >= it.quantity_ordered);
-          return {
-            ...po,
-            items: updatedItems,
-            status: allReceived ? 'received' : 'partially_received'
-          };
-        }
-        return po;
-      }));
+      setPurchaseOrders(prev => {
+        const nextOrders = prev.map(po => {
+          if (poMap.has(po.id)) {
+            const pnIncrements = poMap.get(po.id);
+            const updatedItems = po.items.map(it => {
+              const inc = pnIncrements.get(it.part_number.toUpperCase()) || 0;
+              if (inc > 0) {
+                return { ...it, quantity_received: it.quantity_received + inc };
+              }
+              return it;
+            });
+            const allReceived = updatedItems.every(it => it.quantity_received >= it.quantity_ordered);
+            return {
+              ...po,
+              items: updatedItems,
+              status: allReceived ? 'received' : 'partially_received'
+            };
+          }
+          return po;
+        });
+        persistPurchaseOrders(nextOrders);
+        return nextOrders;
+      });
     }
 
     setScanLogs(prev => [...newLogs, ...(prev || [])].slice(0, 200));
@@ -1024,24 +1295,28 @@ export function useInventory({
     }
 
     if (existing?.po_id) {
-      setPurchaseOrders(prev => prev.map(po => {
-        if (po.id === existing.po_id) {
-          const updatedItems = (po.items || []).map(it => {
-            if (existing?.part_number && it.part_number.toUpperCase() === existing.part_number.toUpperCase() && it.quantity_received > 0) {
-              return { ...it, quantity_received: it.quantity_received - 1 };
-            }
-            return it;
-          });
-          const allReceived = updatedItems.every(it => it.quantity_received >= it.quantity_ordered);
-          const anyReceived = updatedItems.some(it => it.quantity_received > 0);
-          return {
-            ...po,
-            items: updatedItems,
-            status: allReceived ? 'received' : anyReceived ? 'partially_received' : 'ordered'
-          };
-        }
-        return po;
-      }));
+      setPurchaseOrders(prev => {
+        const nextOrders = prev.map(po => {
+          if (po.id === existing.po_id) {
+            const updatedItems = (po.items || []).map(it => {
+              if (existing?.part_number && it.part_number.toUpperCase() === existing.part_number.toUpperCase() && it.quantity_received > 0) {
+                return { ...it, quantity_received: it.quantity_received - 1 };
+              }
+              return it;
+            });
+            const allReceived = updatedItems.every(it => it.quantity_received >= it.quantity_ordered);
+            const anyReceived = updatedItems.some(it => it.quantity_received > 0);
+            return {
+              ...po,
+              items: updatedItems,
+              status: allReceived ? 'received' : anyReceived ? 'partially_received' : 'pending'
+            };
+          }
+          return po;
+        });
+        persistPurchaseOrders(nextOrders);
+        return nextOrders;
+      });
     }
 
     if (broadcastCloudEvent) broadcastCloudEvent('STOCK_UPDATED', { serial: cleanSerial });
@@ -1506,6 +1781,10 @@ export function useInventory({
     setScanLogs,
     purchaseOrders,
     setPurchaseOrders,
+    addPurchaseOrder,
+    deletePurchaseOrder,
+    clearCompletedPurchaseOrders,
+    persistPurchaseOrders,
     repairUsageRecords,
     setRepairUsageRecords,
     masterlistData,

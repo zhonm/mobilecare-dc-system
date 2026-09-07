@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  /* Color Palette - Apple Logistics Modern Pro */
+  /* Color Palette - Ergonomic Enterprise Balance (Eye-Friendly) */
   --bg-primary: #f8fafc;
   --bg-surface: #ffffff;
   --bg-elevated: #f1f5f9;
@@ -14,27 +14,38 @@
   --border-light: #e2e8f0;
   --border-strong: #cbd5e1;
   
-  /* Accents & Statuses */
-  --primary: #0284c7; /* Sky Pro Blue */
-  --primary-hover: #0369a1;
-  --primary-light: #e0f2fe;
+  /* Primary Brand: Sophisticated Apple/Enterprise Sapphire Blue (Anti-Glare) */
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-light: #eff6ff;
+  --primary-border: #bfdbfe;
+  --primary-text: #1d4ed8;
   
-  --success: #10b981;
-  --success-light: #d1fae5;
-  --success-dark: #065f46;
+  /* Semantic Statuses: Soft Pastels + High-Contrast Readable Text */
+  --success: #16a34a;
+  --success-light: #dcfce7;
+  --success-border: #bbf7d0;
+  --success-dark: #15803d;
   
-  --warning: #f59e0b;
+  --warning: #d97706;
   --warning-light: #fef3c7;
+  --warning-border: #fde68a;
   --warning-dark: #92400e;
   
-  --danger: #ef4444;
+  --danger: #dc2626;
   --danger-light: #fee2e2;
+  --danger-border: #fecaca;
   --danger-dark: #991b1b;
+
+  --info: #0284c7;
+  --info-light: #f0f9ff;
+  --info-border: #bae6fd;
+  --info-dark: #0369a1;
   
   --sidebar-bg: #0f172a;
-  --sidebar-text: #e2e8f0;
+  --sidebar-text: #cbd5e1;
   --sidebar-hover: #1e293b;
-  --sidebar-active: #38bdf8;
+  --sidebar-active: #3b82f6;
   
   /* Radii & Shadows */
   --radius-sm: 6px;
@@ -131,7 +142,7 @@ h1, h2, h3, h4 {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 3px 8px;
+  padding: 3px 9px;
   border-radius: var(--radius-full);
   font-size: 11px;
   font-weight: 600;
@@ -140,13 +151,15 @@ h1, h2, h3, h4 {
   white-space: nowrap;
   flex-shrink: 0;
   line-height: 1.2;
+  border: 1px solid transparent;
 }
 
-.badge-success { background: var(--success-light); color: var(--success-dark); }
-.badge-warning { background: var(--warning-light); color: var(--warning-dark); }
-.badge-danger { background: var(--danger-light); color: var(--danger-dark); }
-.badge-primary { background: var(--primary-light); color: var(--primary-hover); }
-.badge-neutral { background: var(--bg-elevated); color: var(--text-muted); }
+.badge-success { background: var(--success-light); color: var(--success-dark); border-color: var(--success-border); }
+.badge-warning { background: var(--warning-light); color: var(--warning-dark); border-color: var(--warning-border); }
+.badge-danger { background: var(--danger-light); color: var(--danger-dark); border-color: var(--danger-border); }
+.badge-primary { background: var(--primary-light); color: var(--primary-text); border-color: var(--primary-border); }
+.badge-info { background: var(--info-light); color: var(--info-dark); border-color: var(--info-border); }
+.badge-neutral { background: var(--bg-elevated); color: var(--text-muted); border-color: var(--border-light); }
 
 /* Buttons */
 .btn {

@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveSite } from '../utils/appContextHelpers';
+import { resolveSite, isUUID } from '../utils/appContextHelpers';
+import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus } from '../utils/partResolver';
+import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilter';
+import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
 import {
   Inbox,
@@ -33,7 +36,16 @@ import {
   Trash2,
   Edit3,
   Truck,
-  PackageCheck
+  PackageCheck,
+  ChevronRight,
+  MapPin,
+  Sparkles,
+  Smartphone,
+  SearchX,
+  ExternalLink,
+  Copy,
+  Mail,
+  Phone
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -50,11 +62,13 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     currentUser,
     sites = [],
     parts = [],
+    categories = [],
     inventoryUnits = [],
     partsRequests = [],
     shipments = [],
     confirmSiteReceive,
     submitPartsRequest,
+    submitBatchPartsRequests,
     cancelPartsRequest,
     updatePartsRequestStatus,
     getStockOnHandForSite,
@@ -140,16 +154,57 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     };
   }, [setPmgSubTab]);
 
-  // Form State for New Request
+  // Multi-Item Form State for New Replenishment Request (Strictly iPhone 13+ Displays & Batteries)
+  const createEmptyRequestRow = () => ({
+    id: `req-row-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    partNumber: '',
+    partSearch: '',
+    quantity: 1,
+    showDropdown: false
+  });
+
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [formPartPn, setFormPartPn] = useState('');
-  const [formPartSearch, setFormPartSearch] = useState('');
-  const [formQuantity, setFormQuantity] = useState(1);
+  const [requestRows, setRequestRows] = useState([
+    {
+      id: 'req-row-init-1',
+      partNumber: '',
+      partSearch: '',
+      quantity: 1,
+      showDropdown: false
+    }
+  ]);
   const [formPriority, setFormPriority] = useState('normal');
   const [formReason, setFormReason] = useState(REASON_PRESETS[0]);
   const [formNotes, setFormNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showPartDropdown, setShowPartDropdown] = useState(false);
+  const [formCategoryFilter, setFormCategoryFilter] = useState('ALL'); // 'ALL' | 'display' | 'battery'
+  const [formModelFilter, setFormModelFilter] = useState('ALL'); // 'ALL' | '17' | '16' | '15' | '14' | '13'
+
+  const addRequestRow = (initialPn = '', initialSearch = '', initialQty = 1) => {
+    setRequestRows(prev => [
+      ...prev,
+      {
+        id: `req-row-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        partNumber: initialPn,
+        partSearch: initialSearch,
+        quantity: initialQty,
+        showDropdown: false
+      }
+    ]);
+  };
+
+  const removeRequestRow = (rowId) => {
+    setRequestRows(prev => {
+      if (prev.length <= 1) {
+        return [createEmptyRequestRow()];
+      }
+      return prev.filter(r => r.id !== rowId);
+    });
+  };
+
+  const updateRequestRow = (rowId, updates) => {
+    setRequestRows(prev => prev.map(r => r.id === rowId ? { ...r, ...updates } : r));
+  };
 
   // Mark Part as Used Modal State (PMG Repair Consumption Feature)
   const [isMarkUsedModalOpen, setIsMarkUsedModalOpen] = useState(false);
@@ -169,6 +224,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [stockCategoryFilter, _setStockCategoryFilter] = useState('ALL');
 
   // Multi-Site All Stocks Tab State
+  const [allStocksRegionTab, setAllStocksRegionTab] = useState(() => {
+    if (userSiteObj && isProvincialSite(userSiteObj)) return 'provincial';
+    return 'metro_manila';
+  });
+  const [allStocksSelectedSiteId, setAllStocksSelectedSiteId] = useState('');
   const [allStocksSiteFilter, setAllStocksSiteFilter] = useState('ALL');
   const [allStocksSearchQuery, setAllStocksSearchQuery] = useState('');
   const [expandedPartKey, setExpandedPartKey] = useState(null);
@@ -197,7 +257,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     setReceiveModalState({
       shipment,
       site: destSite,
-      receivedByName: currentUser?.fullName || 'Superadmin',
+      receivedByName: currentUser?.fullName || (isSuperadmin ? 'Superadmin' : `${destSite.code || 'Branch'} Staff`),
       receivedDate: new Date().toISOString().split('T')[0],
       receivedCondition: 'Good Condition (All parts intact & verified)',
       receivingNotes: `Confirmed physical receipt of shipment manifest #${shipment.invoice_ref || shipment.shipment_number} at ${destSite.name || 'Branch'}.`
@@ -364,54 +424,160 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return { pending, approved, fulfilled, totalOnHands, totalRequests: relevant.length };
   }, [partsRequests, isSuperadmin, selectedSiteId, activeSiteObj, currentUser, userSiteObj, siteStockData]);
 
-  // Selected Part Object for Form
-  const selectedFormPart = useMemo(() => {
-    if (!formPartPn) return null;
-    return parts.find(p => p.part_number?.toUpperCase() === formPartPn.toUpperCase()) || null;
-  }, [parts, formPartPn]);
+  // Combined Universal Apple Parts Catalog (Default Catalog + Context Catalog)
+  const masterPartsCatalog = useMemo(() => {
+    const map = new Map();
+    (defaultPartsCatalog || []).forEach(p => {
+      if (p?.part_number) map.set(p.part_number.trim().toUpperCase(), p);
+    });
+    (parts || []).forEach(p => {
+      if (p?.part_number) {
+        const key = p.part_number.trim().toUpperCase();
+        const existing = map.get(key);
+        map.set(key, { ...existing, ...p });
+      }
+    });
+    return Array.from(map.values());
+  }, [parts]);
 
-  // Available Parts for Search Dropdown
-  const matchingParts = useMemo(() => {
-    if (!formPartSearch.trim()) return parts.slice(0, 15);
-    const q = formPartSearch.toLowerCase().trim();
-    return parts.filter(p =>
-      p.part_number?.toLowerCase().includes(q) ||
-      p.description?.toLowerCase().includes(q) ||
-      p.iphone_model?.toLowerCase().includes(q)
-    ).slice(0, 20);
-  }, [parts, formPartSearch]);
+  // Central DC Stock summary for parts availability reference
+  const dcStockSummary = useMemo(() => {
+    const dcStock = (typeof getStockOnHandForSite === 'function')
+      ? (getStockOnHandForSite('site-dc') || getStockOnHandForSite('DC-MDC') || {})
+      : {};
+    return dcStock?.partsSummary || {};
+  }, [getStockOnHandForSite]);
 
-  // Open Form with Pre-selected Part from Stock View
+  // Restricted Catalog for Replenishment Requests (Strictly iPhone 13+ Displays & Batteries)
+  const requestEligibleCatalog = useMemo(() => {
+    return masterPartsCatalog.filter(p => isDisplayOrBatteryForIPhone13Plus(p));
+  }, [masterPartsCatalog]);
+
+  // Helper to filter eligible parts for each request row based on search query, category, and model
+  const getMatchingPartsForRow = (searchTerm) => {
+    let list = requestEligibleCatalog;
+
+    // 1. Category Filter: 'ALL' | 'display' | 'battery'
+    if (formCategoryFilter === 'display') {
+      list = list.filter(p => {
+        const cat = String(p.category_id || p.category || '').toLowerCase();
+        const desc = String(p.description || '').toLowerCase();
+        return cat.includes('display') || desc.includes('display');
+      });
+    } else if (formCategoryFilter === 'battery') {
+      list = list.filter(p => {
+        const cat = String(p.category_id || p.category || '').toLowerCase();
+        const desc = String(p.description || '').toLowerCase();
+        return cat.includes('battery') || desc.includes('battery');
+      });
+    }
+
+    // 2. iPhone Model Filter: 'ALL' | '17' | '16' | '15' | '14' | '13'
+    if (formModelFilter !== 'ALL') {
+      list = list.filter(p => {
+        const model = String(p.iphone_model || p.model || p.description || '').toLowerCase();
+        return model.includes(`iphone ${formModelFilter.toLowerCase()}`);
+      });
+    }
+
+    // 3. Search Query Filter
+    if (searchTerm && searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      list = list.filter(p =>
+        p.part_number?.toLowerCase().includes(q) ||
+        p.description?.toLowerCase().includes(q) ||
+        p.iphone_model?.toLowerCase().includes(q)
+      );
+    }
+
+    return list.slice(0, 100);
+  };
+
+  // Open Form with Pre-selected Part from Stock View (Appends or increments in multi-part request)
   const handleQuickRequestPart = (partNumber, sourceSiteName = null) => {
-    setFormPartPn(partNumber);
-    setFormPartSearch(partNumber);
+    if (isSuperadmin) {
+      showToast('Superadmins cannot request parts. Only PMG branch users can request parts.', 'info');
+      return;
+    }
+
+    const partObj = masterPartsCatalog.find(p => p.part_number?.toUpperCase() === partNumber?.toUpperCase());
+    if (partObj && !isDisplayOrBatteryForIPhone13Plus(partObj)) {
+      showToast('Parts replenishment is restricted strictly to Displays and Batteries for iPhone 13 and newer.', 'warning');
+      return;
+    }
+
+    const partSearchText = partObj ? `${partObj.part_number} — ${partObj.description}` : partNumber;
+
+    setRequestRows(prev => {
+      const existingIdx = prev.findIndex(r => r.partNumber?.toUpperCase() === partNumber?.toUpperCase());
+      if (existingIdx >= 0) {
+        return prev.map((r, i) => i === existingIdx ? { ...r, quantity: r.quantity + 1 } : r);
+      }
+      if (prev.length === 1 && !prev[0].partNumber) {
+        return [{ ...prev[0], partNumber, partSearch: partSearchText, quantity: 1, showDropdown: false }];
+      }
+      return [
+        ...prev,
+        {
+          id: `req-row-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          partNumber,
+          partSearch: partSearchText,
+          quantity: 1,
+          showDropdown: false
+        }
+      ];
+    });
+
     if (sourceSiteName) {
-      setFormNotes(`Stock transfer requested from ${sourceSiteName}`);
+      setFormNotes(prev => prev ? `${prev} | Transfer from ${sourceSiteName}` : `Stock transfer requested from ${sourceSiteName}`);
     }
     setIsFormOpen(true);
     setActiveTab('requests_table');
   };
 
-  // Submit Request Handler
+  // Submit Multi-Part Replenishment Request Handler
   const handleSubmitNewRequest = async (e) => {
     e.preventDefault();
-    if (!formPartPn) {
-      showToast('Please select a valid Apple Part Number to request.', 'error');
+    if (isSuperadmin) {
+      showToast('Superadmin accounts cannot submit replenishment requests. Only PMG branch users can request parts.', 'error');
       return;
     }
 
-    const partObj = parts.find(p => p.part_number?.toUpperCase() === formPartPn.toUpperCase());
-    if (!partObj) {
-      showToast(`Part number "${formPartPn}" was not found in the master parts catalog.`, 'error');
+    const selectedRows = requestRows.filter(r => r.partNumber?.trim());
+    if (selectedRows.length === 0) {
+      showToast('Please select at least one Apple Part to request.', 'error');
       return;
     }
+
+    // Verify all selected parts are in-scope (iPhone 13+ Displays & Batteries)
+    for (const r of selectedRows) {
+      const partObj = masterPartsCatalog.find(p => p.part_number?.toUpperCase() === r.partNumber.toUpperCase());
+      if (!isDisplayOrBatteryForIPhone13Plus(partObj || { part_number: r.partNumber, description: r.partSearch })) {
+        showToast(`Request blocked: "${r.partNumber}" is not an authorized iPhone 13+ Display or Battery.`, 'error');
+        return;
+      }
+    }
+
+    const items = selectedRows.map(r => {
+      const partObj = masterPartsCatalog.find(p => p.part_number?.toUpperCase() === r.partNumber.toUpperCase()) || {
+        id: `part-${r.partNumber.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`,
+        part_number: r.partNumber.toUpperCase(),
+        description: r.partSearch.includes('—') ? r.partSearch.split('—')[1].trim() : 'Apple Replacement Part'
+      };
+      return {
+        partId: partObj.id,
+        partNumber: partObj.part_number,
+        description: partObj.description,
+        quantity: Math.max(1, parseInt(r.quantity, 10) || 1)
+      };
+    });
 
     setIsSubmitting(true);
     try {
-      const res = await submitPartsRequest({
-        siteId: isSuperadmin ? selectedSiteId : (currentUser?.siteId || selectedSiteId),
-        partId: partObj.id,
-        quantity: formQuantity,
+      const submitFn = typeof submitBatchPartsRequests === 'function' ? submitBatchPartsRequests : submitPartsRequest;
+      const res = await submitFn({
+        siteId: currentUser?.siteId || selectedSiteId,
+        items,
         priority: formPriority,
         reason: formReason,
         notes: formNotes
@@ -419,11 +585,16 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       if (res && res.success) {
         setIsFormOpen(false);
-        setFormPartPn('');
-        setFormPartSearch('');
-        setFormQuantity(1);
+        setRequestRows([{
+          id: `req-row-init-${Date.now()}`,
+          partNumber: '',
+          partSearch: '',
+          quantity: 1,
+          showDropdown: false
+        }]);
         setFormPriority('normal');
         setFormNotes('');
+        setFormReason(REASON_PRESETS[0]);
       }
     } finally {
       setIsSubmitting(false);
@@ -593,7 +764,128 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     }).sort((a, b) => b.inStock - a.inStock || a.partNumber.localeCompare(b.partNumber));
   }, [siteStockData, stockCategoryFilter, stockSearchQuery]);
 
-  // Flattened Multi-Site Parts Rows for All Stocks Tab
+  // Regional Site Classification (Metro Manila vs Provincial vs DC)
+  const { metroManilaSites, provincialSites, dcSite } = useMemo(() => {
+    const mm = [];
+    const prov = [];
+    let dc = null;
+    (sites || []).forEach(s => {
+      if (s.is_dc || s.code === 'DC-MDC' || s.code === 'DC' || s.id === 'site-dc') {
+        dc = s;
+      } else if (isProvincialSite(s)) {
+        prov.push(s);
+      } else {
+        mm.push(s);
+      }
+    });
+    return { metroManilaSites: mm, provincialSites: prov, dcSite: dc };
+  }, [sites]);
+
+  // Calculate Region Stock Totals
+  const regionStockTotals = useMemo(() => {
+    let mmUnits = 0;
+    let provUnits = 0;
+    let dcUnits = 0;
+    (multiSiteStockData || []).forEach(summary => {
+      const s = sites.find(x => x.id === summary.siteId || x.code === summary.siteCode);
+      if (s?.is_dc || s?.code === 'DC-MDC' || s?.code === 'DC' || summary.siteId === 'site-dc') {
+        dcUnits += (summary.totalInStock || 0);
+      } else if (isProvincialSite(s)) {
+        provUnits += (summary.totalInStock || 0);
+      } else {
+        mmUnits += (summary.totalInStock || 0);
+      }
+    });
+    return { mmUnits, provUnits, dcUnits };
+  }, [multiSiteStockData, sites]);
+
+  // Current sites list for the active region tab
+  const currentRegionSites = useMemo(() => {
+    if (allStocksRegionTab === 'provincial') return provincialSites;
+    if (allStocksRegionTab === 'dc') return dcSite ? [dcSite] : [];
+    return metroManilaSites;
+  }, [allStocksRegionTab, metroManilaSites, provincialSites, dcSite]);
+
+  // Effective selected site in All Stocks view
+  const currentActiveMultiSite = useMemo(() => {
+    if (allStocksSelectedSiteId) {
+      const match = currentRegionSites.find(s => s.id === allStocksSelectedSiteId || s.code === allStocksSelectedSiteId);
+      if (match) return match;
+    }
+    const ownInRegion = currentRegionSites.find(s => s.id === currentUser?.siteId || s.code === userSiteObj?.code);
+    return ownInRegion || currentRegionSites[0] || null;
+  }, [allStocksSelectedSiteId, currentRegionSites, currentUser?.siteId, userSiteObj?.code]);
+
+  // Full Stock summary for currentActiveMultiSite
+  const currentActiveMultiSiteStock = useMemo(() => {
+    if (!currentActiveMultiSite) return null;
+    const summary = (multiSiteStockData || []).find(
+      s => s.siteId === currentActiveMultiSite.id || s.siteCode === currentActiveMultiSite.code
+    );
+    return summary || {
+      siteId: currentActiveMultiSite.id,
+      siteCode: currentActiveMultiSite.code,
+      siteName: currentActiveMultiSite.name,
+      totalInStock: 0,
+      parts: []
+    };
+  }, [currentActiveMultiSite, multiSiteStockData]);
+
+  // Filtered parts table rows for the selected site
+  const activeSiteStockRows = useMemo(() => {
+    if (!currentActiveMultiSiteStock) return [];
+    let partsList = currentActiveMultiSiteStock.parts || [];
+    if (allStocksSearchQuery.trim()) {
+      const q = allStocksSearchQuery.toLowerCase().trim();
+      partsList = partsList.filter(p =>
+        p.partNumber?.toLowerCase().includes(q) ||
+        p.description?.toLowerCase().includes(q) ||
+        p.model?.toLowerCase().includes(q)
+      );
+    }
+    return partsList;
+  }, [currentActiveMultiSiteStock, allStocksSearchQuery]);
+
+  // Network-wide availability search results across ALL branches
+  const networkPartSearchResults = useMemo(() => {
+    if (!allStocksSearchQuery.trim()) return null;
+    const q = allStocksSearchQuery.toLowerCase().trim();
+    const matches = [];
+
+    (multiSiteStockData || []).forEach(summary => {
+      const siteObj = sites.find(s => s.id === summary.siteId || s.code === summary.siteCode) || {};
+      const isProv = isProvincialSite(siteObj);
+      const isDc = siteObj.is_dc || siteObj.code === 'DC-MDC' || siteObj.code === 'DC';
+      const regionLabel = isDc ? 'Central DC' : (isProv ? 'Provincial' : 'Metro Manila');
+      const regionKey = isDc ? 'dc' : (isProv ? 'provincial' : 'metro_manila');
+
+      (summary.parts || []).forEach(partItem => {
+        const isMatch = partItem.partNumber?.toLowerCase().includes(q) ||
+                        partItem.description?.toLowerCase().includes(q) ||
+                        partItem.model?.toLowerCase().includes(q);
+        if (isMatch && partItem.inStock > 0) {
+          matches.push({
+            siteId: summary.siteId,
+            siteCode: summary.siteCode,
+            siteName: summary.siteName,
+            regionKey,
+            regionLabel,
+            isProv,
+            isDc,
+            isOwnSite: summary.isOwnSite,
+            partNumber: partItem.partNumber,
+            description: partItem.description,
+            model: partItem.model,
+            inStock: partItem.inStock
+          });
+        }
+      });
+    });
+
+    return matches.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
+  }, [allStocksSearchQuery, multiSiteStockData, sites]);
+
+  // Flattened Multi-Site Parts Rows for All Stocks Tab fallback/count
   const flattenedAllStocksRows = useMemo(() => {
     const all = [];
     (multiSiteStockData || []).forEach(siteSummary => {
@@ -652,7 +944,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 <Inbox size={20} />
               </div>
               <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0 }}>
-                {activeTab === 'all_stocks' ? 'All Stocks & Multi-Site Inventory' : 'New Request of Parts & Site Stock'}
+                {activeTab === 'all_stocks'
+                  ? 'All Stocks & Multi-Site Inventory'
+                  : (isSuperadmin ? 'Branch Parts Requests & Replenishment Review' : 'New Request of Parts & Site Stock')}
               </h2>
               <span
                 style={{
@@ -673,7 +967,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               </span>
             </div>
             <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-              Live branch stock visibility • Granular serial privacy • Superadmin replenishment governance
+              {isSuperadmin
+                ? 'Master DC replenishment governance • Review and approve branch parts requests'
+                : 'Live branch stock visibility • Granular serial privacy • Superadmin replenishment governance'}
             </p>
           </div>
 
@@ -721,15 +1017,17 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               <span>{isLoadingPartsRequests ? 'Syncing…' : 'Sync'}</span>
             </button>
 
-            {/* New Request Button */}
-            <button
-              className="btn btn-primary"
-              onClick={() => setIsFormOpen(prev => !prev)}
-              style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
-            >
-              {isFormOpen ? <X size={16} /> : <Plus size={16} />}
-              <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
-            </button>
+            {/* New Request Button (Strictly for PMG Branch Users) */}
+            {!isSuperadmin && (
+              <button
+                className="btn btn-primary"
+                onClick={() => setIsFormOpen(prev => !prev)}
+                style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+              >
+                {isFormOpen ? <X size={16} /> : <Plus size={16} />}
+                <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -804,8 +1102,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       </div>
 
-      {/* 3. New Parts Request Submission Form Modal / Collapsible Section */}
-      {isFormOpen && (
+      {/* 3. New Parts Request Submission Form Modal / Collapsible Section (Strictly PMG Users) */}
+      {!isSuperadmin && isFormOpen && (
         <div
           className="card"
           style={{
@@ -829,158 +1127,406 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           </div>
 
           <form onSubmit={handleSubmitNewRequest}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '16px' }}>
-              
-              {/* Part Selector / Search */}
-              <div className="form-group" style={{ position: 'relative' }}>
-                <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Select Apple Part</span>
-                  {selectedFormPart && (
-                    <span style={{ color: '#0284c7', fontWeight: 600 }}>
-                      Current Stock: {siteStockData.partsSummary[selectedFormPart.part_number]?.inStock || 0} units
-                    </span>
-                  )}
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Search part # or model (e.g. 661-37213, iPhone 15 Display)..."
-                    value={formPartSearch}
-                    onChange={(e) => {
-                      setFormPartSearch(e.target.value);
-                      setShowPartDropdown(true);
-                    }}
-                    onFocus={() => setShowPartDropdown(true)}
-                    required
-                  />
-                  {formPartSearch && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormPartSearch('');
-                        setFormPartPn('');
-                      }}
-                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
+            {/* Catalog Filter Controls: Restricted strictly to iPhone 13+ Displays & Batteries */}
+            <div style={{ background: '#f8fafc', padding: '12px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Filter size={13} color="#0284c7" />
+                  <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Authorized Replenishment Catalog: iPhone 13+ Displays &amp; Batteries Only
+                  </span>
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Smartphone size={13} color="#64748b" />
+                  <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Device Model:</span>
+                  <select
+                    className="form-select"
+                    value={formModelFilter}
+                    onChange={(e) => setFormModelFilter(e.target.value)}
+                    style={{ fontSize: '11.5px', padding: '3px 8px', height: '28px', width: 'auto' }}
+                  >
+                    <option value="ALL">All Models (13+)</option>
+                    <option value="17">iPhone 17 Series</option>
+                    <option value="16">iPhone 16 Series</option>
+                    <option value="15">iPhone 15 Series</option>
+                    <option value="14">iPhone 14 Series</option>
+                    <option value="13">iPhone 13 Series</option>
+                  </select>
+                </div>
+              </div>
 
-                {/* Autocomplete Dropdown */}
-                {showPartDropdown && matchingParts.length > 0 && (
-                  <div
+              {/* Category Pills (Displays & Batteries only) */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {[
+                  { id: 'ALL', label: 'All In-Scope (Displays & Batteries)' },
+                  { id: 'display', label: 'Displays Only' },
+                  { id: 'battery', label: 'Batteries Only' }
+                ].map(cat => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setFormCategoryFilter(cat.id)}
                     style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      maxHeight: '220px',
-                      overflowY: 'auto',
-                      background: '#ffffff',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: '8px',
-                      boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-                      zIndex: 50,
-                      marginTop: '4px'
+                      cursor: 'pointer',
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: formCategoryFilter === cat.id ? 700 : 500,
+                      background: formCategoryFilter === cat.id ? '#0284c7' : '#ffffff',
+                      color: formCategoryFilter === cat.id ? '#ffffff' : '#475569',
+                      border: formCategoryFilter === cat.id ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                      transition: 'all 0.15s ease'
                     }}
                   >
-                    {matchingParts.map(p => (
-                      <div
-                        key={p.id}
-                        onClick={() => {
-                          setFormPartPn(p.part_number);
-                          setFormPartSearch(`${p.part_number} — ${p.description}`);
-                          setShowPartDropdown(false);
-                        }}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          borderBottom: '1px solid #f1f5f9',
-                          transition: 'background 0.1s ease',
-                          background: formPartPn === p.part_number ? '#f0f9ff' : '#ffffff'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = formPartPn === p.part_number ? '#f0f9ff' : '#ffffff'}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{p.part_number}</strong>
-                          <span className="badge" style={{ fontSize: '10.5px', background: '#f1f5f9' }}>{p.iphone_model || 'iPhone'}</span>
-                        </div>
-                        <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>{p.description}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Dynamic Multi-Part Requested Line Items */}
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <label className="form-label" style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>
+                  Requested Parts Line Items ({requestRows.length})
+                </label>
+                <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                  Add multiple displays or batteries in this single request submission
+                </span>
               </div>
 
-              {/* Quantity Requested */}
-              <div className="form-group">
-                <label className="form-label">Quantity Needed</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ padding: '8px 14px', fontWeight: 700 }}
-                    onClick={() => setFormQuantity(prev => Math.max(1, prev - 1))}
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    min="1"
-                    max="500"
-                    className="form-input"
-                    style={{ textAlign: 'center', fontWeight: 700, fontSize: '15px' }}
-                    value={formQuantity}
-                    onChange={(e) => setFormQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ padding: '8px 14px', fontWeight: 700 }}
-                    onClick={() => setFormQuantity(prev => prev + 1)}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {requestRows.map((row, index) => {
+                  const selectedPart = row.partNumber
+                    ? masterPartsCatalog.find(p => p.part_number?.toUpperCase() === row.partNumber.toUpperCase())
+                    : null;
+                  const matchingParts = getMatchingPartsForRow(row.partSearch);
+                  const branchAvail = selectedPart ? (siteStockData.partsSummary[selectedPart.part_number]?.inStock || 0) : 0;
+                  const dcAvail = selectedPart ? (dcStockSummary[selectedPart.part_number]?.inStock || 0) : 0;
 
-              {/* Priority Selector */}
-              <div className="form-group">
-                <label className="form-label">Urgency Priority</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
-                  {[
-                    { id: 'normal', label: 'Normal', color: '#0284c7', bg: '#e0f2fe' },
-                    { id: 'urgent', label: 'Urgent', color: '#d97706', bg: '#fef3c7' },
-                    { id: 'critical', label: 'Critical', color: '#dc2626', bg: '#fee2e2' }
-                  ].map(prio => (
-                    <button
-                      key={prio.id}
-                      type="button"
-                      onClick={() => setFormPriority(prio.id)}
+                  return (
+                    <div
+                      key={row.id}
                       style={{
-                        padding: '8px',
-                        borderRadius: '6px',
-                        border: formPriority === prio.id ? `2px solid ${prio.color}` : '1px solid #cbd5e1',
-                        background: formPriority === prio.id ? prio.bg : '#ffffff',
-                        color: formPriority === prio.id ? prio.color : '#475569',
-                        fontWeight: 700,
-                        fontSize: '12px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '4px'
+                        padding: '14px',
+                        borderRadius: '8px',
+                        border: selectedPart ? '1px solid #bae6fd' : '1px solid #e2e8f0',
+                        background: selectedPart ? '#f0f9ff' : '#f8fafc',
+                        position: 'relative'
                       }}
                     >
-                      {prio.id === 'critical' && <Flame size={13} />}
-                      {prio.label}
-                    </button>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span
+                            style={{
+                              background: '#0284c7',
+                              color: '#ffffff',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              borderRadius: '4px',
+                              padding: '2px 8px'
+                            }}
+                          >
+                            Part #{index + 1}
+                          </span>
+                          {selectedPart && (
+                            <span className="badge badge-primary" style={{ fontSize: '11px' }}>
+                              {selectedPart.iphone_model || 'iPhone'} • {selectedPart.part_number}
+                            </span>
+                          )}
+                        </div>
+
+                        {requestRows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeRequestRow(row.id)}
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              color: '#ef4444',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              padding: '2px 6px',
+                              borderRadius: '4px'
+                            }}
+                            title="Remove this part row"
+                          >
+                            <Trash2 size={14} />
+                            <span>Remove</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', alignItems: 'start' }}>
+                        {/* Searchable Part Dropdown */}
+                        <div style={{ position: 'relative' }}>
+                          <div style={{ position: 'relative' }}>
+                            <input
+                              type="text"
+                              className="form-input"
+                              placeholder="Search iPhone 13+ Display or Battery (e.g. 661-37213, iPhone 17 Battery)..."
+                              value={row.partSearch}
+                              onChange={(e) => {
+                                updateRequestRow(row.id, {
+                                  partSearch: e.target.value,
+                                  showDropdown: true
+                                });
+                              }}
+                              onFocus={() => updateRequestRow(row.id, { showDropdown: true })}
+                              required
+                            />
+                            {row.partSearch && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  updateRequestRow(row.id, {
+                                    partSearch: '',
+                                    partNumber: '',
+                                    showDropdown: false
+                                  });
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  right: '8px',
+                                  top: '50%',
+                                  transform: 'translateY(-50%)',
+                                  border: 'none',
+                                  background: 'transparent',
+                                  cursor: 'pointer',
+                                  color: '#94a3b8'
+                                }}
+                              >
+                                <X size={14} />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Dropdown Menu */}
+                          {row.showDropdown && matchingParts.length > 0 && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                maxHeight: '250px',
+                                overflowY: 'auto',
+                                background: '#ffffff',
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '8px',
+                                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15)',
+                                zIndex: 60,
+                                marginTop: '4px'
+                              }}
+                            >
+                              <div style={{ padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b' }}>
+                                <span>Showing <strong>{matchingParts.length}</strong> eligible Displays &amp; Batteries</span>
+                                <span>Click part to select</span>
+                              </div>
+                              {matchingParts.map(p => {
+                                const rowDcAvail = dcStockSummary[p.part_number]?.inStock || 0;
+                                const rowBranchAvail = siteStockData.partsSummary[p.part_number]?.inStock || 0;
+                                const isSelected = row.partNumber === p.part_number;
+
+                                return (
+                                  <div
+                                    key={p.id || p.part_number}
+                                    onClick={() => {
+                                      updateRequestRow(row.id, {
+                                        partNumber: p.part_number,
+                                        partSearch: `${p.part_number} — ${p.description}`,
+                                        showDropdown: false
+                                      });
+                                    }}
+                                    style={{
+                                      padding: '9px 12px',
+                                      cursor: 'pointer',
+                                      borderBottom: '1px solid #f1f5f9',
+                                      transition: 'background 0.1s ease',
+                                      background: isSelected ? '#f0f9ff' : '#ffffff'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                                    onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#f0f9ff' : '#ffffff'}
+                                  >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                      <strong style={{ fontSize: '12.5px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{p.part_number}</strong>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span className="badge" style={{ fontSize: '10px', background: '#f1f5f9' }}>{p.iphone_model || 'iPhone'}</span>
+                                        <span
+                                          className="badge"
+                                          style={{
+                                            fontSize: '10px',
+                                            background: rowDcAvail > 0 ? '#dcfce7' : '#f1f5f9',
+                                            color: rowDcAvail > 0 ? '#15803d' : '#64748b'
+                                          }}
+                                        >
+                                          DC Stock: {rowDcAvail}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div style={{ fontSize: '11.5px', color: '#334155', marginTop: '2px' }}>{p.description}</div>
+                                    {rowBranchAvail > 0 && (
+                                      <div style={{ fontSize: '10px', color: '#0369a1', marginTop: '2px' }}>
+                                        Your Branch On-Hand: {rowBranchAvail} units
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Quantity Stepper */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: '130px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 10px', fontWeight: 700, height: '38px' }}
+                            onClick={() => updateRequestRow(row.id, { quantity: Math.max(1, row.quantity - 1) })}
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="1"
+                            max="500"
+                            className="form-input"
+                            style={{ width: '56px', textAlign: 'center', fontWeight: 700, fontSize: '14px', height: '38px', padding: '4px' }}
+                            value={row.quantity}
+                            onChange={(e) => updateRequestRow(row.id, { quantity: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                            required
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 10px', fontWeight: 700, height: '38px' }}
+                            onClick={() => updateRequestRow(row.id, { quantity: row.quantity + 1 })}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Selected Part Details pill bar */}
+                      {selectedPart && (
+                        <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '11px', color: '#475569', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span style={{ color: '#0f172a', fontWeight: 600 }}>{selectedPart.description}</span>
+                          <span>•</span>
+                          <span>Branch On-Hand: <strong>{branchAvail} units</strong></span>
+                          <span>•</span>
+                          <span style={{ color: dcAvail > 0 ? '#16a34a' : '#d97706', fontWeight: 600 }}>
+                            Central DC Stock: {dcAvail} units available
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add Another Part Button */}
+              <div style={{ marginTop: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => addRequestRow()}
+                  className="btn btn-secondary"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    width: '100%',
+                    justifyContent: 'center',
+                    border: '1.5px dashed #0284c7',
+                    background: '#f0f9ff',
+                    color: '#0284c7',
+                    fontWeight: 700,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Plus size={16} />
+                  <span>+ Add Another Part to Request</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Request Summary Banner */}
+            {requestRows.some(r => r.partNumber) && (
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  marginBottom: '18px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a' }}>
+                    Request Batch Summary:
+                  </span>
+                  <span className="badge badge-primary" style={{ fontSize: '11px' }}>
+                    {requestRows.filter(r => r.partNumber).length} distinct part{requestRows.filter(r => r.partNumber).length > 1 ? 's' : ''} • {requestRows.filter(r => r.partNumber).reduce((sum, r) => sum + (parseInt(r.quantity, 10) || 1), 0)} total units
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {requestRows.filter(r => r.partNumber).map((r, i) => (
+                    <span
+                      key={r.id || i}
+                      style={{
+                        fontSize: '11.5px',
+                        background: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '6px',
+                        padding: '4px 8px',
+                        color: '#334155'
+                      }}
+                    >
+                      <strong>{r.quantity}x</strong> {r.partSearch.includes('—') ? r.partSearch.split('—')[1].trim() : r.partNumber} ({r.partNumber})
+                    </span>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Urgency Priority */}
+            <div style={{ marginBottom: '16px' }}>
+              <label className="form-label">Urgency Priority</label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '8px' }}>
+                {[
+                  { id: 'normal', label: 'Normal', color: '#0284c7', bg: '#e0f2fe' },
+                  { id: 'urgent', label: 'Urgent', color: '#d97706', bg: '#fef3c7' },
+                  { id: 'critical', label: 'Critical', color: '#dc2626', bg: '#fee2e2' }
+                ].map(prio => (
+                  <button
+                    key={prio.id}
+                    type="button"
+                    onClick={() => setFormPriority(prio.id)}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      border: formPriority === prio.id ? `2px solid ${prio.color}` : '1px solid #cbd5e1',
+                      background: formPriority === prio.id ? prio.bg : '#ffffff',
+                      color: formPriority === prio.id ? prio.color : '#475569',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    {prio.id === 'critical' && <Flame size={13} />}
+                    {prio.label}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -1012,7 +1558,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             </div>
 
             {/* Form Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
               <button
                 type="button"
                 className="btn btn-secondary"
@@ -1023,11 +1569,23 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={isSubmitting}
-                style={{ background: '#0284c7', minWidth: '150px' }}
+                disabled={isSubmitting || requestRows.filter(r => r.partNumber).length === 0}
+                style={{
+                  background: '#0284c7',
+                  minWidth: '180px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  justifyContent: 'center',
+                  fontWeight: 700
+                }}
               >
-                <Send size={15} />
-                <span>{isSubmitting ? 'Submitting…' : 'Submit to DC Superadmin'}</span>
+                {isSubmitting ? <RefreshCw size={15} className="spin" /> : <Send size={15} />}
+                <span>
+                  {isSubmitting
+                    ? 'Submitting Request...'
+                    : `Submit Request (${requestRows.filter(r => r.partNumber).reduce((sum, r) => sum + (parseInt(r.quantity, 10) || 1), 0)} Units) to DC Superadmin`}
+                </span>
               </button>
             </div>
           </form>
@@ -1149,7 +1707,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Parts Requests Found</h4>
                 <p style={{ margin: 0, fontSize: '12.5px' }}>
                   {partsRequests.length === 0
-                    ? 'No parts requests have been submitted yet. Click "New Request" to create one.'
+                    ? (isSuperadmin
+                        ? 'No parts requests have been submitted yet. Awaiting branch replenishment requests.'
+                        : 'No parts requests have been submitted yet. Click "New Request" to create one.')
                     : 'No requests match your selected filters.'}
                 </p>
               </div>
@@ -1440,10 +2000,10 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   </div>
                   <div>
                     <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
-                      Incoming Shipments ({incomingShipments.length} Manifest{incomingShipments.length > 1 ? 's' : ''} • {incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} Parts)
+                      Incoming Shipments &amp; Arriving Packages ({incomingShipments.length} Manifest{incomingShipments.length > 1 ? 's' : ''} • {incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} Parts)
                     </h4>
                     <p style={{ margin: 0, fontSize: '11.5px', color: '#475569' }}>
-                      Parts are packed and in-transit / ready for pickup. They only become active stock in branch inventory after the Superadmin confirms physical receipt.
+                      Parts are packed and in-transit / dispatched from DC. Confirm physical package arrival at your branch below to activate stock immediately.
                     </p>
                   </div>
                 </div>
@@ -1508,22 +2068,16 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px' }}>
-                        {isSuperadmin ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
-                            onClick={() => handleOpenReceiveModal(sh)}
-                            title="Confirm physical receipt of this package and make stock available at this branch"
-                          >
-                            <PackageCheck size={13} />
-                            <span>Confirm Site Receipt</span>
-                          </button>
-                        ) : (
-                          <span style={{ fontSize: '11px', color: '#d97706', fontStyle: 'italic', fontWeight: 600 }}>
-                            Awaiting Superadmin confirmation
-                          </span>
-                        )}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
+                          onClick={() => handleOpenReceiveModal(sh)}
+                          title="Confirm physical arrival of this package and activate parts in branch inventory"
+                        >
+                          <PackageCheck size={13} />
+                          <span>Confirm Site Package</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -1739,270 +2293,690 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 7. TAB 3: All Stocks & Multi-Site Inventory with Granular Serial Privacy */}
+      {/* 7. TAB 3: All Stocks & Multi-Site Inventory with Regional Tabs and Part Number Availability Search */}
       {activeTab === 'all_stocks' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
-          <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '240px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
-                <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ paddingLeft: '32px', fontSize: '12.5px' }}
-                  placeholder="Search across all sites by part #, model, or branch..."
-                  value={allStocksSearchQuery}
-                  onChange={(e) => setAllStocksSearchQuery(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Filter size={13} color="#64748b" />
-                <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Filter Branch:</span>
-                <select
-                  className="form-select"
-                  style={{ fontSize: '12px', padding: '4px 10px', width: 'auto' }}
-                  value={allStocksSiteFilter}
-                  onChange={(e) => setAllStocksSiteFilter(e.target.value)}
-                >
-                  <option value="ALL">All Service Branches</option>
-                  {sites.map(s => (
-                    <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-                  ))}
-                </select>
+          {/* Top Search Bar & Telemetry Status Card */}
+          <div className="card" style={{ padding: '16px 20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '280px' }}>
+                <div style={{ position: 'relative', width: '100%', maxWidth: '440px' }}>
+                  <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#0284c7' }} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ paddingLeft: '36px', paddingRight: allStocksSearchQuery ? '30px' : '12px', fontSize: '13px', height: '38px', borderRadius: '8px' }}
+                    placeholder="Search part # (e.g. 661-22294), model, or branch name..."
+                    value={allStocksSearchQuery}
+                    onChange={(e) => setAllStocksSearchQuery(e.target.value)}
+                  />
+                  {allStocksSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setAllStocksSearchQuery('')}
+                      style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', background: '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>
-                <Lock size={12} color="#0284c7" />
-                <span>Serial Privacy: <strong>Active</strong></span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '12px', color: '#0369a1', display: 'flex', alignItems: 'center', gap: '5px', background: '#e0f2fe', padding: '6px 12px', borderRadius: '6px', fontWeight: 600 }}>
+                  <ShieldCheck size={14} color="#0284c7" />
+                  <span>Network Multi-Site Visibility</span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '5px', background: '#f1f5f9', padding: '6px 12px', borderRadius: '6px' }}>
+                  <Lock size={13} color="#0284c7" />
+                  <span>Serial Privacy: <strong>Enforced</strong></span>
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="table-container" style={{ overflowX: 'auto' }}>
-            {flattenedAllStocksRows.length === 0 ? (
-              <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
-                <Boxes size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
-                <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Inventory Records Found</h4>
-                <p style={{ margin: 0, fontSize: '12.5px' }}>
-                  No inventory units match your current multi-site filter.
-                </p>
+          {/* Network-Wide Part Number Search Availability Result Panel */}
+          {allStocksSearchQuery.trim() && (
+            <div
+              className="card"
+              style={{
+                padding: '20px',
+                background: '#ffffff',
+                border: '2px solid #0284c7',
+                borderRadius: 'var(--radius-lg)',
+                boxShadow: '0 8px 20px -4px rgba(2, 132, 199, 0.15)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '10px', borderBottom: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ padding: '6px', background: '#e0f2fe', borderRadius: '6px', color: '#0284c7' }}>
+                    <Search size={16} />
+                  </div>
+                  <h4 style={{ margin: 0, fontSize: '15px', color: '#0f172a', fontWeight: 800 }}>
+                    Network Stock Availability for &quot;{allStocksSearchQuery}&quot;
+                  </h4>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="badge badge-primary" style={{ fontSize: '11.5px', padding: '4px 10px' }}>
+                    {networkPartSearchResults?.length || 0} stock location{(networkPartSearchResults?.length || 0) === 1 ? '' : 's'} found
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '11px', padding: '3px 8px' }}
+                    onClick={() => setAllStocksSearchQuery('')}
+                  >
+                    Close Search
+                  </button>
+                </div>
               </div>
-            ) : (
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    <th style={{ width: '180px' }}>Branch / Location</th>
-                    <th style={{ minWidth: '160px' }}>Part Number</th>
-                    <th style={{ minWidth: '220px' }}>Description &amp; Model</th>
-                    <th style={{ textAlign: 'center', width: '130px' }}>Available Stock</th>
-                    <th style={{ minWidth: '220px' }}>Serial Details &amp; Privacy</th>
-                    <th style={{ textAlign: 'center', width: '140px' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {flattenedAllStocksRows.map((row, idx) => {
-                    const rowKey = `${row.siteId}-${row.partNumber}-${idx}`;
-                    const isExpanded = expandedPartKey === rowKey;
-                    const canSeeFullDetails = row.canViewDetails || isSuperadmin;
 
-                    return (
-                      <tr key={rowKey} style={{ background: row.isOwnSite ? '#f8fafc' : '#ffffff' }}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Building2 size={14} color={row.isOwnSite ? '#0284c7' : '#64748b'} />
-                            <div>
-                              <strong style={{ fontSize: '12.5px', color: row.isOwnSite ? '#0284c7' : '#0f172a' }}>
-                                {row.siteCode}
-                              </strong>
-                              <div style={{ fontSize: '11px', color: '#64748b' }}>
-                                {row.siteName}
-                              </div>
-                            </div>
-                          </div>
-                          {row.isOwnSite && !isSuperadmin && (
-                            <span className="badge" style={{ fontSize: '10px', background: '#e0f2fe', color: '#0284c7', marginTop: '3px' }}>
-                              Your Branch
-                            </span>
-                          )}
-                        </td>
-
-                        <td>
-                          <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                            {row.partNumber}
-                          </strong>
-                        </td>
-
-                        <td>
-                          <div style={{ fontSize: '12.5px', color: '#1e293b' }}>
-                            {row.description}
-                          </div>
-                          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                            {row.model}
-                          </div>
-                        </td>
-
-                        <td style={{ textAlign: 'center' }}>
+              {networkPartSearchResults && networkPartSearchResults.length > 0 ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+                  {networkPartSearchResults.map((match, idx) => (
+                    <div
+                      key={`${match.siteId}-${match.partNumber}-${idx}`}
+                      style={{
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '8px',
+                        padding: '12px 14px',
+                        background: match.isOwnSite ? '#f0fdf4' : '#f8fafc',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        gap: '10px'
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <span
                             className="badge"
                             style={{
-                              background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
-                              color: row.inStock > 0 ? '#059669' : '#dc2626',
-                              fontWeight: 800,
-                              fontSize: '12px',
-                              padding: '4px 10px'
+                              fontSize: '10.5px',
+                              background: match.isDc ? '#f3e8ff' : (match.isProv ? '#fef3c7' : '#e0f2fe'),
+                              color: match.isDc ? '#7e22ce' : (match.isProv ? '#b45309' : '#0369a1'),
+                              fontWeight: 700
                             }}
                           >
-                            {row.inStock} units
+                            {match.regionLabel}
                           </span>
-                        </td>
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#dcfce7',
+                              color: '#15803d',
+                              fontWeight: 800,
+                              fontSize: '11.5px',
+                              padding: '2px 8px'
+                            }}
+                          >
+                            {match.inStock} units in stock
+                          </span>
+                        </div>
+                        <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
+                          {match.siteCode} — {match.siteName}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700, marginTop: '4px' }}>
+                          {match.partNumber}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: '#475569', marginTop: '2px' }}>
+                          {match.description}
+                        </div>
+                      </div>
 
-                        <td>
-                          {canSeeFullDetails ? (
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: '#059669', fontWeight: 600 }}>
-                                <Unlock size={12} />
-                                <span>Full Serial Visibility ({row.serializedUnits?.length || 0} units)</span>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '8px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          onClick={() => {
+                            setAllStocksRegionTab(match.regionKey);
+                            setAllStocksSelectedSiteId(match.siteId);
+                          }}
+                        >
+                          <ChevronRight size={12} />
+                          <span>View Site Stock</span>
+                        </button>
+                        {!isSuperadmin && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: '11px', padding: '4px 10px', background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => handleQuickRequestPart(match.partNumber, match.siteName)}
+                          >
+                            <Send size={11} />
+                            <span>Request Transfer</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b' }}>
+                  <SearchX size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
+                  <p style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                    No branch currently has &quot;{allStocksSearchQuery}&quot; in available stock.
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
+                    You can submit a replenishment request directly to DC Superadmin to procure this part.
+                  </p>
+                  {!isSuperadmin && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      style={{ marginTop: '12px', background: '#0284c7' }}
+                      onClick={() => handleQuickRequestPart(allStocksSearchQuery.trim())}
+                    >
+                      <Plus size={13} />
+                      <span>Request from DC Superadmin</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Region Tabs (Metro Manila vs Provincial Sites) */}
+          <div className="card" style={{ padding: '6px 8px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Metro Manila Sites Tab */}
+              <button
+                type="button"
+                onClick={() => {
+                  setAllStocksRegionTab('metro_manila');
+                  const firstMm = metroManilaSites.find(s => s.id === currentUser?.siteId || s.code === userSiteObj?.code) || metroManilaSites[0];
+                  if (firstMm) setAllStocksSelectedSiteId(firstMm.id);
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: '220px',
+                  padding: '12px 18px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: allStocksRegionTab === 'metro_manila'
+                    ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)'
+                    : '#f8fafc',
+                  color: allStocksRegionTab === 'metro_manila' ? '#ffffff' : '#334155',
+                  boxShadow: allStocksRegionTab === 'metro_manila' ? '0 4px 12px rgba(2, 132, 199, 0.25)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Building2 size={18} color={allStocksRegionTab === 'metro_manila' ? '#ffffff' : '#0284c7'} />
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 800, fontSize: '13.5px' }}>Metro Manila Sites</div>
+                    <div style={{ fontSize: '11px', opacity: 0.85 }}>{metroManilaSites.length} Authorized Service Points</div>
+                  </div>
+                </div>
+                <span
+                  style={{
+                    background: allStocksRegionTab === 'metro_manila' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0',
+                    color: allStocksRegionTab === 'metro_manila' ? '#ffffff' : '#0f172a',
+                    padding: '3px 10px',
+                    borderRadius: '999px',
+                    fontSize: '11.5px',
+                    fontWeight: 800
+                  }}
+                >
+                  {regionStockTotals.mmUnits} units
+                </span>
+              </button>
+
+              {/* Provincial Sites Tab */}
+              <button
+                type="button"
+                onClick={() => {
+                  setAllStocksRegionTab('provincial');
+                  const firstProv = provincialSites.find(s => s.id === currentUser?.siteId || s.code === userSiteObj?.code) || provincialSites[0];
+                  if (firstProv) setAllStocksSelectedSiteId(firstProv.id);
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: '220px',
+                  padding: '12px 18px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: allStocksRegionTab === 'provincial'
+                    ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)'
+                    : '#f8fafc',
+                  color: allStocksRegionTab === 'provincial' ? '#ffffff' : '#334155',
+                  boxShadow: allStocksRegionTab === 'provincial' ? '0 4px 12px rgba(217, 119, 6, 0.25)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <MapPin size={18} color={allStocksRegionTab === 'provincial' ? '#ffffff' : '#d97706'} />
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 800, fontSize: '13.5px' }}>Provincial Sites</div>
+                    <div style={{ fontSize: '11px', opacity: 0.85 }}>{provincialSites.length} Regional Service Points</div>
+                  </div>
+                </div>
+                <span
+                  style={{
+                    background: allStocksRegionTab === 'provincial' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0',
+                    color: allStocksRegionTab === 'provincial' ? '#ffffff' : '#0f172a',
+                    padding: '3px 10px',
+                    borderRadius: '999px',
+                    fontSize: '11.5px',
+                    fontWeight: 800
+                  }}
+                >
+                  {regionStockTotals.provUnits} units
+                </span>
+              </button>
+
+              {/* Central DC Tab (Superadmin Only) */}
+              {isSuperadmin && dcSite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAllStocksRegionTab('dc');
+                    setAllStocksSelectedSiteId(dcSite.id);
+                  }}
+                  style={{
+                    padding: '12px 18px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: allStocksRegionTab === 'dc'
+                      ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)'
+                      : '#f8fafc',
+                    color: allStocksRegionTab === 'dc' ? '#ffffff' : '#334155',
+                    boxShadow: allStocksRegionTab === 'dc' ? '0 4px 12px rgba(124, 58, 237, 0.25)' : 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <Package size={18} color={allStocksRegionTab === 'dc' ? '#ffffff' : '#7c3aed'} />
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 800, fontSize: '13px' }}>Central DC</div>
+                    <div style={{ fontSize: '10.5px', opacity: 0.85 }}>{regionStockTotals.dcUnits} units</div>
+                  </div>
+                </button>
+              )}
+            </div>
+
+            {/* Individual Site Selector Chips under the Active Region */}
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span>Select Site to View Available Stocks:</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {currentRegionSites.map(site => {
+                  const isSelected = currentActiveMultiSite?.id === site.id || currentActiveMultiSite?.code === site.code;
+                  const isUserOwn = site.id === currentUser?.siteId || site.code === userSiteObj?.code;
+                  const siteSummary = (multiSiteStockData || []).find(s => s.siteId === site.id || s.siteCode === site.code);
+                  const inStockUnits = siteSummary?.totalInStock || 0;
+
+                  // Check if search matches parts at this site
+                  const hasSearchMatch = Boolean(
+                    allStocksSearchQuery.trim() &&
+                    siteSummary?.parts?.some(p => {
+                      const q = allStocksSearchQuery.toLowerCase().trim();
+                      return p.partNumber?.toLowerCase().includes(q) ||
+                             p.description?.toLowerCase().includes(q) ||
+                             p.model?.toLowerCase().includes(q);
+                    })
+                  );
+
+                  return (
+                    <button
+                      key={site.id}
+                      type="button"
+                      onClick={() => setAllStocksSelectedSiteId(site.id)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: isSelected
+                          ? (allStocksRegionTab === 'provincial' ? '2px solid #d97706' : '2px solid #0284c7')
+                          : (hasSearchMatch ? '2px solid #10b981' : '1px solid #cbd5e1'),
+                        background: isSelected
+                          ? (allStocksRegionTab === 'provincial' ? '#fffbeb' : '#f0f9ff')
+                          : (hasSearchMatch ? '#ecfdf5' : '#ffffff'),
+                        color: isSelected
+                          ? (allStocksRegionTab === 'provincial' ? '#92400e' : '#0369a1')
+                          : '#1e293b',
+                        cursor: 'pointer',
+                        fontWeight: isSelected ? 800 : 500,
+                        fontSize: '12px',
+                        transition: 'all 0.1s ease'
+                      }}
+                    >
+                      <span>{site.code}</span>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>({site.name.replace('MOBILECARE - ', '').replace('MOBILE CARE SERVICES PHILS. INC. - ', '')})</span>
+                      <span
+                        style={{
+                          background: inStockUnits > 0 ? (isSelected ? '#0284c7' : '#e2e8f0') : '#fee2e2',
+                          color: inStockUnits > 0 ? (isSelected ? '#ffffff' : '#0f172a') : '#dc2626',
+                          borderRadius: '999px',
+                          padding: '1px 6px',
+                          fontSize: '10px',
+                          fontWeight: 700
+                        }}
+                      >
+                        {inStockUnits}
+                      </span>
+                      {isUserOwn && (
+                        <span style={{ background: '#dcfce7', color: '#15803d', padding: '1px 5px', borderRadius: '4px', fontSize: '9.5px', fontWeight: 700 }}>
+                          Your Branch
+                        </span>
+                      )}
+                      {hasSearchMatch && (
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} title="Has parts matching your search" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Active Site Header & Available Stocks Table Card */}
+          {currentActiveMultiSite ? (
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)', background: '#ffffff' }}>
+              
+              {/* Selected Site Detail Banner with Full Supervisor Details */}
+              <div style={{ padding: '18px 22px', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)', borderBottom: '1px solid var(--border-light)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                  <div style={{ flex: 1, minWidth: '280px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <Building2 size={20} color="#0284c7" />
+                      <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
+                        {currentActiveMultiSite.name}
+                      </h3>
+                      <span className="badge badge-primary" style={{ fontSize: '11px', fontWeight: 700 }}>
+                        {currentActiveMultiSite.code}
+                      </span>
+                      {currentActiveMultiSite.ship_to && (
+                        <span className="badge" style={{ fontSize: '11px', background: '#e0e7ff', color: '#3730a3', fontWeight: 700 }}>
+                          GSX Ship-To: {currentActiveMultiSite.ship_to}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <MapPin size={13} color="#94a3b8" />
+                      <span>{currentActiveMultiSite.full_address || currentActiveMultiSite.address || 'Standard Authorized Service Facility'}</span>
+                    </div>
+
+                    {/* Supervisor Contact Details (Displayed in Full) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0', fontSize: '12.5px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#1e293b' }}>
+                        <span style={{ color: '#64748b', fontSize: '11.5px', fontWeight: 600 }}>Branch Supervisor:</span>
+                        <strong>{currentActiveMultiSite.contact_person || 'Assigned Branch Supervisor'}</strong>
+                      </div>
+
+                      {currentActiveMultiSite.contact_phone && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Phone size={13} color="#0284c7" />
+                          <a
+                            href={`tel:${currentActiveMultiSite.contact_phone}`}
+                            style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 600, fontSize: '12px' }}
+                            title="Call Branch Supervisor"
+                          >
+                            {currentActiveMultiSite.contact_phone}
+                          </a>
+                        </div>
+                      )}
+
+                      {currentActiveMultiSite.contact_email && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Mail size={13} color="#0284c7" />
+                          <a
+                            href={`mailto:${currentActiveMultiSite.contact_email}`}
+                            style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 600, fontSize: '12px', wordBreak: 'break-all' }}
+                            title="Email Branch Supervisor"
+                          >
+                            {currentActiveMultiSite.contact_email}
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Quick Site Stock Stats */}
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <div style={{ background: '#ffffff', padding: '10px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                      <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Available Units</div>
+                      <div style={{ fontSize: '20px', fontWeight: 800, color: currentActiveMultiSiteStock.totalInStock > 0 ? '#15803d' : '#dc2626' }}>
+                        {currentActiveMultiSiteStock.totalInStock}
+                      </div>
+                    </div>
+                    <div style={{ background: '#ffffff', padding: '10px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                      <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Unique Parts</div>
+                      <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7' }}>
+                        {currentActiveMultiSiteStock.parts?.length || 0}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Site Stock Table */}
+              <div className="table-container" style={{ overflowX: 'auto' }}>
+                {activeSiteStockRows.length === 0 ? (
+                  <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                    <Boxes size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
+                    <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Inventory Records for this Site</h4>
+                    <p style={{ margin: 0, fontSize: '12.5px' }}>
+                      {allStocksSearchQuery.trim()
+                        ? `No parts match "${allStocksSearchQuery}" at ${currentActiveMultiSite.code}.`
+                        : `${currentActiveMultiSite.code} currently has no serialized parts registered in stock.`}
+                    </p>
+                  </div>
+                ) : (
+                  <table className="data-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc' }}>
+                        <th style={{ minWidth: '160px' }}>Part Number</th>
+                        <th style={{ minWidth: '240px' }}>Description &amp; Model</th>
+                        <th style={{ textAlign: 'center', width: '130px' }}>Available Stock</th>
+                        <th style={{ minWidth: '220px' }}>Serial Details &amp; Privacy</th>
+                        <th style={{ textAlign: 'center', width: '140px' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeSiteStockRows.map((row, idx) => {
+                        const rowKey = `${currentActiveMultiSite.id}-${row.partNumber}-${idx}`;
+                        const isExpanded = expandedPartKey === rowKey;
+                        const isOwnSite = currentActiveMultiSite.id === currentUser?.siteId || currentActiveMultiSite.code === userSiteObj?.code;
+                        const canSeeFullDetails = isSuperadmin || isOwnSite;
+
+                        return (
+                          <tr key={rowKey} style={{ background: isOwnSite ? '#f8fafc' : '#ffffff' }}>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                  {row.partNumber}
+                                </strong>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(row.partNumber);
+                                    showToast(`Copied ${row.partNumber} to clipboard`, 'info');
+                                  }}
+                                  style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                                  title="Copy part number"
+                                >
+                                  <Copy size={11} />
+                                </button>
                               </div>
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-secondary"
-                                style={{ fontSize: '10.5px', padding: '2px 6px', marginTop: '4px' }}
-                                onClick={() => setExpandedPartKey(isExpanded ? null : rowKey)}
-                              >
-                                {isExpanded ? 'Hide Serials' : 'View Serials'}
-                              </button>
+                            </td>
 
-                              {isExpanded && row.serializedUnits && (
-                                <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
-                                  {row.serializedUnits.map(u => {
-                                    const canManageUnit = isSuperadmin || row.isOwnSite || row.isUserSameSite || (currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
-                                    return (
-                                      <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
-                                          <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
-                                          {u.work_order_number && (
-                                            <span style={{ color: '#0284c7', background: '#e0f2fe', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>
-                                              WO: {u.work_order_number}
-                                            </span>
-                                          )}
-                                          {u.notes && <span style={{ color: '#64748b', fontStyle: 'italic' }}>({u.notes})</span>}
-                                        </div>
-                                        {canManageUnit && !u.isMasked && (
-                                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                            <button
-                                              type="button"
-                                              className="btn btn-secondary btn-sm"
-                                              style={{ padding: '2px 6px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                                              onClick={() => openEditUnitModal(u)}
-                                              title="Update box number or work order notes"
-                                            >
-                                              <Edit3 size={11} />
-                                              <span>Edit</span>
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className="btn btn-secondary btn-sm"
-                                              style={{ padding: '2px 6px', fontSize: '10.5px', color: '#ef4444', borderColor: '#fca5a5', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                                              onClick={() => setUnitToDelete(u)}
-                                              title="Delete unit from this branch"
-                                            >
-                                              <Trash2 size={11} />
-                                              <span>Delete</span>
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
-                              <Lock size={13} color="#94a3b8" />
-                              <span style={{ fontStyle: 'italic' }}>
-                                Serials restricted to {row.siteCode} owner
-                              </span>
-                            </div>
-                          )}
-                        </td>
+                            <td>
+                              <div style={{ fontSize: '12.5px', color: '#1e293b', fontWeight: 600 }}>
+                                {row.description}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{row.model}</span>
+                                {(() => {
+                                  const catObj = getCategoryForPart({ ...row, category_id: row.category_id || row.categoryId }, categories);
+                                  const rawCat = row.category_name || row.category;
+                                  const displayCategory = (!isUUID(rawCat) && rawCat) || catObj?.name;
+                                  if (!displayCategory) return null;
+                                  const badgeStyle = getCategoryBadgeStyle(catObj?.code || row.categoryCode || displayCategory);
+                                  return (
+                                    <span
+                                      className="badge"
+                                      style={{
+                                        fontSize: '10px',
+                                        padding: '1px 6px',
+                                        background: badgeStyle.bg,
+                                        color: badgeStyle.color,
+                                        border: `1px solid ${badgeStyle.border}`
+                                      }}
+                                    >
+                                      {displayCategory}
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            </td>
 
-                        <td style={{ textAlign: 'center' }}>
-                          {row.isUserSameSite ? (
-                            row.inStock > 0 ? (
+                            <td style={{ textAlign: 'center' }}>
                               <span
                                 className="badge"
                                 style={{
-                                  background: '#f0fdf4',
-                                  color: '#166534',
-                                  border: '1px solid #bbf7d0',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '3px',
-                                  padding: '3px 8px'
+                                  background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
+                                  color: row.inStock > 0 ? '#059669' : '#dc2626',
+                                  fontWeight: 800,
+                                  fontSize: '12px',
+                                  padding: '4px 10px'
                                 }}
-                                title="This part is already in your branch inventory"
                               >
-                                <CheckCircle2 size={11} color="#16a34a" />
-                                <span>In Your Branch</span>
+                                {row.inStock} units
                               </span>
-                            ) : (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                <span
-                                  className="badge"
-                                  style={{
-                                    background: '#fee2e2',
-                                    color: '#dc2626',
-                                    border: '1px solid #fecaca',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '3px',
-                                    padding: '3px 8px'
-                                  }}
-                                  title="Out of stock in your branch"
-                                >
-                                  <AlertTriangle size={11} color="#dc2626" />
-                                  <span>Out of Stock</span>
+                            </td>
+
+                            <td>
+                              {canSeeFullDetails ? (
+                                <div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: '#059669', fontWeight: 600 }}>
+                                    <Unlock size={12} />
+                                    <span>Full Serial Visibility ({row.serializedUnits?.length || 0} units)</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-secondary"
+                                    style={{ fontSize: '10.5px', padding: '2px 6px', marginTop: '4px' }}
+                                    onClick={() => setExpandedPartKey(isExpanded ? null : rowKey)}
+                                  >
+                                    {isExpanded ? 'Hide Serials' : 'View Serials'}
+                                  </button>
+
+                                  {isExpanded && row.serializedUnits && (
+                                    <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
+                                      {row.serializedUnits.map(u => {
+                                        const canManageUnit = isSuperadmin || isOwnSite || (currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
+                                        return (
+                                          <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
+                                              <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
+                                              {u.work_order_number && (
+                                                <span style={{ color: '#0284c7', background: '#e0f2fe', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>
+                                                  WO: {u.work_order_number}
+                                                </span>
+                                              )}
+                                              {u.notes && <span style={{ color: '#64748b', fontStyle: 'italic' }}>({u.notes})</span>}
+                                            </div>
+                                            {canManageUnit && !u.isMasked && (
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                <button
+                                                  type="button"
+                                                  className="btn btn-secondary btn-sm"
+                                                  style={{ padding: '2px 6px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                  onClick={() => openEditUnitModal(u)}
+                                                  title="Update box number or work order notes"
+                                                >
+                                                  <Edit3 size={11} />
+                                                  <span>Edit</span>
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className="btn btn-secondary btn-sm"
+                                                  style={{ padding: '2px 6px', fontSize: '10.5px', color: '#ef4444', borderColor: '#fca5a5', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                  onClick={() => setUnitToDelete(u)}
+                                                  title="Delete unit from this branch"
+                                                >
+                                                  <Trash2 size={11} />
+                                                  <span>Delete</span>
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
+                                  <Lock size={13} color="#94a3b8" />
+                                  <span style={{ fontStyle: 'italic' }}>
+                                    Serials restricted to {currentActiveMultiSite.code} authorized staff
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+
+                            <td style={{ textAlign: 'center' }}>
+                              {!isSuperadmin ? (
+                                isOwnSite ? (
+                                  <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '11px', padding: '4px 10px', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                                    onClick={() => {
+                                      setMarkUsedPartPn(row.partNumber);
+                                      setIsMarkUsedModalOpen(true);
+                                    }}
+                                    title="Mark this part as consumed in a repair work order"
+                                  >
+                                    <Wrench size={11} />
+                                    <span>Mark Used</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                                    onClick={() => handleQuickRequestPart(row.partNumber, currentActiveMultiSite.name)}
+                                    title={`Request replenishment/transfer for ${row.partNumber} from ${currentActiveMultiSite.name}`}
+                                  >
+                                    <Send size={11} />
+                                    <span>Request Transfer</span>
+                                  </button>
+                                )
+                              ) : (
+                                <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+                                  Master DC View
                                 </span>
-                                <button
-                                  className="btn btn-secondary btn-sm"
-                                  style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                                  onClick={() => handleQuickRequestPart(row.partNumber, row.siteName)}
-                                  title={`Request replenishment for ${row.partNumber}`}
-                                >
-                                  <Send size={11} />
-                                  <span>Request</span>
-                                </button>
-                              </div>
-                            )
-                          ) : (
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                              onClick={() => handleQuickRequestPart(row.partNumber, row.siteName)}
-                              title={`Request replenishment/transfer for ${row.partNumber} from ${row.siteName}`}
-                            >
-                              <Send size={11} />
-                              <span>Request Part</span>
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -2751,7 +3725,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <PackageCheck size={20} color="#38bdf8" />
                 <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#fff' }}>
-                  Confirm Site Receipt &amp; Activate Stock
+                  Confirm Site Package Receipt
                 </h3>
               </div>
               <button
@@ -2888,7 +3862,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   disabled={isSubmittingReceive}
                 >
                   <PackageCheck size={16} />
-                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Receipt & Activate Stock'}</span>
+                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Site Package Receipt'}</span>
                 </button>
               </div>
             </form>

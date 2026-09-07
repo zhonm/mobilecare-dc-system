@@ -3,6 +3,8 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { isUUID } from '../utils/appContextHelpers';
+import { defaultPartsCatalog } from '../data/defaultCatalog.js';
+import { getCategoryForPart } from '../utils/categoryFilter';
 
 const toValidUUID = (str) => (isUUID(str) ? str : null);
 
@@ -11,6 +13,7 @@ const FULFILLMENT_ROLES = ['superadmin', 'admin', 'planner', 'warehouse_staff', 
 export function usePartsRequests({
   currentUser,
   parts = [],
+  categories = [],
   sites = [],
   inventoryUnits = [],
   setInventoryUnits,
@@ -138,7 +141,8 @@ export function usePartsRequests({
       return { success: false, error: 'Missing siteId' };
     }
 
-    const targetPart = parts.find(p => p.id === partId || p.part_number === partId);
+    const targetPart = parts.find(p => p.id === partId || p.part_number === partId)
+      || defaultPartsCatalog.find(p => p.id === partId || p.part_number === partId);
     const targetSite = sites.find(s => s.id === effectiveSiteId || s.code === effectiveSiteId);
 
     const resolvedPartId = targetPart?.id || partId;
@@ -294,6 +298,226 @@ export function usePartsRequests({
     }
 
     return { success: true, request: optimisticRequest };
+  };
+
+  // 2b. Submit Multi-Item Batch Parts Request (Single form submission with multiple parts)
+  const submitBatchPartsRequests = async ({
+    siteId,
+    items = [],
+    priority = 'normal',
+    reason = 'Site replenishment request',
+    notes = ''
+  }) => {
+    if (!Array.isArray(items) || items.length === 0) {
+      barcodeAudio.playError();
+      showToast?.('Please add at least one part to your request.', 'error');
+      return { success: false, error: 'No items provided' };
+    }
+
+    const validItems = items.filter(it => it && (it.partId || it.partNumber) && (parseInt(it.quantity, 10) > 0));
+    if (validItems.length === 0) {
+      barcodeAudio.playError();
+      showToast?.('Please ensure all requested parts have a valid part number and quantity >= 1.', 'error');
+      return { success: false, error: 'No valid items' };
+    }
+
+    const effectiveSiteId = (!isFulfillmentUser || !siteId) ? (currentUser?.siteId || siteId) : siteId;
+    if (!effectiveSiteId) {
+      barcodeAudio.playError();
+      showToast?.('Please specify the destination site for this request.', 'error');
+      return { success: false, error: 'Missing siteId' };
+    }
+
+    const targetSite = sites.find(s => s.id === effectiveSiteId || s.code === effectiveSiteId);
+    const resolvedSiteId = targetSite?.id || effectiveSiteId;
+
+    const cleanReason = String(reason || 'Site replenishment request').trim();
+    const cleanPriority = ['normal', 'urgent', 'critical'].includes(priority) ? priority : 'normal';
+    const nowIso = new Date().toISOString();
+    const tempYearMonth = new Date().toISOString().slice(0, 7).replace('-', '');
+    const batchSeed = Math.floor(10000 + Math.random() * 90000);
+
+    const optimisticRequests = validItems.map((item, index) => {
+      const qty = parseInt(item.quantity, 10) || 1;
+      const partKey = item.partId || item.partNumber;
+      const targetPart = parts.find(p => p.id === partKey || p.part_number === partKey)
+        || defaultPartsCatalog.find(p => p.id === partKey || p.part_number === partKey);
+      const resolvedPartId = targetPart?.id || item.partId || partKey;
+      const partNumber = targetPart?.part_number || item.partNumber || '';
+      const partDesc = targetPart?.description || item.description || 'Apple Genuine Service Part';
+
+      const itemSuffix = validItems.length > 1 ? `-${String(index + 1).padStart(2, '0')}` : '';
+      const reqNum = `PR-${tempYearMonth}-${batchSeed}${itemSuffix}`;
+      const itemNotes = [item.notes, notes].filter(Boolean).join(' | ') || null;
+
+      return {
+        id: `req-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 5)}`,
+        request_number: reqNum,
+        site_id: resolvedSiteId,
+        site_code: targetSite?.code || 'SITE',
+        site_name: targetSite?.name || 'Branch Site',
+        part_id: resolvedPartId,
+        part_number: partNumber,
+        part_description: partDesc,
+        quantity_requested: qty,
+        quantity_fulfilled: 0,
+        status: 'pending',
+        priority: cleanPriority,
+        requested_by: currentUser?.id || 'usr-anon',
+        requested_by_name: currentUser?.fullName || 'MobileCare Staff',
+        reason: cleanReason,
+        notes: itemNotes,
+        created_at: nowIso,
+        updated_at: nowIso
+      };
+    });
+
+    // Update local state immediately (Optimistic UI)
+    setPartsRequests(prev => {
+      const next = [...optimisticRequests, ...(prev || [])];
+      persistPartsRequests(next);
+      return next;
+    });
+
+    if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+
+    // Supabase persistence
+    if (supabase) {
+      try {
+        let validSiteId = isUUID(resolvedSiteId) ? resolvedSiteId : null;
+        if (!validSiteId) {
+          const siteCodeToMatch = (targetSite?.code || effectiveSiteId).toUpperCase();
+          const { data: dbSite } = await supabase.from('sites').select('id').eq('code', siteCodeToMatch).maybeSingle();
+          if (dbSite?.id) {
+            validSiteId = dbSite.id;
+          } else {
+            const { data: anyDbSite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+            validSiteId = anyDbSite?.id || toValidUUID(effectiveSiteId);
+          }
+        }
+
+        const insertedRecords = [];
+        for (const req of optimisticRequests) {
+          let validPartId = isUUID(req.part_id) ? req.part_id : null;
+          if (!validPartId) {
+            const pnToMatch = (req.part_number || '').toUpperCase();
+            if (pnToMatch) {
+              const { data: dbPart } = await supabase.from('parts').select('id').eq('part_number', pnToMatch).maybeSingle();
+              if (dbPart?.id) {
+                validPartId = dbPart.id;
+              } else {
+                const { data: newPart } = await supabase.from('parts').upsert({
+                  part_number: pnToMatch,
+                  description: req.part_description || `Part ${pnToMatch}`
+                }, { onConflict: 'part_number' }).select('id').maybeSingle();
+                validPartId = newPart?.id || toValidUUID(req.part_id);
+              }
+            }
+          }
+
+          const insertPayload = {
+            request_number: req.request_number,
+            site_id: validSiteId,
+            part_id: validPartId,
+            quantity_requested: req.quantity_requested,
+            quantity_fulfilled: 0,
+            status: 'pending',
+            priority: cleanPriority,
+            requested_by: isUUID(currentUser?.id) ? currentUser?.id : null,
+            requested_by_name: currentUser?.fullName || 'MobileCare Staff',
+            reason: cleanReason,
+            notes: req.notes,
+            created_at: nowIso,
+            updated_at: nowIso
+          };
+
+          const { data: directInsert, error: directErr } = await supabase
+            .from('parts_requests')
+            .insert(insertPayload)
+            .select('*, parts:part_id(*), sites:site_id(*)')
+            .maybeSingle();
+
+          if (directErr) {
+            console.warn('parts_requests batch insert item warning:', directErr.message);
+          }
+
+          if (directInsert) {
+            insertedRecords.push({
+              ...req,
+              id: directInsert.id,
+              request_number: directInsert.request_number || req.request_number,
+              created_at: directInsert.created_at || req.created_at
+            });
+          } else {
+            insertedRecords.push(req);
+          }
+        }
+
+        // Reconcile optimistic requests with confirmed IDs
+        setPartsRequests(prev => {
+          const optimisticIds = new Set(optimisticRequests.map(o => o.id));
+          const updated = (prev || []).map(r => {
+            if (optimisticIds.has(r.id)) {
+              const idx = optimisticRequests.findIndex(o => o.id === r.id);
+              return insertedRecords[idx] || r;
+            }
+            return r;
+          });
+          persistPartsRequests(updated);
+          return updated;
+        });
+
+        // Update master_parts_requests_registry
+        try {
+          const currentRequests = JSON.parse(localStorage.getItem('mdc_parts_requests') || '[]');
+          const optIds = new Set(optimisticRequests.map(o => o.id));
+          const mergedReg = [
+            ...insertedRecords,
+            ...currentRequests.filter(r => !optIds.has(r.id) && !insertedRecords.some(i => i.id === r.id))
+          ];
+          await supabase.from('saved_records').upsert({
+            id: 'master_parts_requests_registry',
+            record_type: 'parts_requests_registry',
+            period_label: 'Master Parts Requests Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Live Parts Requests registry across all branches',
+            saved_by_name: currentUser?.fullName || 'MobileCare Staff',
+            snapshot_data: {
+              requests: mergedReg.slice(0, 300)
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (regErr) {
+          console.warn('master_parts_requests_registry batch sync note:', regErr.message);
+        }
+
+        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      } catch (err) {
+        console.warn('Batch parts request cloud sync notice:', err.message);
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        if (enqueueOfflineAction) {
+          optimisticRequests.forEach(req => {
+            enqueueOfflineAction('PARTS_REQUEST_CREATE', req);
+          });
+        }
+      }
+    }
+
+    const totalUnits = validItems.reduce((acc, it) => acc + (parseInt(it.quantity, 10) || 1), 0);
+    barcodeAudio.playSuccess();
+    showToast?.(
+      `Parts replenishment request submitted for ${validItems.length} part${validItems.length > 1 ? 's' : ''} (${totalUnits} total unit${totalUnits > 1 ? 's' : ''}).`,
+      'success'
+    );
+
+    if (broadcastCloudEvent) {
+      optimisticRequests.forEach(req => {
+        broadcastCloudEvent('PARTS_REQUEST_CREATED', { request: req, table: 'parts_requests' });
+      });
+    }
+
+    return { success: true, requests: optimisticRequests };
   };
 
   // 3. Cancel Parts Request (Requesters can cancel own still-pending requests)
@@ -483,11 +707,20 @@ export function usePartsRequests({
 
       if (!partsSummary[cleanPN]) {
         const matchedPart = parts.find(p => p.part_number?.toUpperCase() === cleanPN);
+        const catObj = getCategoryForPart(matchedPart || { description: u.description, category_id: u.category_id }, categories);
+        const resolvedCategoryName = catObj?.name || (u.category && !isUUID(u.category) ? u.category : 'General');
+        const resolvedCategoryId = catObj?.id || matchedPart?.category_id || u.category_id || 'cat-general';
+        const resolvedCategoryCode = catObj?.code || 'GENERAL';
+
         partsSummary[cleanPN] = {
           partNumber: cleanPN,
           partId: matchedPart?.id || u.part_id,
           description: matchedPart?.description || u.description || `Part ${cleanPN}`,
-          category: matchedPart?.category_id || u.category_id || 'cat-general',
+          category: resolvedCategoryName,
+          category_name: resolvedCategoryName,
+          category_id: resolvedCategoryId,
+          categoryId: resolvedCategoryId,
+          categoryCode: resolvedCategoryCode,
           model: matchedPart?.iphone_model || u.iphone_model || 'Apple iPhone',
           stockingPrice: matchedPart?.stocking_price || u.stocking_price || 0,
           inStock: 0,
@@ -579,7 +812,7 @@ export function usePartsRequests({
       totalUnits: matchingUnits.length,
       units: matchingUnits
     };
-  }, [inventoryUnits, parts, sites]);
+  }, [inventoryUnits, parts, sites, categories]);
 
   // 6. Multi-Site Stock Summary with Granular Serial Privacy & Masking
   const getAllSitesStockSummary = useCallback((targetSiteFilter = 'ALL') => {
@@ -1081,6 +1314,7 @@ export function usePartsRequests({
     isFulfillmentUser,
     fetchPartsRequests,
     submitPartsRequest,
+    submitBatchPartsRequests,
     cancelPartsRequest,
     updatePartsRequestStatus,
     getStockOnHandForSite,

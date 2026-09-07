@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { ALL_PAGES } from '../constants/navigation';
+import { searchSerialsWithFullDetails } from '../utils/serialTracker';
+import SerialDossierModal from './SerialDossierModal';
 import {
   Search,
   ArrowRight,
@@ -19,7 +21,11 @@ import {
   Command,
   X,
   Package,
-  Layers
+  Layers,
+  Building2,
+  Calendar,
+  Wrench,
+  ShieldCheck
 } from 'lucide-react';
 
 const PAGE_ICONS = {
@@ -44,8 +50,10 @@ export default function CommandPalette({ isOpen, onClose }) {
     currentUser,
     setActiveTab,
     canAccess,
-    inventoryUnits,
-    parts,
+    inventoryUnits = [],
+    parts = [],
+    shipments = [],
+    repairUsageRecords = [],
     setSelectedCategory,
     autoRefreshData,
     showToast,
@@ -55,6 +63,7 @@ export default function CommandPalette({ isOpen, onClose }) {
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [inspectedSerialDetails, setInspectedSerialDetails] = useState(null);
   const inputRef = useRef(null);
 
   const userSiteObj = useMemo(() => {
@@ -277,44 +286,40 @@ export default function CommandPalette({ isOpen, onClose }) {
         });
       });
 
-      // 4. In-Stock Serial Number Search (Strictly restricted to permitted site scope)
-      if (canAccess('audit') || canAccess('scan-in') || canAccess('all-stocks') || canAccess('intake-records') || canAccess('request-parts')) {
+      // 4. Enhanced Serial Number Search (Complete Information: DC vs Site stock, Usage, Arrival Date, Used Date)
+      if (canAccess('audit') || canAccess('scan-in') || canAccess('all-stocks') || canAccess('intake-records') || canAccess('request-parts') || canAccess('shipments')) {
         const isSuper = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
         const userSiteId = currentUser?.siteId;
 
-        const permittedUnits = (inventoryUnits || []).filter(u => {
+        const resolvedSerials = searchSerialsWithFullDetails(q, {
+          inventoryUnits,
+          shipments,
+          repairUsageRecords,
+          sites,
+          parts
+        }, 5);
+
+        // Site-restricted staff only search units belonging to or shipped to their branch
+        const permittedSerials = resolvedSerials.filter(sd => {
           if (isSuper) return true;
-          // Site-restricted staff only search their own branch units
-          const uSiteId = u.current_site_id || u.siteId;
-          const uSiteCode = u.site_code || u.siteCode;
-          return (uSiteId && (uSiteId === userSiteId || uSiteId === userSiteObj.code)) ||
-                 (uSiteCode && (uSiteCode === userSiteObj.code || uSiteCode === userSiteId));
+          return (
+            sd.siteId === userSiteId ||
+            sd.siteCode === userSiteObj?.code ||
+            sd.linkedShipment?.site_id === userSiteId ||
+            sd.linkedShipment?.site_code === userSiteObj?.code
+          );
         });
 
-        const matchedUnits = permittedUnits.filter(u =>
-          u.serial_number?.toLowerCase().includes(q) ||
-          u.part_number?.toLowerCase().includes(q)
-        ).slice(0, 3);
-
-        matchedUnits.forEach(u => {
+        permittedSerials.forEach(sd => {
           list.push({
             type: 'serial',
-            id: `serial-${u.id}`,
-            title: `Serial: ${u.serial_number}`,
-            subtitle: `${u.part_number} • ${u.description || 'Part'} (Status: ${u.status || 'in_stock'})`,
+            id: `serial-${sd.serialNumber}`,
+            serialDetails: sd,
+            title: `Serial: ${sd.serialNumber}`,
+            subtitle: `${sd.partNumber} • ${sd.description} (${sd.iphoneModel})`,
             icon: Barcode,
             action: () => {
-              if (canAccess('audit')) {
-                setActiveTab('audit');
-              } else if (canAccess('scan-in')) {
-                setActiveTab('scan-in');
-              } else if (canAccess('request-parts')) {
-                setActiveTab('request-parts');
-                if (setPmgSubTab) setPmgSubTab('stock_on_hand');
-              } else if (canAccess('all-stocks')) {
-                setActiveTab('all-stocks');
-              }
-              handleClose();
+              setInspectedSerialDetails(sd);
             }
           });
         });
@@ -322,7 +327,7 @@ export default function CommandPalette({ isOpen, onClose }) {
     }
 
     return list;
-  }, [query, accessiblePages, parts, inventoryUnits, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose, currentUser, userSiteObj, setPmgSubTab]);
+  }, [query, accessiblePages, parts, inventoryUnits, shipments, repairUsageRecords, sites, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose, currentUser, userSiteObj, setPmgSubTab]);
 
   const handleInputKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
@@ -443,8 +448,133 @@ export default function CommandPalette({ isOpen, onClose }) {
             </div>
           ) : (
             results.map((item, idx) => {
-              const Icon = item.icon;
               const isSelected = idx === selectedIndex;
+
+              // Rich Serial Intelligence Card (Requested: DC vs Site stock, used status, site arrival date, usage date)
+              if (item.type === 'serial' && item.serialDetails) {
+                const sd = item.serialDetails;
+                const statusBg =
+                  sd.statusBadgeType === 'dc' ? '#0369a1' :
+                  sd.statusBadgeType === 'site' ? '#15803d' :
+                  sd.statusBadgeType === 'transit' ? '#b45309' : '#6d28d9';
+
+                return (
+                  <div
+                    key={item.id}
+                    onClick={item.action}
+                    onMouseEnter={() => setSelectedIndex(idx)}
+                    style={{
+                      padding: '12px 14px',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      background: isSelected ? 'rgba(56, 189, 248, 0.16)' : 'rgba(30, 41, 59, 0.55)',
+                      border: `1.5px solid ${isSelected ? '#38bdf8' : '#334155'}`,
+                      transition: 'all 0.12s ease',
+                      marginBottom: '8px',
+                      boxShadow: isSelected ? '0 0 12px rgba(56, 189, 248, 0.2)' : 'none'
+                    }}
+                  >
+                    {/* Top row: Barcode, Serial, Status Badge */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{
+                          width: '26px',
+                          height: '26px',
+                          borderRadius: '6px',
+                          background: isSelected ? '#0284c7' : '#1e293b',
+                          color: '#38bdf8',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          <Barcode size={15} />
+                        </div>
+                        <span style={{ fontSize: '14.5px', fontWeight: 800, color: '#f8fafc', fontFamily: 'var(--font-mono)' }}>
+                          {sd.serialNumber}
+                        </span>
+                      </div>
+
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          background: statusBg,
+                          color: '#ffffff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                      >
+                        {sd.statusBadgeLabel}
+                      </span>
+                    </div>
+
+                    {/* Part Description and Model */}
+                    <div style={{ fontSize: '12.5px', color: '#cbd5e1', fontWeight: 600, marginBottom: '8px' }}>
+                      {sd.partNumber} &bull; {sd.description} ({sd.iphoneModel})
+                    </div>
+
+                    {/* Complete 3-Way Information Grid Requested by User */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                        gap: '6px',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid #1e293b'
+                      }}
+                    >
+                      {/* 1. DC vs Site In-Stock */}
+                      <div>
+                        <span style={{ color: '#64748b', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                          Stock Location:
+                        </span>
+                        <strong style={{ color: '#f1f5f9', fontSize: '11.5px' }}>
+                          {sd.isDcSite ? 'Central DC Warehouse' : sd.siteName}
+                        </strong>
+                      </div>
+
+                      {/* 2. Recorded Arrival Date at Site */}
+                      <div>
+                        <span style={{ color: '#64748b', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                          Site Arrival Date:
+                        </span>
+                        <strong style={{ color: sd.siteArrivalFormatted ? '#38bdf8' : '#94a3b8', fontSize: '11.5px' }}>
+                          {sd.siteArrivalFormatted || (sd.statusBadgeType === 'transit' ? 'Pending Site Arrival' : (sd.dcScanInFormatted ? `DC: ${sd.dcScanInFormatted}` : 'In DC Stock'))}
+                        </strong>
+                      </div>
+
+                      {/* 3. Used by Site & Date Used */}
+                      <div>
+                        <span style={{ color: '#64748b', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
+                          Usage / Repair Date:
+                        </span>
+                        {sd.isUsed ? (
+                          <strong style={{ color: '#c084fc', fontSize: '11.5px' }}>
+                            Used: {sd.dateUsedFormatted ? sd.dateUsedFormatted.slice(0, 10) : 'Recorded'} {sd.workOrderNumber ? `(${sd.workOrderNumber})` : ''}
+                          </strong>
+                        ) : (
+                          <strong style={{ color: '#4ade80', fontSize: '11.5px' }}>
+                            Available &amp; Unused
+                          </strong>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '6px' }}>
+                      <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Inspect Complete Dossier <ArrowRight size={12} />
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
+
+              const Icon = item.icon;
               return (
                 <div
                   key={item.id}
@@ -541,6 +671,18 @@ export default function CommandPalette({ isOpen, onClose }) {
           <span>DC System 2.0 Command Center</span>
         </div>
       </div>
+
+      {/* Serial Number Intelligence Dossier Modal */}
+      {inspectedSerialDetails && (
+        <SerialDossierModal
+          serialDetails={inspectedSerialDetails}
+          onClose={() => setInspectedSerialDetails(null)}
+          onNavigateTab={(tab) => {
+            setActiveTab(tab);
+            handleClose();
+          }}
+        />
+      )}
     </div>
   );
 }

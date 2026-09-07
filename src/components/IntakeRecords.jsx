@@ -1443,9 +1443,24 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                             <span>{rec.saved_by_name || 'Warehouse Staff'}</span>
                           </div>
                         </td>
-                        <td>{rec.po_number || 'Direct Intake'}</td>
                         <td>
-                          <span className="badge badge-success">Saved History</span>
+                          {rec.po_number && rec.po_number !== 'Direct Receiving' && rec.po_number !== 'Direct Intake' ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{rec.po_number}</strong>
+                              {rec.invoice_ref && <span style={{ fontSize: '11px', color: '#64748b' }}>Ref: {rec.invoice_ref}</span>}
+                            </div>
+                          ) : (
+                            <span style={{ color: '#64748b' }}>Direct Intake</span>
+                          )}
+                        </td>
+                        <td>
+                          {rec.expected_units ? (
+                            <span className={`badge ${rec.total_units >= rec.expected_units ? 'badge-success' : rec.total_units > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
+                              {rec.total_units >= rec.expected_units ? 'Fulfilled (Saved)' : `${rec.total_units}/${rec.expected_units} Received`}
+                            </span>
+                          ) : (
+                            <span className="badge badge-success">Saved History</span>
+                          )}
                         </td>
                         <td style={{ textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
@@ -1610,64 +1625,83 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                 </div>
               </div>
 
-              {/* Items Table */}
-              <div className="table-container" style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                <table className="data-table" style={{ fontSize: '12px' }}>
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Part Number</th>
-                      <th>Description</th>
-                      <th>Serial Number</th>
-                      <th>Destination</th>
-                      <th>Time Received</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredInspectItems.map((it, idx) => {
-                      const isSvnr = it.intake_assignment?.includes('SVNR') || it.notes?.includes('SVNR');
-                      const isCrbr = !isSvnr && (it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR'));
-                      const resolvedDesc = it.description || partDescMap.get(it.part_number?.toUpperCase()) || 'Apple Genuine Service Part';
-                      return (
-                        <tr key={it.id || idx}>
-                          <td className="font-mono">{idx + 1}</td>
-                          <td className="font-mono"><strong>{it.part_number}</strong></td>
-                          <td>{resolvedDesc}</td>
-                          <td className="font-mono">
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span>{it.serial_number}</span>
-                              <button
-                                onClick={() => handleCopySerial(it.serial_number)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--text-muted)' }}
-                              >
-                                {copiedSerial === it.serial_number ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
-                              </button>
-                            </div>
-                          </td>
-                          <td>
-                            {isSvnr ? (
-                              <span className="badge" style={{ background: '#f3e8ff', color: '#7e22ce', fontSize: '10.5px' }}>
-                                SVNR - Service Non-Repair
-                              </span>
-                            ) : isCrbr ? (
-                              <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10.5px' }}>
-                                DC - CRBR
-                              </span>
-                            ) : (
-                              <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '10.5px' }}>
-                                MDC - Forecasting
-                              </span>
-                            )}
-                          </td>
-                          <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            {it.received_at ? new Date(it.received_at).toLocaleTimeString() : 'Recorded'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              {/* Items Table or Awaiting Arrival Empty State */}
+              {(!selectedRecordToInspect.items || selectedRecordToInspect.items.length === 0) ? (
+                <div style={{ padding: '36px 20px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1', margin: '14px 0' }}>
+                  <Clock size={32} color="#f59e0b" style={{ marginBottom: '8px' }} />
+                  <h4 style={{ fontSize: '15px', color: '#0f172a', marginBottom: '4px' }}>Awaiting Parts Arrival & Scan-In</h4>
+                  <p style={{ fontSize: '12.5px', color: '#64748b', maxWidth: '440px', margin: '0 auto 12px auto' }}>
+                    This purchase order batch has been registered in Parts Saved History Records. When parts arrive and are scanned at the Receive Scan-In Station, their serial numbers will automatically be recorded here.
+                  </p>
+                  {selectedRecordToInspect.expected_items && selectedRecordToInspect.expected_items.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      {selectedRecordToInspect.expected_items.map((it, eIdx) => (
+                        <span key={eIdx} className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontSize: '11px' }}>
+                          {it.part_number} ({it.quantity_ordered}x)
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="table-container" style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                  <table className="data-table" style={{ fontSize: '12px' }}>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Part Number</th>
+                        <th>Description</th>
+                        <th>Serial Number</th>
+                        <th>Destination</th>
+                        <th>Time Received</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredInspectItems.map((it, idx) => {
+                        const isSvnr = it.intake_assignment?.includes('SVNR') || it.notes?.includes('SVNR');
+                        const isCrbr = !isSvnr && (it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR'));
+                        const resolvedDesc = it.description || partDescMap.get(it.part_number?.toUpperCase()) || 'Apple Genuine Service Part';
+                        return (
+                          <tr key={it.id || idx}>
+                            <td className="font-mono">{idx + 1}</td>
+                            <td className="font-mono"><strong>{it.part_number}</strong></td>
+                            <td>{resolvedDesc}</td>
+                            <td className="font-mono">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>{it.serial_number}</span>
+                                <button
+                                  onClick={() => handleCopySerial(it.serial_number)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--text-muted)' }}
+                                >
+                                  {copiedSerial === it.serial_number ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
+                                </button>
+                              </div>
+                            </td>
+                            <td>
+                              {isSvnr ? (
+                                <span className="badge" style={{ background: '#f3e8ff', color: '#7e22ce', fontSize: '10.5px' }}>
+                                  SVNR - Service Non-Repair
+                                </span>
+                              ) : isCrbr ? (
+                                <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '10.5px' }}>
+                                  DC - CRBR
+                                </span>
+                              ) : (
+                                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '10.5px' }}>
+                                  MDC - Forecasting
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {it.received_at ? new Date(it.received_at).toLocaleTimeString() : 'Recorded'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             <div className="modal-footer">

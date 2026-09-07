@@ -57,20 +57,14 @@ function isUnitForecasting(u) {
 }
 
 export default function ScanInReceiving({ initialTab = 'station' }) {
-  // Top Segmented Tab: 'station' (DC Receive Scan-In Station) | 'records' (DC Stock Records)
-  const [activeReceiveTab, setActiveReceiveTab] = useState(initialTab);
-
-  useEffect(() => {
-    if (initialTab) {
-      setActiveReceiveTab(initialTab);
-    }
-  }, [initialTab]);
   const {
     addScanInUnit,
     deleteScanInUnit,
     updateUnitAssignment,
     batchAddScanInUnits,
     purchaseOrders,
+    selectedPoId: globalSelectedPoId,
+    setSelectedPoId: setGlobalSelectedPoId,
     parts,
     categories = [],
     inventoryUnits,
@@ -79,6 +73,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     showToast,
     commitUnitsToStock,
     _setActiveTab,
+    setActiveTab,
+    setPmgSubTab,
     activePackDraft,
     shipments,
     currentUser,
@@ -86,6 +82,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   } = useApp();
 
   const isPmgUser = currentUser?.role === 'parts_management';
+
+  // Top Segmented Tab: 'station' (DC Receive Scan-In Station) | 'records' (DC Stock Records)
+  const [activeReceiveTab, setActiveReceiveTab] = useState(isPmgUser ? 'station' : initialTab);
+
+  useEffect(() => {
+    if (isPmgUser) {
+      setActiveReceiveTab('station');
+    } else if (initialTab) {
+      setActiveReceiveTab(initialTab);
+    }
+  }, [initialTab, isPmgUser]);
 
   const userSiteObj = useMemo(() => {
     return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
@@ -100,8 +107,45 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     return dcSiteObj;
   }, [isPmgUser, userSiteObj, dcSiteObj]);
 
+  const pmgIncomingShipments = useMemo(() => {
+    if (!isPmgUser) return [];
+    return (shipments || []).filter(sh => {
+      if (!sh.items || sh.items.length === 0) return false;
+      const isPending = sh.status === 'pending_pickup' || sh.status === 'shipped' || sh.status === 'in_transit' || sh.status === 'draft';
+      if (!isPending) return false;
+      const shSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || {};
+      return (
+        shSite.id === userSiteObj.id ||
+        shSite.code === userSiteObj.code ||
+        sh.site_id === userSiteObj.id ||
+        sh.site_code === userSiteObj.code ||
+        sh.site_id === currentUser?.siteId ||
+        sh.site_code === currentUser?.siteCode
+      );
+    });
+  }, [shipments, isPmgUser, userSiteObj, sites, currentUser?.siteId, currentUser?.siteCode]);
+
   
-  const [selectedPoId, setSelectedPoId] = useState(purchaseOrders[0]?.id || '');
+  const [selectedPoId, setSelectedPoId] = useState(() => {
+    return globalSelectedPoId || purchaseOrders[0]?.id || '';
+  });
+
+  useEffect(() => {
+    if (globalSelectedPoId) {
+      setSelectedPoId(globalSelectedPoId);
+    }
+  }, [globalSelectedPoId]);
+
+  const handlePoChange = (poId) => {
+    setSelectedPoId(poId);
+    if (setGlobalSelectedPoId) {
+      setGlobalSelectedPoId(poId);
+    }
+  };
+
+  const activePo = useMemo(() => {
+    return purchaseOrders.find(p => p.id === selectedPoId) || null;
+  }, [purchaseOrders, selectedPoId]);
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
@@ -485,10 +529,23 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     const snToUse = validation.cleanSerial;
     const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
 
+    // Auto-detect target PO if none selected or if part belongs to an active pending PO
+    let effectivePoId = selectedPoId;
+    if (!effectivePoId) {
+      const candidatePo = purchaseOrders.find(po =>
+        po.status !== 'received' &&
+        po.items?.some(it => it.part_number.toUpperCase() === pnToUse.toUpperCase() && (it.quantity_received || 0) < (it.quantity_ordered || 0))
+      );
+      if (candidatePo) {
+        effectivePoId = candidatePo.id;
+        handlePoChange(candidatePo.id);
+      }
+    }
+
     const res = addScanInUnit({
       partNumber: pnToUse,
       serialNumber: snToUse,
-      poId: selectedPoId || null,
+      poId: effectivePoId || null,
       intakeAssignment: currentAssignment,
       notes: currentAssignment,
       targetSiteId: activeReceivingSite.id,
@@ -497,9 +554,22 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     });
 
     if (res.success) {
+      let poDetail = '';
+      const targetPoObj = purchaseOrders.find(p => p.id === effectivePoId) || activePo;
+      if (targetPoObj) {
+        const poItem = targetPoObj.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
+        if (poItem) {
+          const recCount = (poItem.quantity_received || 0) + 1;
+          const isDone = recCount >= (poItem.quantity_ordered || 0);
+          poDetail = ` [PO ${targetPoObj.po_number}: ${recCount}/${poItem.quantity_ordered} fulfilled${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
+        } else {
+          poDetail = ` [⚠️ Note: Part not listed in PO ${targetPoObj.po_number}]`;
+        }
+      }
+
       setScanResult({
         type: 'success',
-        message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
+        message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
       });
       setSessionScans(prev => [res.unit, ...prev]);
       setShowPnDropdown(false);
@@ -1056,17 +1126,19 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             </span>
           </button>
 
-          <button
-            type="button"
-            className={`scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
-            onClick={() => setActiveReceiveTab('records')}
-          >
-            <BookmarkPlus size={16} />
-            <span>{isPmgUser ? 'Branch Stock Records' : 'DC Stock Records'}</span>
-            <span className="scanin-tab-badge">
-              {dcIntakeRecords?.length || 0} batches
-            </span>
-          </button>
+          {!isPmgUser && (
+            <button
+              type="button"
+              className={`scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
+              onClick={() => setActiveReceiveTab('records')}
+            >
+              <BookmarkPlus size={16} />
+              <span>DC Stock Records</span>
+              <span className="scanin-tab-badge">
+                {dcIntakeRecords?.length || 0} batches
+              </span>
+            </button>
+          )}
         </div>
 
         <div className="scanin-top-tabs-actions">
@@ -1077,13 +1149,69 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         </div>
       </div>
 
-      {activeReceiveTab === 'records' ? (
+      {!isPmgUser && activeReceiveTab === 'records' ? (
         <IntakeRecords 
           embeddedMode={true} 
           onNavigateToScanIn={() => setActiveReceiveTab('station')} 
         />
       ) : (
         <>
+          {/* PMG Arriving Site Packages Notification Banner */}
+          {isPmgUser && pmgIncomingShipments.length > 0 && (
+            <div style={{
+              margin: '0 0 16px 0',
+              padding: '12px 18px',
+              borderRadius: '8px',
+              background: 'linear-gradient(135deg, #065f46 0%, #047857 100%)',
+              color: '#ffffff',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px',
+              boxShadow: '0 4px 12px rgba(5, 150, 105, 0.25)',
+              border: '1px solid #10b981'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(255,255,255,0.2)', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <PackageCheck size={20} color="#ffffff" />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '13.5px' }}>
+                    {pmgIncomingShipments.length} Arriving Site Package{pmgIncomingShipments.length > 1 ? 's' : ''} Awaiting Confirmation at {userSiteObj.code}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#a7f3d0' }}>
+                    Packages dispatched from DC containing {pmgIncomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} parts are ready for confirmation.
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{
+                  background: '#ffffff',
+                  color: '#065f46',
+                  fontWeight: 800,
+                  fontSize: '12px',
+                  border: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '7px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer'
+                }}
+                onClick={() => {
+                  if (setActiveTab) setActiveTab('request-parts');
+                  if (setPmgSubTab) setPmgSubTab('stock_on_hand');
+                }}
+              >
+                <PackageCheck size={14} />
+                <span>Confirm Site Package</span>
+              </button>
+            </div>
+          )}
+
           {/* Scanner Workstation Hero Card */}
           <div className="scanner-hero">
         {/* Header Row: Title & System Telemetry Status */}
@@ -1129,16 +1257,21 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               </label>
               <select
                 className="form-select"
-                style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
+                style={{ width: '100%', background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1', height: '42px', fontSize: '13px' }}
                 value={selectedPoId}
-                onChange={(e) => setSelectedPoId(e.target.value)}
+                onChange={(e) => handlePoChange(e.target.value)}
               >
-                <option value="">-- Direct Intake (No PO) --</option>
-                {purchaseOrders.map(po => (
-                  <option key={po.id} value={po.id}>
-                    {po.po_number} ({po.status})
-                  </option>
-                ))}
+                <option value="">-- Direct Intake (Auto-Detect PO) --</option>
+                {purchaseOrders.map(po => {
+                  const totalOrd = po.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 0;
+                  const totalRec = po.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) || 0;
+                  const statusLabel = po.status === 'received' ? 'Fully Received' : `${totalRec}/${totalOrd} received`;
+                  return (
+                    <option key={po.id} value={po.id}>
+                      {po.po_number} {po.invoice_ref ? `(${po.invoice_ref})` : ''} — {statusLabel}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           )}
@@ -1383,6 +1516,91 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             </div>
           </div>
         </div>
+
+        {/* Linked PO Progress & Inspection Card (if PO is selected) */}
+        {!isPmgUser && activePo && (
+          <div style={{
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: '8px',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.04)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '13.5px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                  Linked PO: {activePo.po_number}
+                </span>
+                <span className={`badge ${activePo.status === 'received' ? 'badge-success' : activePo.status === 'partially_received' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
+                  {activePo.status === 'received' ? 'Fully Received' : activePo.status === 'partially_received' ? 'Partially Received' : 'Pending Arrival'}
+                </span>
+                {activePo.invoice_ref && (
+                  <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                    Ref: <strong style={{ color: '#334155' }}>{activePo.invoice_ref}</strong>
+                  </span>
+                )}
+                {activePo.supplier && (
+                  <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                    Supplier: <strong style={{ color: '#334155' }}>{activePo.supplier}</strong>
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12.5px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#2563eb' }}>
+                  {activePo.items?.reduce((s, it) => s + (it.quantity_received || 0), 0)} / {activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0)} Units Received ({activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) > 0 ? Math.round((activePo.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) / activePo.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0)) * 100) : 0}%)
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setActiveTab('orders')}
+                  style={{ fontSize: '11px', padding: '2px 8px', height: '24px' }}
+                >
+                  View PO Details
+                </button>
+              </div>
+            </div>
+
+            {/* Part fulfillment chips */}
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+              {activePo.items?.map(it => {
+                const rem = Math.max(0, (it.quantity_ordered || 0) - (it.quantity_received || 0));
+                const isFulfilled = (it.quantity_received || 0) >= (it.quantity_ordered || 0);
+                return (
+                  <div
+                    key={it.id || it.part_number}
+                    style={{
+                      background: isFulfilled ? '#f0fdf4' : '#ffffff',
+                      border: isFulfilled ? '1px solid #bbf7d0' : '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '11.5px',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.03)'
+                    }}
+                    title={it.description}
+                  >
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: isFulfilled ? '#15803d' : '#2563eb' }}>
+                      {it.part_number}
+                    </span>
+                    <span style={{ color: '#475569', fontWeight: 500 }}>
+                      {it.quantity_received || 0}/{it.quantity_ordered || 0}
+                    </span>
+                    {rem > 0 ? (
+                      <span style={{ color: '#b45309', fontSize: '10.5px', fontWeight: 600 }}>({rem} remaining)</span>
+                    ) : (
+                      <span style={{ color: '#16a34a', fontSize: '10.5px', fontWeight: 600 }}>✓ Complete</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Dual Input Fields for Barcode Scans with Autocomplete & Security Validation */}
         <div className="scan-input-grid" style={{ position: 'relative' }}>
@@ -1794,8 +2012,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         )}
       </div>
 
-      {/* Scanned DC Inventory Units Table */}
-      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
+      {/* Scanned DC Inventory Units Table - Strictly DC Superadmin */}
+      {!isPmgUser && (
+        <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
         {/* Table Header Controls */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2226,6 +2445,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           </div>
         )}
       </div>
+      )}
 
       {/* --- XLSX / CSV Import Modal Dialog --- */}
       {isImportModalOpen && (

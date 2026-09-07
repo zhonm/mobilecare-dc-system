@@ -3222,11 +3222,21 @@ export default function ScanOutPacking() {
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid #f1f5f9', fontSize: '11.5px', color: '#64748b' }}>
-                          <div>
-                            {site.contact_person && <span>Contact: <strong>{site.contact_person}</strong></span>}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingTop: '8px', borderTop: '1px solid #f1f5f9', fontSize: '12px', color: '#475569', gap: '10px' }}>
+                          <div style={{ lineHeight: 1.35 }}>
+                            {site.contact_person && (
+                              <div>
+                                Supervisor: <strong style={{ color: '#0f172a' }}>{site.contact_person}</strong>
+                                {site.contact_phone ? <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono, monospace)', marginLeft: '5px' }}>• {site.contact_phone}</span> : ''}
+                              </div>
+                            )}
+                            {site.contact_email && (
+                              <div style={{ color: '#64748b', fontSize: '11.5px', marginTop: '2px', wordBreak: 'break-all' }}>
+                                {site.contact_email}
+                              </div>
+                            )}
                           </div>
-                          <span style={{ color: '#0284c7', fontWeight: 600 }}>
+                          <span style={{ color: '#0284c7', fontWeight: 600, flexShrink: 0, fontSize: '12px', marginTop: '2px' }}>
                             {isSelected ? '✓ Selected' : 'Select Branch →'}
                           </span>
                         </div>

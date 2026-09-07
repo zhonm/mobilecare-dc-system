@@ -1,5 +1,86 @@
-import { resolveSite } from './appContextHelpers.js';
+import { resolveSite, isLockedConfirmedShipment } from './appContextHelpers.js';
 import { isProvincialSite } from './partResolver.js';
+
+/**
+ * Detects whether a shipment is marked as received or delivered by destination branch.
+ */
+export const isShipmentReceived = (sh) => {
+  if (!sh) return false;
+  if (isLockedConfirmedShipment(sh)) return true;
+  const status = String(sh.status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (status === 'received' || status === 'receivedconfirmed' || status === 'delivered' || status === 'completed') {
+    return true;
+  }
+  if (Boolean(sh.received_confirmed_at || sh.received_at || sh.received_date)) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Checks if a shipment is active in the outbound pipeline (Shipped or Pending).
+ * Excludes Received, Delivered, and Cancelled shipments.
+ */
+export const isShipmentActive = (sh) => {
+  if (!sh) return false;
+  const status = String(sh.status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (status === 'cancelled') return false;
+  if (isShipmentReceived(sh)) return false;
+  const hasItems = (Array.isArray(sh.items) && sh.items.length > 0) || (Number(sh.total_units) > 0);
+  return hasItems;
+};
+
+/**
+ * Filters shipments to only include active outbound manifests (Shipped or Pending).
+ */
+export const filterActiveOutboundShipments = (shipments = []) => {
+  if (!Array.isArray(shipments)) return [];
+  return shipments.filter(isShipmentActive);
+};
+
+/**
+ * Calculates the total parts in queue across active drafts and active outbound shipments.
+ * Completely excludes parts from received shipments.
+ */
+export const calculateActiveQueuePartsCount = (activePackDraft = null, activeShipments = []) => {
+  let count = 0;
+  const countedSerials = new Set();
+
+  if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+    activePackDraft.items.forEach(it => {
+      const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+      if (s) {
+        if (!countedSerials.has(s)) {
+          countedSerials.add(s);
+          count++;
+        }
+      } else {
+        count++;
+      }
+    });
+  }
+
+  (activeShipments || []).forEach(sh => {
+    if (Array.isArray(sh.items) && sh.items.length > 0) {
+      sh.items.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+        if (s) {
+          if (!countedSerials.has(s)) {
+            countedSerials.add(s);
+            count++;
+          }
+        } else {
+          count++;
+        }
+      });
+    } else if (Number(sh.total_units) > 0) {
+      count += Number(sh.total_units);
+    }
+  });
+
+  return count;
+};
+
 
 /**
  * Detects whether a shipment is destined for a Metro Manila ASP site.

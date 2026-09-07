@@ -556,7 +556,7 @@ export function getMasterlistParts(
 /**
  * Get all service sites ranked by iPhone demand
  */
-export function getMasterlistSites({ search = '', limit = 'ALL', region = 'ALL' } = {}, customData = null, targetPeriod = null) {
+export function getMasterlistSites({ search = '', limit = 'ALL', region = 'ALL', categories = null } = {}, customData = null, targetPeriod = null) {
   if (isMasterlistCleared()) {
     return {
       totalSitesCount: 0,
@@ -581,22 +581,40 @@ export function getMasterlistSites({ search = '', limit = 'ALL', region = 'ALL' 
       .replace('MOBILECARE - ', '')
       .replace('MOBILECARE SERVICES', 'General Services');
 
+    let allParts = s.allParts || [];
+    const isCategoryFiltered = Array.isArray(categories) && categories.length > 0 && categories.length < 5;
+    if (isCategoryFiltered) {
+      allParts = allParts.filter(p => isPartMatchingCategoryFilter(p, categories));
+    }
+
+    const totalUnits = isCategoryFiltered
+      ? allParts.reduce((sum, p) => sum + (p.units || 0), 0)
+      : (s.totalUnits || 0);
+
+    const totalValUSD = isCategoryFiltered
+      ? allParts.reduce((sum, p) => sum + (p.totalValUSD || 0), 0)
+      : (s.totalValUSD || 0);
+
     return {
       id: s.id || `site-raw-${idx}`,
       siteName: s.siteName,
       shortName,
       region: s.region || (isMM ? 'Metro Manila' : 'Provincial'),
       isMM,
-      totalUnits: s.totalUnits || 0,
-      totalValUSD: s.totalValUSD || 0,
-      totalValPHP: s.totalValPHP || (s.totalValUSD || 0) * USD_TO_PHP_RATE,
-      distinctPartsCount: s.distinctPartsCount || (s.allParts ? s.allParts.length : 0),
-      topParts: s.topParts || [],
-      topPart: s.topPart || s.topParts?.[0] || null,
-      allParts: s.allParts || [],
+      totalUnits,
+      totalValUSD,
+      totalValPHP: totalValUSD * USD_TO_PHP_RATE,
+      distinctPartsCount: allParts.length,
+      topParts: allParts.slice(0, 10),
+      topPart: allParts[0] || null,
+      allParts,
       pctShare: grandUnits > 0 ? ((s.totalUnits || 0) / grandUnits) * 100 : 0
     };
   });
+
+  if (Array.isArray(categories) && categories.length > 0 && categories.length < 5) {
+    list = [...list].sort((a, b) => b.totalUnits - a.totalUnits);
+  }
 
   if (region !== 'ALL') {
     list = list.filter(s => region === 'MM' ? s.isMM : !s.isMM);
@@ -631,7 +649,7 @@ export function getMasterlistSites({ search = '', limit = 'ALL', region = 'ALL' 
  */
 export function getMasterlistPartsForSite(
   siteIdentifier,
-  { category = 'ALL', search = '', limit = 10, sortBy = 'units' } = {},
+  { category = 'ALL', categories = null, search = '', limit = 10, sortBy = 'units' } = {},
   customData = null,
   targetPeriod = null
 ) {
@@ -647,7 +665,7 @@ export function getMasterlistPartsForSite(
     };
   }
 
-  const allSites = getMasterlistSites({ limit: 'ALL' }, customData, targetPeriod).all;
+  const allSites = getMasterlistSites({ limit: 'ALL', categories }, customData, targetPeriod).all;
 
   const cleanId = String(siteIdentifier || '').trim().toLowerCase();
   const matchedSite = allSites.find(s =>
@@ -661,6 +679,8 @@ export function getMasterlistPartsForSite(
 
   if (category !== 'ALL') {
     list = list.filter(p => p.category === category);
+  } else if (Array.isArray(categories) && categories.length > 0 && categories.length < 5) {
+    list = list.filter(p => isPartMatchingCategoryFilter(p, categories));
   }
 
   if (search && search.trim()) {

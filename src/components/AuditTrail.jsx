@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
 import { generateAuditTrailPDF } from '../utils/pdfGenerator';
+import { resolveSerialFullDetails } from '../utils/serialTracker';
+import SerialDossierModal from './SerialDossierModal';
 import {
   History,
   Search,
@@ -25,7 +27,11 @@ import {
   UserCheck,
   ChevronLeft,
   ChevronRight,
-  Printer
+  Printer,
+  MapPin,
+  ExternalLink,
+  Clock,
+  Wrench
 } from 'lucide-react';
 
 export default function AuditTrail() {
@@ -33,6 +39,9 @@ export default function AuditTrail() {
     inventoryUnits = [],
     scanLogs = [],
     sites = [],
+    shipments = [],
+    repairUsageRecords = [],
+    parts = [],
     uploadAuditLogs = [],
     deletionAuditLogs = [],
     deleteAllAuditLogs,
@@ -52,6 +61,7 @@ export default function AuditTrail() {
   const [deletionEntityTypeFilter, setDeletionEntityTypeFilter] = useState('ALL');
   const [periodFilter, setPeriodFilter] = useState('ALL');
   const [selectedSerial, setSelectedSerial] = useState('');
+  const [inspectedSerialDetails, setInspectedSerialDetails] = useState(null);
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -166,12 +176,14 @@ export default function AuditTrail() {
   // 4. Serial Tracer Matched Unit
   const matchedUnit = useMemo(() => {
     if (!selectedSerial.trim()) return null;
-    const q = selectedSerial.trim().toUpperCase();
-    return inventoryUnits.find(u =>
-      (u.serial_number || '').toUpperCase() === q ||
-      (u.serial_number || '').toUpperCase().includes(q)
-    );
-  }, [selectedSerial, inventoryUnits]);
+    return resolveSerialFullDetails(selectedSerial, {
+      inventoryUnits,
+      shipments,
+      repairUsageRecords,
+      sites,
+      parts
+    });
+  }, [selectedSerial, inventoryUnits, shipments, repairUsageRecords, sites, parts]);
 
   // Paginated data for uploads
   const paginatedUploads = useMemo(() => {
@@ -271,17 +283,23 @@ export default function AuditTrail() {
       showToast?.('Search and select a serial number first', 'warning');
       return;
     }
-    const siteObj = sites.find(s => s.id === matchedUnit.current_site_id);
     const unitSheet = [
       { Property: 'Serial Number', Value: matchedUnit.serial_number },
       { Property: 'Part Number', Value: matchedUnit.part_number },
       { Property: 'Description', Value: matchedUnit.description || 'N/A' },
-      { Property: 'Current Status', Value: String(matchedUnit.status || 'in_stock').toUpperCase() },
-      { Property: 'Current Location', Value: siteObj?.name || 'Distribution Center' },
+      { Property: 'Current Status', Value: matchedUnit.statusBadgeLabel || String(matchedUnit.status || 'in_stock').toUpperCase() },
+      { Property: 'Stock Location', Value: matchedUnit.isDcSite ? 'Central DC Warehouse' : `${matchedUnit.siteName || 'Site'} (${matchedUnit.siteRegion || 'Branch'})` },
+      { Property: 'Site Arrival Date', Value: matchedUnit.siteArrivalFormatted || (matchedUnit.siteArrivalDate ? String(matchedUnit.siteArrivalDate).slice(0, 10) : 'N/A') },
+      { Property: 'Site Arrival Status', Value: matchedUnit.siteArrivalStatus || 'N/A' },
+      { Property: 'Used by Site', Value: matchedUnit.isUsed ? 'YES - Consumed in Repair' : 'NO - In Stock / Available' },
+      { Property: 'Date Used in System', Value: matchedUnit.dateUsedFormatted || 'N/A' },
+      { Property: 'Work Order #', Value: matchedUnit.workOrderNumber || 'N/A' },
+      { Property: 'Technician / User', Value: matchedUnit.usedByName || 'N/A' },
       { Property: 'Box Number', Value: matchedUnit.box_number || 1 },
       { Property: 'PO Number', Value: matchedUnit.po_number || 'N/A' },
-      { Property: 'Received Date', Value: matchedUnit.received_at ? new Date(matchedUnit.received_at).toLocaleString() : 'Recorded' },
-      { Property: 'Received By', Value: matchedUnit.received_by || 'Warehouse Staff' },
+      { Property: 'DC Intake Date', Value: matchedUnit.received_at ? new Date(matchedUnit.received_at).toLocaleString() : 'Recorded' },
+      { Property: 'DC Intake By', Value: matchedUnit.received_by || 'Warehouse Staff' },
+      { Property: 'Outbound Manifest #', Value: matchedUnit.linkedShipment?.shipmentNumber || 'N/A' },
       { Property: 'Shipped Date', Value: matchedUnit.shipped_at ? new Date(matchedUnit.shipped_at).toLocaleString() : 'N/A' }
     ];
     const ws = XLSX.utils.json_to_sheet(unitSheet);
@@ -1512,10 +1530,18 @@ export default function AuditTrail() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '2px 8px', borderRadius: '10px', background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0' }}>
-                      {String(matchedUnit.status || 'in_stock').toUpperCase()}
+                    <span style={{
+                      fontSize: '10.5px',
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      background: matchedUnit.isUsed ? '#fef2f2' : matchedUnit.isDcSite ? '#ecfdf5' : '#eff6ff',
+                      color: matchedUnit.isUsed ? '#dc2626' : matchedUnit.isDcSite ? '#059669' : '#0284c7',
+                      border: `1px solid ${matchedUnit.isUsed ? '#fecaca' : matchedUnit.isDcSite ? '#a7f3d0' : '#bfdbfe'}`
+                    }}>
+                      {matchedUnit.statusBadgeLabel ? matchedUnit.statusBadgeLabel.toUpperCase() : String(matchedUnit.status || 'in_stock').toUpperCase()}
                     </span>
-                    <span className="font-mono" style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
+                    <span className="font-mono" style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
                       {matchedUnit.serial_number}
                     </span>
                   </div>
@@ -1528,13 +1554,80 @@ export default function AuditTrail() {
                   </div>
                 </div>
 
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Current Location</div>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#0284c7', marginTop: '1px' }}>
-                    {sites.find(s => s.id === matchedUnit.current_site_id)?.name || 'Distribution Center Main Warehouse'}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setInspectedSerialDetails(matchedUnit)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 700 }}
+                  >
+                    <ExternalLink size={13} />
+                    <span>Open Serial Dossier</span>
+                  </button>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Current Location</div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: matchedUnit.isDcSite ? '#059669' : '#0284c7', marginTop: '1px' }}>
+                      {matchedUnit.isDcSite ? 'Distribution Center Main Warehouse' : matchedUnit.siteName}
+                    </div>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '1px' }}>
-                    Box #{matchedUnit.box_number || 1} &bull; Intake Batch Verified
+                </div>
+              </div>
+
+              {/* 4 Core Intelligence Highlight Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                {/* 1. Stock Location: DC vs Specific Site */}
+                <div style={{ background: matchedUnit.isDcSite ? '#f0fdf4' : '#f0f9ff', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${matchedUnit.isDcSite ? '#bbf7d0' : '#bae6fd'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 800, color: matchedUnit.isDcSite ? '#15803d' : '#0369a1', textTransform: 'uppercase' }}>
+                    <MapPin size={13} />
+                    <span>Stock Location</span>
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {matchedUnit.isDcSite ? 'Central DC Warehouse' : matchedUnit.siteName || 'Branch Site'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    {matchedUnit.isDcSite ? 'Central DC Stock' : `Site Stock (${matchedUnit.siteRegion || 'Branch'})`}
+                  </div>
+                </div>
+
+                {/* 2. Usage Status: Used by Site */}
+                <div style={{ background: matchedUnit.isUsed ? '#fef2f2' : '#f8fafc', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${matchedUnit.isUsed ? '#fecaca' : '#e2e8f0'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 800, color: matchedUnit.isUsed ? '#b91c1c' : '#475569', textTransform: 'uppercase' }}>
+                    <Wrench size={13} />
+                    <span>Usage Status</span>
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: matchedUnit.isUsed ? '#b91c1c' : '#059669', marginTop: '4px' }}>
+                    {matchedUnit.isUsed ? 'Used / Consumed by Site' : 'In Stock / Available'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    {matchedUnit.isUsed ? `WO: ${matchedUnit.workOrderNumber || 'Internal'}` : 'Not consumed in repair'}
+                  </div>
+                </div>
+
+                {/* 3. Site Arrival Date */}
+                <div style={{ background: '#f8fafc', padding: '12px 14px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 800, color: '#0284c7', textTransform: 'uppercase' }}>
+                    <Calendar size={13} />
+                    <span>Recorded Site Arrival Date</span>
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {matchedUnit.siteArrivalFormatted || (matchedUnit.isDcSite ? 'DC Central Intake' : 'Pending Confirmation')}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    {matchedUnit.siteArrivalStatus}
+                  </div>
+                </div>
+
+                {/* 4. Date Used in System */}
+                <div style={{ background: matchedUnit.isUsed ? '#fffbeb' : '#f8fafc', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${matchedUnit.isUsed ? '#fde68a' : '#e2e8f0'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 800, color: matchedUnit.isUsed ? '#b45309' : '#64748b', textTransform: 'uppercase' }}>
+                    <Clock size={13} />
+                    <span>Date Used in System</span>
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: matchedUnit.isUsed ? '#b45309' : '#94a3b8', marginTop: '4px' }}>
+                    {matchedUnit.dateUsedFormatted || (matchedUnit.isUsed ? 'Date Recorded' : 'Not Yet Used')}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    {matchedUnit.isUsed ? `By: ${matchedUnit.usedByName || 'Specialist'}` : 'Active inventory unit'}
                   </div>
                 </div>
               </div>
@@ -1565,7 +1658,7 @@ export default function AuditTrail() {
                     {matchedUnit.allocated_at ? new Date(matchedUnit.allocated_at).toLocaleDateString() : 'Auto-Allocated'}
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                    Target: <strong>{sites.find(s => s.id === matchedUnit.current_site_id)?.name || 'DC Stock'}</strong>
+                    Target: <strong>{matchedUnit.isDcSite ? 'DC Stock' : matchedUnit.siteName}</strong>
                   </div>
                 </div>
 
@@ -1587,13 +1680,13 @@ export default function AuditTrail() {
                 <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '10.5px', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase' }}>
                     <Truck size={13} />
-                    <span>4. Dispatch &amp; Delivery</span>
+                    <span>4. Site Delivery &amp; Usage</span>
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginTop: '6px' }}>
-                    {matchedUnit.status === 'delivered' ? 'Delivered' : matchedUnit.status === 'shipped' || matchedUnit.status === 'packed' ? 'Dispatched' : 'In DC Stock'}
+                    {matchedUnit.isUsed ? 'Used in Repair' : matchedUnit.siteArrivalFormatted ? 'Arrived at Site' : matchedUnit.status === 'shipped' ? 'In Transit' : 'DC Central Stock'}
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                    Status: <strong style={{ color: '#047857' }}>{String(matchedUnit.status || 'in_stock').toUpperCase()}</strong>
+                    Status: <strong style={{ color: matchedUnit.isUsed ? '#dc2626' : '#047857' }}>{matchedUnit.statusBadgeLabel}</strong>
                   </div>
                 </div>
               </div>
@@ -1896,6 +1989,14 @@ export default function AuditTrail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Serial Custody Intelligence Dossier Modal */}
+      {inspectedSerialDetails && (
+        <SerialDossierModal
+          details={inspectedSerialDetails}
+          onClose={() => setInspectedSerialDetails(null)}
+        />
       )}
     </div>
   );

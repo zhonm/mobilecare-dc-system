@@ -59,6 +59,8 @@ import {
   isPeriodMatching
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
+import { isPartMatchingCategoryFilter, getPartCategory } from '../utils/categoryFilter';
+import { filterActiveOutboundShipments, calculateActiveQueuePartsCount } from '../utils/shipmentHelpers';
 
 const USD_TO_PHP_RATE = 57;
 
@@ -91,7 +93,10 @@ export default function Dashboard() {
     masterlistData,
     setMasterlistData,
     repairUsageRecords = [],
-    applyParsedDataset
+    applyParsedDataset,
+    selectedCategories = ['BATTERY', 'DISPLAY'],
+    setSelectedCategories,
+    HARDWARE_CATEGORIES = []
   } = useApp();
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -115,6 +120,16 @@ export default function Dashboard() {
   // ─────────────────────────────────────────────────────────────────────────
   // DC WAREHOUSE INVENTORY TELEMETRY & 4-DAY AGING
   // ─────────────────────────────────────────────────────────────────────────
+  // Active Outbound Shipments: strictly pending or shipped/in_transit (Received shipments excluded)
+  const activeShipments = useMemo(() => {
+    return filterActiveOutboundShipments(shipments);
+  }, [shipments]);
+
+  // Active queue parts count: parts in active draft + parts in pending/shipped shipments (excludes received)
+  const activeQueueUnitsCount = useMemo(() => {
+    return calculateActiveQueuePartsCount(activePackDraft, activeShipments);
+  }, [activePackDraft, activeShipments]);
+
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
     if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
@@ -123,7 +138,7 @@ export default function Dashboard() {
         if (s) set.add(s);
       });
     }
-    (shipments || []).forEach(sh => {
+    (activeShipments || []).forEach(sh => {
       if (sh.items && Array.isArray(sh.items)) {
         sh.items.forEach(it => {
           const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
@@ -132,7 +147,7 @@ export default function Dashboard() {
       }
     });
     return set;
-  }, [activePackDraft, shipments]);
+  }, [activePackDraft, activeShipments]);
 
   const availableInStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
@@ -164,7 +179,7 @@ export default function Dashboard() {
   const packedUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      return u.status === 'packed' || u.status === 'shipped' || u.status === 'allocated' || (cleanSerial && packedSerialsSet.has(cleanSerial));
+      return (cleanSerial && packedSerialsSet.has(cleanSerial)) || ((u.status === 'packed' || u.status === 'allocated') && !u.received_at);
     });
   }, [inventoryUnits, packedSerialsSet]);
 
@@ -193,27 +208,30 @@ export default function Dashboard() {
   const masterPartsReport = useMemo(() => {
     return getMasterlistParts({
       category: reportCategory,
+      categories: selectedCategories,
       search: reportSearch,
       limit: reportLimit,
       sortBy: reportSortBy
     }, activeMasterlist, activePeriod);
-  }, [reportCategory, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
+  }, [reportCategory, selectedCategories, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
 
   const masterSitesReport = useMemo(() => {
     return getMasterlistSites({
       search: reportSearch,
-      limit: reportLimit
+      limit: reportLimit,
+      categories: selectedCategories
     }, activeMasterlist, activePeriod);
-  }, [reportSearch, reportLimit, activeMasterlist, activePeriod]);
+  }, [reportSearch, reportLimit, selectedCategories, activeMasterlist, activePeriod]);
 
   const sitePartsReport = useMemo(() => {
     return getMasterlistPartsForSite(selectedSiteName, {
       category: reportCategory,
+      categories: selectedCategories,
       search: reportSearch,
       limit: reportLimit,
       sortBy: reportSortBy
     }, activeMasterlist, activePeriod);
-  }, [selectedSiteName, reportCategory, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
+  }, [selectedSiteName, reportCategory, selectedCategories, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
 
   // Category Distribution for Donut Chart
   const categoryChartData = useMemo(() => {
@@ -290,6 +308,8 @@ export default function Dashboard() {
         if (activeSnapshotFilter === 'AGING') return item.agingCount > 0;
         return true;
       });
+    } else if (Array.isArray(selectedCategories) && selectedCategories.length > 0 && selectedCategories.length < 5) {
+      list = list.filter(item => isPartMatchingCategoryFilter(item, selectedCategories));
     }
 
     if (tableSearch.trim()) {
@@ -302,9 +322,9 @@ export default function Dashboard() {
     }
 
     return list;
-  }, [availableInStockUnits, parts, activeSnapshotFilter, tableSearch]);
+  }, [availableInStockUnits, parts, selectedCategories, activeSnapshotFilter, tableSearch]);
 
-  const recentShipments = (shipments || []).slice(0, 6);
+  const recentShipments = (activeShipments || []).slice(0, 6);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DASHBOARD REPORT EXPORT HANDLERS (XLSX & PDF)
@@ -744,7 +764,7 @@ export default function Dashboard() {
           title="Click to view all iPhone Top Parts"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <span className="kpi-title">Total iPhone Demand</span>
+            <span className="kpi-title">Total Parts Used</span>
             <div style={{ padding: '8px', background: '#dcfce7', borderRadius: '8px', color: '#10b981' }}>
               <TrendingUp size={20} />
             </div>
@@ -767,7 +787,7 @@ export default function Dashboard() {
         <div
           className="kpi-card"
           style={{
-            borderLeft: '4px solid #f59e0b',
+            borderLeft: `4px solid ${activeShipments.length > 0 ? '#f59e0b' : '#10b981'}`,
             cursor: 'pointer'
           }}
           onClick={() => setActiveTab('shipments')}
@@ -775,21 +795,21 @@ export default function Dashboard() {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <span className="kpi-title">Outbound Shipments</span>
-            <div style={{ padding: '8px', background: '#fef3c7', borderRadius: '8px', color: '#f59e0b' }}>
+            <div style={{ padding: '8px', background: activeShipments.length > 0 ? '#fef3c7' : '#ecfdf5', borderRadius: '8px', color: activeShipments.length > 0 ? '#f59e0b' : '#059669' }}>
               <Truck size={20} />
             </div>
           </div>
           <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {(shipments || []).length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>shipments</span>
+            {activeShipments.length} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>{activeShipments.length === 1 ? 'shipment' : 'shipments'}</span>
           </div>
           <div className="kpi-sub">
-            <span style={{ color: '#b45309', fontWeight: 700 }}>
-              {packedUnits.length} parts in queue
+            <span style={{ color: activeShipments.length > 0 || activeQueueUnitsCount > 0 ? '#b45309' : '#059669', fontWeight: 700 }}>
+              {activeQueueUnitsCount} {activeQueueUnitsCount === 1 ? 'part' : 'parts'} in queue
             </span>{' '}
-            • Dispatched via Lalamove / Lite Exp
+            • {activeShipments.length > 0 ? 'Dispatched via Lalamove / Lite Exp' : 'All shipments received at sites'}
           </div>
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${Math.min(shipments.length * 10, 100)}%`, background: '#f59e0b' }} />
+            <div style={{ height: '100%', width: `${Math.min(activeShipments.length * 20, 100)}%`, background: activeShipments.length > 0 ? '#f59e0b' : '#10b981' }} />
           </div>
         </div>
 
@@ -881,7 +901,7 @@ export default function Dashboard() {
               }}
             >
               <Smartphone size={15} />
-              <span>Top iPhone Parts ({masterSummary.totalDistinctParts})</span>
+              <span>Top iPhone Parts ({masterPartsReport.totalCount})</span>
             </button>
 
             <button
@@ -904,7 +924,7 @@ export default function Dashboard() {
               }}
             >
               <Building2 size={15} />
-              <span>Service Hubs ({masterSummary.totalSites})</span>
+              <span>Service Hubs ({masterSitesReport.totalSitesCount})</span>
             </button>
 
             <button
@@ -927,51 +947,61 @@ export default function Dashboard() {
               }}
             >
               <Layers size={15} />
-              <span>All Parts Per Site</span>
+              <span>All Parts Per Site ({sitePartsReport.totalPartsCount})</span>
             </button>
           </div>
         </div>
 
-        {/* Clean iPhone Category Filter Pills (No Emojis) */}
-        {reportTab !== 'top-sites' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
-            <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
-              Filter Category:
-            </span>
-            {IPHONE_CATEGORIES.map(cat => {
-              const isSelected = reportCategory === cat.key;
-              const count = cat.key === 'ALL' ? masterSummary.totalUnits : (masterSummary.categoryStats[cat.key] || 0);
-              return (
-                <button
-                  key={cat.key}
-                  type="button"
-                  onClick={() => setReportCategory(cat.key)}
-                  style={{
-                    border: '1px solid',
-                    borderColor: isSelected ? '#0284c7' : '#cbd5e1',
-                    background: isSelected ? '#0284c7' : '#ffffff',
-                    color: isSelected ? '#ffffff' : '#334155',
-                    padding: '5px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: isSelected ? 700 : 600,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    whiteSpace: 'nowrap',
-                    transition: 'all 0.12s ease'
-                  }}
-                >
-                  <span style={{ whiteSpace: 'nowrap' }}>{cat.label}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, background: isSelected ? 'rgba(255,255,255,0.22)' : '#f1f5f9', color: isSelected ? '#ffffff' : '#64748b', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                    {count.toLocaleString()}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {/* Clean iPhone Category Filter Pills */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
+          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', marginRight: '4px', whiteSpace: 'nowrap' }}>
+            Filter Category:
+          </span>
+
+          {IPHONE_CATEGORIES.map(cat => {
+            const isSelected = reportCategory === cat.key;
+            const count = cat.key === 'ALL'
+              ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
+                  ? masterPartsReport.totalFilteredUnits
+                  : masterSummary.totalUnits)
+              : (masterSummary.categoryStats[cat.key] || 0);
+
+            const pillLabel = cat.key === 'ALL'
+              ? (Array.isArray(selectedCategories) && selectedCategories.length < 5
+                  ? 'All Active Categories'
+                  : 'All iPhone Parts')
+              : cat.label;
+
+            return (
+              <button
+                key={cat.key}
+                type="button"
+                onClick={() => setReportCategory(cat.key)}
+                style={{
+                  border: '1px solid',
+                  borderColor: isSelected ? '#0284c7' : '#cbd5e1',
+                  background: isSelected ? '#0284c7' : '#ffffff',
+                  color: isSelected ? '#ffffff' : '#334155',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: isSelected ? 700 : 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.12s ease'
+                }}
+              >
+                <span style={{ whiteSpace: 'nowrap' }}>{pillLabel}</span>
+                <span style={{ fontSize: '11px', fontWeight: 700, background: isSelected ? 'rgba(255,255,255,0.22)' : '#f1f5f9', color: isSelected ? '#ffffff' : '#64748b', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                  {count.toLocaleString()}
+                </span>
+              </button>
+            );
+          })}
+        </div>
 
         {/* Filter Controls Bar: Search, Sort, Limit */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
@@ -1956,9 +1986,18 @@ export default function Dashboard() {
       <div className="card" style={{ padding: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Outbound Shipments</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Recent Outbound Shipments</h3>
+              {activeShipments.length > 0 && (
+                <span className="badge" style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', fontSize: '11px', fontWeight: 700 }}>
+                  {activeShipments.length} Active
+                </span>
+              )}
+            </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-              Exported manifests dispatched for branch delivery
+              {activeShipments.length > 0
+                ? 'Active manifests dispatched or pending branch delivery'
+                : 'All outbound manifests have been received and confirmed by destination sites'}
             </p>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('shipments')}>
@@ -1969,19 +2008,39 @@ export default function Dashboard() {
 
         {recentShipments.length === 0 ? (
           <div style={{ padding: '32px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
-            <Truck size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
-            <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a' }}>No Outbound Shipments Generated Yet</div>
-            <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 12px' }}>
-              Scan serialized parts in Pack Scan-Out to generate delivery manifests for service branches.
+            <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: (shipments || []).length > 0 ? '#ecfdf5' : '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+              {(shipments || []).length > 0 ? (
+                <CheckCircle2 size={26} color="#059669" />
+              ) : (
+                <Truck size={26} color="#94a3b8" />
+              )}
+            </div>
+            <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>
+              {(shipments || []).length > 0 ? 'All Outbound Shipments Received' : 'No Outbound Shipments Generated Yet'}
+            </div>
+            <p style={{ fontSize: '12px', color: '#64748b', margin: '4px auto 16px', maxWidth: '440px' }}>
+              {(shipments || []).length > 0
+                ? 'All outbound delivery manifests have been successfully received and confirmed by destination service branches.'
+                : 'Scan serialized parts in Pack Scan-Out to generate delivery manifests for service branches.'}
             </p>
-            <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-out')}>
-              Open Pack Scan-Out
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+              {(shipments || []).length > 0 && (
+                <button className="btn btn-secondary btn-sm" onClick={() => setActiveTab('shipments')}>
+                  View Received Shipments
+                </button>
+              )}
+              <button className="btn btn-primary btn-sm" onClick={() => setActiveTab('scan-out')}>
+                Open Pack Scan-Out
+              </button>
+            </div>
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
             {recentShipments.map(sh => {
               const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_id) || {};
+              const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
+              const isPending = sh.status === 'pending_pickup' || sh.status === 'pending';
+              const badgeLabel = isPending ? 'Pending Pickup' : (isShipped ? 'In Transit / Shipped' : (sh.status ? sh.status.replace('_', ' ') : 'Draft'));
               return (
                 <div
                   key={sh.id}
@@ -2001,7 +2060,7 @@ export default function Dashboard() {
                       {sh.invoice_ref || sh.shipment_number}
                     </div>
                     <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                      To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || 0} units
+                      To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || sh.total_units || 0} units
                     </div>
                   </div>
 
@@ -2011,12 +2070,12 @@ export default function Dashboard() {
                       style={{
                         fontSize: '10.5px',
                         fontWeight: 600,
-                        background: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#ecfdf5' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#f0f9ff' : (sh.status === 'pending_pickup' ? '#fffbeb' : '#f1f5f9'),
-                        color: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '#047857' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '#0369a1' : (sh.status === 'pending_pickup' ? '#b45309' : '#475569'),
-                        border: (sh.status === 'received_confirmed' || sh.status === 'delivered') ? '1px solid #a7f3d0' : (sh.status === 'shipped' || sh.status === 'in_transit') ? '1px solid #bae6fd' : (sh.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0')
+                        background: isShipped ? '#f0f9ff' : (isPending ? '#fffbeb' : '#f1f5f9'),
+                        color: isShipped ? '#0369a1' : (isPending ? '#b45309' : '#475569'),
+                        border: isShipped ? '1px solid #bae6fd' : (isPending ? '1px solid #fde68a' : '1px solid #e2e8f0')
                       }}
                     >
-                      {sh.status === 'pending_pickup' ? 'Pending Pickup' : (sh.status === 'received_confirmed' ? 'Received' : (sh.status ? sh.status.replace('_', ' ') : 'Draft'))}
+                      {badgeLabel}
                     </span>
                     <button
                       className="btn btn-secondary btn-sm"

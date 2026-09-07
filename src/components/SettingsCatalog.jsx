@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
+import { getCategoryForPart } from '../utils/categoryFilter';
 import {
   Settings,
   Plus,
@@ -19,6 +20,7 @@ import {
   Building2,
   Phone,
   User,
+  Mail,
   RefreshCw,
   ShieldCheck,
   FileText,
@@ -41,7 +43,7 @@ const getCategoryBadgeStyle = (catName = '') => {
   if (name.includes('CAMERA')) return { bg: '#faf5ff', text: '#7e22ce', border: '#e9d5ff' };
   if (name.includes('BACK') || name.includes('GLASS')) return { bg: '#fffbeb', text: '#b45309', border: '#fde68a' };
   if (name.includes('REAR') || name.includes('MID')) return { bg: '#eef2ff', text: '#4338ca', border: '#c7d2fe' };
-  return { bg: '#f1f5f9', text: '#475569', border: '#e2e8f0' };
+  return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
 };
 
 export default function SettingsCatalog() {
@@ -117,7 +119,7 @@ export default function SettingsCatalog() {
 
   const BLANK_SITE = {
     code: '', name: '', region: 'Metro Manila', address: '',
-    contact_person: '', contact_phone: '', is_dc: false, ship_to: ''
+    contact_person: '', contact_phone: '', contact_email: '', is_dc: false, ship_to: ''
   };
   const [newSite, setNewSite] = useState(BLANK_SITE);
   const [deletingSite, setDeletingSite] = useState(null);
@@ -134,7 +136,10 @@ export default function SettingsCatalog() {
       (s.name || '').toLowerCase().includes(q) ||
       (s.region || '').toLowerCase().includes(q) ||
       (s.address || '').toLowerCase().includes(q) ||
-      (s.ship_to || '').toLowerCase().includes(q)
+      (s.ship_to || '').toLowerCase().includes(q) ||
+      (s.contact_person || '').toLowerCase().includes(q) ||
+      (s.contact_phone || '').toLowerCase().includes(q) ||
+      (s.contact_email || '').toLowerCase().includes(q)
     );
   }, [sites, siteSearch]);
 
@@ -325,8 +330,13 @@ export default function SettingsCatalog() {
   // Filtered parts calculation
   const filteredParts = useMemo(() => {
     return (parts || []).filter(p => {
-      if (selectedCategoryFilter !== 'ALL' && p.category_id !== selectedCategoryFilter) {
-        return false;
+      if (selectedCategoryFilter !== 'ALL') {
+        const cat = getCategoryForPart(p, categories);
+        const activeCat = categories.find(c => c.id === selectedCategoryFilter);
+        const matchesCat = (p.category_id === selectedCategoryFilter) ||
+          (cat && cat.id === selectedCategoryFilter) ||
+          (activeCat && cat && (cat.code === activeCat.code || cat.name === activeCat.name));
+        if (!matchesCat) return false;
       }
       if (partSearch.trim()) {
         const q = partSearch.toLowerCase().trim();
@@ -337,7 +347,7 @@ export default function SettingsCatalog() {
       }
       return true;
     });
-  }, [parts, partSearch, selectedCategoryFilter]);
+  }, [parts, partSearch, selectedCategoryFilter, categories]);
 
   return (
     <div className="settings-view" style={{ maxWidth: '1240px', margin: '0 auto', paddingBottom: '30px' }}>
@@ -729,13 +739,16 @@ export default function SettingsCatalog() {
                 {/* Category Filter */}
                 <select
                   className="form-select"
-                  style={{ height: '36px', fontSize: '12.5px', width: '170px', borderRadius: '6px' }}
+                  style={{ height: '36px', fontSize: '12.5px', width: '185px', borderRadius: '6px' }}
                   value={selectedCategoryFilter}
                   onChange={(e) => setSelectedCategoryFilter(e.target.value)}
                 >
                   <option value="ALL">All Categories ({parts.length})</option>
                   {categories.map(c => {
-                    const count = parts.filter(p => p.category_id === c.id).length;
+                    const count = (parts || []).filter(p => {
+                      const partCat = getCategoryForPart(p, categories);
+                      return p.category_id === c.id || partCat?.id === c.id || partCat?.code === c.code;
+                    }).length;
                     return (
                       <option key={c.id} value={c.id}>{c.name} ({count})</option>
                     );
@@ -777,7 +790,7 @@ export default function SettingsCatalog() {
                   </thead>
                   <tbody>
                     {filteredParts.map((p, i) => {
-                      const cat = categories.find(c => c.id === p.category_id);
+                      const cat = getCategoryForPart(p, categories);
                       const isVariant = partNumberCounts[p.part_number?.toUpperCase()] > 1;
                       const catBadge = getCategoryBadgeStyle(cat?.name);
                       return (
@@ -865,7 +878,10 @@ export default function SettingsCatalog() {
                             <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                               <button
                                 className="btn btn-secondary btn-sm"
-                                onClick={() => setEditingPart({ ...p })}
+                                onClick={() => {
+                                  const currentCat = getCategoryForPart(p, categories);
+                                  setEditingPart({ ...p, category_id: currentCat?.id || p.category_id });
+                                }}
                                 title="Edit Part details and prices"
                                 style={{ padding: '4px 7px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
                               >
@@ -1102,7 +1118,7 @@ export default function SettingsCatalog() {
 
           {/* Table */}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="table-container" style={{ maxHeight: '580px' }}>
+            <div className="table-container" style={{ maxHeight: '580px', overflowX: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1111,7 +1127,7 @@ export default function SettingsCatalog() {
                     <th style={{ width: 110 }}>GSX Ship-To</th>
                     <th style={{ width: 120 }}>Region</th>
                     <th>Address</th>
-                    <th style={{ width: 90 }}>Contact</th>
+                    <th style={{ minWidth: 260 }}>Supervisor & Contact</th>
                     <th style={{ width: 130 }}>Type</th>
                     <th style={{ width: 80, textAlign: 'center' }}>Actions</th>
                   </tr>
@@ -1145,10 +1161,27 @@ export default function SettingsCatalog() {
                         <td style={{ fontSize: '12px', color: '#475569', maxWidth: '220px' }}>
                           {s.address || <span style={{ color: '#cbd5e1', fontStyle: 'italic' }}>No address set</span>}
                         </td>
-                        <td style={{ fontSize: '12px', color: '#64748b' }}>
-                          {s.contact_person && <div style={{ fontWeight: 600 }}>{s.contact_person}</div>}
-                          {s.contact_phone && <div style={{ color: '#94a3b8' }}>{s.contact_phone}</div>}
-                          {!s.contact_person && !s.contact_phone && <span style={{ color: '#cbd5e1', fontStyle: 'italic' }}>—</span>}
+                        <td style={{ minWidth: '260px', padding: '10px 12px' }}>
+                          {s.contact_person && (
+                            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '13px', marginBottom: '4px' }}>
+                              {s.contact_person}
+                            </div>
+                          )}
+                          {s.contact_phone && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)', marginBottom: '3px' }}>
+                              <Phone size={13} style={{ flexShrink: 0, color: '#0284c7' }} />
+                              <span>{s.contact_phone}</span>
+                            </div>
+                          )}
+                          {s.contact_email && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#334155', fontSize: '12px', wordBreak: 'break-all', lineHeight: 1.35 }}>
+                              <Mail size={13} style={{ flexShrink: 0, color: '#64748b' }} />
+                              <span style={{ userSelect: 'all' }}>{s.contact_email}</span>
+                            </div>
+                          )}
+                          {!s.contact_person && !s.contact_phone && !s.contact_email && (
+                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '12px' }}>—</span>
+                          )}
                         </td>
                         <td>
                           <span className={`badge ${s.is_dc ? 'badge-success' : 'badge-neutral'}`}>
@@ -1308,20 +1341,27 @@ export default function SettingsCatalog() {
                     </div>
 
                     {/* Contact */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Contact Person</label>
+                        <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Supervisor / Contact</label>
                         <input type="text" className="form-input"
-                          placeholder="Branch manager name"
+                          placeholder="Supervisor name"
                           value={newSite.contact_person}
                           onChange={e => setNewSite({ ...newSite, contact_person: e.target.value })} />
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label"><Phone size={12} style={{ display: 'inline', marginRight: '4px' }} />Contact Phone</label>
                         <input type="text" className="form-input"
-                          placeholder="+63 9XX XXX XXXX"
+                          placeholder="09XX-XXX-XXXX"
                           value={newSite.contact_phone}
                           onChange={e => setNewSite({ ...newSite, contact_phone: e.target.value })} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label"><Mail size={12} style={{ display: 'inline', marginRight: '4px' }} />Company Email</label>
+                        <input type="email" className="form-input"
+                          placeholder="name@mobilecareph.com"
+                          value={newSite.contact_email || ''}
+                          onChange={e => setNewSite({ ...newSite, contact_email: e.target.value })} />
                       </div>
                     </div>
                   </div>
@@ -1418,20 +1458,27 @@ export default function SettingsCatalog() {
                     </div>
 
                     {/* Contact */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Contact Person</label>
+                        <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Supervisor / Contact</label>
                         <input type="text" className="form-input"
-                          placeholder="Branch manager name"
+                          placeholder="Supervisor name"
                           value={editingSite.contact_person || ''}
                           onChange={e => setEditingSite({ ...editingSite, contact_person: e.target.value })} />
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label"><Phone size={12} style={{ display: 'inline', marginRight: '4px' }} />Contact Phone</label>
                         <input type="text" className="form-input"
-                          placeholder="+63 9XX XXX XXXX"
+                          placeholder="09XX-XXX-XXXX"
                           value={editingSite.contact_phone || ''}
                           onChange={e => setEditingSite({ ...editingSite, contact_phone: e.target.value })} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label"><Mail size={12} style={{ display: 'inline', marginRight: '4px' }} />Company Email</label>
+                        <input type="email" className="form-input"
+                          placeholder="name@mobilecareph.com"
+                          value={editingSite.contact_email || ''}
+                          onChange={e => setEditingSite({ ...editingSite, contact_email: e.target.value })} />
                       </div>
                     </div>
                   </div>

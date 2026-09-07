@@ -2,6 +2,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { unmarkDeletedSerials } from './deletionRegistryService';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+import { getPartCategory } from '../utils/categoryFilter';
 
 export const executeSaveUnitsToSupabase = async ({
   units,
@@ -12,18 +13,9 @@ export const executeSaveUnitsToSupabase = async ({
   await unmarkDeletedSerials(units.map(u => u.serial_number));
   setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
   try {
-    let defaultCatId = null;
-    const { data: dbCats } = await supabase.from('part_categories').select('id').limit(1);
-    if (dbCats && dbCats.length > 0) {
-      defaultCatId = dbCats[0].id;
-    } else {
-      const { data: newCat } = await supabase
-        .from('part_categories')
-        .insert({ name: 'General Parts', code: 'GEN' })
-        .select('id')
-        .single();
-      defaultCatId = newCat?.id;
-    }
+    const { data: dbCats } = await supabase.from('part_categories').select('id, code');
+    const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
+    const defaultCatId = dbCats?.[0]?.id || null;
 
     const { data: existingParts } = await supabase.from('parts').select('id, part_number');
     const existingPartsMap = new Map((existingParts || []).map(p => [p.part_number?.toUpperCase(), p.id]));
@@ -32,10 +24,12 @@ export const executeSaveUnitsToSupabase = async ({
     units.forEach(u => {
       const pn = (u.part_number || 'UNKNOWN').toUpperCase();
       if (!existingPartsMap.has(pn) && !missingParts.some(mp => mp.part_number === pn)) {
+        const catCode = getPartCategory({ part_number: pn, description: u.description });
+        const partCatId = catMap.get(catCode) || defaultCatId;
         missingParts.push({
           part_number: pn,
           description: u.description || 'Service Replacement Part',
-          category_id: defaultCatId
+          ...(partCatId ? { category_id: partCatId } : {})
         });
       }
     });

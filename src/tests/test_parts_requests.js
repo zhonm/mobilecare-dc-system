@@ -1,6 +1,8 @@
 import assert from 'assert';
 import { ROLE_PRESETS, ROLE_OPTIONS } from '../constants/roles.js';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation.js';
+import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilter.js';
+import { isUUID } from '../utils/appContextHelpers.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Parts Management (PMG) Role, Site Scan-In & Serial Privacy');
@@ -1014,6 +1016,61 @@ it('Packing List: Default destination site is blank requiring explicit selection
   const allowedPackRes = attemptPack(chosenSiteId, '661-21991', 'F8Y6276C1UQ13XCB1');
   assert.strictEqual(allowedPackRes.success, true);
   assert.strictEqual(allowedPackRes.siteId, 'site-clrk');
+});
+
+// 29. PMG STOCK ON HAND & ALL STOCKS CATEGORY UUID RESOLUTION
+it('Resolves Display category UUID 89179943-a0e2-4e80-b213-34e3bcb6869f to human-readable Display', () => {
+  const displayUuid = '89179943-a0e2-4e80-b213-34e3bcb6869f';
+  const mockCategories = [
+    { id: 'b069269c-a7e2-46fd-9d95-f0d479f1d6c3', code: 'BATTERY', name: 'Battery' },
+    { id: displayUuid, code: 'DISPLAY', name: 'Display' },
+    { id: 'c79bff7c-a7a67-44b4-9761-2f47a8ddda04', code: 'CAMERA', name: 'Camera' }
+  ];
+
+  // 1. Matched part with PostgreSQL category_id UUID
+  const part = {
+    part_number: '661-56065',
+    description: 'Display, iPhone 17',
+    category_id: displayUuid,
+    iphone_model: 'iPhone 17'
+  };
+
+  const catObj = getCategoryForPart(part, mockCategories);
+  assert.strictEqual(catObj.name, 'Display', 'Category name must resolve to "Display"');
+  assert.strictEqual(catObj.code, 'DISPLAY', 'Category code must resolve to "DISPLAY"');
+
+  // 2. Simulated partsSummary entry from getStockOnHandForSite
+  const resolvedCategoryName = catObj?.name || 'General';
+  const resolvedCategoryId = catObj?.id || part.category_id;
+  const resolvedCategoryCode = catObj?.code || 'GENERAL';
+
+  const summaryItem = {
+    partNumber: part.part_number,
+    description: part.description,
+    category: resolvedCategoryName,
+    category_id: resolvedCategoryId,
+    categoryCode: resolvedCategoryCode,
+    model: part.iphone_model
+  };
+
+  assert.strictEqual(summaryItem.category, 'Display', 'partsSummary.category must be human-readable "Display"');
+  assert.notStrictEqual(summaryItem.category, displayUuid, 'partsSummary.category must never be a raw UUID');
+
+  // 3. UI Badge resolution in RequestParts
+  const rawCat = summaryItem.category_name || summaryItem.category;
+  const displayCategory = (!isUUID(rawCat) && rawCat) || catObj?.name;
+  const badgeStyle = getCategoryBadgeStyle(catObj?.code || summaryItem.categoryCode || displayCategory);
+
+  assert.strictEqual(displayCategory, 'Display');
+  assert.strictEqual(isUUID(displayCategory), false, 'Displayed badge string must never be a UUID');
+  assert.strictEqual(badgeStyle.color, '#0369a1');
+  assert.strictEqual(badgeStyle.bg, '#e0f2fe');
+
+  // 4. Resilience: Even if rawCat was previously the raw UUID from legacy cache, it correctly falls back to Display
+  const legacyCachedCat = displayUuid.toUpperCase();
+  assert.strictEqual(isUUID(legacyCachedCat), true, 'Correctly detects UUID');
+  const healedDisplayCat = (!isUUID(legacyCachedCat) && legacyCachedCat) || catObj?.name;
+  assert.strictEqual(healedDisplayCat, 'Display', 'Healed category from legacy cache must be "Display"');
 });
 
 console.log('====================================================');
