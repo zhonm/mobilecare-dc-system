@@ -49,9 +49,9 @@ export function useCloudSync({
   setRepairUsageRecords,
   _savedRecords,
   setSavedRecords,
-  _stockTransferReports,
+  stockTransferReports,
   setStockTransferReports,
-  _stockTransferMetadata,
+  stockTransferMetadata,
   setStockTransferMetadata,
   _dcIntakeRecords,
   setDcIntakeRecords,
@@ -83,6 +83,16 @@ export function useCloudSync({
   useEffect(() => {
     isSavingRef.current = cloudSyncStatus.isSaving;
   }, [cloudSyncStatus.isSaving]);
+
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const stockTransferReportsRef = useRef(stockTransferReports);
+  useEffect(() => {
+    stockTransferReportsRef.current = stockTransferReports;
+  }, [stockTransferReports]);
 
   const pendingRealtimeSyncRef = useRef(false);
   const pendingRealtimeTablesRef = useRef(new Set());
@@ -249,7 +259,7 @@ export function useCloudSync({
   }, []);
 
   // Main Database Hydration
-  const hydrateFromSupabase = useCallback(async (selectiveTables = null) => {
+  const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
 
     try {
@@ -282,17 +292,72 @@ export function useCloudSync({
             'master_deleted_shipments_registry',
             'master_deleted_intakes_registry',
             'master_shipments_registry',
-            'live_master_dc_inventory'
+            'live_master_dc_inventory',
+            'deleted_period_record_ids_registry'
           ];
-          const [resSystem, resPeriods] = await Promise.all([
+          const [resSystem, resPeriods, resStockHeader] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
               .order('created_at', { ascending: false })
-              .limit(50)
+              .limit(50),
+            // Lightweight metadata check for master_stock_transfers_report_registry (~60 bytes)
+            supabase.from('saved_records')
+              .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
+              .eq('id', 'master_stock_transfers_report_registry')
+              .maybeSingle()
           ]);
           const systemRows = resSystem.data || [];
-          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id));
+          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry');
+
+          // Supabase Egress & Quota Defense for Stock Transfer Reports:
+          // Stock transfer files contain thousands of rows (~500 KB - 1 MB in JSON).
+          // We only download the full snapshot_data if local cache is empty, cloud timestamp is newer,
+          // user explicitly requests saved_records sync, or user is currently viewing the reports tab.
+          const stockHeader = resStockHeader?.data;
+          let stockTransferRow = null;
+          if (stockHeader) {
+            let localStockTransferUpdatedAt = null;
+            try {
+              localStockTransferUpdatedAt = localStorage.getItem('mdc_stock_transfer_updated_at');
+            } catch (e) {}
+            if (!localStockTransferUpdatedAt) {
+              try {
+                localStockTransferUpdatedAt = await dbStorage.getItem('mdc_stock_transfer_updated_at');
+              } catch (e) {}
+            }
+
+            const currentTab = activeTabRef.current || (typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '') : '');
+            const isReportsTab = currentTab === 'reports' || (typeof window !== 'undefined' && window.location.hash.includes('reports'));
+            const localCount = Array.isArray(stockTransferReportsRef.current) ? stockTransferReportsRef.current.length : 0;
+            const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('stock_transfers')));
+            const isTimestampMismatch = Boolean(stockHeader.updated_at && stockHeader.updated_at !== localStockTransferUpdatedAt);
+            const needsFullPayload = (isForce || localCount === 0 || isTimestampMismatch || isTargetedSync || isReportsTab) && stockHeader.notes !== '__CLEARED__';
+
+            if (needsFullPayload) {
+              try {
+                const { data: fullStockDoc } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'master_stock_transfers_report_registry')
+                  .maybeSingle();
+                if (fullStockDoc) {
+                  stockTransferRow = fullStockDoc;
+                }
+              } catch (err) {
+                console.warn('Full stock transfers fetch note:', err);
+                stockTransferRow = stockHeader;
+              }
+            } else {
+              // Up-to-date or cleared: lightweight header provides all required sync metadata without egress waste
+              stockTransferRow = stockHeader;
+            }
+          }
+
+          if (stockTransferRow) {
+            systemRows.push(stockTransferRow);
+          }
+
           return { data: [...systemRows, ...periodRows] };
         })() : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
@@ -799,28 +864,64 @@ export function useCloudSync({
           if (cloudReports.length > 0) {
             if (setStockTransferReports) setStockTransferReports(cloudReports);
             if (setStockTransferMetadata) setStockTransferMetadata(cloudMetadata);
-            try {
-              localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(cloudReports));
-              localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(cloudMetadata));
-            } catch (e) {}
             dbStorage.setItem('mdc_stock_transfer_reports', cloudReports);
             dbStorage.setItem('mdc_stock_transfer_metadata', cloudMetadata);
+            if (stockTransferDoc.updated_at) {
+              dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+            }
+            try {
+              if (stockTransferDoc.updated_at) {
+                localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+              }
+              localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(cloudMetadata));
+              localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(cloudReports));
+            } catch (e) {}
           } else if (stockTransferDoc.notes === '__CLEARED__') {
             if (setStockTransferReports) setStockTransferReports([]);
             if (setStockTransferMetadata) setStockTransferMetadata(null);
             try {
               localStorage.removeItem('mdc_stock_transfer_reports');
               localStorage.removeItem('mdc_stock_transfer_metadata');
+              if (stockTransferDoc.updated_at) {
+                localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+              }
             } catch (e) {}
             dbStorage.setItem('mdc_stock_transfer_reports', []);
             dbStorage.setItem('mdc_stock_transfer_metadata', null);
+            if (stockTransferDoc.updated_at) {
+              dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+            }
           }
-        } else {
+        } else if (stockTransferDoc && stockTransferDoc.notes === '__CLEARED__') {
+          if (setStockTransferReports) setStockTransferReports([]);
+          if (setStockTransferMetadata) setStockTransferMetadata(null);
+          try {
+            localStorage.removeItem('mdc_stock_transfer_reports');
+            localStorage.removeItem('mdc_stock_transfer_metadata');
+            if (stockTransferDoc.updated_at) {
+              localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+            }
+          } catch (e) {}
+          dbStorage.setItem('mdc_stock_transfer_reports', []);
+          dbStorage.setItem('mdc_stock_transfer_metadata', null);
+          if (stockTransferDoc.updated_at) {
+            dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
+          }
+        } else if (!stockTransferDoc) {
           // Self-heal: If cloud registry is missing, but this client already has local records, upload them to cloud
           try {
-            const localSavedReports = JSON.parse(localStorage.getItem('mdc_stock_transfer_reports') || '[]');
-            const localSavedMeta = JSON.parse(localStorage.getItem('mdc_stock_transfer_metadata') || 'null');
+            let localSavedReports = null;
+            let localSavedMeta = null;
+            try {
+              localSavedReports = JSON.parse(localStorage.getItem('mdc_stock_transfer_reports') || 'null');
+              localSavedMeta = JSON.parse(localStorage.getItem('mdc_stock_transfer_metadata') || 'null');
+            } catch (e) {}
+            if (!Array.isArray(localSavedReports) || localSavedReports.length === 0) {
+              localSavedReports = await dbStorage.getItem('mdc_stock_transfer_reports');
+              localSavedMeta = await dbStorage.getItem('mdc_stock_transfer_metadata');
+            }
             if (Array.isArray(localSavedReports) && localSavedReports.length > 0 && supabase) {
+              const nowIso = new Date().toISOString();
               supabase.from('saved_records').upsert({
                 id: 'master_stock_transfers_report_registry',
                 record_type: 'stock_transfer_report',
@@ -832,7 +933,7 @@ export function useCloudSync({
                   records: localSavedReports,
                   metadata: localSavedMeta
                 },
-                updated_at: new Date().toISOString()
+                updated_at: nowIso
               }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
             }
           } catch (e) {}
@@ -1472,7 +1573,7 @@ export function useCloudSync({
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
-      const success = await hydrateFromSupabase(tables);
+      const success = await hydrateFromSupabase(tables, Boolean(force || isManual));
       if (!silent) {
         if (success) {
           showToast('Successfully synced latest live data from database!', 'success');
@@ -1716,6 +1817,23 @@ export function useCloudSync({
               if (Date.now() - lastLocalTime >= 3000) {
                 autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]' });
               }
+            } else if (ev.data.type === 'STOCK_TRANSFERS_UPDATED') {
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: 'Local Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
+            } else if (ev.data.type === 'STOCK_TRANSFERS_CLEARED') {
+              if (setStockTransferReports) setStockTransferReports([]);
+              if (setStockTransferMetadata) setStockTransferMetadata(null);
+              try {
+                localStorage.removeItem('mdc_stock_transfer_reports');
+                localStorage.removeItem('mdc_stock_transfer_metadata');
+                if (ev.data.payload?.updatedAt) {
+                  localStorage.setItem('mdc_stock_transfer_updated_at', ev.data.payload.updatedAt);
+                }
+              } catch (e) {}
+              dbStorage.setItem('mdc_stock_transfer_reports', []);
+              dbStorage.setItem('mdc_stock_transfer_metadata', null);
+              if (ev.data.payload?.updatedAt) {
+                dbStorage.setItem('mdc_stock_transfer_updated_at', ev.data.payload.updatedAt);
+              }
             }
             triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
           }
@@ -1801,6 +1919,23 @@ export function useCloudSync({
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
               }
+            } else if (bType === 'STOCK_TRANSFERS_UPDATED') {
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: 'WebSocket Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
+            } else if (bType === 'STOCK_TRANSFERS_CLEARED') {
+              if (setStockTransferReports) setStockTransferReports([]);
+              if (setStockTransferMetadata) setStockTransferMetadata(null);
+              try {
+                localStorage.removeItem('mdc_stock_transfer_reports');
+                localStorage.removeItem('mdc_stock_transfer_metadata');
+                if (bPayload?.updatedAt) {
+                  localStorage.setItem('mdc_stock_transfer_updated_at', bPayload.updatedAt);
+                }
+              } catch (e) {}
+              dbStorage.setItem('mdc_stock_transfer_reports', []);
+              dbStorage.setItem('mdc_stock_transfer_metadata', null);
+              if (bPayload?.updatedAt) {
+                dbStorage.setItem('mdc_stock_transfer_updated_at', bPayload.updatedAt);
+              }
             } else if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
               const targetUserId = String(bPayload?.userId || '').trim().toLowerCase();
               const targetEmail = String(bPayload?.email || '').trim().toLowerCase();
@@ -1830,7 +1965,8 @@ export function useCloudSync({
               'PACKING_PRESENCE', 'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED',
               'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
               'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
-              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'
+              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
+              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {

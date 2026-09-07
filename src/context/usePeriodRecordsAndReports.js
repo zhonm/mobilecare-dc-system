@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
@@ -61,6 +61,30 @@ export function usePeriodRecordsAndReports({
       return null;
     }
   });
+
+  // IndexedDB startup hydration to withstand localStorage quota restrictions
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const [cachedReports, cachedMeta] = await Promise.all([
+          dbStorage.getItem('mdc_stock_transfer_reports'),
+          dbStorage.getItem('mdc_stock_transfer_metadata')
+        ]);
+        if (isMounted) {
+          if (Array.isArray(cachedReports) && cachedReports.length > 0) {
+            setStockTransferReports(prev => (prev && prev.length > 0 ? prev : cachedReports));
+          }
+          if (cachedMeta) {
+            setStockTransferMetadata(prev => prev || cachedMeta);
+          }
+        }
+      } catch (err) {
+        console.warn('Error hydrating stock transfers from IndexedDB:', err);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, []);
 
   const savePeriodRecord = async ({
     recordType = 'both',
@@ -496,21 +520,26 @@ export function usePeriodRecordsAndReports({
   };
 
   const importStockTransfersReport = async (records, metadata) => {
+    const nowIso = new Date().toISOString();
     setStockTransferReports(records);
     setStockTransferMetadata(metadata);
     try {
-      localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(records));
       localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(metadata));
-    } catch (e) {}
+      localStorage.setItem('mdc_stock_transfer_updated_at', nowIso);
+      localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(records));
+    } catch (e) {
+      console.debug('LocalStorage quota note for stock transfers:', e);
+    }
     await Promise.all([
       dbStorage.setItem('mdc_stock_transfer_reports', records),
-      dbStorage.setItem('mdc_stock_transfer_metadata', metadata)
+      dbStorage.setItem('mdc_stock_transfer_metadata', metadata),
+      dbStorage.setItem('mdc_stock_transfer_updated_at', nowIso)
     ]);
 
     if (supabase) {
       try {
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        await supabase.from('saved_records').upsert({
+        const { error } = await supabase.from('saved_records').upsert({
           id: 'master_stock_transfers_report_registry',
           record_type: 'stock_transfer_report',
           period_label: metadata?.fileName || 'Reports - Stock Transfers',
@@ -521,8 +550,9 @@ export function usePeriodRecordsAndReports({
             records,
             metadata
           },
-          updated_at: new Date().toISOString()
+          updated_at: nowIso
         }, { onConflict: 'id' });
+        if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       } catch (err) {
         console.warn('Sync stock transfers to Supabase error:', err);
@@ -531,28 +561,31 @@ export function usePeriodRecordsAndReports({
     }
 
     if (broadcastCloudEvent) {
-      broadcastCloudEvent('STOCK_TRANSFERS_UPDATED', { count: records.length, metadata, table: 'saved_records' });
+      broadcastCloudEvent('STOCK_TRANSFERS_UPDATED', { count: records.length, metadata, updatedAt: nowIso, table: 'saved_records' });
     }
 
     showToast(`Successfully imported ${records.length.toLocaleString()} stock transfer records`, 'success');
   };
 
   const clearStockTransfersReport = async () => {
+    const nowIso = new Date().toISOString();
     setStockTransferReports([]);
     setStockTransferMetadata(null);
     try {
       localStorage.removeItem('mdc_stock_transfer_reports');
       localStorage.removeItem('mdc_stock_transfer_metadata');
+      localStorage.removeItem('mdc_stock_transfer_updated_at');
     } catch (e) {}
     await Promise.all([
       dbStorage.setItem('mdc_stock_transfer_reports', []),
-      dbStorage.setItem('mdc_stock_transfer_metadata', null)
+      dbStorage.setItem('mdc_stock_transfer_metadata', null),
+      dbStorage.setItem('mdc_stock_transfer_updated_at', nowIso)
     ]);
 
     if (supabase) {
       try {
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        await supabase.from('saved_records').upsert({
+        const { error } = await supabase.from('saved_records').upsert({
           id: 'master_stock_transfers_report_registry',
           record_type: 'stock_transfer_report',
           period_label: 'Cleared Stock Transfers',
@@ -563,8 +596,9 @@ export function usePeriodRecordsAndReports({
             records: [],
             metadata: null
           },
-          updated_at: new Date().toISOString()
+          updated_at: nowIso
         }, { onConflict: 'id' });
+        if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       } catch (err) {
         console.warn('Clear stock transfers from Supabase error:', err);
@@ -573,7 +607,7 @@ export function usePeriodRecordsAndReports({
     }
 
     if (broadcastCloudEvent) {
-      broadcastCloudEvent('STOCK_TRANSFERS_CLEARED', { table: 'saved_records' });
+      broadcastCloudEvent('STOCK_TRANSFERS_CLEARED', { updatedAt: nowIso, table: 'saved_records' });
     }
 
     showToast('Cleared stock transfer reports data', 'info');

@@ -1,5 +1,6 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import dbStorage from '../utils/dbStorage';
 import {
   parseStockTransfersReportFile,
   exportStockTransfersToExcel,
@@ -208,6 +209,36 @@ export default function StockTransferReports() {
     stockTransferReports.forEach(r => { if (r.to_stock) s.add(r.to_stock); });
     return Array.from(s).sort();
   }, [stockTransferReports]);
+
+  // Smart On-Mount Hydration: If local state is empty, check IndexedDB first, then trigger targeted cloud sync
+  useEffect(() => {
+    if (!stockTransferReports || stockTransferReports.length === 0) {
+      let isMounted = true;
+      (async () => {
+        try {
+          const [cachedReports, cachedMeta] = await Promise.all([
+            dbStorage.getItem('mdc_stock_transfer_reports'),
+            dbStorage.getItem('mdc_stock_transfer_metadata')
+          ]);
+          if (isMounted && Array.isArray(cachedReports) && cachedReports.length > 0) {
+            importStockTransfersReport(cachedReports, cachedMeta);
+            return;
+          }
+        } catch (e) {}
+
+        if (isMounted) {
+          autoRefreshData({
+            force: true,
+            silent: true,
+            isManual: true,
+            reason: 'StockTransferReports tab initial mount sync',
+            tables: ['saved_records']
+          });
+        }
+      })();
+      return () => { isMounted = false; };
+    }
+  }, []);
 
   // ── File Upload ────────────────────────────────────────────────────────────
   const handleFileUpload = async (file) => {
@@ -428,7 +459,7 @@ export default function StockTransferReports() {
             </button>
             <button
               className="btn btn-secondary"
-              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Reports empty state sync' })}
+              onClick={() => autoRefreshData({ force: true, silent: false, isManual: true, reason: 'Reports empty state sync', tables: ['saved_records'] })}
               disabled={isAutoRefreshing}
               style={{ padding: '9px 20px', fontSize: '13px' }}
             >
@@ -652,7 +683,7 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
           {autoRefreshData && (
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData({ force: true, silent: false, reason: 'Reports manual sync' })}
+              onClick={() => autoRefreshData({ force: true, silent: false, isManual: true, reason: 'Reports manual sync', tables: ['saved_records'] })}
               disabled={isAutoRefreshing}
               title="Sync latest stock transfers from cloud database"
               style={{ fontWeight: 600 }}
