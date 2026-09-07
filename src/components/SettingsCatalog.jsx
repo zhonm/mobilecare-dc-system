@@ -117,7 +117,7 @@ export default function SettingsCatalog() {
 
   const BLANK_SITE = {
     code: '', name: '', region: 'Metro Manila', address: '',
-    contact_person: '', contact_phone: '', is_dc: false
+    contact_person: '', contact_phone: '', is_dc: false, ship_to: ''
   };
   const [newSite, setNewSite] = useState(BLANK_SITE);
   const [deletingSite, setDeletingSite] = useState(null);
@@ -133,7 +133,8 @@ export default function SettingsCatalog() {
       (s.code || '').toLowerCase().includes(q) ||
       (s.name || '').toLowerCase().includes(q) ||
       (s.region || '').toLowerCase().includes(q) ||
-      (s.address || '').toLowerCase().includes(q)
+      (s.address || '').toLowerCase().includes(q) ||
+      (s.ship_to || '').toLowerCase().includes(q)
     );
   }, [sites, siteSearch]);
 
@@ -1107,17 +1108,18 @@ export default function SettingsCatalog() {
                   <tr>
                     <th style={{ width: 90 }}>Code</th>
                     <th>Site / Branch Name</th>
-                    <th style={{ width: 130 }}>Region</th>
+                    <th style={{ width: 110 }}>GSX Ship-To</th>
+                    <th style={{ width: 120 }}>Region</th>
                     <th>Address</th>
                     <th style={{ width: 90 }}>Contact</th>
-                    <th style={{ width: 140 }}>Type</th>
+                    <th style={{ width: 130 }}>Type</th>
                     <th style={{ width: 80, textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredSites.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
                         {siteSearch ? `No branches match "${siteSearch}"` : 'No branches configured.'}
                       </td>
                     </tr>
@@ -1126,6 +1128,15 @@ export default function SettingsCatalog() {
                       <tr key={s.id}>
                         <td className="font-mono"><strong>{s.code}</strong></td>
                         <td style={{ fontWeight: 600, fontSize: '13px' }}>{s.name}</td>
+                        <td>
+                          {s.ship_to ? (
+                            <span className="badge badge-neutral font-mono" style={{ fontSize: '11px', letterSpacing: '0.4px', fontWeight: 600 }}>
+                              {s.ship_to}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '11px' }}>—</span>
+                          )}
+                        </td>
                         <td>
                           <span className={`badge ${s.region === 'Metro Manila' ? 'badge-primary' : 'badge-warning'}`}>
                             {s.region}
@@ -1258,8 +1269,8 @@ export default function SettingsCatalog() {
                       </div>
                     </div>
 
-                    {/* Region + Type */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                    {/* Region + Type + GSX Ship-To */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Region</label>
                         <select className="form-select"
@@ -1276,6 +1287,13 @@ export default function SettingsCatalog() {
                           <option value="branch">Service Branch</option>
                           <option value="dc">Distribution Center</option>
                         </select>
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">GSX Ship-To #</label>
+                        <input type="text" className="form-input font-mono"
+                          placeholder="e.g. 0001102538"
+                          value={newSite.ship_to || ''}
+                          onChange={e => setNewSite({ ...newSite, ship_to: e.target.value })} />
                       </div>
                     </div>
 
@@ -1361,8 +1379,8 @@ export default function SettingsCatalog() {
                       </div>
                     </div>
 
-                    {/* Region + Type */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                    {/* Region + Type + GSX Ship-To */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Region</label>
                         <select className="form-select"
@@ -1379,6 +1397,13 @@ export default function SettingsCatalog() {
                           <option value="branch">Service Branch</option>
                           <option value="dc">Distribution Center</option>
                         </select>
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">GSX Ship-To #</label>
+                        <input type="text" className="form-input font-mono"
+                          placeholder="e.g. 0001102538"
+                          value={editingSite.ship_to || ''}
+                          onChange={e => setEditingSite({ ...editingSite, ship_to: e.target.value })} />
                       </div>
                     </div>
 

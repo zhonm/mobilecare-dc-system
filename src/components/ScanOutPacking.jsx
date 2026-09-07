@@ -2119,9 +2119,16 @@ export default function ScanOutPacking() {
             <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
               <strong style={{ minWidth: '55px', fontSize: '12px', color: '#0f172a' }}>Ship To</strong>
               <div>
-                <strong style={{ fontSize: '12.5px', color: selectedSite ? '#0f172a' : '#d97706', textTransform: 'uppercase' }}>
-                  {selectedSite?.name || '— PLEASE SELECT DESTINATION SITE —'}
-                </strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '12.5px', color: selectedSite ? '#0f172a' : '#d97706', textTransform: 'uppercase' }}>
+                    {selectedSite?.name || '— PLEASE SELECT DESTINATION SITE —'}
+                  </strong>
+                  {selectedSite?.ship_to && (
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#0284c7', background: '#e0f2fe', padding: '1px 6px', borderRadius: '4px', fontFamily: 'var(--font-mono, monospace)' }}>
+                      GSX: {selectedSite.ship_to}
+                    </span>
+                  )}
+                </div>
                 <div style={{ color: selectedSite ? '#334155' : '#94a3b8', fontSize: '11.5px', marginTop: '2px', lineHeight: '1.4' }}>
                   {selectedSite?.address || 'Click "Select Site" above to choose the target receiving branch.'}
                 </div>
@@ -3188,6 +3195,11 @@ export default function ScanOutPacking() {
                               <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '2px 7px', borderRadius: '4px' }}>
                                 {site.region || 'Metro Manila'}
                               </span>
+                              {site.ship_to && (
+                                <span style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', background: '#e0f2fe', padding: '2px 7px', borderRadius: '4px', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '0.4px' }}>
+                                  Ship-To: {site.ship_to}
+                                </span>
+                              )}
                             </div>
 
                             {isSelected && (
