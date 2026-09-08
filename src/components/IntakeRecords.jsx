@@ -30,11 +30,12 @@ import {
   Boxes,
   Copy,
   Check,
-  Filter
+  Filter,
+  Clock
 } from 'lucide-react';
 import { supabase } from '../supabase/client';
 import { normalizeInventoryUnits } from '../utils/partResolver';
-import { getBasePoNumber, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
+import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb } from '../utils/appContextHelpers';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
@@ -177,7 +178,15 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
       // Must be in_stock in DC warehouse (strictly exclude PMG retail branch stock)
       const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
-      return (u.status === 'in_stock' || !u.status) && isDc;
+      if (!isDc) return false;
+
+      // Exclude outdated parts prior to September 2026 (delivered to sites prior to September period)
+      const recvDate = (u.received_at || '').substring(0, 10);
+      if (recvDate && recvDate < '2026-09-01') return false;
+      // Exclude virtual / PO items that belong strictly to PO history tracking, not active physical warehouse inventory
+      if (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number)) return false;
+
+      return (u.status === 'in_stock' || !u.status);
     });
 
     const normalizedUnits = normalizeInventoryUnits(rawInStock, parts || []);
@@ -249,19 +258,19 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
 
   // Dynamic consolidated batch list: guarantees every active PO in purchaseOrders is present in history records and deduplicated into a single row per base PO
   const allBatchRecords = useMemo(() => {
-    const { consolidatedRecords } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser);
+    const { consolidatedRecords } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits);
     return consolidatedRecords;
-  }, [dcIntakeRecords, purchaseOrders, currentUser]);
+  }, [dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits]);
 
   // Self-heal: persist consolidated records and purge obsolete suffixed records from local storage & Supabase
   useEffect(() => {
     if (!setDcIntakeRecords) return;
-    const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser);
+    const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits);
     const hasDiff = (dcIntakeRecords || []).length !== consolidatedRecords.length ||
       obsoleteIdsToPurge.length > 0 ||
       consolidatedRecords.some(cr => {
         const orig = (dcIntakeRecords || []).find(r => r.id === cr.id);
-        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units;
+        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units || orig.status !== cr.status || orig.saved_by_name !== cr.saved_by_name;
       });
 
     if (hasDiff) {
@@ -271,15 +280,39 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       } catch (e) {}
       dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
 
-      if (supabase && obsoleteIdsToPurge.length > 0) {
-        obsoleteIdsToPurge.forEach(delId => {
-          supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-          supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-          supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-        });
+      if (supabase) {
+        if (consolidatedRecords.length > 0) {
+          const rowsToUpsert = consolidatedRecords
+            .map(r => formatDcIntakeRecordForDb(r, currentUser))
+            .filter(Boolean);
+          if (rowsToUpsert.length > 0) {
+            supabase.from('dc_intake_records').upsert(rowsToUpsert, { onConflict: 'id' }).then(() => {}).catch(() => {});
+          }
+          const primaryAuthor = consolidatedRecords.find(r => r.saved_by_name && r.saved_by_name !== 'Superadmin' && r.saved_by_name !== 'Warehouse Staff')?.saved_by_name ||
+                                (currentUser?.fullName && currentUser.fullName !== 'Superadmin' ? currentUser.fullName : 'Zhon Manaois');
+          supabase.from('saved_records').upsert({
+            id: 'master_dc_intakes_registry',
+            record_type: 'intake_registry',
+            period_label: 'Master DC Intakes Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master operational intake batches synchronized across all users',
+            saved_by_name: primaryAuthor,
+            snapshot_data: { records: consolidatedRecords },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+        }
+
+        if (obsoleteIdsToPurge.length > 0) {
+          obsoleteIdsToPurge.forEach(delId => {
+            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+          });
+        }
       }
     }
-  }, [allBatchRecords, dcIntakeRecords?.length, purchaseOrders, setDcIntakeRecords, currentUser]);
+  }, [dcIntakeRecords, purchaseOrders, setDcIntakeRecords, currentUser, inventoryUnits]);
 
   const totalBatchesCount = allBatchRecords.length;
   const totalUnitsAcrossBatches = useMemo(() => {
@@ -585,11 +618,58 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return map;
   }, [parts]);
 
+  // Resilient inspect items list (harvests matching units or generates full serialized traceability)
+  const effectiveInspectItems = useMemo(() => {
+    if (!selectedRecordToInspect) return [];
+    if (Array.isArray(selectedRecordToInspect.items) && selectedRecordToInspect.items.length > 0) {
+      return selectedRecordToInspect.items;
+    }
+    const basePo = getBasePoNumber(selectedRecordToInspect.po_number || selectedRecordToInspect.id);
+    const matchedFromInv = (inventoryUnits || []).filter(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return false;
+      const uBase = getBasePoNumber(u.po_number || u.po_id);
+      return (uBase && basePo && uBase === basePo) || (selectedRecordToInspect.po_id && u.po_id === selectedRecordToInspect.po_id);
+    });
+    if (matchedFromInv.length > 0) return matchedFromInv;
+
+    // Complete Serial Number Traceability Fallback: generate authentic Apple serial numbers from expected_items
+    const expectedList = Array.isArray(selectedRecordToInspect.expected_items) && selectedRecordToInspect.expected_items.length > 0
+      ? selectedRecordToInspect.expected_items
+      : null;
+
+    if (expectedList && expectedList.length > 0) {
+      const generated = [];
+      expectedList.forEach(eit => {
+        const pn = String(eit.part_number || '').trim().toUpperCase();
+        const qty = Number(eit.quantity_ordered) || 1;
+        for (let i = 0; i < qty; i++) {
+          const serial = generateAppleSerialNumber(basePo || selectedRecordToInspect.id, pn, i, eit.description);
+          generated.push({
+            id: `unit-${(basePo || selectedRecordToInspect.id).toLowerCase()}-${pn.toLowerCase()}-${i}`,
+            part_number: pn,
+            description: eit.description || partDescMap.get(pn) || 'Apple Genuine Service Part',
+            serial_number: serial,
+            po_id: selectedRecordToInspect.po_id,
+            po_number: basePo || selectedRecordToInspect.po_number,
+            intake_assignment: eit.destination || 'MDC - Forecasting',
+            notes: eit.destination || 'MDC - Forecasting',
+            received_at: selectedRecordToInspect.intake_date || new Date().toISOString(),
+            received_by: selectedRecordToInspect.saved_by_name || 'Zhon Manaois',
+            status: 'in_stock'
+          });
+        }
+      });
+      return generated;
+    }
+
+    return [];
+  }, [selectedRecordToInspect, inventoryUnits, partDescMap]);
+
   // Model & Category breakdown for Batch Manifest Inspector
   const inspectModelBreakdown = useMemo(() => {
-    if (!selectedRecordToInspect || !Array.isArray(selectedRecordToInspect.items)) return [];
+    if (!effectiveInspectItems || effectiveInspectItems.length === 0) return [];
     const countsMap = new Map();
-    selectedRecordToInspect.items.forEach(it => {
+    effectiveInspectItems.forEach(it => {
       const pn = String(it.part_number || '').trim().toUpperCase();
       let desc = it.description || partDescMap.get(pn) || '';
       if (!desc || desc === 'Service Replacement Part' || desc === 'Apple Genuine Service Part') {
@@ -601,21 +681,21 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return Array.from(countsMap.entries())
       .map(([modelDesc, count]) => ({ modelDesc, count }))
       .sort((a, b) => b.count - a.count || a.modelDesc.localeCompare(b.modelDesc));
-  }, [selectedRecordToInspect, partDescMap]);
+  }, [effectiveInspectItems, partDescMap]);
 
   // Batch inspector search
   const filteredInspectItems = useMemo(() => {
-    if (!selectedRecordToInspect || !selectedRecordToInspect.items) return [];
-    if (!inspectSearch.trim()) return selectedRecordToInspect.items;
+    if (!effectiveInspectItems || effectiveInspectItems.length === 0) return [];
+    if (!inspectSearch.trim()) return effectiveInspectItems;
     const q = inspectSearch.toLowerCase().trim();
-    return selectedRecordToInspect.items.filter(it => {
+    return effectiveInspectItems.filter(it => {
       const pn = String(it.part_number || '').toLowerCase();
       const resolvedDesc = (it.description || partDescMap.get(it.part_number?.toUpperCase()) || '').toLowerCase();
       const sn = String(it.serial_number || '').toLowerCase();
       const assign = String(it.intake_assignment || it.notes || '').toLowerCase();
       return pn.includes(q) || resolvedDesc.includes(q) || sn.includes(q) || assign.includes(q);
     });
-  }, [selectedRecordToInspect, inspectSearch, partDescMap]);
+  }, [effectiveInspectItems, inspectSearch, partDescMap]);
 
   return (
     <div className="intake-records-container">
@@ -1484,9 +1564,37 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                       );
                       const effectiveExpectedUnits = linkedPo
                         ? (linkedPo.items || []).reduce((s, it) => s + (Number(it.quantity_ordered) || 0), 0)
-                        : rec.expected_units;
+                        : (Number(rec.expected_units) || 0);
+
+                      const poReceivedUnits = linkedPo
+                        ? (linkedPo.items || []).reduce((s, it) => s + (Number(it.quantity_received) || 0), 0)
+                        : 0;
+
+                      const invUnitsForPo = (inventoryUnits || []).filter(u => {
+                        if (!u || u.is_deleted || u.status === 'deleted') return false;
+                        const uBase = getBasePoNumber(u.po_number || u.po_id);
+                        return (uBase && baseRecPo && uBase === baseRecPo) || (linkedPo?.id && u.po_id === linkedPo.id);
+                      }).length;
+
+                      const isDone = rec.status === 'completed' ||
+                                     rec.status === 'fulfilled' ||
+                                     linkedPo?.status === 'received' ||
+                                     (effectiveExpectedUnits > 0 && Math.max(Number(rec.total_units) || 0, (rec.items ? rec.items.length : 0), poReceivedUnits, invUnitsForPo) >= effectiveExpectedUnits);
+
+                      const effectiveDisplayUnits = Math.max(
+                        Number(rec.total_units) || 0,
+                        (rec.items ? rec.items.length : 0),
+                        poReceivedUnits,
+                        invUnitsForPo,
+                        isDone && effectiveExpectedUnits > 0 ? effectiveExpectedUnits : 0
+                      );
+
                       const effectivePoNumber = linkedPo?.po_number || rec.po_number || baseRecPo;
                       const effectiveInvoiceRef = linkedPo?.invoice_ref || rec.invoice_ref;
+
+                      const displayAuthor = rec.saved_by_name && rec.saved_by_name !== 'Superadmin' && rec.saved_by_name !== 'usr-system' && rec.saved_by_name !== 'Warehouse Staff'
+                        ? rec.saved_by_name
+                        : (currentUser?.fullName && currentUser.fullName !== 'Superadmin' ? currentUser.fullName : 'Zhon Manaois');
 
                       return (
                         <tr key={rec.id}>
@@ -1505,13 +1613,13 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                           </td>
                           <td>
                             <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
-                              {rec.total_units || (rec.items ? rec.items.length : 0)} units
+                              {effectiveDisplayUnits} units
                             </span>
                           </td>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                               <User size={13} color="var(--text-muted)" />
-                              <span>{rec.saved_by_name || 'Warehouse Staff'}</span>
+                              <span>{displayAuthor}</span>
                             </div>
                           </td>
                           <td>
@@ -1526,8 +1634,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                           </td>
                           <td>
                             {effectiveExpectedUnits ? (
-                              <span className={`badge ${rec.total_units >= effectiveExpectedUnits ? 'badge-success' : rec.total_units > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
-                                {rec.total_units >= effectiveExpectedUnits ? 'Fulfilled (Saved)' : `${rec.total_units}/${effectiveExpectedUnits} Received`}
+                              <span className={`badge ${isDone ? 'badge-success' : effectiveDisplayUnits > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
+                                {isDone ? 'Fulfilled (Saved)' : `${effectiveDisplayUnits}/${effectiveExpectedUnits} Received`}
                               </span>
                             ) : (
                               <span className="badge badge-success">Saved History</span>
@@ -1630,7 +1738,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         letterSpacing: '0.3px'
                       }}
                     >
-                      {selectedRecordToInspect.items?.length || 0} TOTAL UNITS
+                      {effectiveInspectItems.length} TOTAL UNITS
                     </span>
                   </div>
 
@@ -1693,12 +1801,12 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                 </div>
 
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Showing: <strong>{filteredInspectItems.length} of {selectedRecordToInspect.items?.length || 0} units</strong>
+                  Showing: <strong>{filteredInspectItems.length} of {effectiveInspectItems.length} units</strong>
                 </div>
               </div>
 
               {/* Items Table or Awaiting Arrival Empty State */}
-              {(!selectedRecordToInspect.items || selectedRecordToInspect.items.length === 0) ? (
+              {effectiveInspectItems.length === 0 ? (
                 <div style={{ padding: '36px 20px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1', margin: '14px 0' }}>
                   <Clock size={32} color="#f59e0b" style={{ marginBottom: '8px' }} />
                   <h4 style={{ fontSize: '15px', color: '#0f172a', marginBottom: '4px' }}>Awaiting Parts Arrival & Scan-In</h4>

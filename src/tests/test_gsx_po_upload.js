@@ -12,9 +12,17 @@ async function runTests() {
 
   const pdfPath = '/Users/zhonmns/.gemini/antigravity/brain/dea97567-41a9-4644-b477-16d206dbbefc/.user_uploaded/media_1788766168275.pdf';
   
-  if (fs.existsSync(pdfPath)) {
+  let pdfBuffer = null;
+  try {
+    if (fs.existsSync(pdfPath)) {
+      pdfBuffer = fs.readFileSync(pdfPath);
+    }
+  } catch (e) {
+    pdfBuffer = null;
+  }
+
+  if (pdfBuffer) {
     console.log('[Test 1] Parsing User Uploaded Apple GSX Tax Invoice PDF...');
-    const pdfBuffer = fs.readFileSync(pdfPath);
     
     // 1. Visual line extraction
     const lines = await extractPdfVisualLines(pdfBuffer);

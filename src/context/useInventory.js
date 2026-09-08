@@ -49,10 +49,15 @@ export function useInventory({
         if (Array.isArray(parsed) && parsed.length > 0) baseUnits = parsed;
       }
 
-      // Filter out deleted serials before reconciliation (prevents ghost reappearance)
+      // Filter out deleted serials and pre-September DC stock units (delivered to sites prior to September)
       const filtered = baseUnits.filter(u => {
         const s = String(u.serial_number || '').trim().toUpperCase();
-        return !s || !deletedSerialsSet.has(s);
+        if (s && deletedSerialsSet.has(s)) return false;
+        const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+        const recvDate = (u.received_at || '').substring(0, 10);
+        if (isDc && recvDate && recvDate < '2026-09-01') return false;
+        if (isDc && (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number))) return false;
+        return true;
       });
 
       return reconcileUnitsWithPackedDrafts(filtered);
@@ -237,7 +242,8 @@ export function useInventory({
         const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
           prev || [],
           consolidatedPos.length > 0 ? consolidatedPos : [newPo],
-          currentUser
+          currentUser,
+          inventoryUnits
         );
         try {
           localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
@@ -259,6 +265,7 @@ export function useInventory({
             supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
           }
         }
+
         return consolidatedRecords;
       });
     }
@@ -347,13 +354,22 @@ export function useInventory({
     if (!setDcIntakeRecords) return;
 
     setDcIntakeRecords(prevRecords => {
-      const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(prevRecords || [], purchaseOrders || [], currentUser);
+      const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
+        prevRecords || [],
+        purchaseOrders || [],
+        currentUser,
+        inventoryUnits
+      );
 
       const hasLengthDiff = (prevRecords || []).length !== consolidatedRecords.length;
       const hasObsolete = obsoleteIdsToPurge.length > 0;
       const hasContentDiff = consolidatedRecords.some(cr => {
         const orig = (prevRecords || []).find(r => r.id === cr.id);
-        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units;
+        return !orig ||
+          orig.expected_units !== cr.expected_units ||
+          orig.po_number !== cr.po_number ||
+          orig.total_units !== cr.total_units ||
+          (orig.items || []).length !== (cr.items || []).length;
       });
 
       if (hasLengthDiff || hasObsolete || hasContentDiff) {
@@ -362,11 +378,20 @@ export function useInventory({
         } catch (e) {}
         dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
 
-        if (supabase && obsoleteIdsToPurge.length > 0) {
-          obsoleteIdsToPurge.forEach(delId => {
-            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+        if (supabase) {
+          if (obsoleteIdsToPurge.length > 0) {
+            obsoleteIdsToPurge.forEach(delId => {
+              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            });
+          }
+
+          consolidatedRecords.forEach(cr => {
+            const formattedRow = formatDcIntakeRecordForDb(cr, currentUser);
+            if (formattedRow) {
+              supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
+            }
           });
         }
         return consolidatedRecords;
@@ -374,7 +399,7 @@ export function useInventory({
 
       return prevRecords;
     });
-  }, [purchaseOrders, currentUser, setDcIntakeRecords]);
+  }, [purchaseOrders, currentUser, setDcIntakeRecords, inventoryUnits]);
 
   const saveUnitsToSupabase = async (units) => {
     if (!supabase || !units || units.length === 0) return;
@@ -524,6 +549,9 @@ export function useInventory({
       }
 
       if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      if (broadcastCloudEvent) {
+        broadcastCloudEvent('STOCK_UPDATED', { count: units.length, timestamp: Date.now() });
+      }
     } catch (err) {
       console.warn('saveUnitsToSupabase notice:', err.message);
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
@@ -693,9 +721,10 @@ export function useInventory({
 
     saveUnitsToSupabase([newUnit]);
 
+    let matchedPoNumber = matchedPo?.po_number || null;
+    let matchedPoSupplier = matchedPo?.supplier || null;
+
     if (targetPoId) {
-      let matchedPoNumber = null;
-      let matchedPoSupplier = null;
       setPurchaseOrders(prev => {
         const nextOrders = prev.map(po => {
           if (po.id === targetPoId || po.po_number.toUpperCase() === String(targetPoId).toUpperCase()) {
@@ -784,6 +813,25 @@ export function useInventory({
               localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextList));
             } catch (e) {}
             dbStorage.setItem('mdc_dc_intake_records', nextList);
+
+            if (supabase) {
+              const formatted = formatDcIntakeRecordForDb(autoRec, currentUser);
+              if (formatted) {
+                supabase.from('dc_intake_records').upsert(formatted, { onConflict: 'id' }).then(() => {}).catch(() => {});
+              }
+              supabase.from('saved_records').upsert({
+                id: 'master_dc_intakes_registry',
+                record_type: 'intake_registry',
+                period_label: 'Master DC Intakes Registry',
+                period_year: new Date().getFullYear(),
+                period_month: new Date().getMonth() + 1,
+                notes: 'Master operational intake batches synchronized across all users',
+                saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+                snapshot_data: { records: nextList },
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+            }
+
             return nextList;
           }
 
@@ -791,9 +839,33 @@ export function useInventory({
             localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords));
           } catch (e) {}
           dbStorage.setItem('mdc_dc_intake_records', nextRecords);
+
+          if (supabase) {
+            supabase.from('saved_records').upsert({
+              id: 'master_dc_intakes_registry',
+              record_type: 'intake_registry',
+              period_label: 'Master DC Intakes Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              notes: 'Master operational intake batches synchronized across all users',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: { records: nextRecords },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+          }
+
           return nextRecords;
         });
       }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('STOCK_UPDATED', {
+        count: 1,
+        unit: newUnit,
+        matchedPoNumber,
+        timestamp: Date.now()
+      });
     }
 
     barcodeAudio.playSuccess();

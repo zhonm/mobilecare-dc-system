@@ -11,8 +11,10 @@ import {
   safeUUID,
   formatShipmentForDb,
   formatDcIntakeRecordForDb,
+  parseDcIntakeRecordFromDb,
   isLockedConfirmedShipment,
   getBasePoNumber,
+  generateAppleSerialNumber,
   consolidatePurchaseOrdersList,
   consolidateDcIntakeRecordsList
 } from '../utils/appContextHelpers';
@@ -22,7 +24,7 @@ import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
-import { resolvePartCategoryId, getCategoryForPart, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
+import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 
 export function useCloudSync({
   currentUser,
@@ -63,7 +65,7 @@ export function useCloudSync({
   setSavedRecords,
   stockTransferReports,
   setStockTransferReports,
-  stockTransferMetadata,
+  _stockTransferMetadata,
   setStockTransferMetadata,
   _dcIntakeRecords,
   setDcIntakeRecords,
@@ -306,7 +308,10 @@ export function useCloudSync({
             'master_shipments_registry',
             'live_master_dc_inventory',
             'deleted_period_record_ids_registry',
-            'master_purchase_orders_registry'
+            'master_purchase_orders_registry',
+            'master_dc_intakes_registry',
+            'deleted_intake_ids_registry',
+            'deleted_unit_serials_registry'
           ];
           const [resSystem, resPeriods, resStockHeader] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
@@ -1233,6 +1238,7 @@ export function useCloudSync({
         }
 
         const intakeMap = new Map();
+        // 1. Authoritative direct dc_intake_records table
         if (dbIntakes && Array.isArray(dbIntakes)) {
           dbIntakes.forEach(row => {
             const parsed = parseDcIntakeRecordFromDb(row);
@@ -1245,28 +1251,63 @@ export function useCloudSync({
           });
         }
 
+        // 2. Master DC Intakes Registry from saved_records (cross-client unified registry)
+        const intakeRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_dc_intakes_registry');
+        if (intakeRegistryDoc?.snapshot_data?.records && Array.isArray(intakeRegistryDoc.snapshot_data.records)) {
+          intakeRegistryDoc.snapshot_data.records.forEach(rec => {
+            const cleanId = String(rec.id || '').trim().toUpperCase();
+            const cleanName = String(rec.record_name || '').trim().toUpperCase();
+            if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName))) {
+              if (!intakeMap.has(cleanId)) {
+                intakeMap.set(cleanId, rec);
+              } else {
+                const existing = intakeMap.get(cleanId);
+                const existingCount = Array.isArray(existing.items) ? existing.items.length : (Number(existing.total_units) || 0);
+                const recCount = Array.isArray(rec.items) ? rec.items.length : (Number(rec.total_units) || 0);
+                if (recCount > existingCount) {
+                  intakeMap.set(cleanId, { ...existing, ...rec });
+                }
+              }
+            }
+          });
+        }
+
+        // 3. Individual batch documents in saved_records
         (dbSavedRecords || []).forEach(r => {
-          if (r.id && (r.id.startsWith('INTAKE-') || r.id.startsWith('saved-batch-') || r.record_type === 'intake_batch')) {
+          if (r.id && (r.id.startsWith('INTAKE-') || r.id.startsWith('saved-batch-') || r.id.startsWith('MDC') || r.record_type === 'intake_batch')) {
             const cleanId = String(r.id).trim().toUpperCase();
-            if (!deletedIntakeIdsSet.has(cleanId) && !intakeMap.has(cleanId)) {
-              intakeMap.set(cleanId, {
+            if (!deletedIntakeIdsSet.has(cleanId)) {
+              const snap = r.snapshot_data || {};
+              const snapItems = Array.isArray(snap.items) ? snap.items : [];
+              const snapUnits = snap.total_units || snapItems.length || 0;
+              const docRec = {
                 id: cleanId,
-                record_name: r.record_name || r.id,
-                intake_date: r.intake_date || r.period_label || r.created_at?.split('T')[0],
-                po_number: r.snapshot_data?.po_number || null,
-                po_id: r.snapshot_data?.po_id || null,
-                invoice_ref: r.snapshot_data?.invoice_ref || null,
-                supplier_name: r.snapshot_data?.supplier_name || 'Direct Intake',
-                notes: r.notes || '',
-                status: r.snapshot_data?.status || 'completed',
-                items: r.snapshot_data?.items || [],
-                total_units: r.snapshot_data?.total_units || (r.snapshot_data?.items?.length || 0),
-                expected_units: r.snapshot_data?.expected_units || null,
-                total_value: r.snapshot_data?.total_value || 0,
-                saved_by_id: r.saved_by_id || null,
-                saved_by_name: r.saved_by_name || 'Warehouse Staff',
+                record_name: snap.record_name || r.record_name || r.period_label || r.id,
+                intake_date: snap.intake_date || r.intake_date || r.period_label || r.created_at?.split('T')[0],
+                po_number: snap.po_number || r.po_number || null,
+                po_id: snap.po_id || r.po_id || null,
+                invoice_ref: snap.invoice_ref || r.invoice_ref || null,
+                supplier_name: snap.supplier_name || snap.supplier || r.supplier || 'Direct Intake',
+                supplier: snap.supplier || snap.supplier_name || 'Direct Intake',
+                notes: r.notes || snap.notes || '',
+                status: snap.status || (snapUnits > 0 ? 'completed' : 'in_progress'),
+                items: snapItems,
+                total_units: snapUnits,
+                expected_units: snap.expected_units || null,
+                total_value: snap.total_value || snapItems.reduce((acc, it) => acc + Number(it.stocking_price || it.price || 99), 0),
+                saved_by_id: snap.saved_by_id || r.saved_by_id || null,
+                saved_by_name: snap.saved_by_name || r.saved_by_name || 'Warehouse Staff',
                 created_at: r.created_at || new Date().toISOString()
-              });
+              };
+              if (!intakeMap.has(cleanId)) {
+                intakeMap.set(cleanId, docRec);
+              } else {
+                const existing = intakeMap.get(cleanId);
+                const existingCount = Array.isArray(existing.items) ? existing.items.length : (Number(existing.total_units) || 0);
+                if (snapUnits > existingCount) {
+                  intakeMap.set(cleanId, { ...existing, ...docRec });
+                }
+              }
             }
           }
         });
@@ -1304,11 +1345,40 @@ export function useCloudSync({
             }
           } catch (e) {}
 
-          // 2. Merge cloud records from intakeMap
+          // 2. Merge cloud records from intakeMap (preserving richest data and preventing zeroing out)
           intakeMap.forEach((rec, cleanId) => {
             if (!deletedIntakeIdsSet.has(cleanId)) {
               const existing = map.get(cleanId);
-              map.set(cleanId, { ...(existing || {}), ...rec, id: cleanId });
+              if (!existing) {
+                map.set(cleanId, rec);
+              } else {
+                const existingItems = Array.isArray(existing.items) ? existing.items : [];
+                const recItems = Array.isArray(rec.items) ? rec.items : [];
+                const resolvedItems = recItems.length >= existingItems.length ? recItems : existingItems;
+
+                const existingUnits = Number(existing.total_units) || existingItems.length || 0;
+                const recUnits = Number(rec.total_units) || recItems.length || 0;
+                const resolvedUnits = Math.max(existingUnits, recUnits, resolvedItems.length);
+
+                const isGeneric = (n) => !n || n === 'Superadmin' || n === 'Warehouse Staff' || n === 'usr-system';
+                const resolvedAuthor = (!isGeneric(rec.saved_by_name))
+                  ? rec.saved_by_name
+                  : (!isGeneric(existing.saved_by_name) ? existing.saved_by_name : (rec.saved_by_name || existing.saved_by_name || 'Zhon Manaois'));
+
+                const isDone = existing.status === 'completed' || rec.status === 'completed' ||
+                               (rec.expected_units && resolvedUnits >= rec.expected_units) ||
+                               (existing.expected_units && resolvedUnits >= existing.expected_units);
+
+                map.set(cleanId, {
+                  ...existing,
+                  ...rec,
+                  id: cleanId,
+                  items: resolvedItems,
+                  total_units: resolvedUnits,
+                  status: isDone ? 'completed' : (resolvedUnits > 0 ? 'in_progress' : (rec.status || existing.status || 'in_progress')),
+                  saved_by_name: resolvedAuthor
+                });
+              }
             }
           });
 
@@ -1317,9 +1387,12 @@ export function useCloudSync({
             const poNumClean = String(po.po_number || '').trim().toUpperCase();
             const poInvClean = po.invoice_ref ? String(po.invoice_ref).trim().toUpperCase() : null;
             const targetUniqueId = poInvClean ? `${poNumClean}-${poInvClean}` : poNumClean;
+            const basePo = getBasePoNumber(po.po_number || po.id);
 
             let exists = false;
             map.forEach(rec => {
+              const recBase = getBasePoNumber(rec.po_number || rec.id);
+              if (basePo && recBase && basePo === recBase) exists = true;
               if (rec.po_id && po.id && rec.po_id === po.id) exists = true;
               if (rec.id && String(rec.id).trim().toUpperCase() === targetUniqueId) exists = true;
               if (poInvClean && rec.invoice_ref && String(rec.invoice_ref).trim().toUpperCase() === poInvClean && rec.po_number && String(rec.po_number).trim().toUpperCase() === poNumClean) exists = true;
@@ -1328,6 +1401,9 @@ export function useCloudSync({
             if (!exists && !deletedIntakeIdsSet.has(targetUniqueId)) {
               const poExpectedUnits = (po.items || []).reduce((sum, it) => sum + (Number(it.quantity_ordered) || 0), 0);
               const poExpectedValue = po.total_amount || (po.items || []).reduce((sum, it) => sum + (Number(it.extended_price) || 0), 0);
+              const poReceivedUnits = (po.items || []).reduce((sum, it) => sum + (Number(it.quantity_received) || 0), 0);
+              const isPoDone = po.status === 'received' || (poExpectedUnits > 0 && poReceivedUnits >= poExpectedUnits);
+
               map.set(targetUniqueId, {
                 id: targetUniqueId,
                 record_name: `${po.po_number}${po.invoice_ref ? ` - ${po.invoice_ref}` : ''} (Apple GSX PO)`,
@@ -1339,20 +1415,46 @@ export function useCloudSync({
                 supplier_name: po.supplier || 'Apple South Asia Pte Ltd',
                 supplier: po.supplier || 'Apple South Asia Pte Ltd',
                 notes: po.remarks || `Auto-registered from PO ${po.po_number} (${poExpectedUnits} units expected from Apple)`,
-                status: 'in_progress',
-                items: [],
+                status: isPoDone ? 'completed' : (poReceivedUnits > 0 ? 'in_progress' : 'pending'),
+                items: (po.items || []).flatMap(it => {
+                  const qty = Number(it.quantity_ordered) || 0;
+                  const units = [];
+                  for (let i = 0; i < qty; i++) {
+                    const serial = generateAppleSerialNumber(basePo, it.part_number, i, it.description);
+                    units.push({
+                      id: `unit-${basePo.toLowerCase()}-${String(it.part_number || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${i}`,
+                      part_number: it.part_number,
+                      description: it.description || 'Apple Genuine Service Part',
+                      serial_number: serial,
+                      po_id: po.id,
+                      po_number: basePo,
+                      intake_assignment: 'MDC - Forecasting',
+                      notes: 'MDC - Forecasting',
+                      stocking_price: Number(it.unit_price || 99),
+                      site_code: 'DC-MDC',
+                      site_name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
+                      current_site_id: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+                      received_at: po.order_date ? new Date(po.order_date).toISOString() : new Date().toISOString(),
+                      received_by: po.created_by || 'Zhon Manaois',
+                      status: 'in_stock',
+                      box_number: 1,
+                      is_generated: true
+                    });
+                  }
+                  return units;
+                }),
                 expected_items: (po.items || []).map(it => ({
                   part_number: it.part_number,
                   description: it.description,
                   quantity_ordered: it.quantity_ordered,
                   unit_price: it.unit_price
                 })),
-                total_units: 0,
+                total_units: isPoDone ? Math.max(poReceivedUnits, poExpectedUnits) : poReceivedUnits,
                 expected_units: poExpectedUnits,
-                total_value: 0,
+                total_value: isPoDone ? poExpectedValue : 0,
                 expected_value: poExpectedValue,
-                saved_by_id: 'usr-system',
-                saved_by_name: 'Superadmin',
+                saved_by_id: po.created_by_id || currentUser?.id || 'usr-zhon',
+                saved_by_name: po.created_by || (currentUser?.fullName && currentUser.fullName !== 'Superadmin' ? currentUser.fullName : 'Zhon Manaois') || 'Zhon Manaois',
                 created_at: po.created_at || new Date().toISOString(),
                 updated_at: new Date().toISOString()
               });
@@ -1362,10 +1464,16 @@ export function useCloudSync({
           const rawIntakeList = Array.from(map.values())
             .filter(rec => !deletedIntakeIdsSet.has(String(rec.id).trim().toUpperCase()));
 
+          const availableUnitsForIntakes = [
+            ...(Array.isArray(dbUnits) ? dbUnits : []),
+            ...(Array.isArray(inventoryUnits) ? inventoryUnits : [])
+          ];
+
           const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
             rawIntakeList,
             activeCloudOrLocalPOs,
-            currentUser
+            currentUser,
+            availableUnitsForIntakes
           );
 
           if (supabase && obsoleteIdsToPurge.length > 0) {
@@ -1562,11 +1670,77 @@ export function useCloudSync({
           if (liveMasterInvDoc?.snapshot_data?.units && Array.isArray(liveMasterInvDoc.snapshot_data.units)) {
             liveMasterInvDoc.snapshot_data.units.forEach(u => {
               const s = String(u.serial_number || '').trim().toUpperCase();
-              if (s && !deletedSerialsSet.has(s) && !map.has(s)) {
-                map.set(s, u);
+              if (s && !deletedSerialsSet.has(s)) {
+                if (!map.has(s)) {
+                  map.set(s, u);
+                } else {
+                  const existing = map.get(s);
+                  map.set(s, {
+                    ...existing,
+                    ...u,
+                    po_number: u.po_number || existing.po_number || null,
+                    po_id: u.po_id || existing.po_id || null,
+                    intake_assignment: u.intake_assignment || existing.intake_assignment || null,
+                    notes: u.notes || existing.notes || null,
+                    stocking_price: u.stocking_price || existing.stocking_price || 99
+                  });
+                }
               }
             });
           }
+
+          // Cross-Check & Harvest in-stock units recorded across intake batches (guarantees cross-user parity)
+          // Strictly harvest ONLY from physical intake batches (e.g. 'DIRECT RECEIVING' or 'INTAKE-'), NEVER from Purchase Order records!
+          (effectiveIntakeRecords || []).forEach(rec => {
+            if (!rec) return;
+            const isPoBatch = Boolean(
+              (rec.po_number && rec.po_number.trim() && !rec.id?.startsWith('INTAKE-DIRECT')) ||
+              (rec.id && (rec.id.startsWith('MDC') || rec.id.startsWith('PO-'))) ||
+              (rec.record_name && rec.record_name.includes('(Apple GSX PO)'))
+            );
+
+            if (Array.isArray(rec.items)) {
+              rec.items.forEach(u => {
+                const s = String(u.serial_number || '').trim().toUpperCase();
+                // Exclude outdated pre-September entries (delivered to sites prior to September period)
+                const recvDate = (u.received_at || rec.intake_date || '').substring(0, 10);
+                if (recvDate && recvDate < '2026-09-01') return;
+                if (s && !deletedSerialsSet.has(s)) {
+                  if (map.has(s)) {
+                    const existing = map.get(s);
+                    if (!existing.po_number && (u.po_number || rec.po_number)) {
+                      existing.po_number = u.po_number || rec.po_number;
+                    }
+                    if (!existing.po_id && (u.po_id || rec.po_id)) {
+                      existing.po_id = u.po_id || rec.po_id;
+                    }
+                  } else if (!isPoBatch) {
+                    const recvInfo = receivedShipmentsMap.get(s);
+                    const isPackedOrShipped = !recvInfo && shippedOrPackedSerials.has(s);
+                    const targetStatus = recvInfo
+                      ? 'in_stock'
+                      : (isPackedOrShipped
+                          ? (u.status === 'shipped' ? 'shipped' : 'packed')
+                          : (u.status || 'in_stock'));
+
+                    const rawAssign = u.intake_assignment || (u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+                    map.set(s, {
+                      ...u,
+                      serial_number: s,
+                      po_number: u.po_number || rec.po_number || null,
+                      po_id: u.po_id || rec.po_id || null,
+                      status: targetStatus,
+                      intake_assignment: rawAssign,
+                      notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('SVNR') && !u.notes.includes('Forecasting') ? `${rawAssign} | ${u.notes}` : rawAssign,
+                      current_site_id: recvInfo ? recvInfo.site_id : (u.current_site_id || 'site-dc'),
+                      site_code: recvInfo ? (recvInfo.site_code || 'DC-MDC') : (u.site_code || 'DC-MDC'),
+                      received_at: u.received_at || rec.intake_date || new Date().toISOString()
+                    });
+                  }
+                }
+              });
+            }
+          });
 
           // Offline fallback ONLY when Supabase query is completely unavailable
           if (!dbUnits) {
@@ -1601,7 +1775,15 @@ export function useCloudSync({
             }
           });
 
-          const mergedRaw = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+          const mergedRaw = Array.from(map.values())
+            .filter(u => {
+              const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+              const recvDate = (u.received_at || '').substring(0, 10);
+              if (isDc && recvDate && recvDate < '2026-09-01') return false;
+              if (isDc && (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number))) return false;
+              return true;
+            })
+            .sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
           const normalized = normalizeInventoryUnits(mergedRaw, allAvailableParts);
           const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft);
           try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
@@ -1881,6 +2063,14 @@ export function useCloudSync({
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+    } else if (type === 'UNIT_DELETED' && payload.serialNumber) {
+      const cleanS = String(payload.serialNumber).trim().toUpperCase();
+      setInventoryUnits(prev => {
+        const updated = (prev || []).filter(u => String(u.serial_number || '').trim().toUpperCase() !== cleanS);
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', updated);
+        return updated;
+      });
     }
   }, [setInventoryUnits]);
 
@@ -1940,7 +2130,7 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)) {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
               if (ev.data.type === 'GLOBAL_FORCE_CACHE_REFRESH') {
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
@@ -1957,6 +2147,14 @@ export function useCloudSync({
                   setActivePeriod(ev.data.payload.period);
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
+              } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: `Local Broadcast [${ev.data.type}]`,
+                  tables: ['inventory_units', 'dc_intake_records', 'saved_records', 'purchase_orders']
+                });
               } else {
                 if (ev.data.payload?.period && setActivePeriod) {
                   setActivePeriod(ev.data.payload.period);
@@ -2047,7 +2245,7 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(bType)) {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
               if (bType === 'GLOBAL_FORCE_CACHE_REFRESH') {
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
@@ -2064,6 +2262,14 @@ export function useCloudSync({
                   setActivePeriod(bPayload.period);
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+              } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: `WebSocket Broadcast [${bType}]`,
+                  tables: ['inventory_units', 'dc_intake_records', 'saved_records', 'purchase_orders']
+                });
               } else {
                 if (bPayload?.period && setActivePeriod) {
                   setActivePeriod(bPayload.period);
@@ -2113,11 +2319,12 @@ export function useCloudSync({
             // Egress Defense: Only trigger full/selective HTTP hydration if an unhandled table was explicitly targeted.
             // Events that are already applied in-memory (presences, pack updates, model changes) do not re-query the cloud DB.
             const isAlreadyHandledLocally = [
-              'PACKING_PRESENCE', 'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED',
+              'PACKING_PRESENCE', 'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNIT_DELETED',
               'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
               'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
-              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED'
+              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {

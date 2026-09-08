@@ -22,7 +22,11 @@ export function useIntakeRecords({
       try {
         pos = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
       } catch (e) {}
-      const { consolidatedRecords } = consolidateDcIntakeRecordsList(parsed, pos);
+      let inv = [];
+      try {
+        inv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+      } catch (e) {}
+      const { consolidatedRecords } = consolidateDcIntakeRecordsList(parsed, pos, null, inv);
       return consolidatedRecords;
     } catch {
       return [];
