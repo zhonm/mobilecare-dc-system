@@ -1,13 +1,5 @@
-/**
- * GSX PDF & Purchase Order Parser
- * Zero-dependency client-side & Node compatible parser for Apple GSX / SAP Tax Invoices.
- * 
- * Supports:
- * - Direct stream token decoding (hex <...> Tj and standard (...) Tj)
- * - Positional y/x sorting for exact line reconstruction
- * - Structured table cell extraction for multi-column headers and values
- * - Line item extraction: Apple Part Number (661-xxxxx), Description, Quantity Ordered, Quantity Shipped, Unit Price, Extended Price
- */
+import { normalizeDateToIso } from './appContextHelpers.js';
+
 
 /**
  * Extracts raw visual lines from PDF binary content.
@@ -352,14 +344,17 @@ export async function parseGsxInvoicePdf(pdfInput, filename = 'GSX_Invoice.pdf')
 
   const calculatedTotal = items.reduce((sum, it) => sum + (it.quantity_ordered * (it.unit_price || 0)), 0);
 
+  const normalizedOrderDate = normalizeDateToIso(documentDate);
+  const normalizedExpectedDate = shipDate ? normalizeDateToIso(shipDate) : normalizedOrderDate;
+
   return {
     po_number: poNumber,
     invoice_ref: invoiceRef,
     sales_order_no: salesOrderNo,
     customer_no: customerNo,
     supplier: supplier,
-    order_date: documentDate,
-    expected_date: shipDate || documentDate,
+    order_date: normalizedOrderDate,
+    expected_date: normalizedExpectedDate,
     currency: currency,
     total_amount: totalAmount > 0 ? totalAmount : calculatedTotal,
     remarks: webOrderNo ? `GSX Invoice ${invoiceRef || ''} / Web Order ${webOrderNo}` : `GSX Invoice ${invoiceRef || ''}`,
@@ -482,8 +477,8 @@ export async function parseGsxExcelOrCsv(fileData, filename = 'Purchase_Order.xl
     invoice_ref: invoiceRef,
     sales_order_no: salesOrderNo,
     supplier: supplier,
-    order_date: orderDate,
-    expected_date: expectedDate,
+    order_date: normalizeDateToIso(orderDate),
+    expected_date: normalizeDateToIso(expectedDate || orderDate),
     currency: currency,
     total_amount: calculatedTotal,
     remarks: `Imported from ${filename}`,

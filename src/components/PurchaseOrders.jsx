@@ -13,7 +13,7 @@ import {
   Files
 } from 'lucide-react';
 import { parseGsxInvoicePdf, parseGsxExcelOrCsv } from '../utils/gsxPdfParser';
-import { getBasePoNumber } from '../utils/appContextHelpers';
+import { getBasePoNumber, normalizeDateToIso } from '../utils/appContextHelpers';
 
 export default function PurchaseOrders() {
   const {
@@ -165,8 +165,8 @@ export default function PurchaseOrders() {
         setInvoiceRef(parsedData.invoice_ref || '');
         setSalesOrderNo(parsedData.sales_order_no || '');
         setSupplier(parsedData.supplier || 'Apple South Asia Pte Ltd');
-        setOrderDate(parsedData.order_date || new Date().toISOString().split('T')[0]);
-        setExpectedDate(parsedData.expected_date || parsedData.order_date || new Date().toISOString().split('T')[0]);
+        setOrderDate(normalizeDateToIso(parsedData.order_date));
+        setExpectedDate(normalizeDateToIso(parsedData.expected_date || parsedData.order_date));
         setCurrency(parsedData.currency || 'USD');
         setRemarks(parsedData.remarks || '');
         setItems(parsedData.items || []);
@@ -276,8 +276,8 @@ export default function PurchaseOrders() {
         invoice_ref: combinedInvoiceRef,
         sales_order_no: combinedSalesOrderNo,
         supplier: consolidatedStaged.supplier || 'Apple South Asia Pte Ltd',
-        order_date: consolidatedStaged.order_date || new Date().toISOString().split('T')[0],
-        expected_date: consolidatedStaged.expected_date || consolidatedStaged.order_date || new Date().toISOString().split('T')[0],
+        order_date: normalizeDateToIso(consolidatedStaged.order_date),
+        expected_date: normalizeDateToIso(consolidatedStaged.expected_date || consolidatedStaged.order_date),
         status: 'pending',
         currency: consolidatedStaged.currency || 'USD',
         total_amount: calculatedTotal,

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import dbStorage from '../utils/dbStorage';
+import { supabase } from '../supabase/client';
 import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
@@ -33,9 +34,8 @@ import {
   Filter,
   Clock
 } from 'lucide-react';
-import { supabase } from '../supabase/client';
 import { normalizeInventoryUnits } from '../utils/partResolver';
-import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb } from '../utils/appContextHelpers';
+import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst } from '../utils/appContextHelpers';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
@@ -259,7 +259,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Dynamic consolidated batch list: guarantees every active PO in purchaseOrders is present in history records and deduplicated into a single row per base PO
   const allBatchRecords = useMemo(() => {
     const { consolidatedRecords } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits);
-    return consolidatedRecords;
+    return [...consolidatedRecords].sort(sortBatchesNewestFirst);
   }, [dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits]);
 
   // Self-heal: persist consolidated records and purge obsolete suffixed records from local storage & Supabase
@@ -270,7 +270,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       obsoleteIdsToPurge.length > 0 ||
       consolidatedRecords.some(cr => {
         const orig = (dcIntakeRecords || []).find(r => r.id === cr.id);
-        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units || orig.status !== cr.status || orig.saved_by_name !== cr.saved_by_name;
+        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units || orig.status !== cr.status || orig.saved_by_name !== cr.saved_by_name || orig.intake_date !== cr.intake_date;
       });
 
     if (hasDiff) {
@@ -442,9 +442,9 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return Array.from(years).sort((a, b) => b - a);
   }, [allBatchRecords]);
 
-  // Filtered batch records
+  // Filtered batch records - always sorted newest newly created at the top
   const filteredBatchRecords = useMemo(() => {
-    return allBatchRecords.filter(rec => {
+    const list = allBatchRecords.filter(rec => {
       if (yearFilter !== 'ALL' && rec.intake_date) {
         const y = new Date(rec.intake_date).getFullYear();
         if (String(y) !== String(yearFilter)) return false;
@@ -468,6 +468,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       }
       return true;
     });
+
+    return [...list].sort(sortBatchesNewestFirst);
   }, [allBatchRecords, yearFilter, searchQuery]);
 
   // Export Date Group to Excel (.xlsx) with optimized layout and system UI styling
@@ -1546,7 +1548,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                     <tr>
                       <th>Batch ID</th>
                       <th>Batch Name / Manifest</th>
-                      <th>Intake Date</th>
+                      <th style={{ whiteSpace: 'nowrap', minWidth: '130px' }}>Intake Date</th>
                       <th>Total Units</th>
                       <th>Recorded By</th>
                       <th>Linked PO</th>
@@ -1589,7 +1591,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                         isDone && effectiveExpectedUnits > 0 ? effectiveExpectedUnits : 0
                       );
 
-                      const effectivePoNumber = linkedPo?.po_number || rec.po_number || baseRecPo;
+                      const rawPoCandidate = linkedPo?.po_number || rec.po_number || baseRecPo;
+                      const effectivePoNumber = !isDirectOrNonPo(rawPoCandidate) ? rawPoCandidate : null;
                       const effectiveInvoiceRef = linkedPo?.invoice_ref || rec.invoice_ref;
 
                       const displayAuthor = rec.saved_by_name && rec.saved_by_name !== 'Superadmin' && rec.saved_by_name !== 'usr-system' && rec.saved_by_name !== 'Warehouse Staff'
@@ -1605,10 +1608,12 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                             <strong>{rec.record_name || 'Parts History Record'}</strong>
                             {rec.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{rec.notes}</div>}
                           </td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <td style={{ whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
                               <Calendar size={13} color="var(--text-muted)" />
-                              <span>{rec.intake_date || 'Recent'}</span>
+                              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                                {normalizeDateToIso(rec.intake_date) || 'Recent'}
+                              </span>
                             </div>
                           </td>
                           <td>
@@ -1623,7 +1628,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                             </div>
                           </td>
                           <td>
-                            {effectivePoNumber && effectivePoNumber !== 'Direct Receiving' && effectivePoNumber !== 'Direct Intake' ? (
+                            {effectivePoNumber ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                 <strong style={{ fontFamily: 'var(--font-mono)', color: '#2563eb' }}>{effectivePoNumber}</strong>
                                 {effectiveInvoiceRef && <span style={{ fontSize: '11px', color: '#64748b' }}>Ref: {effectiveInvoiceRef}</span>}
@@ -1699,7 +1704,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                     Batch Manifest Inspector: {selectedRecordToInspect.id}
                   </h3>
                   <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    {selectedRecordToInspect.record_name} • {selectedRecordToInspect.intake_date} • {selectedRecordToInspect.saved_by_name}
+                    {selectedRecordToInspect.record_name} • {normalizeDateToIso(selectedRecordToInspect.intake_date)} • {selectedRecordToInspect.saved_by_name}
                   </p>
                 </div>
               </div>

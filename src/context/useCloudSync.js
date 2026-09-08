@@ -14,6 +14,7 @@ import {
   parseDcIntakeRecordFromDb,
   isLockedConfirmedShipment,
   getBasePoNumber,
+  normalizeDateToIso,
   generateAppleSerialNumber,
   consolidatePurchaseOrdersList,
   consolidateDcIntakeRecordsList
@@ -1255,17 +1256,29 @@ export function useCloudSync({
         const intakeRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_dc_intakes_registry');
         if (intakeRegistryDoc?.snapshot_data?.records && Array.isArray(intakeRegistryDoc.snapshot_data.records)) {
           intakeRegistryDoc.snapshot_data.records.forEach(rec => {
-            const cleanId = String(rec.id || '').trim().toUpperCase();
-            const cleanName = String(rec.record_name || '').trim().toUpperCase();
+            let normalizedRec = rec;
+            let cleanId = String(rec.id || '').trim().toUpperCase();
+            if (cleanId === 'DIRECT RECEIVING' || cleanId === 'DIRECT_RECEIVING') {
+              cleanId = 'MDC202600021';
+              normalizedRec = {
+                ...rec,
+                id: 'MDC202600021',
+                record_name: (rec.record_name && !rec.record_name.toUpperCase().startsWith('DIRECT RECEIVING')) ? rec.record_name : 'MDC202600021',
+                po_number: null,
+                po_id: null,
+                is_manual_intake: true
+              };
+            }
+            const cleanName = String(normalizedRec.record_name || '').trim().toUpperCase();
             if (cleanId && !deletedIntakeIdsSet.has(cleanId) && (!cleanName || !deletedIntakeIdsSet.has(cleanName))) {
               if (!intakeMap.has(cleanId)) {
-                intakeMap.set(cleanId, rec);
+                intakeMap.set(cleanId, normalizedRec);
               } else {
                 const existing = intakeMap.get(cleanId);
                 const existingCount = Array.isArray(existing.items) ? existing.items.length : (Number(existing.total_units) || 0);
-                const recCount = Array.isArray(rec.items) ? rec.items.length : (Number(rec.total_units) || 0);
+                const recCount = Array.isArray(normalizedRec.items) ? normalizedRec.items.length : (Number(normalizedRec.total_units) || 0);
                 if (recCount > existingCount) {
-                  intakeMap.set(cleanId, { ...existing, ...rec });
+                  intakeMap.set(cleanId, { ...existing, ...normalizedRec });
                 }
               }
             }
@@ -1312,23 +1325,40 @@ export function useCloudSync({
           }
         });
 
-        // Actively purge any deleted IDs from Supabase database in the background
-        if (supabase && deletedIntakeIdsSet.size > 0) {
-          Array.from(deletedIntakeIdsSet).forEach(delId => {
-            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-          });
+        // Actively purge any deleted IDs and corrupted DIRECT RECEIVING rows from Supabase database in the background
+        if (supabase) {
+          supabase.from('dc_intake_records').delete().eq('id', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
+          supabase.from('dc_intake_records').delete().eq('record_name', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
+          supabase.from('saved_records').delete().eq('id', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
+          if (deletedIntakeIdsSet.size > 0) {
+            Array.from(deletedIntakeIdsSet).forEach(delId => {
+              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
+            });
+          }
         }
 
         setDcIntakeRecords(prev => {
           const map = new Map();
 
-          // 1. Preserve existing local records
+          // 1. Preserve existing local records (healing any legacy DIRECT RECEIVING corruption)
           (prev || []).forEach(rec => {
-            const cleanId = String(rec.id || '').trim().toUpperCase();
+            let normalizedRec = rec;
+            let cleanId = String(rec.id || '').trim().toUpperCase();
+            if (cleanId === 'DIRECT RECEIVING' || cleanId === 'DIRECT_RECEIVING') {
+              cleanId = 'MDC202600021';
+              normalizedRec = {
+                ...rec,
+                id: 'MDC202600021',
+                record_name: (rec.record_name && !rec.record_name.toUpperCase().startsWith('DIRECT RECEIVING')) ? rec.record_name : 'MDC202600021',
+                po_number: null,
+                po_id: null,
+                is_manual_intake: true
+              };
+            }
             if (cleanId && !deletedIntakeIdsSet.has(cleanId)) {
-              map.set(cleanId, rec);
+              map.set(cleanId, normalizedRec);
             }
           });
 
@@ -1337,9 +1367,21 @@ export function useCloudSync({
             const localSaved = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
             if (Array.isArray(localSaved)) {
               localSaved.forEach(rec => {
-                const cleanId = String(rec.id || '').trim().toUpperCase();
+                let normalizedRec = rec;
+                let cleanId = String(rec.id || '').trim().toUpperCase();
+                if (cleanId === 'DIRECT RECEIVING' || cleanId === 'DIRECT_RECEIVING') {
+                  cleanId = 'MDC202600021';
+                  normalizedRec = {
+                    ...rec,
+                    id: 'MDC202600021',
+                    record_name: (rec.record_name && !rec.record_name.toUpperCase().startsWith('DIRECT RECEIVING')) ? rec.record_name : 'MDC202600021',
+                    po_number: null,
+                    po_id: null,
+                    is_manual_intake: true
+                  };
+                }
                 if (cleanId && !deletedIntakeIdsSet.has(cleanId) && !map.has(cleanId)) {
-                  map.set(cleanId, rec);
+                  map.set(cleanId, normalizedRec);
                 }
               });
             }
@@ -1369,6 +1411,11 @@ export function useCloudSync({
                                (rec.expected_units && resolvedUnits >= rec.expected_units) ||
                                (existing.expected_units && resolvedUnits >= existing.expected_units);
 
+                // Preserve is_manual_intake: if either side carries it, the merged record must too.
+                // This prevents a cloud re-fetch (where the column may not yet exist) from silently
+                // clearing the flag and causing the record to be misrouted on the next consolidation.
+                const resolvedIsManualIntake = existing.is_manual_intake === true || rec.is_manual_intake === true;
+
                 map.set(cleanId, {
                   ...existing,
                   ...rec,
@@ -1376,7 +1423,8 @@ export function useCloudSync({
                   items: resolvedItems,
                   total_units: resolvedUnits,
                   status: isDone ? 'completed' : (resolvedUnits > 0 ? 'in_progress' : (rec.status || existing.status || 'in_progress')),
-                  saved_by_name: resolvedAuthor
+                  saved_by_name: resolvedAuthor,
+                  is_manual_intake: resolvedIsManualIntake
                 });
               }
             }
@@ -1403,11 +1451,12 @@ export function useCloudSync({
               const poExpectedValue = po.total_amount || (po.items || []).reduce((sum, it) => sum + (Number(it.extended_price) || 0), 0);
               const poReceivedUnits = (po.items || []).reduce((sum, it) => sum + (Number(it.quantity_received) || 0), 0);
               const isPoDone = po.status === 'received' || (poExpectedUnits > 0 && poReceivedUnits >= poExpectedUnits);
+              const cleanPoIntakeDate = normalizeDateToIso(po.received_at || po.created_at || new Date());
 
               map.set(targetUniqueId, {
                 id: targetUniqueId,
                 record_name: `${po.po_number}${po.invoice_ref ? ` - ${po.invoice_ref}` : ''} (Apple GSX PO)`,
-                intake_date: po.order_date || new Date().toISOString().split('T')[0],
+                intake_date: cleanPoIntakeDate,
                 po_id: po.id,
                 po_number: po.po_number,
                 invoice_ref: po.invoice_ref || null,
@@ -1434,7 +1483,7 @@ export function useCloudSync({
                       site_code: 'DC-MDC',
                       site_name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
                       current_site_id: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
-                      received_at: po.order_date ? new Date(po.order_date).toISOString() : new Date().toISOString(),
+                      received_at: `${cleanPoIntakeDate}T12:00:00.000Z`,
                       received_by: po.created_by || 'Zhon Manaois',
                       status: 'in_stock',
                       box_number: 1,
@@ -1768,10 +1817,17 @@ export function useCloudSync({
             } catch (e) {}
           }
 
-          // Preserve active unsaved UI session drafts (in-progress receiving session before clicking Save Batch)
+          // Preserve active local inventory units (including freshly scanned units, session drafts, or optimistic additions not yet indexed in dbUnits)
           (prev || []).forEach(u => {
-            if (u.isSessionDraft && !deletedSerialsSet.has(String(u.serial_number || '').toUpperCase())) {
-              map.set(String(u.serial_number || '').toUpperCase(), u);
+            const s = String(u.serial_number || '').trim().toUpperCase();
+            if (s && !deletedSerialsSet.has(s) && !u.is_deleted && u.status !== 'deleted') {
+              if (!map.has(s)) {
+                // Unit exists in local state but not yet returned by cloud query: preserve optimistic addition
+                map.set(s, u);
+              } else if (u.isSessionDraft) {
+                const cloudUnit = map.get(s);
+                map.set(s, { ...cloudUnit, ...u });
+              }
             }
           });
 
@@ -2071,6 +2127,20 @@ export function useCloudSync({
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+    } else if ((type === 'STOCK_UPDATED' || type === 'UNIT_ADDED') && payload.unit) {
+      const u = payload.unit;
+      const cleanS = String(u.serial_number || payload.serial || '').trim().toUpperCase();
+      if (cleanS) {
+        setInventoryUnits(prev => {
+          if ((prev || []).some(existing => String(existing.serial_number || '').trim().toUpperCase() === cleanS)) {
+            return prev;
+          }
+          const updated = [u, ...(prev || [])];
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
     }
   }, [setInventoryUnits]);
 
@@ -2148,13 +2218,7 @@ export function useCloudSync({
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
               } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
-                autoRefreshData({
-                  force: true,
-                  silent: true,
-                  isManual: false,
-                  reason: `Local Broadcast [${ev.data.type}]`,
-                  tables: ['inventory_units', 'dc_intake_records', 'saved_records', 'purchase_orders']
-                });
+                triggerDebouncedRealtimeSync(`Local Broadcast [${ev.data.type}]`, 'inventory_units');
               } else {
                 if (ev.data.payload?.period && setActivePeriod) {
                   setActivePeriod(ev.data.payload.period);
@@ -2263,13 +2327,7 @@ export function useCloudSync({
                 }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
               } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
-                autoRefreshData({
-                  force: true,
-                  silent: true,
-                  isManual: false,
-                  reason: `WebSocket Broadcast [${bType}]`,
-                  tables: ['inventory_units', 'dc_intake_records', 'saved_records', 'purchase_orders']
-                });
+                triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
                 if (bPayload?.period && setActivePeriod) {
                   setActivePeriod(bPayload.period);

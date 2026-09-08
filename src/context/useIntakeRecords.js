@@ -136,7 +136,7 @@ export function useIntakeRecords({
       record_name: nextName,
       intake_date: cleanDate,
       po_id: recordData.po_id || recordData.poId || null,
-      po_number: recordData.po_number || recordData.poNumber || 'Direct Receiving',
+      po_number: recordData.po_number || recordData.poNumber || null,
       supplier_name: recordData.supplier_name || recordData.supplierName || recordData.supplier || 'Apple Authorized Logistics',
       notes: recordData.notes || '',
       items: rawItems,
@@ -144,6 +144,9 @@ export function useIntakeRecords({
       total_value: totalValue,
       saved_by_id: currentUser?.id || 'usr-system',
       saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+      // Flag this as a manually-created direct intake when there is no linked PO.
+      // This prevents the consolidation logic from treating it as a PO batch and overwriting its data.
+      is_manual_intake: !(recordData.po_id || recordData.poId),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -210,6 +213,7 @@ export function useIntakeRecords({
             notes: newRecord.notes || null,
             category_breakdown: newRecord.category_breakdown || {},
             items: Array.isArray(newRecord.items) ? newRecord.items : [],
+            is_manual_intake: newRecord.is_manual_intake === true,
             created_at: newRecord.created_at || new Date().toISOString(),
             updated_at: new Date().toISOString()
           };

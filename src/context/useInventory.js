@@ -11,6 +11,7 @@ import {
   isUUID,
   toValidUUID,
   getBasePoNumber,
+  normalizeDateToIso,
   consolidatePurchaseOrdersList,
   consolidateDcIntakeRecordsList
 } from '../utils/appContextHelpers';
@@ -204,8 +205,8 @@ export function useInventory({
       sales_order_no: poData.sales_order_no ? String(poData.sales_order_no).trim() : null,
       customer_no: poData.customer_no ? String(poData.customer_no).trim() : null,
       supplier: poData.supplier || 'Apple South Asia Pte Ltd',
-      order_date: poData.order_date || new Date().toISOString().split('T')[0],
-      expected_date: poData.expected_date || poData.order_date || new Date().toISOString().split('T')[0],
+      order_date: normalizeDateToIso(poData.order_date),
+      expected_date: normalizeDateToIso(poData.expected_date || poData.order_date),
       status: 'pending', // Strictly pending initially, zero auto-confirmation!
       currency: poData.currency || 'USD',
       total_amount: poData.total_amount || 0,
@@ -369,6 +370,7 @@ export function useInventory({
           orig.expected_units !== cr.expected_units ||
           orig.po_number !== cr.po_number ||
           orig.total_units !== cr.total_units ||
+          orig.intake_date !== cr.intake_date ||
           (orig.items || []).length !== (cr.items || []).length;
       });
 
@@ -608,25 +610,33 @@ export function useInventory({
       return { success: false, error: serialValidation.error, isInvalidSerial: true };
     }
 
-    const validatedSerial = serialValidation.cleanSerial;
     const resolvedSiteId = targetSiteId || currentUser?.siteId || 'site-dc';
     const resolvedSiteCode = targetSiteCode || (currentUser?.siteId ? (currentUser.siteCode || 'BRANCH') : 'DC-MDC');
-    const isDcDest = resolvedSiteId === 'site-dc' || resolvedSiteCode === 'DC-MDC' || resolvedSiteCode === 'DC' || (!resolvedSiteId && !resolvedSiteCode);
+    const isDcDest = resolvedSiteId === 'site-dc' ||
+      resolvedSiteCode === 'DC-MDC' ||
+      resolvedSiteCode === 'DC' ||
+      (!resolvedSiteId && !resolvedSiteCode) ||
+      (_sites || []).some(s => s.is_dc && (s.id === resolvedSiteId || s.code === resolvedSiteCode));
 
     const existingUnit = inventoryUnits.find(u => {
-      if (String(u.serial_number || '').toUpperCase() !== validatedSerial) return false;
+      if (String(u.serial_number || '').toUpperCase() !== cleanSerial) return false;
       if (u.status !== 'in_stock' && u.status) return false;
       if (isDcDest) {
-        return u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+        return u.current_site_id === 'site-dc' ||
+          u.current_site_id === resolvedSiteId ||
+          u.site_code === 'DC-MDC' ||
+          u.site_code === 'DC' ||
+          u.site_code === resolvedSiteCode ||
+          (!u.current_site_id && !u.site_code);
       }
       return u.current_site_id === resolvedSiteId || u.site_code === resolvedSiteCode;
     });
 
     if (existingUnit) {
       barcodeAudio.playError();
-      showToast(`Duplicate Serial: ${validatedSerial} already exists in ${isDcDest ? 'DC stock' : resolvedSiteCode}!`, 'error');
-      logScan('RECEIVE_IN', cleanPN, validatedSerial, false, 'Duplicate serial number');
-      return { success: false, error: `Duplicate serial number: ${validatedSerial}` };
+      showToast(`Duplicate Serial: ${cleanSerial} already exists in ${isDcDest ? 'DC stock' : resolvedSiteCode}!`, 'error');
+      logScan('RECEIVE_IN', cleanPN, cleanSerial, false, 'Duplicate serial number');
+      return { success: false, error: `Duplicate serial number: ${cleanSerial}` };
     }
 
     const effectiveAssignment = intakeAssignment === 'SVNR - Service Non-Repair' || String(intakeAssignment).includes('SVNR')
@@ -684,7 +694,7 @@ export function useInventory({
       part_number: part.part_number,
       description: part.description,
       category_id: part.category_id,
-      serial_number: validatedSerial,
+      serial_number: cleanSerial,
       intake_assignment: effectiveAssignment,
       notes: effectiveNotes,
       current_site_id: resolvedSiteId,
@@ -702,7 +712,7 @@ export function useInventory({
       stocking_price: part.stocking_price || 99
     };
 
-    unmarkDeletedSerials([validatedSerial]);
+    unmarkDeletedSerials([cleanSerial]);
 
     setInventoryUnits(prev => {
       const updated = [newUnit, ...(prev || []).filter(u => u.serial_number !== newUnit.serial_number)];

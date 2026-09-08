@@ -1931,10 +1931,30 @@
   align-items: flex-start;
 }
 
+.receive-btn-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.receive-btn-spacer {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+}
+
 @media (max-width: 800px) {
   .scan-input-grid {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .receive-btn-spacer {
+    display: none !important;
+  }
+
+  .receive-btn-col,
+  .receive-btn-col button {
+    width: 100% !important;
   }
 }
 

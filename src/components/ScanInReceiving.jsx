@@ -31,7 +31,8 @@ import {
   AlertTriangle,
   Copy,
   Boxes,
-  User
+  User,
+  Ban
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
@@ -323,7 +324,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Fast lookup map for serial numbers already present in the active site (Session, Inventory, Batch Archives)
   const systemSerialsMap = useMemo(() => {
     const map = new Map();
-    const isDcMode = activeReceivingSite.id === 'site-dc' || activeReceivingSite.code === 'DC-MDC' || activeReceivingSite.code === 'DC';
+    const isDcMode = activeReceivingSite.id === 'site-dc' ||
+      activeReceivingSite.code === 'DC-MDC' ||
+      activeReceivingSite.code === 'DC' ||
+      activeReceivingSite.id === dcSiteObj?.id ||
+      activeReceivingSite.code === dcSiteObj?.code;
 
     // 1. Current Session Scans (highest priority / most immediate)
     (sessionScans || []).forEach((u, idx) => {
@@ -342,7 +347,14 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // 2. Active Site Inventory Units (Strict Site Isolation)
     (inventoryUnits || []).forEach(u => {
-      const unitIsDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      const unitIsDc = u.current_site_id === 'site-dc' ||
+        u.current_site_id === dcSiteObj?.id ||
+        u.current_site_id === activeReceivingSite?.id ||
+        u.site_code === 'DC-MDC' ||
+        u.site_code === 'DC' ||
+        u.site_code === dcSiteObj?.code ||
+        u.site_code === activeReceivingSite?.code ||
+        (!u.current_site_id && !u.site_code);
       const isSiteMatch = isDcMode ? unitIsDc : (u.current_site_id === activeReceivingSite.id || u.site_code === activeReceivingSite.code);
       if (!isSiteMatch) return; // Completely ignore other sites to avoid false cross-site conflicts
 
@@ -400,7 +412,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     }
 
     return map;
-  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments, activeReceivingSite]);
+  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments, activeReceivingSite, dcSiteObj?.id, dcSiteObj?.code]);
 
   // Check if current serial input is already scanned / present in the system
   const duplicateSerialMatch = useMemo(() => {
@@ -479,6 +491,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     const rawSn = (overrideSn !== null ? overrideSn : serialInput).trim();
 
     if (!rawSn) {
+      barcodeAudio.playError();
       setScanResult({
         type: 'error',
         message: 'Please scan or enter a Serial Number'
@@ -503,6 +516,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     }
 
     if (!rawPn) {
+      barcodeAudio.playError();
       setScanResult({
         type: 'error',
         message: `Please scan or select a Part Number for S/N ${rawSn}`
@@ -518,6 +532,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     // Security Verification: Validate Serial Number before adding
     const validation = validateAppleSerialNumber(rawSn, pnToUse, parts);
     if (!validation.isValid) {
+      barcodeAudio.playError();
       setScanResult({
         type: 'error',
         message: validation.error
@@ -541,6 +556,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     });
 
     if (res.success) {
+      barcodeAudio.playSuccess();
       let poDetail;
       const matchedPo = res.matchedPo;
       if (matchedPo) {
@@ -571,6 +587,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
       return true;
     } else {
+      barcodeAudio.playError();
       setScanResult({
         type: 'error',
         message: res.error
@@ -663,8 +680,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (validation.isPartNumber) {
       setScanResult({
         type: 'error',
-        message: validation.error
+        message: `⚠️ Part Number detected in Serial field — auto-cleared. Please rescan the Serial Number barcode. (Got: ${cleanSerial.toUpperCase()})`
       });
+      // Auto-clear after brief pause so user sees the warning, then refocus for immediate rescan
+      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = setTimeout(() => {
+        setSerialInput('');
+        serialInputRef.current?.focus();
+        autoScanTimerRef.current = null;
+      }, 900);
       return; // Do NOT auto-receive when a Part Number is entered into Serial field!
     }
 
@@ -712,6 +736,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const handleSerialKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      if (duplicateSerialMatch) {
+        barcodeAudio.playError();
+        return;
+      }
       const combined = parseBarcodeData(serialInput);
       if (combined) {
         const resolved = resolvePartInfo(combined.pn, parts);
@@ -719,6 +747,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         setPartNumberInput(actualPn);
         setSerialInput(combined.sn);
         setShowPnDropdown(false);
+        const cleanCombinedSn = String(combined.sn || '').trim().toUpperCase();
+        if (cleanCombinedSn && systemSerialsMap.get(cleanCombinedSn)) {
+          barcodeAudio.playError();
+          return;
+        }
         if (autoReceive) {
           executeScan(actualPn, combined.sn);
         } else {
@@ -912,7 +945,22 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   // Filter for currently available IN-STOCK units in DC or Branch (normalized to ensure Apple P/N and exclude mislabeled/packed units)
   const availableInStockUnits = useMemo(() => {
-    const raw = (inventoryUnits || []).filter(u => {
+    // 1. Combine inventoryUnits with sessionScans (sessionScans takes precedence for real-time zero-latency reactivity)
+    const serialMap = new Map();
+    (inventoryUnits || []).forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) serialMap.set(s, u);
+    });
+    (sessionScans || []).forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) {
+        const existing = serialMap.get(s);
+        serialMap.set(s, { ...existing, ...u });
+      }
+    });
+    const pool = Array.from(serialMap.values());
+
+    const raw = pool.filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated' || u.status === 'deleted' || u.is_deleted) return false;
@@ -935,11 +983,18 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         return isUserSite;
       }
 
-      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
+      const isDc = u.current_site_id === 'site-dc' ||
+        u.current_site_id === dcSiteObj?.id ||
+        u.current_site_id === activeReceivingSite?.id ||
+        u.site_code === 'DC-MDC' ||
+        u.site_code === 'DC' ||
+        u.site_code === dcSiteObj?.code ||
+        u.site_code === activeReceivingSite?.code ||
+        (!u.current_site_id && !u.site_code);
       return (u.status === 'in_stock' || !u.status) && isDc;
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, packedSerialsSet, parts, isPmgUser, activeReceivingSite, currentUser]);
+  }, [inventoryUnits, sessionScans, packedSerialsSet, parts, isPmgUser, activeReceivingSite, dcSiteObj, currentUser]);
 
   // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedReceivedUnits = useMemo(() => {
@@ -1047,7 +1102,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
 
       return true;
-    });
+    }).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
   }, [enrichedReceivedUnits, assignmentFilter, categoryFilter, tableSearch]);
 
   const handleConfirmDeletePart = async () => {
@@ -1780,24 +1835,70 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             )}
           </div>
 
-          {/* Receive Submit Button */}
-          <div>
+          {/* Receive Submit Button Column with Alignment Spacer & Duplicate Guard */}
+          <div className="receive-btn-col">
+            <div
+              className="receive-btn-spacer"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '4px'
+              }}
+              aria-hidden="true"
+            >
+              <label className="scanner-field-label" style={{ visibility: 'hidden', userSelect: 'none' }}>
+                Action
+              </label>
+            </div>
             <button
-              className={`btn ${autoReceive ? 'btn-primary' : 'btn-secondary'} btn-lg`}
-              onClick={() => executeScan()}
+              type="button"
+              disabled={Boolean(duplicateSerialMatch)}
+              className={`btn ${autoReceive && !duplicateSerialMatch ? 'btn-primary' : 'btn-secondary'} btn-lg`}
+              onClick={() => {
+                if (duplicateSerialMatch) return;
+                executeScan();
+              }}
               style={{
                 height: '48px',
                 minWidth: '130px',
-                background: autoReceive ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#1e293b',
-                borderColor: autoReceive ? '#38bdf8' : '#475569',
-                color: '#fff',
+                background: duplicateSerialMatch
+                  ? 'rgba(239, 68, 68, 0.16)'
+                  : autoReceive
+                  ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)'
+                  : '#1e293b',
+                borderColor: duplicateSerialMatch ? '#ef4444' : autoReceive ? '#38bdf8' : '#475569',
+                color: duplicateSerialMatch ? '#f87171' : '#fff',
                 fontWeight: 600,
-                borderRadius: '10px'
+                borderRadius: '10px',
+                cursor: duplicateSerialMatch ? 'not-allowed' : 'pointer',
+                opacity: duplicateSerialMatch ? 0.6 : 1,
+                boxShadow: duplicateSerialMatch ? 'none' : undefined,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.15s ease-in-out'
               }}
-              title={autoReceive ? "Auto-Receive is Active: Press Enter or scan barcode to receive automatically" : "Click to manually confirm and receive part"}
+              title={
+                duplicateSerialMatch
+                  ? `Duplicate Serial: "${serialInput.trim()}" is already received in the system. Receiving is disabled.`
+                  : autoReceive
+                  ? "Auto-Receive is Active: Press Enter or scan barcode to receive automatically"
+                  : "Click to manually confirm and receive part"
+              }
             >
-              <span>{autoReceive ? 'Receive ↵' : 'Receive'}</span>
-              <ArrowRight size={18} />
+              {duplicateSerialMatch ? (
+                <>
+                  <Ban size={18} color="#ef4444" />
+                  <span>Receive (Blocked)</span>
+                </>
+              ) : (
+                <>
+                  <span>{autoReceive ? 'Receive ↵' : 'Receive'}</span>
+                  <ArrowRight size={18} />
+                </>
+              )}
             </button>
           </div>
         </div>

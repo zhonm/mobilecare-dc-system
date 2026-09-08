@@ -317,16 +317,95 @@ export function generateAppleSerialNumber(poNumber, partNumber, index = 0, descr
   return `${prefix}${partCode}${hexPart}${char1}${char2}${char3}${char4}`.slice(0, 17);
 }
 
+// Universal Date Normalizer: Converts any date format (e.g. '02-Sep-2026', '2026-09-08T...', '09/08/2026') into standard ISO YYYY-MM-DD
+export function normalizeDateToIso(dateInput) {
+  if (!dateInput) return new Date().toISOString().split('T')[0];
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (!trimmed) return new Date().toISOString().split('T')[0];
+
+    // Already YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    // ISO string with T: e.g. 2026-09-08T...
+    if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return trimmed.split('T')[0];
+
+    // Match DD-MMM-YYYY or DD-MMM-YY (e.g. 02-Sep-2026, 02-SEP-2026, 2-Sep-26, 02 Sep 2026)
+    const dMonYMatch = trimmed.match(/^(\d{1,2})[-/\s]([A-Za-z]{3,9})[-/\s](\d{2,4})$/);
+    if (dMonYMatch) {
+      const day = dMonYMatch[1].padStart(2, '0');
+      const monthStr = dMonYMatch[2].slice(0, 3).toLowerCase();
+      let year = dMonYMatch[3];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      const monthMap = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+      };
+      const month = monthMap[monthStr];
+      if (month) {
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // Match YYYY-MMM-DD (e.g. 2026-Sep-02)
+    const yMonDMatch = trimmed.match(/^(\d{4})[-/\s]([A-Za-z]{3,9})[-/\s](\d{1,2})$/);
+    if (yMonDMatch) {
+      const year = yMonDMatch[1];
+      const monthStr = yMonDMatch[2].slice(0, 3).toLowerCase();
+      const day = yMonDMatch[3].padStart(2, '0');
+      const monthMap = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+      };
+      const month = monthMap[monthStr];
+      if (month) {
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // Match MM/DD/YYYY or DD/MM/YYYY
+    const mdyMatch = trimmed.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+    if (mdyMatch) {
+      const p1 = parseInt(mdyMatch[1], 10);
+      const p2 = parseInt(mdyMatch[2], 10);
+      const year = mdyMatch[3];
+      if (p1 > 12) {
+        return `${year}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+      } else {
+        return `${year}-${String(p1).padStart(2, '0')}-${String(p2).padStart(2, '0')}`;
+      }
+    }
+
+    // Native Date parser fallback
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  } else if (dateInput instanceof Date && !isNaN(dateInput.getTime())) {
+    const y = dateInput.getFullYear();
+    const m = String(dateInput.getMonth() + 1).padStart(2, '0');
+    const d = String(dateInput.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return new Date().toISOString().split('T')[0];
+}
+
 // Format intake record to match Supabase dc_intake_records table schema perfectly
 export function formatDcIntakeRecordForDb(rec, currentUser = null) {
   if (!rec) return null;
   const items = Array.isArray(rec.items) ? rec.items : [];
   const totalUnits = parseInt(rec.total_units !== undefined && rec.total_units !== null ? rec.total_units : items.length, 10) || 0;
+  const cleanDate = normalizeDateToIso(rec.intake_date || rec.intakeDate || rec.created_at);
 
   return {
     id: String(rec.id),
     record_name: String(rec.record_name || rec.id),
-    intake_date: rec.intake_date || new Date().toISOString().split('T')[0],
+    intake_date: cleanDate,
     po_id: safeUUID(rec.po_id),
     po_number: rec.po_number || null,
     supplier: rec.supplier || rec.supplier_name || 'Apple South Asia Pte Ltd',
@@ -336,6 +415,7 @@ export function formatDcIntakeRecordForDb(rec, currentUser = null) {
     notes: rec.notes || null,
     category_breakdown: rec.category_breakdown || {},
     items: items,
+    is_manual_intake: rec.is_manual_intake === true,
     created_at: rec.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -367,11 +447,12 @@ export function parseDcIntakeRecordFromDb(row) {
   const totalUnits = parseInt(row.total_units !== undefined && row.total_units !== null ? row.total_units : rawItems.length, 10) || 0;
   const expectedUnits = parseInt(row.expected_units, 10) || null;
   const isDone = row.status === 'completed' || row.status === 'fulfilled' || (expectedUnits ? totalUnits >= expectedUnits : totalUnits > 0);
+  const cleanDate = normalizeDateToIso(row.intake_date || row.created_at);
 
   return {
     id: String(row.id),
     record_name: String(row.record_name || row.id),
-    intake_date: row.intake_date ? String(row.intake_date).split('T')[0] : (row.created_at ? String(row.created_at).split('T')[0] : new Date().toISOString().split('T')[0]),
+    intake_date: cleanDate,
     po_id: row.po_id || null,
     po_number: row.po_number || null,
     invoice_ref: row.invoice_ref || null,
@@ -389,6 +470,7 @@ export function parseDcIntakeRecordFromDb(row) {
     category_breakdown: row.category_breakdown || {},
     items: rawItems,
     expected_items: rawExpectedItems,
+    is_manual_intake: row.is_manual_intake === true,
     status: isDone ? 'completed' : (row.status || (totalUnits > 0 ? 'in_progress' : 'pending')),
     created_at: row.created_at || new Date().toISOString(),
     updated_at: row.updated_at || new Date().toISOString()
@@ -675,13 +757,40 @@ export function generateNextInvoiceRef(shipmentsList = [], date = new Date()) {
   return `DCOWNED#${dateCode}${nextSeqLetters}`;
 }
 
+// Detect if a string represents a direct intake or non-PO placeholder (e.g. 'Direct Receiving', 'Direct Intake', 'None', etc.)
+export const isDirectOrNonPo = (str) => {
+  if (!str) return true;
+  const s = String(str).trim().toUpperCase();
+  return (
+    s === '' ||
+    s === 'DIRECT' ||
+    s === 'DIRECT RECEIVING' ||
+    s === 'DIRECT INTAKE' ||
+    s === 'DIRECT DISPATCH' ||
+    s === 'DIRECT BARCODE INTAKE' ||
+    s === 'DIRECT DISPATCH (NO PO)' ||
+    s === 'DIRECT INTAKE BATCH' ||
+    s.startsWith('DIRECT RECEIVING') ||
+    s.startsWith('DIRECT INTAKE') ||
+    s.startsWith('DIRECT DISPATCH') ||
+    s.startsWith('DIRECT BARCODE') ||
+    s === 'NO PO' ||
+    s === 'N/A' ||
+    s === 'NONE' ||
+    s === 'NULL' ||
+    s === 'UNDEFINED'
+  );
+};
+
 // Universal Purchase Order Normalizer: extracts canonical base PO Number (e.g. 'MDC202600018' from 'MDC202600018-1' or 'MDC202600018-MD03875753')
 export const getBasePoNumber = (poStr) => {
   if (!poStr) return '';
+  if (isDirectOrNonPo(poStr)) return '';
   let str = String(poStr).trim();
   if (str.includes('(Apple GSX PO)')) {
     str = str.replace(/\(Apple GSX PO\)/gi, '').trim();
   }
+  if (isDirectOrNonPo(str)) return '';
   if (/^po-/i.test(str)) {
     str = str.replace(/^po-/i, '');
   }
@@ -689,7 +798,9 @@ export const getBasePoNumber = (poStr) => {
   if (/^[A-Za-z0-9_-]+-\d{1,3}$/.test(str) && !/^(PO|SITE|BATCH|INTAKE)-\d{1,3}$/i.test(str)) {
     str = str.replace(/-\d{1,3}$/, '');
   }
-  return str.trim().toUpperCase();
+  const res = str.trim().toUpperCase();
+  if (isDirectOrNonPo(res)) return '';
+  return res;
 };
 
 // Consolidates multiple PO objects belonging to the same base PO into a single unified PO
@@ -758,6 +869,45 @@ export const consolidatePurchaseOrdersList = (orders) => {
   return Array.from(map.values());
 };
 
+// Extract maximum numerical ID from a record ID or name (e.g. MDC202600024 -> 202600024)
+export const extractMaxIdNumber = (idStr) => {
+  if (!idStr) return 0;
+  const matches = String(idStr).match(/\d+/g);
+  if (!matches || matches.length === 0) return 0;
+  return Math.max(...matches.map(m => parseInt(m, 10)));
+};
+
+// Sorts batches in descending order so that the newly created record is always at the top
+export const sortBatchesNewestFirst = (a, b) => {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+
+  // 1. Primary: created_at timestamp descending (most recently created/saved first)
+  const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+  const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+  if (timeA && timeB && timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
+    return timeB - timeA;
+  }
+
+  // 2. Secondary: Sequential Batch ID numeric descending (e.g. MDC202600024 > MDC202600022 > MDC202600021 > MDC202600020)
+  const idNumA = extractMaxIdNumber(a.id || a.record_name);
+  const idNumB = extractMaxIdNumber(b.id || b.record_name);
+  if (idNumA !== idNumB && idNumA > 0 && idNumB > 0) {
+    return idNumB - idNumA;
+  }
+
+  // 3. Tertiary: intake_date descending (latest intake date first)
+  const dateA = a.intake_date ? new Date(a.intake_date).getTime() : 0;
+  const dateB = b.intake_date ? new Date(b.intake_date).getTime() : 0;
+  if (dateA && dateB && dateA !== dateB && !isNaN(dateA) && !isNaN(dateB)) {
+    return dateB - dateA;
+  }
+
+  // 4. Fallback: string comparison on ID descending
+  return String(b.id || '').localeCompare(String(a.id || ''));
+};
+
 // Consolidates Parts Saved History Records (dcIntakeRecords) by base PO Number, merging duplicate rows
 export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], currentUser = null, inventoryUnits = []) => {
   if (!Array.isArray(records)) return { consolidatedRecords: [], obsoleteIdsToPurge: [] };
@@ -776,31 +926,74 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
 
   records.forEach(r => {
     if (!r) return;
-    const isPoBatch = Boolean(
-      (r.po_number && r.po_number.trim()) ||
-      (r.po_id && String(r.po_id).trim()) ||
-      (r.record_name && r.record_name.includes('(Apple GSX PO)')) ||
-      (String(r.id || '').toUpperCase().startsWith('MDC'))
+
+    // 0. Heal legacy records corrupted by earlier consolidation bug (id set to 'DIRECT RECEIVING')
+    let recordToProcess = r;
+    const rawIdUpper = String(r.id || '').trim().toUpperCase();
+    if (rawIdUpper === 'DIRECT RECEIVING' || rawIdUpper === 'DIRECT_RECEIVING' || rawIdUpper.startsWith('DIRECT RECEIVING')) {
+      obsoleteIdsToPurge.add(String(r.id).trim());
+      obsoleteIdsToPurge.add('DIRECT RECEIVING');
+      recordToProcess = {
+        ...r,
+        id: 'MDC202600021',
+        record_name: (r.record_name && !r.record_name.toUpperCase().startsWith('DIRECT RECEIVING'))
+          ? r.record_name
+          : 'MDC202600021',
+        po_number: null,
+        po_id: null,
+        supplier_name: r.supplier_name && !r.supplier_name.toUpperCase().includes('APPLE') ? r.supplier_name : 'Direct Intake',
+        supplier: r.supplier && !r.supplier.toUpperCase().includes('APPLE') ? r.supplier : 'Direct Intake',
+        notes: (r.notes && !r.notes.includes('Purchase Order DIRECT RECEIVING')) ? r.notes : 'Direct Intake Batch',
+        is_manual_intake: true
+      };
+    }
+
+    // 1. Direct-intake / manual intake records saved by warehouse staff with no linked PO must NEVER be
+    // routed into the PO consolidation path — doing so would overwrite their custom names and
+    // data with auto-generated PO batch content. Protect them first.
+    const isExplicitlyManual = recordToProcess.is_manual_intake === true;
+    const hasDirectPo = isDirectOrNonPo(recordToProcess.po_number);
+    const hasDirectPoId = isDirectOrNonPo(recordToProcess.po_id);
+    const isDirectRecordId = isDirectOrNonPo(recordToProcess.id);
+
+    // Check if the record matches an ACTUAL Purchase Order in purchaseOrders (poMap)
+    const basePoCandidate = getBasePoNumber(recordToProcess.po_number) ||
+      (recordToProcess.record_name && recordToProcess.record_name.includes('(Apple GSX PO)') ? getBasePoNumber(recordToProcess.record_name.split(' ')[0]) : '') ||
+      (recordToProcess.po_id && !hasDirectPoId ? getBasePoNumber(recordToProcess.po_id) : '');
+
+    const matchesRealPo = basePoCandidate ? poMap.has(basePoCandidate) : false;
+
+    // A record is ONLY a PO batch if it is NOT manual, has a non-direct PO number, and matches a registered PO or has Apple GSX PO badge (without being a direct receiving badge)
+    const isPoBatch = !isExplicitlyManual && !hasDirectPo && Boolean(
+      (basePoCandidate && matchesRealPo) ||
+      (recordToProcess.record_name && recordToProcess.record_name.includes('(Apple GSX PO)') && !recordToProcess.record_name.toUpperCase().startsWith('DIRECT'))
     );
 
     if (!isPoBatch) {
-      nonPoRecords.push(r);
+      const cleanRecord = {
+        ...recordToProcess,
+        po_number: isDirectOrNonPo(recordToProcess.po_number) ? null : recordToProcess.po_number,
+        po_id: isDirectOrNonPo(recordToProcess.po_id) ? null : recordToProcess.po_id,
+        is_manual_intake: true
+      };
+      if (cleanRecord.record_name && cleanRecord.record_name.includes('(Apple GSX PO)') && (hasDirectPo || isDirectRecordId)) {
+        cleanRecord.record_name = cleanRecord.record_name.replace(/\s*\(Apple GSX PO\)/gi, '').trim();
+      }
+      nonPoRecords.push(cleanRecord);
       return;
     }
 
-    const basePo = getBasePoNumber(r.po_number) ||
-      getBasePoNumber(r.id) ||
-      (r.record_name ? getBasePoNumber(r.record_name.split(' ')[0]) : '');
+    const basePo = basePoCandidate || getBasePoNumber(recordToProcess.id);
 
-    if (!basePo) {
-      nonPoRecords.push(r);
+    if (!basePo || isDirectOrNonPo(basePo)) {
+      nonPoRecords.push({ ...recordToProcess, is_manual_intake: true, po_number: null });
       return;
     }
 
     if (!poRecordsMap.has(basePo)) {
       poRecordsMap.set(basePo, []);
     }
-    poRecordsMap.get(basePo).push(r);
+    poRecordsMap.get(basePo).push(recordToProcess);
   });
 
   // Ensure any active PO in purchaseOrders has a batch in history
@@ -864,7 +1057,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     let expectedItems = [];
     let invoiceRef = matchingPo?.invoice_ref || null;
     let salesOrderNo = matchingPo?.sales_order_no || null;
-    let orderDate = matchingPo?.order_date || null;
+    let orderDate = matchingPo?.order_date ? normalizeDateToIso(matchingPo.order_date) : null;
     let supplier = matchingPo?.supplier || 'Apple South Asia Pte Ltd';
 
     if (matchingPo && Array.isArray(matchingPo.items) && matchingPo.items.length > 0) {
@@ -889,7 +1082,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
         }
         if (!invoiceRef && r.invoice_ref) invoiceRef = r.invoice_ref;
         if (!salesOrderNo && r.sales_order_no) salesOrderNo = r.sales_order_no;
-        if (!orderDate && r.intake_date) orderDate = r.intake_date;
+        if (!orderDate && r.intake_date) orderDate = normalizeDateToIso(r.intake_date);
         if (r.supplier) supplier = r.supplier;
       });
     }
@@ -904,6 +1097,25 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
 
     const isCompleted = isGroupCompleted || isPoReceived || isUnitsFulfilled;
     let status;
+
+    // Resolved Intake Date:
+    // Manual intakes retain their user-specified intake_date.
+    // For auto-saved PO records, the intake date at the DC warehouse represents when the shipment entered/was intaken into DC (received_at, created_at, or today), NOT Apple's historical invoice order_date!
+    let resolvedIntakeDate;
+    const isExplicitManual = Boolean(firstRec.is_manual_intake);
+    const dcReceiptDate = normalizeDateToIso(firstRec.received_at || matchingPo?.received_at || firstRec.created_at || matchingPo?.created_at || new Date());
+
+    if (isExplicitManual && firstRec.intake_date) {
+      resolvedIntakeDate = normalizeDateToIso(firstRec.intake_date);
+    } else if (firstRec.intake_date && orderDate && firstRec.intake_date === orderDate) {
+      // Previously set to Apple's invoice order_date; heal to actual DC receipt/creation date
+      resolvedIntakeDate = dcReceiptDate;
+    } else if (firstRec.intake_date && !orderDate) {
+      resolvedIntakeDate = normalizeDateToIso(firstRec.intake_date);
+    } else {
+      // Auto-saved PO record intake date: use actual DC receipt/creation date
+      resolvedIntakeDate = dcReceiptDate;
+    }
 
     // Author reconciliation: preserve specific user names over generic placeholders
     const isGenericUser = (name) => !name || name === 'Superadmin' || name === 'Warehouse Staff' || name === 'usr-system';
@@ -964,7 +1176,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
               site_code: 'DC-MDC',
               site_name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
               current_site_id: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
-              received_at: orderDate ? new Date(orderDate).toISOString() : (firstRec.intake_date ? new Date(firstRec.intake_date).toISOString() : new Date().toISOString()),
+              received_at: `${resolvedIntakeDate}T12:00:00.000Z`,
               received_by: resolvedAuthorName,
               status: 'in_stock',
               box_number: 1,
@@ -990,7 +1202,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
       ...firstRec,
       id: canonicalId,
       record_name: `${basePo} (Apple GSX PO)`,
-      intake_date: orderDate || firstRec.intake_date || new Date().toISOString().split('T')[0],
+      intake_date: resolvedIntakeDate,
       po_id: canonicalPoId,
       po_number: basePo,
       invoice_ref: invoiceRef,
@@ -1014,8 +1226,11 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     });
   });
 
+  const allConsolidated = [...consolidatedPoRecords, ...nonPoRecords];
+  allConsolidated.sort(sortBatchesNewestFirst);
+
   return {
-    consolidatedRecords: [...consolidatedPoRecords, ...nonPoRecords],
+    consolidatedRecords: allConsolidated,
     obsoleteIdsToPurge: Array.from(obsoleteIdsToPurge)
   };
 };
