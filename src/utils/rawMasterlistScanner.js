@@ -25,7 +25,16 @@ export const CATEGORY_STYLE_MAP = {
 };
 
 export function getCategoryBadge(categoryName) {
-  return CATEGORY_STYLE_MAP[categoryName] || CATEGORY_STYLE_MAP['Component'];
+  if (!categoryName) return CATEGORY_STYLE_MAP['Component'];
+  if (CATEGORY_STYLE_MAP[categoryName]) return CATEGORY_STYLE_MAP[categoryName];
+
+  const raw = String(categoryName).trim().toUpperCase();
+  if (raw.includes('BATTERY') || raw === 'BATT') return CATEGORY_STYLE_MAP['Battery'];
+  if (raw.includes('DISPLAY') || raw.includes('SCREEN')) return CATEGORY_STYLE_MAP['Display'];
+  if (raw.includes('CAMERA')) return CATEGORY_STYLE_MAP['Camera'];
+  if (raw.includes('BACK') || raw.includes('GLASS')) return CATEGORY_STYLE_MAP['Back Glass'];
+  if (raw.includes('REAR') || raw.includes('LOGIC') || raw.includes('MID')) return CATEGORY_STYLE_MAP['Rear System & Logic'];
+  return CATEGORY_STYLE_MAP['Component'];
 }
 
 // Pre-populate known part prices and categories from baseline catalog

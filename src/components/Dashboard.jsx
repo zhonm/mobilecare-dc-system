@@ -59,7 +59,7 @@ import {
   isPeriodMatching
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
-import { isPartMatchingCategoryFilter } from '../utils/categoryFilter';
+import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';
 import { filterActiveOutboundShipments, calculateActiveQueuePartsCount } from '../utils/shipmentHelpers';
 
 const USD_TO_PHP_RATE = 57;
@@ -81,6 +81,7 @@ export default function Dashboard() {
     shipments = [],
     parts = [],
     sites = [],
+    categories = [],
     currentUser,
     activePeriod,
     setActivePeriod,
@@ -262,10 +263,20 @@ export default function Dashboard() {
 
       if (!map.has(pn)) {
         const partObj = parts.find(p => p.part_number?.toUpperCase() === pn);
+        const description = u.description || partObj?.description || 'iPhone Replacement Component';
+        const catObj = getCategoryForPart({
+          part_number: pn,
+          description,
+          category_id: partObj?.category_id || u.category_id || u.category
+        }, categories);
+
         map.set(pn, {
           part_number: pn,
-          description: u.description || partObj?.description || 'iPhone Replacement Component',
-          category: partObj?.category_id || 'GENERAL',
+          description,
+          category: catObj?.name || 'General',
+          category_name: catObj?.name || 'General',
+          category_code: catObj?.code || 'GENERAL',
+          category_id: catObj?.id || partObj?.category_id || 'cat-other',
           units: [],
           maxDaysInDc: days,
           agingCount: 0,
@@ -293,9 +304,9 @@ export default function Dashboard() {
     if (activeSnapshotFilter !== 'ALL') {
       list = list.filter(item => {
         const desc = String(item.description).toUpperCase();
-        if (activeSnapshotFilter === 'DISPLAY') return desc.includes('DISPLAY') || desc.includes('SCREEN');
-        if (activeSnapshotFilter === 'BATTERY') return desc.includes('BATTERY');
-        if (activeSnapshotFilter === 'CAMERA') return desc.includes('CAMERA');
+        if (activeSnapshotFilter === 'DISPLAY') return desc.includes('DISPLAY') || desc.includes('SCREEN') || item.category_code === 'DISPLAY';
+        if (activeSnapshotFilter === 'BATTERY') return desc.includes('BATTERY') || item.category_code === 'BATTERY';
+        if (activeSnapshotFilter === 'CAMERA') return desc.includes('CAMERA') || item.category_code === 'CAMERA';
         if (activeSnapshotFilter === 'AGING') return item.agingCount > 0;
         return true;
       });
@@ -308,12 +319,13 @@ export default function Dashboard() {
       list = list.filter(item =>
         item.part_number.toLowerCase().includes(q) ||
         item.description.toLowerCase().includes(q) ||
+        item.category?.toLowerCase().includes(q) ||
         item.latest_serial?.toLowerCase().includes(q)
       );
     }
 
     return list;
-  }, [availableInStockUnits, parts, selectedCategories, activeSnapshotFilter, tableSearch]);
+  }, [availableInStockUnits, parts, categories, selectedCategories, activeSnapshotFilter, tableSearch]);
 
   const recentShipments = (activeShipments || []).slice(0, 6);
 
@@ -2244,20 +2256,35 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {groupedInventory.map((item, idx) => (
-                  <tr key={item.part_number} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
-                    <td style={{ textAlign: 'center', color: '#64748b', padding: '10px 12px', whiteSpace: 'nowrap' }}>{idx + 1}</td>
-                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a', padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      {item.part_number}
-                    </td>
-                    <td style={{ color: '#334155', padding: '10px 12px' }}>
-                      {item.description}
-                    </td>
-                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                        {String(item.category).replace('cat-', '').toUpperCase()}
-                      </span>
-                    </td>
+                {groupedInventory.map((item, idx) => {
+                  const badge = getCategoryBadge(item.category_name || item.category);
+                  return (
+                    <tr key={item.part_number} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
+                      <td style={{ textAlign: 'center', color: '#64748b', padding: '10px 12px', whiteSpace: 'nowrap' }}>{idx + 1}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        {item.part_number}
+                      </td>
+                      <td style={{ color: '#334155', padding: '10px 12px' }}>
+                        {item.description}
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <span
+                          className="badge"
+                          style={{
+                            background: badge.bg,
+                            color: badge.text || badge.color,
+                            border: `1px solid ${badge.border}`,
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            fontWeight: 700,
+                            fontSize: '11px',
+                            display: 'inline-block',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {badge.name || item.category_name || item.category}
+                        </span>
+                      </td>
                     <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
                       <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>
                         {item.units.length} units
@@ -2304,7 +2331,8 @@ export default function Dashboard() {
                       {item.latest_serial || '—'}
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
           </div>

@@ -2,8 +2,20 @@ import ExcelJS from 'exceljs';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { sanitizeForSpreadsheet } from './security.js';
+import { getPartCategory, HARDWARE_CATEGORIES } from './categoryFilter.js';
 
 const USD_TO_PHP_RATE = 57;
+
+function resolveCategoryDisplayName(item) {
+  if (item.category_name) return item.category_name;
+  const rawCat = String(item.category || '').trim();
+  if (rawCat && !/^[0-9a-f-]{30,}$/i.test(rawCat) && !rawCat.startsWith('cat-')) {
+    return rawCat;
+  }
+  const code = getPartCategory(item);
+  const matched = HARDWARE_CATEGORIES.find(c => c.code === code);
+  return matched?.name || 'General';
+}
 
 /**
  * Format currency in PHP
@@ -932,7 +944,7 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
       idx + 1,
       sanitizeForSpreadsheet(item.part_number || ''),
       sanitizeForSpreadsheet(item.description || ''),
-      sanitizeForSpreadsheet(String(item.category || '').replace('cat-', '').toUpperCase()),
+      sanitizeForSpreadsheet(resolveCategoryDisplayName(item)),
       unitsCount,
       agingLabel,
       sanitizeForSpreadsheet(item.latest_serial || '—')
@@ -1027,7 +1039,7 @@ export function exportDcInventoryToPDF(groupedInventory = [], { filter = 'ALL', 
     idx + 1,
     item.part_number || '',
     item.description || '',
-    String(item.category || '').replace('cat-', '').toUpperCase(),
+    resolveCategoryDisplayName(item),
     `${item.units?.length || 0} units`,
     item.maxDaysInDc >= 4 ? `Aging (${item.maxDaysInDc}d)` : `Fresh (${item.maxDaysInDc}d)`,
     item.latest_serial || '—'
