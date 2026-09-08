@@ -12,7 +12,6 @@ import {
   X,
   FileText,
   RefreshCw,
-  Sparkles,
   Search,
   Check,
   BookmarkPlus,
@@ -31,7 +30,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Copy,
-  Boxes
+  Boxes,
+  User
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
@@ -1129,6 +1129,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         </div>
 
         <div className="scanin-top-tabs-actions">
+          <div className="telemetry-badge" title="Cloud Database Realtime Active" style={{ height: '32px' }}>
+            <span className={`status-indicator ${cloudSyncStatus.isSaving ? 'syncing' : 'online'}`} />
+            <span style={{ fontSize: '11.5px' }}>{cloudSyncStatus.isSaving ? 'Saving to Cloud...' : 'Cloud Auto-Save: Active'}</span>
+          </div>
           <div className="telemetry-badge" title="Hardware Scanner Connection Status" style={{ height: '32px' }}>
             <div className="pulse-dot" />
             <span style={{ color: '#34d399', fontWeight: 600, fontSize: '11.5px' }}>Scanner: Ready (HID)</span>
@@ -1201,313 +1205,238 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
           {/* Scanner Workstation Hero Card */}
           <div className="scanner-hero">
-        {/* Header Row: Title & System Telemetry Status */}
-        <div className="scanner-hero-header" style={{ marginBottom: '18px', alignItems: 'flex-start' }}>
-          <div>
-            <h2 style={{ color: '#fff', fontSize: '21px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
-              <Barcode size={24} color="#38bdf8" />
-              <span>{isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}</span>
-            </h2>
-            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '3px', margin: '3px 0 0 0' }}>
-              Physical Keyboard HID Barcode Scanner Active • Receiving Site: <strong style={{ color: '#38bdf8' }}>{activeReceivingSite.name} ({activeReceivingSite.code})</strong>
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <div className="telemetry-badge" title="Cloud Database Realtime Active">
-              <span className={`status-indicator ${cloudSyncStatus.isSaving ? 'syncing' : 'online'}`} />
-              <span>{cloudSyncStatus.isSaving ? 'Saving to Cloud...' : 'Cloud Auto-Save: Active'}</span>
-            </div>
-
-            <div className="telemetry-badge" title="Current In-Stock Inventory in DB">
-              <Database size={13} color="#38bdf8" />
-              <span>
-                <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'}
-              </span>
-            </div>
-
-            <div className="telemetry-badge" title="Hardware Scanner Connection Status">
-              <div className="pulse-dot" />
-              <span style={{ color: '#34d399', fontWeight: 600 }}>Scanner: Ready (HID)</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Workstation Controls & Actions Toolbar */}
-        <div className="workstation-controls-bar" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-          {/* Column 1: PO Auto-Detection & Routing (DC Only) */}
-          {!isPmgUser && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                <label className="workstation-col-label" style={{ margin: 0 }}>
-                  <Building2 size={13} color="#38bdf8" />
-                  <span>1. Purchase Order Routing</span>
-                </label>
-                <span className="badge" style={{ background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0', fontSize: '10.5px', padding: '1px 6px', fontWeight: 600 }}>
-                  ⚡ Auto-Assign Active
-                </span>
-              </div>
-              <select
-                className="form-select"
-                style={{ width: '100%', background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1', height: '42px', fontSize: '13px' }}
-                value={selectedPoId}
-                onChange={(e) => handlePoChange(e.target.value)}
-              >
-                <option value="">⚡ Auto-Route to Designated PO ({purchaseOrders.filter(p => p.status !== 'received').length} Pending Orders)</option>
-                {purchaseOrders.map(po => {
-                  const totalOrd = po.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 0;
-                  const totalRec = po.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) || 0;
-                  const statusLabel = po.status === 'received' ? 'Fully Received' : `${totalRec}/${totalOrd} received`;
-                  return (
-                    <option key={po.id} value={po.id}>
-                      Focus PO: {po.po_number} {po.invoice_ref ? `(${po.invoice_ref})` : ''} — {statusLabel}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-          )}
-
-          {/* Column 2: Part Assignment Classification - Forecasting, CRBR, SVNR */}
-          {!isPmgUser && (
-            <div>
-              <label className="workstation-col-label">
-                <Layers size={13} color="#38bdf8" />
-                <span>2. Part Assignment Category</span>
-              </label>
-              <div style={{
-                display: 'flex',
-                gap: '6px',
-                background: '#0f172a',
-                padding: '4px',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid #334155',
-                height: '42px',
-                alignItems: 'center'
-              }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = 'MDC - Forecasting';
-                    setIntakeAssignment(next);
-                    intakeAssignmentRef.current = next;
-                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                    showToast('Part assignment set to "MDC - Forecasting"', 'info');
-                  }}
-                  style={{
-                    flex: 1,
-                    height: '32px',
-                    background: intakeAssignment === 'MDC - Forecasting' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-                    color: intakeAssignment === 'MDC - Forecasting' ? '#fff' : '#94a3b8',
-                    border: intakeAssignment === 'MDC - Forecasting' ? '1px solid #38bdf8' : 'none',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    fontWeight: intakeAssignment === 'MDC - Forecasting' ? 700 : 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s',
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Designated for Monthly Forecasting & Branch Stock Allocation"
-                >
-                  <span>MDC - Forecasting</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = 'DC - CRBR';
-                    setIntakeAssignment(next);
-                    intakeAssignmentRef.current = next;
-                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                    showToast('Part assignment set to "DC - CRBR"', 'info');
-                  }}
-                  style={{
-                    flex: 1,
-                    height: '32px',
-                    background: intakeAssignment === 'DC - CRBR' ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)' : 'transparent',
-                    color: intakeAssignment === 'DC - CRBR' ? '#fff' : '#94a3b8',
-                    border: intakeAssignment === 'DC - CRBR' ? '1px solid #f59e0b' : 'none',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    fontWeight: intakeAssignment === 'DC - CRBR' ? 700 : 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s',
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Designated for Customer Return / Repair Buffer Returns (CRBR)"
-                >
-                  <span>DC - CRBR</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = 'SVNR - Service Non-Repair';
-                    setIntakeAssignment(next);
-                    intakeAssignmentRef.current = next;
-                    try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                    showToast('Part assignment set to "SVNR - Service Non-Repair"', 'info');
-                  }}
-                  style={{
-                    flex: 1,
-                    height: '32px',
-                    background: intakeAssignment === 'SVNR - Service Non-Repair' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : 'transparent',
-                    color: intakeAssignment === 'SVNR - Service Non-Repair' ? '#fff' : '#c084fc',
-                    border: intakeAssignment === 'SVNR - Service Non-Repair' ? '1px solid #a855f7' : 'none',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    fontWeight: intakeAssignment === 'SVNR - Service Non-Repair' ? 700 : 500,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                    transition: 'all 0.15s',
-                    whiteSpace: 'nowrap'
-                  }}
-                  title="Designated for Service Non-Repair (SVNR) — Provincial Sites"
-                >
-                  <span>SVNR</span>
-                </button>
-              </div>
-              <span style={{ fontSize: '11px', color: intakeAssignment === 'SVNR - Service Non-Repair' ? '#c084fc' : intakeAssignment === 'DC - CRBR' ? '#fbbf24' : '#38bdf8', marginTop: '4px', display: 'block' }}>
-                {intakeAssignment === 'SVNR - Service Non-Repair'
-                  ? '• Tagged: SVNR - Service Non-Repair'
-                  : intakeAssignment === 'DC - CRBR'
-                  ? '• Tagged: DC - CRBR (Customer Return & Buffer)'
-                  : '• Tagged: MDC - Forecasting (Stock Allocation)'}
-              </span>
-            </div>
-          )}
-
-          {/* Column: Auto-Receive Switch & Settings */}
-          <div>
-            <label className="workstation-col-label">
-              <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
-              <span>{isPmgUser ? '1. Barcode Auto-Receive' : '3. Scanner Intake Mode'}</span>
-            </label>
-            <div
-              className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
-              onClick={() => {
-                const next = !autoReceive;
-                setAutoReceive(next);
-                showToast(`Auto-Receive Parts ${next ? 'ENABLED (Instant intake on barcode scan)' : 'DISABLED (Manual confirmation required)'}`, next ? 'success' : 'info');
-              }}
-              title={autoReceive ? "Click to disable Auto-Receive" : "Click to enable Auto-Receive"}
-            >
-              <div>
-                <strong style={{ fontSize: '12.5px', color: autoReceive ? '#34d399' : '#cbd5e1', display: 'block' }}>
-                  {autoReceive ? '⚡ Auto-Receive: ON' : 'Auto-Receive: OFF'}
-                </strong>
-                <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                  {autoReceive ? 'Saves instantly to DB on scan' : 'Requires manual click'}
-                </span>
-              </div>
-              <div className={`toggle-switch-pill ${autoReceive ? 'checked' : ''}`}>
-                <div className="toggle-knob" />
-              </div>
-            </div>
-
-            {autoReceive && (
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#cbd5e1', cursor: 'pointer', marginTop: '6px' }}>
-                <input
-                  type="checkbox"
-                  checked={keepPartNumber}
-                  onChange={(e) => setKeepPartNumber(e.target.checked)}
-                  style={{ accentColor: '#10b981', cursor: 'pointer' }}
-                />
-                <span>Keep P/N for batch scanning</span>
-              </label>
-            )}
-          </div>
-
-          {/* Column: Workstation Action Buttons */}
-          <div>
-            <label className="workstation-col-label">
-              <Sparkles size={13} color="#38bdf8" />
-              <span>{isPmgUser ? '2. Bulk Import & Actions' : '4. Batch Actions'}</span>
-            </label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {!isPmgUser && (
-                <button
-                  type="button"
-                  className="action-btn-emerald"
-                  onClick={handleAddAllToStock}
-                  disabled={isAddingToStock || availableInStockUnits.length === 0}
-                  style={{
-                    background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
-                    color: '#fff',
-                    fontWeight: 700,
-                    fontSize: '13px',
-                    boxShadow: '0 3px 10px rgba(16, 185, 129, 0.35)',
-                    border: '1px solid #34d399',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer'
-                  }}
-                  title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
-                >
-                  {isAddingToStock ? <RefreshCw size={15} className="spin" /> : <PackageCheck size={16} />}
-                  <span>Add to Stock ({availableInStockUnits.length})</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="action-btn-slate"
-                onClick={() => setIsImportModalOpen(true)}
-                title="Bulk upload parts spreadsheet (.xlsx / .csv)"
-                style={{
-                  background: isPmgUser ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : undefined,
-                  color: '#fff',
-                  border: isPmgUser ? '1px solid #38bdf8' : undefined,
-                  fontWeight: 700
-                }}
-              >
-                <FileSpreadsheet size={15} />
-                <span>Import Spreadsheet (XLSX/CSV)</span>
-              </button>
-
-              {!isPmgUser && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setIsSaveIntakeModalOpen(true)}
-                  title="Save current scanned parts into a named Parts Saved History Record (MDC202600015)"
-                  style={{ justifyContent: 'center', height: '32px', fontSize: '12px', opacity: 0.9 }}
-                >
-                  <BookmarkPlus size={14} />
-                  <span>Save Parts History Record</span>
-                </button>
-              )}
-
-              {isPmgUser && (
-                <div style={{
-                  padding: '6px 10px',
-                  background: 'rgba(16, 185, 129, 0.12)',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
-                  borderRadius: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '11.5px',
-                  color: '#34d399',
-                  fontWeight: 600
-                }}>
-                  <CheckCircle2 size={13} color="#34d399" />
-                  <span>Permanent Database Sync Active</span>
+            {/* Workstation Header & Site Metadata */}
+            <div className="workstation-hero-header">
+              <div className="workstation-hero-meta">
+                <div className="workstation-title-row">
+                  <span className="workstation-icon-chip">
+                    <Barcode size={18} />
+                  </span>
+                  <h2 className="workstation-title">
+                    {isPmgUser ? 'Branch Barcode Intake Console' : 'Central DC Barcode Workstation'}
+                  </h2>
                 </div>
-              )}
+                <div className="workstation-sub-row">
+                  <span className="workstation-meta-item">
+                    <Building2 size={13} color="#38bdf8" />
+                    <span>Site: <strong style={{ color: '#f1f5f9' }}>{activeReceivingSite.name} ({activeReceivingSite.code})</strong></span>
+                  </span>
+                  <span className="workstation-meta-divider">•</span>
+                  <span className="workstation-meta-item">
+                    <User size={13} color="#38bdf8" />
+                    <span>Receiver: <strong style={{ color: '#f1f5f9' }}>{currentUser?.fullName || 'Zhon Manaois'}</strong></span>
+                  </span>
+                  <span className="workstation-meta-divider">•</span>
+                  <span className="workstation-meta-item">
+                    <Database size={13} color="#38bdf8" />
+                    <span>DC Stock: <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units</span>
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+
+            {/* Workstation Configuration Toolbar Card */}
+            <div className="workstation-toolbar-card">
+              <div className={`workstation-toolbar-grid ${isPmgUser ? 'pmg-layout' : ''}`}>
+                {/* Control 1: PO Auto-Detection & Routing (DC Only) */}
+                {!isPmgUser && (
+                  <div className="workstation-tool-col">
+                    <div className="workstation-col-header">
+                      <label className="workstation-col-label">
+                        <Building2 size={13} color="#38bdf8" />
+                        <span>Purchase Order Routing</span>
+                      </label>
+                      <span className="workstation-mini-tag">
+                        ⚡ Auto-Detect
+                      </span>
+                    </div>
+                    <select
+                      className="workstation-select"
+                      value={selectedPoId}
+                      onChange={(e) => handlePoChange(e.target.value)}
+                    >
+                      <option value="">⚡ Auto-Route to Designated PO ({purchaseOrders.filter(p => p.status !== 'received').length} Pending Orders)</option>
+                      {purchaseOrders.map(po => {
+                        const totalOrd = po.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 0;
+                        const totalRec = po.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) || 0;
+                        const statusLabel = po.status === 'received' ? 'Fully Received' : `${totalRec}/${totalOrd} received`;
+                        return (
+                          <option key={po.id} value={po.id}>
+                            Focus PO: {po.po_number} {po.invoice_ref ? `(${po.invoice_ref})` : ''} — {statusLabel}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                )}
+
+                {/* Control 2: Part Assignment Classification - Forecasting, CRBR, SVNR */}
+                {!isPmgUser && (
+                  <div className="workstation-tool-col">
+                    <div className="workstation-col-header">
+                      <label className="workstation-col-label">
+                        <Layers size={13} color="#38bdf8" />
+                        <span>Part Assignment Tag</span>
+                      </label>
+                      <span className="workstation-active-tag-label">
+                        {intakeAssignment === 'SVNR - Service Non-Repair'
+                          ? 'SVNR'
+                          : intakeAssignment === 'DC - CRBR'
+                          ? 'DC - CRBR'
+                          : 'Forecasting'}
+                      </span>
+                    </div>
+                    <div className="assignment-segmented-control">
+                      <button
+                        type="button"
+                        className={`assignment-seg-btn ${intakeAssignment === 'MDC - Forecasting' ? 'active-forecasting' : ''}`}
+                        onClick={() => {
+                          const next = 'MDC - Forecasting';
+                          setIntakeAssignment(next);
+                          intakeAssignmentRef.current = next;
+                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                          showToast('Part assignment set to "MDC - Forecasting"', 'info');
+                        }}
+                        title="Designated for Monthly Forecasting & Branch Stock Allocation"
+                      >
+                        <span>MDC - Forecasting</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`assignment-seg-btn ${intakeAssignment === 'DC - CRBR' ? 'active-crbr' : ''}`}
+                        onClick={() => {
+                          const next = 'DC - CRBR';
+                          setIntakeAssignment(next);
+                          intakeAssignmentRef.current = next;
+                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                          showToast('Part assignment set to "DC - CRBR"', 'info');
+                        }}
+                        title="Designated for Customer Return / Repair Buffer Returns (CRBR)"
+                      >
+                        <span>DC - CRBR</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`assignment-seg-btn ${intakeAssignment === 'SVNR - Service Non-Repair' ? 'active-svnr' : ''}`}
+                        onClick={() => {
+                          const next = 'SVNR - Service Non-Repair';
+                          setIntakeAssignment(next);
+                          intakeAssignmentRef.current = next;
+                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
+                          showToast('Part assignment set to "SVNR - Service Non-Repair"', 'info');
+                        }}
+                        title="Designated for Service Non-Repair (SVNR) — Provincial Sites"
+                      >
+                        <span>SVNR</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Control 3: Auto-Receive Switch & Settings */}
+                <div className="workstation-tool-col">
+                  <div className="workstation-col-header">
+                    <label className="workstation-col-label">
+                      <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
+                      <span>{isPmgUser ? 'Barcode Intake Mode' : 'Scanner Intake Mode'}</span>
+                    </label>
+                  </div>
+                  <div
+                    className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
+                    onClick={() => {
+                      const next = !autoReceive;
+                      setAutoReceive(next);
+                      showToast(`Auto-Receive Parts ${next ? 'ENABLED (Instant intake on barcode scan)' : 'DISABLED (Manual confirmation required)'}`, next ? 'success' : 'info');
+                    }}
+                    title={autoReceive ? "Click to disable Auto-Receive" : "Click to enable Auto-Receive"}
+                  >
+                    <div className="auto-receive-text-col">
+                      <span className="auto-receive-title">
+                        {autoReceive ? '⚡ Auto-Receive: ON' : 'Auto-Receive: OFF'}
+                      </span>
+                      <span className="auto-receive-sub">
+                        {autoReceive ? 'Saves instantly to DB on scan' : 'Requires manual click'}
+                      </span>
+                    </div>
+                    <div className={`toggle-switch-pill ${autoReceive ? 'checked' : ''}`}>
+                      <div className="toggle-knob" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sub-row: Batch scanning checkbox + Quick Actions Ribbon */}
+              <div className="workstation-sub-actions-row">
+                <div className="workstation-options-group">
+                  {autoReceive && (
+                    <label className="workstation-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={keepPartNumber}
+                        onChange={(e) => setKeepPartNumber(e.target.checked)}
+                      />
+                      <span>Keep P/N for batch scanning</span>
+                    </label>
+                  )}
+                </div>
+
+                {/* Batch Action Buttons Ribbon */}
+                <div className="workstation-buttons-ribbon">
+                  {!isPmgUser && (
+                    <button
+                      type="button"
+                      className="btn-batch-emerald"
+                      onClick={handleAddAllToStock}
+                      disabled={isAddingToStock || availableInStockUnits.length === 0}
+                      title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
+                    >
+                      {isAddingToStock ? <RefreshCw size={14} className="spin" /> : <PackageCheck size={14} />}
+                      <span>Add to Stock ({availableInStockUnits.length})</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="btn-batch-sky"
+                    onClick={() => setIsImportModalOpen(true)}
+                    title="Bulk upload parts spreadsheet (.xlsx / .csv)"
+                  >
+                    <FileSpreadsheet size={14} />
+                    <span>Import Spreadsheet (XLSX/CSV)</span>
+                  </button>
+
+                  {!isPmgUser && (
+                    <button
+                      type="button"
+                      className="btn-batch-outline"
+                      onClick={() => setIsSaveIntakeModalOpen(true)}
+                      title="Save current scanned parts into a named Parts Saved History Record (MDC202600015)"
+                    >
+                      <BookmarkPlus size={14} />
+                      <span>Save Parts History Record</span>
+                    </button>
+                  )}
+
+                  {isPmgUser && (
+                    <div style={{
+                      padding: '4px 10px',
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      borderRadius: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '11.5px',
+                      color: '#34d399',
+                      fontWeight: 600
+                    }}>
+                      <CheckCircle2 size={13} color="#34d399" />
+                      <span>Permanent Database Sync Active</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
         {/* Linked PO Progress & Inspection Card (if PO is selected) */}
         {!isPmgUser && activePo && (
@@ -1599,7 +1528,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           {/* Part Number Input Column */}
           <div style={{ position: 'relative' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <label className="scanner-field-label">1. Part Number (P/N)</label>
+              <label className="scanner-field-label">Part Number (P/N)</label>
               {matchedPart && (
                 <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
                   ✓ {matchedPart.part_number}
@@ -1730,7 +1659,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           {/* Serial Number Input Column with Security Validation & Duplicate Alert */}
           <div style={{ position: 'relative' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <label className="scanner-field-label">2. Serial Number (S/N)</label>
+              <label className="scanner-field-label">Serial Number (S/N)</label>
               {duplicateSerialMatch ? (
                 <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 8px', background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
                   <AlertCircle size={11} /> DUPLICATE S/N (ALREADY RECEIVED)
@@ -1857,12 +1786,13 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               className={`btn ${autoReceive ? 'btn-primary' : 'btn-secondary'} btn-lg`}
               onClick={() => executeScan()}
               style={{
-                height: '54px',
+                height: '48px',
                 minWidth: '130px',
                 background: autoReceive ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#1e293b',
                 borderColor: autoReceive ? '#38bdf8' : '#475569',
                 color: '#fff',
-                fontWeight: 600
+                fontWeight: 600,
+                borderRadius: '10px'
               }}
               title={autoReceive ? "Auto-Receive is Active: Press Enter or scan barcode to receive automatically" : "Click to manually confirm and receive part"}
             >

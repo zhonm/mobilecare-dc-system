@@ -205,13 +205,15 @@ export default function Forecasting() {
     };
   }, [enrichedItems]);
 
-  const exportForecastExcelHandler = async () => {
-    if (filteredItems.length === 0) {
+  const exportForecastExcelHandler = async (scope = 'all') => {
+    const isFiltered = filteredItems.length < enrichedItems.length;
+    const itemsToExport = (scope === 'filtered' && isFiltered) ? filteredItems : (enrichedItems.length > 0 ? enrichedItems : filteredItems);
+    if (itemsToExport.length === 0) {
       showToast('No forecast items to export', 'warning');
       return;
     }
-    await exportForecastToExcel(filteredItems, targetPeriodLabel);
-    showToast(`Exported ${targetPeriodLabel} Forecast with styled Excel format`, 'success');
+    await exportForecastToExcel(itemsToExport, targetPeriodLabel);
+    showToast(`Exported ${targetPeriodLabel} Forecast (${itemsToExport.length} parts) with styled Excel format`, 'success');
   };
 
   return (

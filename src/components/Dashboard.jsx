@@ -337,22 +337,30 @@ export default function Dashboard() {
         ? activePeriod
         : (activePeriod?.label || 'September 2026');
 
+      const partsReportToExport = mode === 'all'
+        ? getMasterlistParts({ category: 'ALL', categories: null, search: '', limit: 'ALL', sortBy: 'units' }, activeMasterlist, activePeriod)
+        : masterPartsReport;
+
+      const sitesReportToExport = mode === 'all'
+        ? getMasterlistSites({ search: '', limit: 'ALL', region: 'ALL', categories: null }, activeMasterlist, activePeriod)
+        : masterSitesReport;
+
       await exportDashboardReportToExcel({
         activeTab: reportTab,
-        masterPartsReport,
-        masterSitesReport,
+        masterPartsReport: partsReportToExport,
+        masterSitesReport: sitesReportToExport,
         sitePartsReport,
         masterSummary,
         selectedSiteName,
-        reportCategory,
-        reportSearch,
+        reportCategory: mode === 'all' ? 'ALL' : reportCategory,
+        reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
         exportMode: mode
       });
 
       showToast?.(
         mode === 'all'
-          ? 'Complete Masterlist Intelligence Package exported to Excel (.xlsx)'
+          ? `Complete Masterlist Intelligence Package (${partsReportToExport.totalCount} SKUs, ${sitesReportToExport.totalSitesCount} sites) exported to Excel (.xlsx)`
           : `${tabTitle} exported to Excel (.xlsx)`,
         'success'
       );
@@ -378,21 +386,34 @@ export default function Dashboard() {
         ? activePeriod
         : (activePeriod?.label || 'September 2026');
 
+      const partsReportToExport = mode === 'all'
+        ? getMasterlistParts({ category: 'ALL', categories: null, search: '', limit: 'ALL', sortBy: 'units' }, activeMasterlist, activePeriod)
+        : masterPartsReport;
+
+      const sitesReportToExport = mode === 'all'
+        ? getMasterlistSites({ search: '', limit: 'ALL', region: 'ALL', categories: null }, activeMasterlist, activePeriod)
+        : masterSitesReport;
+
       exportDashboardReportToPDF({
         activeTab: reportTab,
-        masterPartsReport,
-        masterSitesReport,
+        masterPartsReport: partsReportToExport,
+        masterSitesReport: sitesReportToExport,
         sitePartsReport,
         masterSummary,
         selectedSiteName,
-        reportCategory,
-        reportSearch,
+        reportCategory: mode === 'all' ? 'ALL' : reportCategory,
+        reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
         exportMode: mode,
         supervisorSettings
       });
 
-      showToast?.(`${tabTitle} exported to Corporate PDF`, 'success');
+      showToast?.(
+        mode === 'all'
+          ? `Complete Masterlist PDF (${partsReportToExport.totalCount} SKUs, ${sitesReportToExport.totalSitesCount} sites) exported`
+          : `${tabTitle} exported to Corporate PDF`,
+        'success'
+      );
     } catch (err) {
       console.error('Error generating dashboard PDF report:', err);
       showToast?.('Failed to generate PDF report: ' + (err.message || 'Unknown error'), 'error');

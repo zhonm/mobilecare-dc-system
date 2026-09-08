@@ -327,33 +327,44 @@ export default function AllocationMatrix() {
     return costs;
   }, [effectiveAllocations, parts, orderedServiceSites]);
 
-  const handleExport = () => {
-    if (filteredAllocations.length === 0) {
+  const isMatrixFiltered = filteredAllocations.length < (effectiveAllocations || []).length;
+
+  const handleExport = (scope = 'all') => {
+    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
+      ? filteredAllocations
+      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
+    if (dataToExport.length === 0) {
       showToast('No allocations available to export', 'warning');
       return;
     }
     const currentPeriodLabel = activePeriod?.label || 'September 2026';
-    exportAllocationToExcel(filteredAllocations, orderedServiceSites, currentPeriodLabel);
-    showToast(`Exported Multi-Sheet Allocation Workbook (${currentPeriodLabel}) to Excel`, 'success');
+    exportAllocationToExcel(dataToExport, orderedServiceSites, currentPeriodLabel);
+    showToast(`Exported Comprehensive Allocation Workbook (${dataToExport.length} parts, ${currentPeriodLabel}) to Excel`, 'success');
   };
 
-  const handleDownloadPDF = () => {
-    if (filteredAllocations.length === 0) {
+  const handleDownloadPDF = (scope = 'all') => {
+    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
+      ? filteredAllocations
+      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
+    if (dataToExport.length === 0) {
       showToast('No allocations available to export', 'warning');
       return;
     }
     const currentPeriodLabel = activePeriod?.label || 'September 2026';
-    exportAllocationToPDF(filteredAllocations, orderedServiceSites, currentPeriodLabel);
-    showToast(`Exported Allocation Matrix (${currentPeriodLabel}) to PDF`, 'success');
+    exportAllocationToPDF(dataToExport, orderedServiceSites, currentPeriodLabel);
+    showToast(`Exported Allocation Matrix (${dataToExport.length} parts, ${currentPeriodLabel}) to PDF`, 'success');
   };
 
-  const handlePrint = () => {
-    if (filteredAllocations.length === 0) {
+  const handlePrint = (scope = 'all') => {
+    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
+      ? filteredAllocations
+      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
+    if (dataToExport.length === 0) {
       showToast('No allocations available to print', 'warning');
       return;
     }
     const currentPeriodLabel = activePeriod?.label || 'September 2026';
-    printAllocationMatrixDirect(filteredAllocations, orderedServiceSites, currentPeriodLabel);
+    printAllocationMatrixDirect(dataToExport, orderedServiceSites, currentPeriodLabel);
   };
 
   // Render a Single Part Row (Unified across Master and Weekly Views)

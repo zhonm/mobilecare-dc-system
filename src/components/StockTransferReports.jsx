@@ -19,8 +19,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
   Cell,
   Legend,
   AreaChart,
@@ -45,9 +43,16 @@ import {
   ChevronRight,
   HelpCircle,
   BarChart2,
-  PieChart as PieIcon,
   Activity,
-  RefreshCw
+  RefreshCw,
+  ChevronDown,
+  MapPin,
+  Truck,
+  Sparkles,
+  Boxes,
+  ArrowUpRight,
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 
 // ── Colour palette ──────────────────────────────────────────────────────────
@@ -96,10 +101,12 @@ function formatCurrencyTick(v) {
 function formatRouteDisplayName(from = '', to = '') {
   const clean = (str) => {
     return String(str || '')
-      .replace(/_MSPI-Owned/gi, ' (MSPI)')
-      .replace(/\(APP\)-MSPI-Owned/gi, 'APP')
-      .replace(/SERVICE_HUB/gi, 'Service Hub')
-      .replace(/DC_MSPI/gi, 'DC')
+      .replace(/[-_]MSPI[-_]Owned/gi, ' (MSPI)')
+      .replace(/MSPI[-_]Owned/gi, ' (MSPI)')
+      .replace(/\(APP\)[-_]MSPI[-_]Owned/gi, 'APP')
+      .replace(/[-_]SERVICE[-_]HUB/gi, ' Service Hub')
+      .replace(/SERVICE[-_]HUB/gi, ' Service Hub')
+      .replace(/DC[-_]MSPI/gi, 'DC')
       .trim();
   };
   const fromClean = clean(from);
@@ -132,21 +139,6 @@ const CustomBarTooltip = ({ active, payload, label }) => {
           </div>
         );
       })}
-    </div>
-  );
-};
-
-const CustomPieTooltip = ({ active, payload }) => {
-  if (!active || !payload?.length) return null;
-  const d = payload[0];
-  return (
-    <div style={{
-      background: '#0f172a', color: '#fff', padding: '10px 14px',
-      borderRadius: '6px', fontSize: '12px', boxShadow: '0 4px 16px rgba(0,0,0,0.35)'
-    }}>
-      <p style={{ fontWeight: 700, color: d.color || '#38bdf8', marginBottom: '4px' }}>{d.name}</p>
-      <p style={{ margin: 0 }}>Units: <strong>{d.value?.toLocaleString()}</strong></p>
-      <p style={{ margin: 0 }}>Share: <strong>{d.payload?.pct?.toFixed(1)}%</strong></p>
     </div>
   );
 };
@@ -293,11 +285,13 @@ export default function StockTransferReports() {
   const analytics = useMemo(() => {
     let totalUnits = 0, totalVal = 0;
     let battery = 0, display = 0, camera = 0, other = 0;
+    let batteryVal = 0, displayVal = 0, cameraVal = 0, otherVal = 0;
     const routeMap = {};
     const partMap = {};
     const originMap = {};
     const destMap = {};
     const monthMap = {};
+    let mmShipments = 0, provShipments = 0;
 
     filteredRecords.forEach(r => {
       const q = Number(r.transfer_quantity) || 1;
@@ -306,10 +300,25 @@ export default function StockTransferReports() {
       totalUnits += q;
       totalVal += v;
 
-      if (desc.includes('battery')) battery += q;
-      else if (desc.includes('display') || desc.includes('screen')) display += q;
-      else if (desc.includes('camera')) camera += q;
-      else other += q;
+      if (desc.includes('battery')) {
+        battery += q;
+        batteryVal += v;
+      } else if (desc.includes('display') || desc.includes('screen')) {
+        display += q;
+        displayVal += v;
+      } else if (desc.includes('camera')) {
+        camera += q;
+        cameraVal += v;
+      } else {
+        other += q;
+        otherVal += v;
+      }
+
+      // Regional courier classification
+      const dest = r.to_stock || 'Unknown';
+      const isProv = /(cebu|davao|iloilo|bacolod|pampanga|clark|baguio|dagupan|lipa|batangas|palawan|gensan|cagayan|laoag|naga|legazpi|tarlac|subic|marilao|cabanatuan|lucena|roxas|tacloban|butuan|tagum|zamboanga|newpoint|nep|lanang|lima|la union|\b(ceb|dav|ilo|bac|pam|cla|bag|dag|lip|bat|pal|gen|cdo)\b)/i.test(dest);
+      if (isProv) provShipments++;
+      else mmShipments++;
 
       // Route aggregation
       const rk = `${r.from_stock || 'DC'} → ${r.to_stock || 'Branch'}`;
@@ -320,7 +329,14 @@ export default function StockTransferReports() {
 
       // Part aggregation
       const pk = r.product_code || 'UNKNOWN';
-      if (!partMap[pk]) partMap[pk] = { code: pk, name: r.product_name || '', count: 0, qty: 0, val: 0 };
+      if (!partMap[pk]) partMap[pk] = {
+        code: pk,
+        name: r.product_name || '',
+        category: desc.includes('battery') ? 'BATTERY' : (desc.includes('display') || desc.includes('screen')) ? 'DISPLAY' : desc.includes('camera') ? 'CAMERA' : 'OTHER',
+        count: 0,
+        qty: 0,
+        val: 0
+      };
       partMap[pk].count++;
       partMap[pk].qty += q;
       partMap[pk].val += v;
@@ -347,6 +363,15 @@ export default function StockTransferReports() {
     const allRoutes = Object.values(routeMap).sort((a, b) => b.qty - a.qty);
     const allParts  = Object.values(partMap).sort((a, b) => b.qty - a.qty);
 
+    const totalTransfers = filteredRecords.length;
+    const totalValPHP = totalVal * 57;
+
+    // Courier fee estimates
+    const totalFeePHP = (mmShipments * 180) + (provShipments * 350);
+    const totalFeeUSD = totalFeePHP / 57;
+    const mmPct = totalTransfers > 0 ? (mmShipments / totalTransfers) * 100 : 0;
+    const provPct = totalTransfers > 0 ? (provShipments / totalTransfers) * 100 : 0;
+
     // Top N charts data
     const topRoutesChart = allRoutes.slice(0, 10).map(rt => ({
       name: formatRouteDisplayName(rt.from, rt.to),
@@ -355,14 +380,18 @@ export default function StockTransferReports() {
       to: rt.to,
       qty: rt.qty,
       val: rt.val,
-      count: rt.count
+      count: rt.count,
+      pctOfTotal: totalUnits > 0 ? (rt.qty / totalUnits) * 100 : 0
     }));
 
     const topPartsChart = allParts.slice(0, 10).map(p => ({
       name: p.code,
       label: p.name.length > 28 ? p.name.substring(0, 28) + '…' : p.name,
+      fullName: p.name,
+      category: p.category,
       qty: p.qty,
-      val: p.val
+      val: p.val,
+      pctOfTotal: totalUnits > 0 ? (p.qty / totalUnits) * 100 : 0
     }));
 
     const topOriginsChart = Object.entries(originMap)
@@ -377,24 +406,57 @@ export default function StockTransferReports() {
       .sort((a, b) => a.month.localeCompare(b.month))
       .map(m => ({ ...m, monthLabel: m.month }));
 
-    // Commodity pie
+    // Commodity pie & breakdown
     const commodityPie = [
-      { name: 'Battery', value: battery, color: COMMODITY_COLORS.BATTERY },
-      { name: 'Display', value: display, color: COMMODITY_COLORS.DISPLAY },
-      { name: 'Camera', value: camera, color: COMMODITY_COLORS.CAMERA },
-      { name: 'Other', value: other, color: COMMODITY_COLORS.OTHER }
-    ].filter(d => d.value > 0).map(d => ({ ...d, pct: (d.value / (totalUnits || 1)) * 100 }));
+      { name: 'Battery', value: battery, val: batteryVal, color: COMMODITY_COLORS.BATTERY },
+      { name: 'Display', value: display, val: displayVal, color: COMMODITY_COLORS.DISPLAY },
+      { name: 'Camera', value: camera, val: cameraVal, color: COMMODITY_COLORS.CAMERA },
+      { name: 'Other', value: other, val: otherVal, color: COMMODITY_COLORS.OTHER }
+    ].filter(d => d.value > 0).map(d => ({
+      ...d,
+      pct: (d.value / (totalUnits || 1)) * 100,
+      valPct: (d.val / (totalVal || 1)) * 100
+    }));
+
+    // Operational dynamic insights
+    const topOrigin = topOriginsChart[0] ? topOriginsChart[0].name : 'Primary DC';
+    const topOriginQty = topOriginsChart[0] ? topOriginsChart[0].qty : 0;
+    const topOriginPct = topOriginsChart[0] && totalUnits > 0 ? ((topOriginsChart[0].qty / totalUnits) * 100).toFixed(1) : '0';
+    const topDest = topDestsChart[0] ? topDestsChart[0].name : 'Branch Hub';
+    const topDestQty = topDestsChart[0] ? topDestsChart[0].qty : 0;
+    const topDestPct = topDestsChart[0] && totalUnits > 0 ? ((topDestsChart[0].qty / totalUnits) * 100).toFixed(1) : '0';
+    const dominantCommodity = commodityPie.slice().sort((a, b) => b.value - a.value)[0];
 
     return {
-      totalTransfers: filteredRecords.length,
-      totalUnits, totalVal,
+      totalTransfers,
+      totalUnits,
+      totalVal,
+      totalValPHP,
       battery, display, camera, other,
+      batteryVal, displayVal, cameraVal, otherVal,
       uniqueOrigins: Object.keys(originMap).length,
       uniqueDests: Object.keys(destMap).length,
-      allRoutes, allParts,
-      topRoutesChart, topPartsChart,
-      topOriginsChart, topDestsChart,
-      monthlyTrend, commodityPie
+      allRoutes,
+      allParts,
+      topRoutesChart,
+      topPartsChart,
+      topOriginsChart,
+      topDestsChart,
+      monthlyTrend,
+      commodityPie,
+      mmShipments,
+      provShipments,
+      totalFeePHP,
+      totalFeeUSD,
+      mmPct,
+      provPct,
+      topOrigin,
+      topOriginQty,
+      topOriginPct,
+      topDest,
+      topDestQty,
+      topDestPct,
+      dominantCommodity
     };
   }, [filteredRecords, parts]);
 
@@ -407,18 +469,36 @@ export default function StockTransferReports() {
   }, [filteredRecords, currentPage, pageSize]);
 
   // ── Export Handlers ────────────────────────────────────────────────────────
-  const handleExportExcel = async () => {
-    if (!filteredRecords.length) { showToast('No records to export', 'warning'); return; }
-    await exportStockTransfersToExcel(filteredRecords, stockTransferMetadata);
-    showToast('Exported to Excel (.xlsx)', 'success');
+  const isFiltered = filteredRecords.length < stockTransferReports.length;
+
+  const handleExportExcel = async (scope = 'all') => {
+    const recordsToExport = (scope === 'filtered' && isFiltered) ? filteredRecords : stockTransferReports;
+    if (!recordsToExport.length) { showToast('No records to export', 'warning'); return; }
+    await exportStockTransfersToExcel(recordsToExport, stockTransferMetadata);
+    showToast(
+      scope === 'filtered'
+        ? `Exported filtered view (${recordsToExport.length} transfers) to Excel`
+        : `Exported comprehensive report (${recordsToExport.length} transfers, 4 sheets) to Excel`,
+      'success'
+    );
   };
-  const handleExportPDF = () => {
-    if (!filteredRecords.length) { showToast('No records to export', 'warning'); return; }
-    exportStockTransfersToPDF(filteredRecords, stockTransferMetadata);
+
+  const handleExportPDF = (scope = 'all') => {
+    const recordsToExport = (scope === 'filtered' && isFiltered) ? filteredRecords : stockTransferReports;
+    if (!recordsToExport.length) { showToast('No records to export', 'warning'); return; }
+    exportStockTransfersToPDF(recordsToExport, stockTransferMetadata);
+    showToast(
+      scope === 'filtered'
+        ? `Exported filtered PDF (${recordsToExport.length} transfers)`
+        : `Exported comprehensive PDF (${recordsToExport.length} transfers)`,
+      'success'
+    );
   };
-  const handlePrint = () => {
-    if (!filteredRecords.length) { showToast('No records to print', 'warning'); return; }
-    printStockTransfersDirect(filteredRecords, stockTransferMetadata);
+
+  const handlePrint = (scope = 'all') => {
+    const recordsToExport = (scope === 'filtered' && isFiltered) ? filteredRecords : stockTransferReports;
+    if (!recordsToExport.length) { showToast('No records to print', 'warning'); return; }
+    printStockTransfersDirect(recordsToExport, stockTransferMetadata);
   };
 
 
@@ -527,10 +607,12 @@ export default function StockTransferReports() {
         filteredRecords={filteredRecords}
       />
 
-      {/* ── OVERVIEW / CHARTS VIEW ── */}
-      {viewMode === 'overview' && <ChartsView analytics={analytics} />}
+      {/* ── 1. EXECUTIVE SUMMARY VIEW (DEFAULT) ── */}
+      {viewMode === 'overview' && (
+        <ExecutiveSummaryView analytics={analytics} setViewMode={setViewMode} />
+      )}
 
-      {/* ── LEDGER VIEW ── */}
+      {/* ── 2. TRANSFERS LEDGER VIEW ── */}
       {viewMode === 'ledger' && (
         <LedgerView
           paginatedRecords={paginatedRecords}
@@ -544,22 +626,16 @@ export default function StockTransferReports() {
         />
       )}
 
-      {/* ── ROUTES VIEW ── */}
+      {/* ── 3. ROUTE ANALYTICS VIEW ── */}
       {viewMode === 'routes' && <RoutesView analytics={analytics} />}
 
-      {/* ── SITE-BY-PART MATRIX VIEW ── */}
-      {viewMode === 'matrix' && <SitePartMatrixView filteredRecords={filteredRecords} />}
-
-      {/* ── COURIER SHIPPING FEE TRACKER VIEW ── */}
-      {viewMode === 'courier' && <CourierFeeView filteredRecords={filteredRecords} />}
-
-      {/* ── PARTS VIEW ── */}
-      {viewMode === 'parts' && <PartsView analytics={analytics} />}
+      {/* ── 4. BRANCH MATRIX & COURIERS VIEW ── */}
+      {viewMode === 'matrix' && <BranchMatrixCouriersView filteredRecords={filteredRecords} />}
     </div>
   );
 }
 
-// ── FilterBar ─────────────────────────────────────────────────────────────────
+// ── Filter & Navigation Bar ───────────────────────────────────────────────────
 function FilterBar({
   viewMode,
   setViewMode,
@@ -580,82 +656,137 @@ function FilterBar({
   filteredRecords
 }) {
   return (
-    <div className="card" style={{ padding: '12px 16px', marginBottom: '16px' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
-        {/* View tabs */}
-        <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '6px', padding: '3px', border: '1px solid #e2e8f0' }}>
-          {[
-            { id: 'overview', label: '📊 Charts & Graphs' },
-            { id: 'ledger',   label: '📋 Transfers Ledger' },
-            { id: 'routes',   label: '🔁 Route Routes' },
-            { id: 'matrix',   label: '🏢 Site-by-Part Matrix' },
-            { id: 'courier',  label: '🚚 Courier Fee Tracker' },
-            { id: 'parts',    label: '📦 Part Movers' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              className={`btn btn-sm ${viewMode === tab.id ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
-              style={{ border: 'none', fontSize: '11.5px', padding: '5px 12px', fontWeight: 600 }}
-            >
-              {tab.label}
-            </button>
-          ))}
+    <div className="card" style={{ padding: '12px 16px', marginBottom: '18px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+        {/* Primary Row: Tab Pills & Quick Search */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          {/* View Tabs */}
+          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', border: '1px solid #e2e8f0', gap: '2px' }}>
+            {[
+              { id: 'overview', label: 'Executive Summary', icon: Sparkles },
+              { id: 'ledger',   label: 'Transfers Ledger', icon: FileText },
+              { id: 'routes',   label: 'Route Analytics', icon: TrendingUp },
+              { id: 'matrix',   label: 'Branch Matrix & Couriers', icon: Building2 }
+            ].map(tab => {
+              const Icon = tab.icon;
+              const isActive = viewMode === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
+                  style={{
+                    border: 'none',
+                    fontSize: '12px',
+                    padding: '6px 14px',
+                    fontWeight: isActive ? 700 : 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    borderRadius: '6px'
+                  }}
+                >
+                  <Icon size={14} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Quick Search */}
+          <div style={{ position: 'relative', width: '280px', minWidth: '220px' }}>
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+            <input
+              type="text"
+              placeholder="Search part #, serial, hub…"
+              value={searchQuery}
+              onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+              style={{ width: '100%', padding: '7px 10px 7px 30px', fontSize: '12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+            />
+          </div>
         </div>
 
-        {/* Search */}
-        <div style={{ position: 'relative', flex: '1', minWidth: '200px' }}>
-          <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-          <input
-            type="text"
-            placeholder="Search part #, serial, hub…"
-            value={searchQuery}
-            onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-            style={{ width: '100%', padding: '6px 10px 6px 28px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-          />
+        {/* Secondary Row: Commodity Pills & Hub Selects */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
+          {/* Commodity Category Segmented Buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Commodity:</span>
+            <div style={{ display: 'flex', background: '#f8fafc', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0', gap: '2px' }}>
+              {[
+                { id: 'ALL', label: 'All Items' },
+                { id: 'BATTERY', label: `Battery (${analytics.battery})` },
+                { id: 'DISPLAY', label: `Display (${analytics.display})` },
+                { id: 'CAMERA', label: `Camera (${analytics.camera})` },
+                { id: 'OTHER', label: `Other (${analytics.other})` }
+              ].map(cat => {
+                const isSelected = categoryFilter === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => { setCategoryFilter(cat.id); setCurrentPage(1); }}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: isSelected ? 700 : 500,
+                      borderRadius: '4px',
+                      border: 'none',
+                      background: isSelected ? '#0284c7' : 'transparent',
+                      color: isSelected ? '#ffffff' : '#64748b',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Hub Selects & Page Size */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+              <span style={{ color: '#64748b', fontWeight: 600 }}>From:</span>
+              <select
+                value={fromFilter}
+                onChange={e => { setFromFilter(e.target.value); setCurrentPage(1); }}
+                style={{ padding: '4px 8px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1', maxWidth: '140px' }}
+              >
+                <option value="ALL">All Origins ({uniqueFromStocks.length})</option>
+                {uniqueFromStocks.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+              <span style={{ color: '#64748b', fontWeight: 600 }}>To:</span>
+              <select
+                value={toFilter}
+                onChange={e => { setToFilter(e.target.value); setCurrentPage(1); }}
+                style={{ padding: '4px 8px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1', maxWidth: '140px' }}
+              >
+                <option value="ALL">All Hubs ({uniqueToStocks.length})</option>
+                {uniqueToStocks.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            {/* Page size (ledger view only) */}
+            {viewMode === 'ledger' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
+                <span style={{ color: '#64748b' }}>Show:</span>
+                <select
+                  value={pageSize}
+                  onChange={e => { setPageSize(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value)); setCurrentPage(1); }}
+                  style={{ padding: '4px 8px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                >
+                  {[25, 50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
+                  <option value="ALL">All ({filteredRecords.length})</option>
+                </select>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Filters */}
-        {[
-          { label: 'From:', value: fromFilter, onChange: v => { setFromFilter(v); setCurrentPage(1); },
-            options: [{ value: 'ALL', label: `All Origins (${uniqueFromStocks.length})` }, ...uniqueFromStocks.map(s => ({ value: s, label: s }))] },
-          { label: 'To:', value: toFilter, onChange: v => { setToFilter(v); setCurrentPage(1); },
-            options: [{ value: 'ALL', label: `All Destinations (${uniqueToStocks.length})` }, ...uniqueToStocks.map(s => ({ value: s, label: s }))] },
-          { label: 'Type:', value: categoryFilter, onChange: v => { setCategoryFilter(v); setCurrentPage(1); },
-            options: [
-              { value: 'ALL', label: 'All Commodities' },
-              { value: 'BATTERY', label: `Battery (${analytics.battery})` },
-              { value: 'DISPLAY', label: `Display (${analytics.display})` },
-              { value: 'CAMERA', label: `Camera (${analytics.camera})` },
-              { value: 'OTHER', label: `Other (${analytics.other})` }
-            ] }
-        ].map(({ label, value, onChange, options }) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
-            <span style={{ color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
-            <select
-              value={value}
-              onChange={e => onChange(e.target.value)}
-              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1', maxWidth: '140px' }}
-            >
-              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        ))}
-
-        {/* Page size (ledger only) */}
-        {viewMode === 'ledger' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px' }}>
-            <span style={{ color: '#64748b' }}>Show:</span>
-            <select
-              value={pageSize}
-              onChange={e => { setPageSize(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value)); setCurrentPage(1); }}
-              style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-            >
-              {[25, 50, 100, 250].map(n => <option key={n} value={n}>{n}</option>)}
-              <option value="ALL">All ({filteredRecords.length})</option>
-            </select>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -664,6 +795,9 @@ function FilterBar({
 // ── Header Bar ────────────────────────────────────────────────────────────────
 function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExportPDF, handlePrint,
   stockTransferMetadata, stockTransferReports, setShowClearConfirm, fileInputRef, isAutoRefreshing, autoRefreshData, canEdit, isReadOnly }) {
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const isFiltered = filteredRecords.length < stockTransferReports.length;
+
   return (
     <div className="card" style={{ marginBottom: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
@@ -679,7 +813,7 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', position: 'relative' }}>
           {autoRefreshData && (
             <button
               className="btn btn-secondary btn-sm"
@@ -697,15 +831,187 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
               <UploadCloud size={14} /><span>{isProcessing ? 'Processing…' : 'Upload File (XLSX/CSV)'}</span>
             </button>
           )}
-          <button className="btn btn-secondary btn-sm" onClick={handleExportExcel} disabled={!filteredRecords.length} style={{ fontWeight: 700, color: '#15803d', borderColor: '#86efac' }}>
-            <Download size={13} /><span>Export Excel (XLSX)</span>
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleExportPDF} disabled={!filteredRecords.length} style={{ fontWeight: 600, color: '#0284c7', borderColor: '#bae6fd' }}>
-            <FileText size={13} /><span>PDF</span>
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={handlePrint} disabled={!filteredRecords.length}>
-            <Printer size={13} /><span>Print</span>
-          </button>
+
+          {/* Export Dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              disabled={!stockTransferReports.length}
+              style={{ fontWeight: 700, color: '#15803d', borderColor: '#86efac', display: 'flex', alignItems: 'center', gap: '6px' }}
+              title="Export Stock Transfers"
+            >
+              <Download size={13} />
+              <span>Export &amp; Share</span>
+              <ChevronDown size={12} style={{ transform: showExportMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+            </button>
+
+            {showExportMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '6px',
+                  width: '280px',
+                  background: '#ffffff',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '8px',
+                  boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                  zIndex: 100,
+                  overflow: 'hidden',
+                  padding: '6px'
+                }}
+              >
+                <div style={{ padding: '4px 10px 6px', fontSize: '10.5px', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Complete Dataset ({stockTransferReports.length.toLocaleString()} Transfers)
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => { setShowExportMenu(false); handleExportExcel('all'); }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 10px',
+                    background: 'none',
+                    border: 'none',
+                    borderRadius: '6px',
+                    textAlign: 'left',
+                    fontSize: '12.5px',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f0fdf4'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                >
+                  <FileSpreadsheet size={16} color="#15803d" />
+                  <div>
+                    <div>Export Master Workbook (.xlsx)</div>
+                    <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>4 sheets: Ledger, routes, parts, timeline</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setShowExportMenu(false); handleExportPDF('all'); }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 10px',
+                    background: 'none',
+                    border: 'none',
+                    borderRadius: '6px',
+                    textAlign: 'left',
+                    fontSize: '12.5px',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                >
+                  <Download size={16} color="#0284c7" />
+                  <div>
+                    <div>Download Complete PDF (.pdf)</div>
+                    <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>All records across multi-page document</div>
+                  </div>
+                </button>
+
+                {isFiltered && (
+                  <>
+                    <div style={{ height: '1px', background: '#e2e8f0', margin: '6px 0' }} />
+                    <div style={{ padding: '4px 10px 4px', fontSize: '10px', fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Active Filter ({filteredRecords.length.toLocaleString()} of {stockTransferReports.length.toLocaleString()} Transfers)
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => { setShowExportMenu(false); handleExportExcel('filtered'); }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '6px 10px',
+                        background: 'none',
+                        border: 'none',
+                        borderRadius: '6px',
+                        textAlign: 'left',
+                        fontSize: '12px',
+                        color: '#334155',
+                        fontWeight: 500,
+                        cursor: 'pointer'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#fffbeb'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    >
+                      <FileSpreadsheet size={14} color="#d97706" />
+                      <span>Export Filtered Ledger (.xlsx)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => { setShowExportMenu(false); handleExportPDF('filtered'); }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '6px 10px',
+                        background: 'none',
+                        border: 'none',
+                        borderRadius: '6px',
+                        textAlign: 'left',
+                        fontSize: '12px',
+                        color: '#334155',
+                        fontWeight: 500,
+                        cursor: 'pointer'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#fffbeb'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    >
+                      <Download size={14} color="#d97706" />
+                      <span>Download Filtered PDF (.pdf)</span>
+                    </button>
+                  </>
+                )}
+
+                <div style={{ height: '1px', background: '#e2e8f0', margin: '6px 0' }} />
+
+                <button
+                  type="button"
+                  onClick={() => { setShowExportMenu(false); handlePrint(isFiltered ? 'filtered' : 'all'); }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '7px 10px',
+                    background: 'none',
+                    border: 'none',
+                    borderRadius: '6px',
+                    textAlign: 'left',
+                    fontSize: '12px',
+                    color: '#475569',
+                    fontWeight: 500,
+                    cursor: 'pointer'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                >
+                  <Printer size={14} color="#475569" />
+                  <span>Print Report ({isFiltered ? `${filteredRecords.length} Filtered` : 'All'})</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <button className="btn btn-secondary btn-sm" onClick={() => downloadSampleStockTransfersTemplate('xlsx')}>
             <HelpCircle size={13} /><span>Template</span>
           </button>
@@ -759,22 +1065,50 @@ function HeaderBar({ isProcessing, filteredRecords, handleExportExcel, handleExp
   );
 }
 
-// ── KPI Cards ─────────────────────────────────────────────────────────────────
+// ── Hero KPI Cards ────────────────────────────────────────────────────────────
 function KpiCards({ analytics }) {
   return (
     <div className="matrix-kpi-grid" style={{ marginBottom: '20px' }}>
       {[
-        { icon: Package, color: '#0284c7', bg: '#e0f2fe', label: 'Total Transfers', value: `${analytics.totalTransfers.toLocaleString()}`, sub: 'movement events' },
-        { icon: Layers, color: '#334155', bg: '#f1f5f9', label: 'Total Units Moved', value: `${analytics.totalUnits.toLocaleString()}`, sub: 'physical units' },
-        { icon: DollarSign, color: '#15803d', bg: '#dcfce7', label: 'Total Valuation', value: `$${analytics.totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: 'transfer value' },
-        { icon: Building2, color: '#92400e', bg: '#fef3c7', label: 'Active Hubs', value: `${analytics.uniqueOrigins} → ${analytics.uniqueDests}`, sub: 'origins → destinations' }
+        {
+          icon: Package,
+          color: '#0284c7',
+          bg: '#e0f2fe',
+          label: 'Total Stock Transfers',
+          value: `${analytics.totalTransfers.toLocaleString()}`,
+          sub: 'inter-hub movement events'
+        },
+        {
+          icon: Layers,
+          color: '#4338ca',
+          bg: '#e0e7ff',
+          label: 'Physical Units Moved',
+          value: `${analytics.totalUnits.toLocaleString()}`,
+          sub: analytics.totalTransfers > 0 ? `Avg ${(analytics.totalUnits / analytics.totalTransfers).toFixed(2)} units / transfer` : 'transferred stock'
+        },
+        {
+          icon: DollarSign,
+          color: '#15803d',
+          bg: '#dcfce7',
+          label: 'Total Valuation',
+          value: `$${analytics.totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          sub: `≈ ₱${analytics.totalValPHP.toLocaleString(undefined, { maximumFractionDigits: 0 })} (est. PHP)`
+        },
+        {
+          icon: Building2,
+          color: '#92400e',
+          bg: '#fef3c7',
+          label: 'Logistics Hub Network',
+          value: `${analytics.uniqueOrigins} → ${analytics.uniqueDests}`,
+          sub: 'origins → receiving hubs'
+        }
       ].map(({ icon: Icon, color, bg, label, value, sub }) => (
-        <div key={label} className="matrix-kpi-card">
+        <div key={label} className="matrix-kpi-card" style={{ transition: 'all 0.2s ease', border: '1px solid #e2e8f0' }}>
           <div className="matrix-kpi-icon-wrap" style={{ background: bg, color }}><Icon size={22} /></div>
           <div>
             <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>{label}</div>
-            <div style={{ fontSize: '19px', fontWeight: 800, color, fontFamily: 'var(--font-mono)' }}>{value}</div>
-            <div style={{ fontSize: '11px', color: '#94a3b8' }}>{sub}</div>
+            <div style={{ fontSize: '20px', fontWeight: 800, color, fontFamily: 'var(--font-mono)', marginTop: '2px' }}>{value}</div>
+            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{sub}</div>
           </div>
         </div>
       ))}
@@ -782,228 +1116,438 @@ function KpiCards({ analytics }) {
   );
 }
 
-// ── Charts View ───────────────────────────────────────────────────────────────
-function ChartsView({ analytics }) {
-  const { topRoutesChart, topPartsChart, topOriginsChart, topDestsChart, monthlyTrend, commodityPie } = analytics;
+// ── 1. EXECUTIVE SUMMARY VIEW ─────────────────────────────────────────────────
+function ExecutiveSummaryView({ analytics, setViewMode }) {
+  const {
+    totalUnits,
+    battery, display, camera, other,
+    batteryVal, displayVal, cameraVal, otherVal,
+    topRoutesChart,
+    topPartsChart,
+    mmShipments,
+    provShipments,
+    totalFeePHP,
+    totalFeeUSD,
+    mmPct,
+    provPct,
+    topOrigin,
+    topOriginQty,
+    topOriginPct,
+    topDest,
+    topDestQty,
+    topDestPct,
+    dominantCommodity
+  } = analytics;
+
+  const bPct = totalUnits > 0 ? (battery / totalUnits) * 100 : 0;
+  const dPct = totalUnits > 0 ? (display / totalUnits) * 100 : 0;
+  const cPct = totalUnits > 0 ? (camera / totalUnits) * 100 : 0;
+  const oPct = totalUnits > 0 ? (other / totalUnits) * 100 : 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
-      {/* Row 1: Monthly Trend (full width) */}
-      <div className="card" style={{ padding: '20px' }}>
-        <ChartSectionHeading icon={Activity} title="Monthly Transfer Volume & Valuation Trend"
-          subtitle="How stock movement frequency and value has changed over time" color="#0284c7" />
-        {monthlyTrend.length >= 2 ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={monthlyTrend} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
-              <defs>
-                <linearGradient id="gradQty" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#0284c7" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#0284c7" stopOpacity={0.02} />
-                </linearGradient>
-                <linearGradient id="gradVal" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#64748b' }} />
-              <YAxis yAxisId="qty" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#0284c7', fontWeight: 600 }} tickFormatter={v => v.toLocaleString()} />
-              <YAxis yAxisId="val" orientation="right" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#10b981', fontWeight: 600 }}
-                tickFormatter={formatCurrencyTick} />
-              <Tooltip content={<CustomBarTooltip />} />
-              <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '12px', paddingBottom: '12px' }} />
-              <Area yAxisId="qty" type="monotone" dataKey="qty" name="Units Transferred"
-                stroke="#0284c7" fill="url(#gradQty)" strokeWidth={2.5} dot={{ r: 4, fill: '#0284c7' }} />
-              <Area yAxisId="val" type="monotone" dataKey="val" name="Valuation ($)"
-                stroke="#10b981" fill="url(#gradVal)" strokeWidth={2} dot={{ r: 3, fill: '#10b981' }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        ) : (
-          <NoDataPlaceholder message="Not enough monthly data to show trend. Upload a file with multiple months of transfers." />
-        )}
-      </div>
+      {/* ── Section A: Visual Commodity Volume & Valuation Distribution ── */}
+      <div className="card" style={{ padding: '22px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '16px' }}>
+          <ChartSectionHeading
+            icon={Boxes}
+            title="Commodity Volume & Valuation Distribution"
+            subtitle="Breakdown of physical units and inventory valuation transferred across core parts families"
+            color="#0284c7"
+          />
+          <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', background: '#e0f2fe', color: '#0369a1' }}>
+            {totalUnits.toLocaleString()} Total Units Transferred
+          </span>
+        </div>
 
-      {/* Row 2: Commodity Pie + Top Origins Bar */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '16px' }}>
-        {/* Commodity distribution pie */}
-        <div className="card" style={{ padding: '20px' }}>
-          <ChartSectionHeading icon={PieIcon} title="Commodity Breakdown"
-            subtitle="Units transferred by part type" color="#7c3aed" />
-          {commodityPie.length > 0 ? (
-            <>
-              <ResponsiveContainer width="100%" height={210}>
-                <PieChart>
-                  <Pie data={commodityPie} cx="50%" cy="50%" innerRadius={55} outerRadius={85}
-                    paddingAngle={3} dataKey="value" nameKey="name">
-                    {commodityPie.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} stroke="#fff" strokeWidth={2} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<CustomPieTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center', marginTop: '10px' }}>
-                {commodityPie.map(d => (
-                  <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px' }}>
-                    <div style={{ width: '11px', height: '11px', borderRadius: '50%', background: d.color }} />
-                    <span style={{ fontWeight: 600, color: '#334155' }}>{d.name}</span>
-                    <span style={{ color: '#64748b' }}>({d.pct.toFixed(1)}%)</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <NoDataPlaceholder message="No commodity data to display." />
+        {/* Stacked Segmented Horizontal Bar */}
+        <div style={{
+          width: '100%',
+          height: '24px',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          display: 'flex',
+          background: '#f1f5f9',
+          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.06)',
+          marginBottom: '16px'
+        }}>
+          {battery > 0 && (
+            <div
+              style={{
+                width: `${bPct}%`,
+                background: COMMODITY_COLORS.BATTERY,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Battery: ${battery.toLocaleString()} units (${bPct.toFixed(1)}%)`}
+            />
+          )}
+          {display > 0 && (
+            <div
+              style={{
+                width: `${dPct}%`,
+                background: COMMODITY_COLORS.DISPLAY,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Display: ${display.toLocaleString()} units (${dPct.toFixed(1)}%)`}
+            />
+          )}
+          {camera > 0 && (
+            <div
+              style={{
+                width: `${cPct}%`,
+                background: COMMODITY_COLORS.CAMERA,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Camera: ${camera.toLocaleString()} units (${cPct.toFixed(1)}%)`}
+            />
+          )}
+          {other > 0 && (
+            <div
+              style={{
+                width: `${oPct}%`,
+                background: COMMODITY_COLORS.OTHER,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Other: ${other.toLocaleString()} units (${oPct.toFixed(1)}%)`}
+            />
           )}
         </div>
 
-        {/* Top Origin Hubs */}
-        <div className="card" style={{ padding: '20px' }}>
-          <ChartSectionHeading icon={Building2} title="Top Sending Origins (by Volume)"
-            subtitle="Which hubs are dispatching the most stock" color="#92400e" />
-          {topOriginsChart.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={topOriginsChart} layout="vertical" margin={{ top: 0, right: 50, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#92400e', fontWeight: 700 }} width={110} />
-                <Tooltip content={<CustomBarTooltip />} />
-                <Bar dataKey="qty" name="Units Sent" radius={[0, 4, 4, 0]}>
-                  {topOriginsChart.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : <NoDataPlaceholder message="No origin data." />}
+        {/* 4 Commodity Legend / Stat Cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+          {[
+            {
+              name: 'Battery Assemblies',
+              count: battery,
+              pct: bPct,
+              val: batteryVal,
+              color: COMMODITY_COLORS.BATTERY,
+              bg: '#f0fdf4',
+              border: '#bbf7d0'
+            },
+            {
+              name: 'Display Panels',
+              count: display,
+              pct: dPct,
+              val: displayVal,
+              color: COMMODITY_COLORS.DISPLAY,
+              bg: '#f0f9ff',
+              border: '#bae6fd'
+            },
+            {
+              name: 'Camera Modules',
+              count: camera,
+              pct: cPct,
+              val: cameraVal,
+              color: COMMODITY_COLORS.CAMERA,
+              bg: '#faf5ff',
+              border: '#e9d5ff'
+            },
+            {
+              name: 'Other Components',
+              count: other,
+              pct: oPct,
+              val: otherVal,
+              color: COMMODITY_COLORS.OTHER,
+              bg: '#f8fafc',
+              border: '#e2e8f0'
+            }
+          ].map(c => (
+            <div
+              key={c.name}
+              style={{
+                background: c.bg,
+                border: `1px solid ${c.border}`,
+                borderRadius: '8px',
+                padding: '12px 14px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: c.color }} />
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b' }}>{c.name}</span>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: c.color }}>{c.pct.toFixed(1)}%</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <span style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                  {c.count.toLocaleString()} <span style={{ fontSize: '11px', fontWeight: 500, color: '#64748b' }}>units</span>
+                </span>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                  ${c.val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Row 3: Top Routes + Top Destinations */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        {/* Top Routes */}
-        <div className="card" style={{ padding: '20px' }}>
-          <ChartSectionHeading icon={ArrowRight} title="Top Transfer Routes (by Volume)"
-            subtitle="Highest-traffic inter-hub movement paths" color="#0369a1" />
-          {topRoutesChart.length > 0 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={topRoutesChart.slice(0, 8)} layout="vertical" margin={{ top: 0, right: 50, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 9.5, fill: '#0369a1', fontWeight: 700 }} width={130} />
-                <Tooltip content={<CustomBarTooltip />} />
-                <Bar dataKey="qty" name="Units Moved" radius={[0, 4, 4, 0]}>
-                  {topRoutesChart.slice(0, 8).map((_, i) => (
-                    <Cell key={i} fill={`hsl(${210 + i * 12}, 75%, ${52 - i * 3}%)`} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : <NoDataPlaceholder message="No route data." />}
-        </div>
+      {/* ── Section B: Two-Column Operational Focus ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px' }}>
 
-        {/* Top Destination Hubs */}
-        <div className="card" style={{ padding: '20px' }}>
-          <ChartSectionHeading icon={TrendingUp} title="Top Receiving Destinations (by Volume)"
-            subtitle="Which hubs are receiving the most stock" color="#15803d" />
-          {topDestsChart.length > 0 ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={topDestsChart} layout="vertical" margin={{ top: 0, right: 50, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#15803d', fontWeight: 700 }} width={110} />
-                <Tooltip content={<CustomBarTooltip />} />
-                <Bar dataKey="qty" name="Units Received" radius={[0, 4, 4, 0]}>
-                  {topDestsChart.map((_, i) => (
-                    <Cell key={i} fill={`hsl(${145 + i * 8}, 68%, ${42 - i * 2}%)`} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          ) : <NoDataPlaceholder message="No destination data." />}
-        </div>
-      </div>
+        {/* Column 1: Top Movement Corridors (Lanes) */}
+        <div className="card" style={{ padding: '22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <ChartSectionHeading
+              icon={ArrowRight}
+              title="Key Logistics Movement Corridors"
+              subtitle="Top 5 highest-volume inter-hub transfer routes"
+              color="#0284c7"
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setViewMode('routes')}
+              style={{ fontSize: '11.5px', padding: '4px 10px', color: '#0284c7' }}
+            >
+              <span>All Routes</span> <ArrowUpRight size={13} />
+            </button>
+          </div>
 
-      {/* Row 4: Top Parts (full width column chart) */}
-      <div className="card" style={{ padding: '20px' }}>
-        <ChartSectionHeading icon={Package} title="Top 10 Transferred Parts (by Units)"
-          subtitle="Highest-volume part numbers across all routes" color="#334155" />
-        {topPartsChart.length > 0 ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={topPartsChart} margin={{ top: 10, right: 20, left: 10, bottom: 40 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#0f172a', fontWeight: 700 }}
-                angle={-30} textAnchor="end" interval={0} />
-              <YAxis domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={v => v.toLocaleString()} />
-              <Tooltip
-                content={({ active, payload, label }) => {
-                  if (!active || !payload?.length) return null;
-                  const d = topPartsChart.find(p => p.name === label);
-                  return (
-                    <div style={{ background: '#0f172a', color: '#fff', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', border: '1px solid #334155' }}>
-                      <p style={{ fontWeight: 700, color: '#38bdf8', marginBottom: '4px' }}>{label}</p>
-                      {d && <p style={{ color: '#94a3b8', fontSize: '11px', margin: '0 0 6px' }}>{d.label}</p>}
-                      <p style={{ margin: '2px 0' }}>Units: <strong>{payload[0]?.value?.toLocaleString()}</strong></p>
-                      {d && <p style={{ margin: '2px 0', color: '#34d399' }}>Value: <strong>${d.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></p>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {topRoutesChart.slice(0, 5).map((rt, idx) => {
+              const maxQty = topRoutesChart[0]?.qty || 1;
+              const barWidth = Math.max((rt.qty / maxQty) * 100, 4);
+              return (
+                <div
+                  key={rt.name}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{
+                        width: '20px', height: '20px', borderRadius: '50%', background: idx === 0 ? '#0284c7' : '#e2e8f0',
+                        color: idx === 0 ? '#fff' : '#475569', fontSize: '11px', fontWeight: 800,
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        {idx + 1}
+                      </span>
+                      <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a' }}>
+                        {rt.name}
+                      </span>
                     </div>
-                  );
-                }}
-              />
-              <Bar dataKey="qty" name="Units" radius={[4, 4, 0, 0]}>
-                {topPartsChart.map((_, i) => (
-                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        ) : <NoDataPlaceholder message="No parts data." />}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                        {rt.qty.toLocaleString()} <span style={{ fontSize: '10.5px', fontWeight: 500, color: '#64748b' }}>units</span>
+                      </span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#15803d', fontFamily: 'var(--font-mono)' }}>
+                        ${rt.val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Horizontal Traffic Bar */}
+                  <div style={{ width: '100%', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${barWidth}%`,
+                      height: '100%',
+                      background: idx === 0 ? 'linear-gradient(90deg, #0284c7, #38bdf8)' : '#94a3b8',
+                      borderRadius: '3px'
+                    }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Column 2: Top Demand Drivers (Parts) */}
+        <div className="card" style={{ padding: '22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <ChartSectionHeading
+              icon={Package}
+              title="Top Transferred Part Numbers"
+              subtitle="Top 5 highest-velocity SKUs dispatched across all branches"
+              color="#7c3aed"
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setViewMode('ledger')}
+              style={{ fontSize: '11.5px', padding: '4px 10px', color: '#7c3aed' }}
+            >
+              <span>View Ledger</span> <ArrowUpRight size={13} />
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {topPartsChart.slice(0, 5).map((p, idx) => {
+              const badgeColor = p.category === 'BATTERY' ? '#15803d' : p.category === 'DISPLAY' ? '#0284c7' : p.category === 'CAMERA' ? '#7c3aed' : '#64748b';
+              const badgeBg = p.category === 'BATTERY' ? '#dcfce7' : p.category === 'DISPLAY' ? '#e0f2fe' : p.category === 'CAMERA' ? '#faf5ff' : '#f1f5f9';
+
+              return (
+                <div
+                  key={p.name}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                    <span style={{
+                      width: '20px', height: '20px', borderRadius: '50%', background: idx === 0 ? '#7c3aed' : '#e2e8f0',
+                      color: idx === 0 ? '#fff' : '#475569', fontSize: '11px', fontWeight: 800,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                    }}>
+                      {idx + 1}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '12.5px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                          {p.name}
+                        </span>
+                        <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: badgeBg, color: badgeColor }}>
+                          {p.category}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                        {p.fullName || p.label}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                      {p.qty.toLocaleString()} <span style={{ fontSize: '11px', fontWeight: 500, color: '#64748b' }}>units</span>
+                    </div>
+                    <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#15803d', fontFamily: 'var(--font-mono)' }}>
+                      ${p.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
       </div>
 
-      {/* Row 5: Transfer Count vs Value Comparison */}
-      <div className="card" style={{ padding: '20px' }}>
-        <ChartSectionHeading icon={BarChart2} title="Top Routes — Quantity vs. Valuation Comparison"
-          subtitle="Side-by-side view of units moved versus the dollar value transferred per route" color="#7c3aed" />
-        {topRoutesChart.length > 0 ? (
-          <ResponsiveContainer width="100%" height={340}>
-            <BarChart data={topRoutesChart.slice(0, 8)} margin={{ top: 15, right: 35, left: 15, bottom: 70 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10, fill: '#334155', fontWeight: 600 }}
-                angle={-25}
-                textAnchor="end"
-                interval={0}
-                height={65}
-              />
-              <YAxis
-                yAxisId="qty"
-                domain={[0, 'auto']}
-                tick={{ fontSize: 11, fill: '#0284c7', fontWeight: 600 }}
-                tickFormatter={v => v.toLocaleString()}
-              />
-              <YAxis
-                yAxisId="val"
-                orientation="right"
-                domain={[0, 'auto']}
-                tick={{ fontSize: 11, fill: '#10b981', fontWeight: 600 }}
-                tickFormatter={formatCurrencyTick}
-              />
-              <Tooltip content={<CustomBarTooltip />} />
-              <Legend
-                verticalAlign="top"
-                align="right"
-                wrapperStyle={{ fontSize: '12px', paddingBottom: '16px' }}
-              />
-              <Bar yAxisId="qty" dataKey="qty" name="Units Moved" fill="#0284c7" radius={[4, 4, 0, 0]} barSize={22} />
-              <Bar yAxisId="val" dataKey="val" name="Valuation ($)" fill="#10b981" radius={[4, 4, 0, 0]} barSize={22} />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : <NoDataPlaceholder message="No route data." />}
+      {/* ── Section C: Regional Logistics Split & Executive Guidance ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px' }}>
+
+        {/* Regional Logistics & Courier Split Card */}
+        <div className="card" style={{ padding: '22px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <ChartSectionHeading
+              icon={Truck}
+              title="Regional Logistics & Courier Split"
+              subtitle="Metro Manila vs. Provincial service hub dispatches & shipping expense"
+              color="#15803d"
+            />
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setViewMode('matrix')}
+              style={{ fontSize: '11.5px', padding: '4px 10px', color: '#15803d' }}
+            >
+              <span>Courier Matrix</span> <ArrowUpRight size={13} />
+            </button>
+          </div>
+
+          {/* Regional Progress Meter */}
+          <div style={{ width: '100%', height: '14px', borderRadius: '6px', overflow: 'hidden', display: 'flex', background: '#f1f5f9', marginBottom: '14px' }}>
+            <div style={{ width: `${mmPct}%`, background: '#0284c7' }} title={`Metro Manila: ${mmPct.toFixed(1)}%`} />
+            <div style={{ width: `${provPct}%`, background: '#15803d' }} title={`Provincial: ${provPct.toFixed(1)}%`} />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+            <div style={{ padding: '12px', background: '#f0f9ff', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase' }}>
+                <MapPin size={13} /> Metro Manila Hubs
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                {mmShipments.toLocaleString()} <span style={{ fontSize: '11.5px', color: '#64748b' }}>({mmPct.toFixed(1)}%)</span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#0369a1', marginTop: '2px', fontWeight: 600 }}>
+                Est. Courier: ₱{(mmShipments * 180).toLocaleString()} (@ ₱180)
+              </div>
+            </div>
+
+            <div style={{ padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase' }}>
+                <Truck size={13} /> Provincial Hubs
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                {provShipments.toLocaleString()} <span style={{ fontSize: '11.5px', color: '#64748b' }}>({provPct.toFixed(1)}%)</span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#15803d', marginTop: '2px', fontWeight: 600 }}>
+                Est. Courier: ₱{(provShipments * 350).toLocaleString()} (@ ₱350)
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding: '10px 14px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>Total Estimated Delivery Expenses:</span>
+            <div style={{ textAlign: 'right' }}>
+              <strong style={{ fontSize: '14px', color: '#dc2626', fontFamily: 'var(--font-mono)' }}>₱{totalFeePHP.toLocaleString()}</strong>
+              <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '6px' }}>(${totalFeeUSD.toFixed(2)} USD)</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Executive Logistics & Operational Highlights Card */}
+        <div className="card" style={{ padding: '22px' }}>
+          <ChartSectionHeading
+            icon={ShieldCheck}
+            title="Operational Takeaways & Logistics Guidance"
+            subtitle="Automated high-level intelligence derived from the current stock transfer dataset"
+            color="#92400e"
+          />
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12.5px', color: '#334155' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '4px', borderRadius: '50%', marginTop: '1px' }}><ArrowRight size={14} /></div>
+              <div>
+                <strong>Primary Distribution Source:</strong> The main sending origin is <strong>{topOrigin}</strong>, dispatching <strong>{Number(topOriginQty).toLocaleString()} units</strong> ({topOriginPct}% of total network volume).
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ background: '#dcfce7', color: '#15803d', padding: '4px', borderRadius: '50%', marginTop: '1px' }}><Building2 size={14} /></div>
+              <div>
+                <strong>Highest Inflow Hub:</strong> The top receiving service branch is <strong>{topDest}</strong>, accounting for <strong>{Number(topDestQty).toLocaleString()} units</strong> ({topDestPct}% of all arrivals).
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ background: '#faf5ff', color: '#7c3aed', padding: '4px', borderRadius: '50%', marginTop: '1px' }}><Package size={14} /></div>
+              <div>
+                <strong>Dominant Commodity:</strong> <strong>{dominantCommodity?.name || 'Battery'}</strong> represents the highest physical transfer volume ({dominantCommodity?.value?.toLocaleString() || 0} units, {dominantCommodity?.pct?.toFixed(1) || 0}% share).
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+              <div style={{ background: '#fef3c7', color: '#92400e', padding: '4px', borderRadius: '50%', marginTop: '1px' }}><Zap size={14} /></div>
+              <div>
+                <strong>Logistics Network Balance:</strong> Movement consists of <strong>{mmPct.toFixed(1)}% Metro Manila</strong> transfers and <strong>{provPct.toFixed(1)}% Provincial</strong> dispatches across {analytics.uniqueDests} destination branches.
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
+
     </div>
   );
 }
+
+
 
 // ── No Data Placeholder ────────────────────────────────────────────────────────
 function NoDataPlaceholder({ message }) {
@@ -1104,98 +1648,177 @@ function LedgerView({ paginatedRecords, filteredRecords, analytics, parts, pageS
   );
 }
 
-// ── Routes View ───────────────────────────────────────────────────────────────
+// ── 3. ROUTE ANALYTICS VIEW ───────────────────────────────────────────────────
 function RoutesView({ analytics }) {
-  const { allRoutes, totalUnits, totalVal } = analytics;
+  const { topOriginsChart, topDestsChart, monthlyTrend, allRoutes, totalUnits, totalVal } = analytics;
+
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
-      <div style={{ overflowX: 'auto' }}>
-        <table className="matrix-table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ width: 50, textAlign: 'center', background: '#0f172a', color: '#fff' }}>#</th>
-              <th style={{ width: 220, background: '#0f172a', color: '#fef3c7' }}>From Stock</th>
-              <th style={{ width: 40, textAlign: 'center', background: '#0f172a', color: '#94a3b8' }}>→</th>
-              <th style={{ width: 220, background: '#0f172a', color: '#dcfce7' }}>To Stock</th>
-              <th style={{ textAlign: 'center', background: '#0f172a', color: '#fff' }}>Events</th>
-              <th style={{ textAlign: 'center', background: '#0284c7', color: '#fff' }}>Units Moved</th>
-              <th style={{ textAlign: 'right', background: '#0f172a', color: '#fff' }}>Valuation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allRoutes.map((rt, i) => (
-              <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{i + 1}</td>
-                <td><span style={{ fontSize: '11.5px', fontWeight: 700, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '4px' }}>{rt.from}</span></td>
-                <td style={{ textAlign: 'center' }}><ArrowRight size={13} color="#94a3b8" /></td>
-                <td><span style={{ fontSize: '11.5px', fontWeight: 700, background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px' }}>{rt.to}</span></td>
-                <td style={{ textAlign: 'center', color: '#475569', fontFamily: 'var(--font-mono)' }}>{rt.count} transfers</td>
-                <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{rt.qty.toLocaleString()}</td>
-                <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', paddingRight: '10px' }}>
-                  ${rt.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+      {/* Row 1: Monthly Trend Area Chart */}
+      <div className="card" style={{ padding: '20px' }}>
+        <ChartSectionHeading
+          icon={Activity}
+          title="Monthly Transfer Volume & Valuation Trend"
+          subtitle="How inter-branch stock movement frequency and valuation has evolved over time"
+          color="#0284c7"
+        />
+        {monthlyTrend.length >= 2 ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={monthlyTrend} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gradQty" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#0284c7" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#0284c7" stopOpacity={0.02} />
+                </linearGradient>
+                <linearGradient id="gradVal" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#64748b' }} />
+              <YAxis yAxisId="qty" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#0284c7', fontWeight: 600 }} tickFormatter={v => v.toLocaleString()} />
+              <YAxis yAxisId="val" orientation="right" domain={[0, 'auto']} tick={{ fontSize: 11, fill: '#10b981', fontWeight: 600 }}
+                tickFormatter={formatCurrencyTick} />
+              <Tooltip content={<CustomBarTooltip />} />
+              <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '12px', paddingBottom: '12px' }} />
+              <Area yAxisId="qty" type="monotone" dataKey="qty" name="Units Transferred"
+                stroke="#0284c7" fill="url(#gradQty)" strokeWidth={2.5} dot={{ r: 4, fill: '#0284c7' }} />
+              <Area yAxisId="val" type="monotone" dataKey="val" name="Valuation ($)"
+                stroke="#10b981" fill="url(#gradVal)" strokeWidth={2} dot={{ r: 3, fill: '#10b981' }} />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <NoDataPlaceholder message="Not enough monthly data to display trend curve." />
+        )}
+      </div>
+
+      {/* Row 2: Top Origins & Top Destinations */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '16px' }}>
+        {/* Top Sending Origins */}
+        <div className="card" style={{ padding: '20px' }}>
+          <ChartSectionHeading icon={Building2} title="Top Sending Origins (by Volume)"
+            subtitle="Which hubs dispatch the most stock" color="#92400e" />
+          {topOriginsChart.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={topOriginsChart} layout="vertical" margin={{ top: 0, right: 40, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#92400e', fontWeight: 700 }} width={110} />
+                <Tooltip content={<CustomBarTooltip />} />
+                <Bar dataKey="qty" name="Units Sent" radius={[0, 4, 4, 0]}>
+                  {topOriginsChart.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <NoDataPlaceholder message="No origin data." />}
+        </div>
+
+        {/* Top Receiving Destinations */}
+        <div className="card" style={{ padding: '20px' }}>
+          <ChartSectionHeading icon={TrendingUp} title="Top Receiving Destinations (by Volume)"
+            subtitle="Which hubs receive the most stock" color="#15803d" />
+          {topDestsChart.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={topDestsChart} layout="vertical" margin={{ top: 0, right: 40, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} />
+                <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#15803d', fontWeight: 700 }} width={110} />
+                <Tooltip content={<CustomBarTooltip />} />
+                <Bar dataKey="qty" name="Units Received" radius={[0, 4, 4, 0]}>
+                  {topDestsChart.map((_, i) => (
+                    <Cell key={i} fill={`hsl(${145 + i * 8}, 68%, ${42 - i * 2}%)`} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <NoDataPlaceholder message="No destination data." />}
+        </div>
+      </div>
+
+      {/* Row 3: All Routes Detailed Summary Table */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
+        <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+          <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>All Transfer Movement Routes</h4>
+          <p style={{ margin: '2px 0 0 0', fontSize: '11.5px', color: '#64748b' }}>
+            Comprehensive list of active movement corridors ranked by volume ({allRoutes.length} distinct routes)
+          </p>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="matrix-table" style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ width: 50, textAlign: 'center', background: '#0f172a', color: '#fff' }}>#</th>
+                <th style={{ width: 220, background: '#0f172a', color: '#fef3c7' }}>From Stock</th>
+                <th style={{ width: 40, textAlign: 'center', background: '#0f172a', color: '#94a3b8' }}>→</th>
+                <th style={{ width: 220, background: '#0f172a', color: '#dcfce7' }}>To Stock</th>
+                <th style={{ textAlign: 'center', background: '#0f172a', color: '#fff' }}>Events</th>
+                <th style={{ textAlign: 'center', background: '#0284c7', color: '#fff' }}>Units Moved</th>
+                <th style={{ textAlign: 'right', background: '#0f172a', color: '#fff' }}>Valuation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allRoutes.map((rt, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{i + 1}</td>
+                  <td><span style={{ fontSize: '11.5px', fontWeight: 700, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '4px' }}>{rt.from}</span></td>
+                  <td style={{ textAlign: 'center' }}><ArrowRight size={13} color="#94a3b8" /></td>
+                  <td><span style={{ fontSize: '11.5px', fontWeight: 700, background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '4px' }}>{rt.to}</span></td>
+                  <td style={{ textAlign: 'center', color: '#475569', fontFamily: 'var(--font-mono)' }}>{rt.count} transfers</td>
+                  <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{rt.qty.toLocaleString()}</td>
+                  <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', paddingRight: '10px' }}>
+                    ${rt.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ background: '#0f172a', color: '#fff', fontWeight: 800 }}>
+                <td colSpan={4} style={{ textAlign: 'right', padding: '10px 14px', fontSize: '12px' }}>TOTAL ({allRoutes.length} distinct routes):</td>
+                <td style={{ textAlign: 'center' }}>{allRoutes.reduce((s, r) => s + r.count, 0)}</td>
+                <td style={{ textAlign: 'center', background: '#0284c7' }}>{totalUnits.toLocaleString()}</td>
+                <td style={{ textAlign: 'right', color: '#38bdf8', paddingRight: '10px' }}>
+                  ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </td>
               </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr style={{ background: '#0f172a', color: '#fff', fontWeight: 800 }}>
-              <td colSpan={4} style={{ textAlign: 'right', padding: '10px 14px', fontSize: '12px' }}>TOTAL ({allRoutes.length} distinct routes):</td>
-              <td style={{ textAlign: 'center' }}>{allRoutes.reduce((s, r) => s + r.count, 0)}</td>
-              <td style={{ textAlign: 'center', background: '#0284c7' }}>{totalUnits.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', color: '#38bdf8', paddingRight: '10px' }}>
-                ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
+            </tfoot>
+          </table>
+        </div>
       </div>
+
     </div>
   );
 }
 
-// ── Parts View ────────────────────────────────────────────────────────────────
-function PartsView({ analytics }) {
-  const { allParts, totalUnits, totalVal } = analytics;
+// ── 4. BRANCH MATRIX & COURIERS VIEW ──────────────────────────────────────────
+function BranchMatrixCouriersView({ filteredRecords }) {
+  const [subTab, setSubTab] = useState('matrix'); // matrix | courier
+
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #cbd5e1', marginBottom: '20px' }}>
-      <div style={{ overflowX: 'auto' }}>
-        <table className="matrix-table" style={{ width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ width: 50, textAlign: 'center', background: '#0f172a', color: '#fff' }}>#</th>
-              <th style={{ width: 130, textAlign: 'center', background: '#0f172a', color: '#fff' }}>Part #</th>
-              <th style={{ minWidth: 240, background: '#0f172a', color: '#fff' }}>Description</th>
-              <th style={{ textAlign: 'center', background: '#0f172a', color: '#fff' }}>Events</th>
-              <th style={{ textAlign: 'center', background: '#0284c7', color: '#fff' }}>Units</th>
-              <th style={{ textAlign: 'right', background: '#0f172a', color: '#fff' }}>Valuation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allParts.map((p, i) => (
-              <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>{i + 1}</td>
-                <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{p.code}</td>
-                <td style={{ fontSize: '12px' }}>{p.name}</td>
-                <td style={{ textAlign: 'center', color: '#475569', fontFamily: 'var(--font-mono)' }}>{p.count}</td>
-                <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{p.qty.toLocaleString()}</td>
-                <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', paddingRight: '10px' }}>
-                  ${p.val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr style={{ background: '#0f172a', color: '#fff', fontWeight: 800 }}>
-              <td colSpan={3} style={{ textAlign: 'right', padding: '10px 14px', fontSize: '12px' }}>TOTAL ({allParts.length} parts):</td>
-              <td style={{ textAlign: 'center' }}>{allParts.reduce((s, p) => s + p.count, 0)}</td>
-              <td style={{ textAlign: 'center', background: '#0284c7' }}>{totalUnits.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', color: '#38bdf8', paddingRight: '10px' }}>
-                ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Sub Tab Switcher */}
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <button
+          className={`btn btn-sm ${subTab === 'matrix' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setSubTab('matrix')}
+          style={{ fontSize: '12px', padding: '6px 14px', fontWeight: subTab === 'matrix' ? 700 : 500 }}
+        >
+          <Building2 size={14} /> <span>Site-by-Part Matrix</span>
+        </button>
+        <button
+          className={`btn btn-sm ${subTab === 'courier' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setSubTab('courier')}
+          style={{ fontSize: '12px', padding: '6px 14px', fontWeight: subTab === 'courier' ? 700 : 500 }}
+        >
+          <Truck size={14} /> <span>Courier Shipping Fee Tracker</span>
+        </button>
       </div>
+
+      {subTab === 'matrix' && <SitePartMatrixView filteredRecords={filteredRecords} />}
+      {subTab === 'courier' && <CourierFeeView filteredRecords={filteredRecords} />}
     </div>
   );
 }
@@ -1294,7 +1917,7 @@ function CourierFeeView({ filteredRecords }) {
 
     filteredRecords.forEach(r => {
       const dest = r.to_stock || 'Unknown';
-      const isProv = /cebu|davao|iloilo|bacolod|pampanga|clark|baguio|dagupan|lipa|batangas|palawan|gensan|cagayan/i.test(dest);
+      const isProv = /(cebu|davao|iloilo|bacolod|pampanga|clark|baguio|dagupan|lipa|batangas|palawan|gensan|cagayan|laoag|naga|legazpi|tarlac|subic|marilao|cabanatuan|lucena|roxas|tacloban|butuan|tagum|zamboanga|newpoint|nep|lanang|lima|la union|\b(ceb|dav|ilo|bac|pam|cla|bag|dag|lip|bat|pal|gen|cdo)\b)/i.test(dest);
       const feePHP = isProv ? 350 : 180; // Flat estimate: ₱180 NCR, ₱350 Provincial
       const feeUSD = feePHP / 57;
 

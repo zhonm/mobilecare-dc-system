@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   parseUniversalExcel,
@@ -56,6 +56,7 @@ import {
   Sparkles,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Boxes,
   CheckCircle,
   CheckCircle2,
@@ -210,6 +211,24 @@ export default function ForecastingReports() {
   const fileInputRef = useRef(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Consolidated Export & Actions dropdown state
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportDropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (exportDropdownRef.current && !exportDropdownRef.current.contains(event.target)) {
+        setShowExportMenu(false);
+      }
+    }
+    if (showExportMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showExportMenu]);
 
   // Custom uploaded dataset state (if user uploads a specific Fixably file directly on this report)
   const [uploadedDataset, setUploadedDataset] = useState(null);
@@ -768,55 +787,131 @@ export default function ForecastingReports() {
   }, [filteredItems, currentPage, pageSize]);
 
   // ── Export Handlers ────────────────────────────────────────────────────────
-  const handleExportExcel = async () => {
-    if (filteredItems.length === 0) {
+  const isFiltered = filteredItems.length < activeDatasetItems.length;
+
+  const handleExportExcel = async (scope = 'all') => {
+    const itemsToExport = (scope === 'filtered' && isFiltered) ? filteredItems : activeDatasetItems;
+    if (itemsToExport.length === 0) {
       showToast('No forecasting data to export', 'warning');
       return;
     }
-    await exportForecastingReportToExcel(filteredItems, analytics.siteAllocationsList, { periodLabel: currentPeriodLabel });
-    showToast(`Exported Fixably Forecasting Excel Report for ${currentPeriodLabel}!`, 'success');
+    await exportForecastingReportToExcel(
+      itemsToExport,
+      analytics.siteAllocationsList,
+      {
+        periodLabel: currentPeriodLabel,
+        historyMonths,
+        allocations: activeAllocations,
+        serviceBranches,
+        analytics
+      }
+    );
+    showToast(
+      scope === 'filtered'
+        ? `Exported filtered view (${itemsToExport.length} SKUs) for ${currentPeriodLabel}!`
+        : `Exported comprehensive Fixably Master Forecast (${itemsToExport.length} SKUs) for ${currentPeriodLabel}!`,
+      'success'
+    );
   };
 
-  const handleExportPDF = () => {
-    if (filteredItems.length === 0) {
-      showToast('No forecasting data to export', 'warning');
-      return;
+  const handleExportPDF = (scope = 'all') => {
+    try {
+      const itemsToExport = (scope === 'filtered' && isFiltered) ? filteredItems : activeDatasetItems;
+      if (itemsToExport.length === 0) {
+        showToast('No forecasting data to export', 'warning');
+        return;
+      }
+      exportForecastingReportToPDF(itemsToExport, {
+        periodLabel: currentPeriodLabel,
+        pastMonthLabel: `August ${activePeriod?.year || 2026}`,
+        sites: serviceBranches,
+        analytics
+      });
+      showToast(
+        scope === 'filtered'
+          ? `Exported filtered Fixably PDF (${itemsToExport.length} SKUs) for ${currentPeriodLabel}!`
+          : `Exported comprehensive Fixably PDF (${itemsToExport.length} SKUs) for ${currentPeriodLabel}!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Failed to export PDF:', err);
+      showToast(`PDF Export Failed: ${err.message}`, 'error');
     }
-    exportForecastingReportToPDF(filteredItems, { periodLabel: currentPeriodLabel });
-    showToast(`Exported Fixably Forecasting PDF Report for ${currentPeriodLabel}!`, 'success');
   };
 
-  const handlePrint = () => {
-    if (filteredItems.length === 0) {
+  const handlePrint = (scope = 'all') => {
+    const itemsToExport = (scope === 'filtered' && isFiltered) ? filteredItems : activeDatasetItems;
+    if (itemsToExport.length === 0) {
       showToast('No forecasting data to print', 'warning');
       return;
     }
-    printForecastingReportDirect(filteredItems, { periodLabel: currentPeriodLabel });
+    printForecastingReportDirect(itemsToExport, {
+      periodLabel: currentPeriodLabel,
+      sites: serviceBranches
+    });
   };
 
   return (
     <div className="forecasting-reports-view" style={{ maxWidth: '1200px', margin: '0 auto' }}>
       {/* ── Top Hero & Control Card ────────────────────────────────────────── */}
-      <div className="card" style={{ padding: '20px 24px', marginBottom: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ background: '#eff6ff', color: '#0284c7', padding: '8px', borderRadius: '8px' }}>
-                <TrendingUp size={22} />
-              </div>
-              <div>
-                <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', margin: 0 }}>
-                  Forecasting Reports & Analytics
+      <div 
+        className="card" 
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        style={{ 
+          padding: '18px 22px', 
+          marginBottom: '20px', 
+          background: isDragging ? '#eff6ff' : '#ffffff', 
+          border: isDragging ? '2px dashed #0284c7' : '1px solid #e2e8f0', 
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          position: 'relative',
+          transition: 'all 0.2s ease'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+          {/* Title & Dataset Metadata */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ background: '#eff6ff', color: '#0284c7', padding: '10px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <TrendingUp size={24} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h2 style={{ fontSize: '19px', fontWeight: 800, color: '#0f172a', margin: 0, letterSpacing: '-0.01em' }}>
+                  Forecasting Reports &amp; Analytics
                 </h2>
-                <p style={{ fontSize: '12.5px', color: '#64748b', margin: '2px 0 0 0' }}>
-                  Enterprise demand forecasting analytics & regression intelligence — powered by Fixably Masterlist raw repair data
-                </p>
+                <span className="badge" style={{ background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '11px', padding: '2px 8px', fontWeight: 600 }}>
+                  {dataSourceMode === 'uploaded'
+                    ? `File: ${uploadedDataset?.fileName || 'Custom Fixably'} • ${analytics.totalSKUs} SKUs`
+                    : `Active Plan: ${currentPeriodLabel} • ${analytics.totalSKUs} SKUs`}
+                </span>
+                {uploadedDataset && dataSourceMode === 'uploaded' && (
+                  <button
+                    type="button"
+                    onClick={() => setDataSourceMode('active')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#0284c7',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textDecoration: 'underline'
+                    }}
+                  >
+                    Reset to Default Plan
+                  </button>
+                )}
               </div>
+              <p style={{ fontSize: '12.5px', color: '#64748b', margin: '3px 0 0 0' }}>
+                Enterprise demand forecasting &amp; regression analytics — powered by Fixably Masterlist raw repair data
+              </p>
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* Streamlined Action Controls (Primary Upload + Consolidated Export Menu + Reset) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <input
               type="file"
               ref={fileInputRef}
@@ -825,72 +920,257 @@ export default function ForecastingReports() {
               onChange={handleFileChange}
             />
 
+            {/* Primary Action Button */}
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-primary btn-sm"
               onClick={() => fileInputRef.current?.click()}
               disabled={isProcessing}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, height: '36px', padding: '0 14px' }}
               title="Upload any raw Fixably masterlist or repair CSV/Excel file"
             >
-              <UploadCloud size={15} />
-              <span>{isProcessing ? 'Processing Masterlist...' : 'Upload Fixably Masterlist'}</span>
+              <UploadCloud size={16} />
+              <span>{isProcessing ? 'Processing...' : 'Upload Masterlist'}</span>
             </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => downloadSampleFixablyForecastingTemplate('xlsx')}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              title="Download sample template"
-            >
-              <FileSpreadsheet size={15} />
-              <span>Sample Template</span>
-            </button>
+            {/* Consolidated Export & Tools Dropdown */}
+            <div ref={exportDropdownRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontWeight: 600,
+                  height: '36px',
+                  padding: '0 12px',
+                  background: showExportMenu ? '#f1f5f9' : '#ffffff'
+                }}
+                title="Export or Print Reports"
+              >
+                <FileSpreadsheet size={15} color="#0284c7" />
+                <span>Export &amp; Share</span>
+                <ChevronDown size={14} style={{ transform: showExportMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />
+              </button>
 
-            <div style={{ width: '1px', height: '22px', background: '#cbd5e1', margin: '0 4px' }} />
+              {/* Dropdown Menu */}
+              {showExportMenu && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '6px',
+                    width: '280px',
+                    background: '#ffffff',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                    zIndex: 100,
+                    overflow: 'hidden',
+                    padding: '6px'
+                  }}
+                >
+                  <div style={{ padding: '4px 10px 6px', fontSize: '10.5px', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Full Master Dataset ({activeDatasetItems.length} SKUs)
+                  </div>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleExportExcel}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#15803d', borderColor: '#86efac' }}
-              title="Export Multi-Tab Excel Workbook"
-            >
-              <FileSpreadsheet size={15} />
-              <span>Export Excel</span>
-            </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowExportMenu(false); handleExportExcel('all'); }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '8px 10px',
+                      background: 'none',
+                      border: 'none',
+                      borderRadius: '6px',
+                      textAlign: 'left',
+                      fontSize: '12.5px',
+                      color: '#0f172a',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f0fdf4'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                  >
+                    <FileSpreadsheet size={16} color="#15803d" />
+                    <div>
+                      <div>Export Master Workbook (.xlsx)</div>
+                      <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>5 sheets: Ledger, 26 branches, matrix, audit</div>
+                    </div>
+                  </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handleExportPDF}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', borderColor: '#bae6fd' }}
-              title="Download Landscape PDF Document"
-            >
-              <Download size={15} />
-              <span>Download PDF</span>
-            </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowExportMenu(false); handleExportPDF('all'); }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '8px 10px',
+                      background: 'none',
+                      border: 'none',
+                      borderRadius: '6px',
+                      textAlign: 'left',
+                      fontSize: '12.5px',
+                      color: '#0f172a',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f0f9ff'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                  >
+                    <Download size={16} color="#0284c7" />
+                    <div>
+                      <div>Download Master PDF (.pdf)</div>
+                      <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>Complete executive forecast summary</div>
+                    </div>
+                  </button>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={handlePrint}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              title="Print formatted executive forecast"
-            >
-              <Printer size={15} />
-              <span>Print</span>
-            </button>
+                  {isFiltered && (
+                    <>
+                      <div style={{ height: '1px', background: '#e2e8f0', margin: '6px 0' }} />
+                      <div style={{ padding: '4px 10px 4px', fontSize: '10px', fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Active Filter View ({filteredItems.length} of {activeDatasetItems.length} SKUs)
+                      </div>
 
+                      <button
+                        type="button"
+                        onClick={() => { setShowExportMenu(false); handleExportExcel('filtered'); }}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '6px 10px',
+                          background: 'none',
+                          border: 'none',
+                          borderRadius: '6px',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          color: '#334155',
+                          fontWeight: 500,
+                          cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#fffbeb'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                      >
+                        <FileSpreadsheet size={14} color="#d97706" />
+                        <span>Export Filtered Ledger (.xlsx)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setShowExportMenu(false); handleExportPDF('filtered'); }}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '6px 10px',
+                          background: 'none',
+                          border: 'none',
+                          borderRadius: '6px',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          color: '#334155',
+                          fontWeight: 500,
+                          cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#fffbeb'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                      >
+                        <Download size={14} color="#d97706" />
+                        <span>Download Filtered PDF (.pdf)</span>
+                      </button>
+                    </>
+                  )}
+
+                  <div style={{ height: '1px', background: '#e2e8f0', margin: '6px 0' }} />
+
+                  <button
+                    type="button"
+                    onClick={() => { setShowExportMenu(false); handlePrint(isFiltered ? 'filtered' : 'all'); }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '7px 10px',
+                      background: 'none',
+                      border: 'none',
+                      borderRadius: '6px',
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      color: '#475569',
+                      fontWeight: 500,
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                  >
+                    <Printer size={14} color="#475569" />
+                    <span>Print Report ({isFiltered ? `${filteredItems.length} Filtered SKUs` : 'All SKUs'})</span>
+                  </button>
+
+                  <div style={{ height: '1px', background: '#f1f5f9', margin: '4px 0' }} />
+
+                  <button
+                    type="button"
+                    onClick={() => { setShowExportMenu(false); downloadSampleFixablyForecastingTemplate('xlsx'); }}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '6px 10px',
+                      background: 'none',
+                      border: 'none',
+                      borderRadius: '6px',
+                      textAlign: 'left',
+                      fontSize: '11.5px',
+                      color: '#64748b',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                  >
+                    <FileSpreadsheet size={13} color="#94a3b8" />
+                    <span>Download Sample Template (.xlsx)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Clear / Reset Action */}
             {canEdit && (
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
-                  setUploadedDataset(null);
-                  setDataSourceMode('active');
-                  clearAllData();
+                  if (window.confirm('Are you sure you want to clear the current forecast dataset and revert to clean empty state?')) {
+                    setUploadedDataset(null);
+                    setDataSourceMode('active');
+                    clearAllData();
+                  }
                 }}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b91c1c' }}
-                title="Clear all forecasting and reporting records to clean empty state"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  color: '#dc2626',
+                  height: '36px',
+                  padding: '0 10px',
+                  borderColor: '#fecaca'
+                }}
+                title="Clear all forecasting records"
               >
-                <RotateCcw size={15} />
-                <span>Clear Data</span>
+                <RotateCcw size={14} />
+                <span>Reset</span>
               </button>
             )}
 
@@ -906,59 +1186,9 @@ export default function ForecastingReports() {
                   fontWeight: 600
                 }}
               >
-                View &amp; Export Mode
+                View Only
               </span>
             )}
-          </div>
-        </div>
-
-        {/* Data Source Indicator & Drag-and-Drop Hint */}
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          style={{
-            background: isDragging ? '#eff6ff' : '#f8fafc',
-            border: isDragging ? '2px dashed #0284c7' : '1px dashed #cbd5e1',
-            borderRadius: '8px',
-            padding: '10px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: '12px'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '12px', color: '#475569' }}>
-            <Sparkles size={16} color="#0284c7" />
-            <span>
-              {dataSourceMode === 'uploaded'
-                ? <span>Viewing custom uploaded Fixably file: <strong style={{ color: '#0f172a' }}>{uploadedDataset?.fileName}</strong> ({analytics.totalSKUs} SKUs)</span>
-                : <span>Sourced from active planning dataset: <strong style={{ color: '#0f172a' }}>{currentPeriodLabel}</strong> ({analytics.totalSKUs} SKUs)</span>}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {uploadedDataset && dataSourceMode === 'uploaded' && (
-              <button
-                type="button"
-                onClick={() => setDataSourceMode('active')}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#0284c7',
-                  fontSize: '11.5px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  textDecoration: 'underline'
-                }}
-              >
-                Switch back to Active Ingested Dataset
-              </button>
-            )}
-            <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-              Drag and drop .xlsx/.csv masterlists anywhere here
-            </span>
           </div>
         </div>
       </div>
@@ -1020,17 +1250,17 @@ export default function ForecastingReports() {
       </div>
 
       {/* ── Filter Bar & View Mode Navigation ──────────────────────────────── */}
-      <div className="card" style={{ padding: '16px 20px', marginBottom: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', marginBottom: '14px' }}>
-          {/* View Mode Switcher Pills */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#f1f5f9', padding: '3px', borderRadius: '8px', flexWrap: 'wrap' }}>
+      <div className="card" style={{ padding: '14px 18px', marginBottom: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
+          {/* View Mode Switcher Segmented Control */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', background: '#f1f5f9', padding: '3px', borderRadius: '8px', flexWrap: 'wrap' }}>
             {[
-              { id: 'overview', label: 'Executive Overview', icon: BarChart3 },
-              { id: 'ledger', label: 'Forecast Master Ledger', icon: FileSpreadsheet },
-              { id: 'accuracy-audit', label: 'Forecast vs Actual Audit', icon: CheckCircle },
-              { id: 'regional-demand', label: 'MM vs Provincial Demand', icon: MapPin },
-              { id: 'branch-demand', label: 'Branch Demand Matrix', icon: Building2 },
-              { id: 'regression', label: 'Regression & Safety Buffers', icon: Activity }
+              { id: 'overview', label: 'Overview', icon: BarChart3 },
+              { id: 'ledger', label: 'Master Ledger', icon: FileSpreadsheet },
+              { id: 'accuracy-audit', label: 'Forecast vs Actual', icon: CheckCircle },
+              { id: 'regional-demand', label: 'MM vs Provincial', icon: MapPin },
+              { id: 'branch-demand', label: 'Branch Matrix', icon: Building2 },
+              { id: 'regression', label: 'Regression & Buffers', icon: Activity }
             ].map(tab => {
               const Icon = tab.icon;
               const isActive = viewMode === tab.id;
@@ -1039,14 +1269,14 @@ export default function ForecastingReports() {
                   key={tab.id}
                   onClick={() => setViewMode(tab.id)}
                   style={{
-                    padding: '6px 12px',
+                    padding: '6px 13px',
                     fontSize: '12px',
                     fontWeight: isActive ? 700 : 500,
                     borderRadius: '6px',
                     border: 'none',
                     background: isActive ? '#ffffff' : 'transparent',
-                    color: isActive ? '#0f172a' : '#64748b',
-                    boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    color: isActive ? '#0284c7' : '#64748b',
+                    boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -1062,94 +1292,102 @@ export default function ForecastingReports() {
           </div>
 
           {/* Quick Search */}
-          <div style={{ position: 'relative', width: '280px' }}>
-            <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+          <div style={{ position: 'relative', width: '260px' }}>
+            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
             <input
               type="text"
               className="form-input"
-              placeholder="Search part #, description, model..."
+              placeholder="Search part #, model..."
               value={searchQuery}
               onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              style={{ paddingLeft: '32px', height: '34px', fontSize: '12px', width: '100%' }}
+              style={{ paddingLeft: '30px', height: '34px', fontSize: '12px', width: '100%', borderRadius: '6px' }}
             />
           </div>
         </div>
 
-        {/* Secondary Filter Chips */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
-          {/* Commodity Category Filters */}
+        {/* Secondary Filter Row: Segmented Commodity Group & Selects */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', flexWrap: 'wrap', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
+          {/* Commodity Category Segmented Pills */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Commodity:</span>
-            {['ALL', 'BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(cat => {
-              const isActive = categoryFilter === cat;
-              const label = cat === 'MID_REAR' ? 'MID/REAR' : cat.replace('_', ' ');
-              return (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => { setCategoryFilter(cat); setCurrentPage(1); }}
-                  style={{
-                    padding: '3px 9px',
-                    fontSize: '11px',
-                    fontWeight: isActive ? 700 : 500,
-                    borderRadius: '5px',
-                    border: isActive ? '1px solid #0284c7' : '1px solid #e2e8f0',
-                    background: isActive ? '#0284c7' : '#f8fafc',
-                    color: isActive ? '#ffffff' : '#475569',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {label}
-                </button>
-              );
-            })}
+            <div style={{ display: 'flex', background: '#f8fafc', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0', gap: '2px' }}>
+              {['ALL', 'BATTERY', 'DISPLAY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(cat => {
+                const isActive = categoryFilter === cat;
+                const label = cat === 'MID_REAR' ? 'Mid/Rear' : cat === 'BACK_GLASS' ? 'Back Glass' : cat.charAt(0) + cat.slice(1).toLowerCase();
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => { setCategoryFilter(cat); setCurrentPage(1); }}
+                    style={{
+                      padding: '3px 10px',
+                      fontSize: '11px',
+                      fontWeight: isActive ? 700 : 500,
+                      borderRadius: '4px',
+                      border: 'none',
+                      background: isActive ? '#0284c7' : 'transparent',
+                      color: isActive ? '#ffffff' : '#475569',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Forecasting Algorithm Selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#0284c7', textTransform: 'uppercase' }}>Algorithm:</span>
-            <select
-              value={forecastingModel}
-              onChange={(e) => { changeForecastingModel(e.target.value); setCurrentPage(1); }}
-              style={{
-                padding: '3px 8px',
-                fontSize: '11.5px',
-                borderRadius: '5px',
-                border: '1px solid #0284c7',
-                background: '#f0f9ff',
-                color: '#0369a1',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              <option value="linear">Linear Regression (FORECAST.LINEAR - Default)</option>
-              <option value="wma">4-Mo WMA (Spike Filtered)</option>
-            </select>
-          </div>
+          {/* Model & Algorithm Selects + Counter */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {/* iPhone Model Filter */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Model:</span>
+              <select
+                value={modelFilter}
+                onChange={(e) => { setModelFilter(e.target.value); setCurrentPage(1); }}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11.5px',
+                  borderRadius: '6px',
+                  border: '1px solid #cbd5e1',
+                  background: '#fff',
+                  color: '#0f172a',
+                  height: '30px'
+                }}
+              >
+                {availableModels.map(m => (
+                  <option key={m} value={m}>{m === 'ALL' ? 'All Models' : m}</option>
+                ))}
+              </select>
+            </div>
 
-          {/* iPhone Model Filter */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase' }}>Model:</span>
-            <select
-              value={modelFilter}
-              onChange={(e) => { setModelFilter(e.target.value); setCurrentPage(1); }}
-              style={{
-                padding: '3px 8px',
-                fontSize: '11.5px',
-                borderRadius: '5px',
-                border: '1px solid #cbd5e1',
-                background: '#fff',
-                color: '#0f172a'
-              }}
-            >
-              {availableModels.map(m => (
-                <option key={m} value={m}>{m === 'ALL' ? 'All iPhone Models' : m}</option>
-              ))}
-            </select>
-          </div>
+            {/* Forecasting Algorithm Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#0284c7', textTransform: 'uppercase' }}>Algorithm:</span>
+              <select
+                value={forecastingModel}
+                onChange={(e) => { changeForecastingModel(e.target.value); setCurrentPage(1); }}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11.5px',
+                  borderRadius: '6px',
+                  border: '1px solid #0284c7',
+                  background: '#f0f9ff',
+                  color: '#0369a1',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  height: '30px'
+                }}
+              >
+                <option value="linear">Linear Regression (Default)</option>
+                <option value="wma">4-Mo WMA (Filtered)</option>
+              </select>
+            </div>
 
-          <div style={{ marginLeft: 'auto', fontSize: '11.5px', color: '#64748b' }}>
-            Showing <strong>{filteredItems.length}</strong> of <strong>{activeDatasetItems.length}</strong> part models
+            <div style={{ fontSize: '11.5px', color: '#64748b', paddingLeft: '4px' }}>
+              Showing <strong>{filteredItems.length}</strong> of <strong>{activeDatasetItems.length}</strong> SKUs
+            </div>
           </div>
         </div>
       </div>

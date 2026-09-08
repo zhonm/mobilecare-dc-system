@@ -3704,7 +3704,7 @@ export async function parseStockTransfersReportFile(file) {
 /**
  * Exports Stock Transfers records to a beautifully styled Excel workbook using ExcelJS
  */
-export async function exportStockTransfersToExcel(records, metadata = {}) {
+export async function exportStockTransfersToExcel(records = [], metadata = {}) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Mobile Care Services Phils. Inc.';
   workbook.lastModifiedBy = 'MDC DC System 2';
@@ -3713,50 +3713,52 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
     workbook.title = metadata.fileName;
   }
 
-  const worksheet = workbook.addWorksheet('Stock Transfers Report', {
+  const totalQty = records.reduce((sum, r) => sum + (Number(r.transfer_quantity) || 1), 0);
+  const totalVal = records.reduce((sum, r) => sum + (Number(r.transfer_value) || 0), 0);
+
+  // ── Sheet 1: Master Stock Transfers Ledger ──────────────────────────────────
+  const ws1 = workbook.addWorksheet('Stock Transfers Ledger', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
-  const totalQty = records.reduce((sum, r) => sum + (r.transfer_quantity || 0), 0);
-  const totalVal = records.reduce((sum, r) => sum + (r.transfer_value || 0), 0);
-
   // Title Banner
-  worksheet.mergeCells('A1:I1');
-  const tCell = worksheet.getCell('A1');
-  tCell.value = 'MOBILE CARE SERVICES PHILS. INC. — Fixably Stock Transfers Report';
-  tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
-  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
-  tCell.alignment = { horizontal: 'center', vertical: 'middle' };
-  worksheet.getRow(1).height = 28;
+  ws1.mergeCells('A1:J1');
+  const tCell1 = ws1.getCell('A1');
+  tCell1.value = 'MOBILE CARE SERVICES PHILS. INC. — Comprehensive Stock Transfers Master Report';
+  tCell1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(1).height = 28;
 
   // KPI Row
-  worksheet.mergeCells('A2:C2');
-  const k1 = worksheet.getCell('A2');
+  ws1.mergeCells('A2:C2');
+  const k1 = ws1.getCell('A2');
   k1.value = `TOTAL RECORDS: ${records.length.toLocaleString()} transfers`;
   k1.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
   k1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
   k1.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  worksheet.mergeCells('D2:F2');
-  const k2 = worksheet.getCell('D2');
+  ws1.mergeCells('D2:F2');
+  const k2 = ws1.getCell('D2');
   k2.value = `TOTAL QUANTITY: ${totalQty.toLocaleString()} units`;
-  k2.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF334155' } };
+  k2.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
   k2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
   k2.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  worksheet.mergeCells('G2:I2');
-  const k3 = worksheet.getCell('G2');
+  ws1.mergeCells('G2:J2');
+  const k3 = ws1.getCell('G2');
   k3.value = `TOTAL TRANSFER VALUATION: $${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   k3.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
   k3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15803D' } };
   k3.alignment = { horizontal: 'center', vertical: 'middle' };
-  worksheet.getRow(2).height = 22;
+  ws1.getRow(2).height = 22;
 
   // Header Row
-  const headers = [
+  const headers1 = [
+    '#',
     'Transfer Received Date',
-    'From Stock',
-    'To Stock',
+    'From Stock (Origin)',
+    'To Stock (Destination)',
     'Product Code',
     'Product Name',
     'Transfer Quantity',
@@ -3765,9 +3767,9 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
     'Transfer Value ($)'
   ];
 
-  const headerRow = worksheet.addRow(headers);
-  headerRow.height = 26;
-  headerRow.eachCell((cell) => {
+  const headerRow1 = ws1.addRow(headers1);
+  headerRow1.height = 26;
+  headerRow1.eachCell((cell) => {
     cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -3779,17 +3781,20 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
     };
   });
 
-  records.forEach((r) => {
-    const dRow = worksheet.addRow([
+  records.forEach((r, idx) => {
+    const qty = Number(r.transfer_quantity) || 1;
+    const val = Number(r.transfer_value) || 0;
+    const dRow = ws1.addRow([
+      idx + 1,
       sanitizeForSpreadsheet(r.transfer_received_date || ''),
       sanitizeForSpreadsheet(r.from_stock || ''),
       sanitizeForSpreadsheet(r.to_stock || ''),
       sanitizeForSpreadsheet(r.product_code || ''),
       sanitizeForSpreadsheet(r.product_name || ''),
-      r.transfer_quantity || 1,
+      qty,
       sanitizeForSpreadsheet(r.serial_number || ''),
       sanitizeForSpreadsheet(r.imei_number || ''),
-      r.transfer_value || 0
+      val
     ]);
     dRow.height = 20;
 
@@ -3802,28 +3807,28 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
         right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
       };
 
-      if (cNum === 1) {
+      if (cNum === 1 || cNum === 2) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 2) {
+      } else if (cNum === 3) {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF92400E' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 3) {
+      } else if (cNum === 4) {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 4) {
+      } else if (cNum === 5) {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 5) {
-        cell.alignment = { horizontal: 'left', vertical: 'middle' };
       } else if (cNum === 6) {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      } else if (cNum === 7) {
         cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0369A1' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 7 || cNum === 8) {
+      } else if (cNum === 8 || cNum === 9) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 9) {
+      } else if (cNum === 10) {
         cell.numFmt = '$#,##0.00';
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
@@ -3831,13 +3836,13 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
     });
   });
 
-  // Footer Row
-  const footerRow = worksheet.addRow(['TOTAL', '', '', '', `${records.length} Total Records`, totalQty, '', '', totalVal]);
-  footerRow.height = 24;
-  footerRow.eachCell((cell, cNum) => {
+  // Footer Row for Sheet 1
+  const footerRow1 = ws1.addRow(['TOTAL', '', '', '', '', `${records.length} Total Records`, totalQty, '', '', totalVal]);
+  footerRow1.height = 24;
+  footerRow1.eachCell((cell, cNum) => {
     cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
-    if (cNum === 9) {
+    if (cNum === 10) {
       cell.numFmt = '$#,##0.00';
       cell.alignment = { horizontal: 'right', vertical: 'middle' };
     } else {
@@ -3845,22 +3850,296 @@ export async function exportStockTransfersToExcel(records, metadata = {}) {
     }
   });
 
-  worksheet.getColumn(1).width = 16;
-  worksheet.getColumn(2).width = 20;
-  worksheet.getColumn(3).width = 20;
-  worksheet.getColumn(4).width = 16;
-  worksheet.getColumn(5).width = 30;
-  worksheet.getColumn(6).width = 12;
-  worksheet.getColumn(7).width = 24;
-  worksheet.getColumn(8).width = 18;
-  worksheet.getColumn(9).width = 16;
+  ws1.columns = [
+    { width: 6 },
+    { width: 16 },
+    { width: 22 },
+    { width: 22 },
+    { width: 16 },
+    { width: 34 },
+    { width: 12 },
+    { width: 25 },
+    { width: 18 },
+    { width: 16 }
+  ];
+
+  // ── Sheet 2: Route Distribution Summary ─────────────────────────────────────
+  const routeMap = new Map();
+  records.forEach(r => {
+    const origin = r.from_stock || 'Unknown Origin';
+    const dest = r.to_stock || 'Unknown Destination';
+    const routeKey = `${origin} ➔ ${dest}`;
+    if (!routeMap.has(routeKey)) {
+      routeMap.set(routeKey, { origin, dest, shipmentsCount: 0, totalUnits: 0, totalVal: 0 });
+    }
+    const item = routeMap.get(routeKey);
+    item.shipmentsCount += 1;
+    item.totalUnits += (Number(r.transfer_quantity) || 1);
+    item.totalVal += (Number(r.transfer_value) || 0);
+  });
+
+  const sortedRoutes = Array.from(routeMap.values()).sort((a, b) => b.totalUnits - a.totalUnits);
+
+  const ws2 = workbook.addWorksheet('Route Distribution Summary', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws2.mergeCells('A1:F1');
+  const tCell2 = ws2.getCell('A1');
+  tCell2.value = 'MOBILE CARE SERVICES PHILS. INC. — Transfer Route Distribution & Network Volume';
+  tCell2.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws2.getRow(1).height = 28;
+
+  const headers2 = ['Route #', 'Origin Location', 'Destination Location', 'Shipments Count', 'Total Units Moved', 'Total Transfer Value ($)'];
+  const headerRow2 = ws2.addRow(headers2);
+  headerRow2.height = 26;
+  headerRow2.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  sortedRoutes.forEach((route, idx) => {
+    const rRow = ws2.addRow([
+      idx + 1,
+      sanitizeForSpreadsheet(route.origin),
+      sanitizeForSpreadsheet(route.dest),
+      route.shipmentsCount,
+      route.totalUnits,
+      route.totalVal
+    ]);
+    rRow.height = 20;
+    rRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum === 1 || cNum === 4 || cNum === 5) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 2) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF92400E' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+      if (cNum === 3) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+      if (cNum === 6) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  const footerRow2 = ws2.addRow(['TOTAL', '', '', records.length, totalQty, totalVal]);
+  footerRow2.height = 24;
+  footerRow2.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    if (cNum === 6) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  ws2.columns = [
+    { width: 8 },
+    { width: 26 },
+    { width: 26 },
+    { width: 18 },
+    { width: 18 },
+    { width: 24 }
+  ];
+
+  // ── Sheet 3: Product & Commodity Summary ────────────────────────────────────
+  const partMap = new Map();
+  records.forEach(r => {
+    const code = r.product_code || 'UNKNOWN';
+    const name = r.product_name || 'Unspecified Part';
+    const descLower = name.toLowerCase();
+    let commodity = 'Component';
+    if (descLower.includes('display') || descLower.includes('screen')) commodity = 'Display';
+    else if (descLower.includes('battery')) commodity = 'Battery';
+    else if (descLower.includes('camera') || descLower.includes('truedepth')) commodity = 'Camera';
+    else if (descLower.includes('glass') || descLower.includes('back')) commodity = 'Back Glass';
+    else if (descLower.includes('rear') || descLower.includes('mid') || descLower.includes('system')) commodity = 'Rear/Mid System';
+
+    if (!partMap.has(code)) {
+      partMap.set(code, { code, name, commodity, unitsMoved: 0, totalVal: 0 });
+    }
+    const item = partMap.get(code);
+    item.unitsMoved += (Number(r.transfer_quantity) || 1);
+    item.totalVal += (Number(r.transfer_value) || 0);
+  });
+
+  const sortedParts = Array.from(partMap.values()).sort((a, b) => b.unitsMoved - a.unitsMoved);
+
+  const ws3 = workbook.addWorksheet('Product & Commodity Summary', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws3.mergeCells('A1:F1');
+  const tCell3 = ws3.getCell('A1');
+  tCell3.value = 'MOBILE CARE SERVICES PHILS. INC. — Transferred Parts & Commodity Summary';
+  tCell3.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws3.getRow(1).height = 28;
+
+  const headers3 = ['#', 'Product Code', 'Product Description', 'Commodity', 'Total Units Moved', 'Total Transferred Value ($)'];
+  const headerRow3 = ws3.addRow(headers3);
+  headerRow3.height = 26;
+  headerRow3.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  sortedParts.forEach((part, idx) => {
+    const pRow = ws3.addRow([
+      idx + 1,
+      sanitizeForSpreadsheet(part.code),
+      sanitizeForSpreadsheet(part.name),
+      sanitizeForSpreadsheet(part.commodity),
+      part.unitsMoved,
+      part.totalVal
+    ]);
+    pRow.height = 20;
+    pRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum === 1 || cNum === 2 || cNum === 4 || cNum === 5) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 3) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      if (cNum === 6) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  const footerRow3 = ws3.addRow(['TOTAL', `${sortedParts.length} Unique SKUs`, '', '', totalQty, totalVal]);
+  footerRow3.height = 24;
+  footerRow3.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    if (cNum === 6) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  ws3.columns = [
+    { width: 8 },
+    { width: 18 },
+    { width: 36 },
+    { width: 18 },
+    { width: 18 },
+    { width: 24 }
+  ];
+
+  // ── Sheet 4: Daily & Monthly Timeline Summary ───────────────────────────────
+  const dateMap = new Map();
+  records.forEach(r => {
+    const rawDate = r.transfer_received_date || 'Unspecified Date';
+    if (!dateMap.has(rawDate)) {
+      dateMap.set(rawDate, { date: rawDate, count: 0, units: 0, val: 0 });
+    }
+    const dObj = dateMap.get(rawDate);
+    dObj.count += 1;
+    dObj.units += (Number(r.transfer_quantity) || 1);
+    dObj.val += (Number(r.transfer_value) || 0);
+  });
+
+  const sortedDates = Array.from(dateMap.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  const ws4 = workbook.addWorksheet('Timeline Summary', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws4.mergeCells('A1:E1');
+  const tCell4 = ws4.getCell('A1');
+  tCell4.value = 'MOBILE CARE SERVICES PHILS. INC. — Daily & Periodic Transfer Velocity';
+  tCell4.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell4.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell4.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws4.getRow(1).height = 28;
+
+  const headers4 = ['#', 'Transfer Received Date', 'Transfers Count', 'Total Units Moved', 'Total Transferred Value ($)'];
+  const headerRow4 = ws4.addRow(headers4);
+  headerRow4.height = 26;
+  headerRow4.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  sortedDates.forEach((dItem, idx) => {
+    const dRow = ws4.addRow([
+      idx + 1,
+      sanitizeForSpreadsheet(dItem.date),
+      dItem.count,
+      dItem.units,
+      dItem.val
+    ]);
+    dRow.height = 20;
+    dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum >= 1 && cNum <= 4) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 5) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  const footerRow4 = ws4.addRow(['TOTAL', `${sortedDates.length} Active Days`, records.length, totalQty, totalVal]);
+  footerRow4.height = 24;
+  footerRow4.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    if (cNum === 5) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  ws4.columns = [
+    { width: 8 },
+    { width: 26 },
+    { width: 18 },
+    { width: 18 },
+    { width: 24 }
+  ];
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `Stock_Transfers_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+  link.download = `Stock_Transfers_Master_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -3923,11 +4202,8 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
   workbook.lastModifiedBy = 'MDC DC System 2';
   workbook.created = new Date();
   const periodLabel = metadata?.periodLabel || 'September 2026';
-
-  // 1. Sheet 1: Master Forecast Ledger
-  const ws1 = workbook.addWorksheet('Forecast Master Ledger', {
-    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
-  });
+  const rawAllocations = metadata?.allocations || [];
+  const serviceBranches = metadata?.serviceBranches || siteAllocations || [];
 
   const resolveStockPrice = (item) => {
     if (!item) return 100;
@@ -3941,6 +4217,30 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
     return 100;
   };
 
+  const getCommodityName = (item) => {
+    if (item.category_name) return item.category_name;
+    const desc = String(item.description || item.part_name || '').toLowerCase();
+    if (desc.includes('display')) return 'Display';
+    if (desc.includes('battery')) return 'Battery';
+    if (desc.includes('camera')) return 'Camera';
+    if (desc.includes('glass') || desc.includes('back')) return 'Back Glass';
+    if (desc.includes('rear') || desc.includes('mid')) return 'Mid/Rear System';
+    return item.part_number?.startsWith('661-') ? 'Apple Part' : 'Component';
+  };
+
+  // Determine history months dynamically
+  let maxHistoryLength = 0;
+  forecastItems.forEach(item => {
+    if (Array.isArray(item.ytd_monthly_counts) && item.ytd_monthly_counts.length > 0) {
+      maxHistoryLength = Math.max(maxHistoryLength, item.ytd_monthly_counts.length);
+    }
+  });
+
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const historyMonths = (Array.isArray(metadata?.historyMonths) && metadata.historyMonths.length > 0)
+    ? metadata.historyMonths
+    : (maxHistoryLength > 0 ? MONTH_NAMES.slice(0, maxHistoryLength) : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug']);
+
   const totalForecastUnits = forecastItems.reduce((s, it) => s + (it.final_forecast ?? it.computed_forecast ?? 0), 0);
   const totalValuation = forecastItems.reduce((s, it) => {
     const qty = it.final_forecast ?? it.computed_forecast ?? 0;
@@ -3948,19 +4248,41 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
     return s + (qty * price);
   }, 0);
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // SHEET 1: Master Forecast Ledger
+  // ══════════════════════════════════════════════════════════════════════════
+  const ws1 = workbook.addWorksheet('Forecast Master Ledger', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  // Calculate Column Count
+  // 4 info cols + historyMonths.length + 5 forecast/stat cols + 2 price cols
+  const lastColNum1 = 4 + historyMonths.length + 5 + 2;
+
+  function getColLetter(colIndex) {
+    let temp, letter = '';
+    while (colIndex > 0) {
+      temp = (colIndex - 1) % 26;
+      letter = String.fromCharCode(temp + 65) + letter;
+      colIndex = Math.floor((colIndex - temp - 1) / 26);
+    }
+    return letter;
+  }
+  const lastColLetter1 = getColLetter(lastColNum1);
+
   // Title Banner
-  ws1.mergeCells('A1:L1');
-  const tCell = ws1.getCell('A1');
-  tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Fixably Demand Forecasting Report (${periodLabel})`;
-  tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
-  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
-  tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.mergeCells(`A1:${lastColLetter1}1`);
+  const tCell1 = ws1.getCell('A1');
+  tCell1.value = `MOBILE CARE SERVICES PHILS. INC. — Fixably Master Demand Forecasting Report (${periodLabel})`;
+  tCell1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell1.alignment = { horizontal: 'center', vertical: 'middle' };
   ws1.getRow(1).height = 28;
 
   // KPI Row
   ws1.mergeCells('A2:D2');
   const k1 = ws1.getCell('A2');
-  k1.value = `TOTAL PART MODELS: ${forecastItems.length} SKUs`;
+  k1.value = `TOTAL PART MODELS: ${forecastItems.length.toLocaleString()} SKUs`;
   k1.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
   k1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
   k1.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -3972,7 +4294,7 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
   k2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
   k2.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  ws1.mergeCells('I2:L2');
+  ws1.mergeCells(`I2:${lastColLetter1}2`);
   const k3 = ws1.getCell('I2');
   k3.value = `PROJECTED STOCK VALUATION: $${totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   k3.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -3985,12 +4307,14 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
     'Description',
     'iPhone Model',
     'Commodity',
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
+    ...historyMonths.map(m => `${m} Actuals`),
     'Base Forecast',
     'Admin Override',
-    'Final Forecast',
+    'Final Recommended Order',
+    'Safety Buffer Units',
+    'Growth Trend %',
     'Stocking Price ($)',
-    'Total Cost ($)'
+    'Total Valuation ($)'
   ];
 
   const headerRow1 = ws1.addRow(headers1);
@@ -3999,13 +4323,25 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
     cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF334155' } },
+      bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
   });
 
   forecastItems.forEach((it) => {
-    const monthly = it.ytd_monthly_counts || [];
+    const rawCounts = it.ytd_monthly_counts || [];
+    const monthlyVals = historyMonths.map((_, idx) => {
+      return (idx < rawCounts.length) ? (Number(rawCounts[idx]) || 0) : 0;
+    });
+
     const base = it.computed_forecast ?? 0;
     const override = it.admin_override ?? '';
     const finalVal = it.final_forecast ?? base;
+    const safetyBuffer = it.safety_buffer ?? (it.reorder_point ? Math.max(0, it.reorder_point - base) : Math.round(finalVal * 0.15));
+    const growthTrend = it.growth_rate !== undefined ? `${(it.growth_rate * 100).toFixed(1)}%` : '0.0%';
     const price = resolveStockPrice(it);
     const cost = finalVal * price;
 
@@ -4013,18 +4349,13 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
       sanitizeForSpreadsheet(it.part_number || ''),
       sanitizeForSpreadsheet(it.description || ''),
       sanitizeForSpreadsheet(it.iphone_model || ''),
-      sanitizeForSpreadsheet(it.category_name || (it.part_number?.startsWith('661-') ? 'Apple Part' : 'General')),
-      monthly[0] || 0,
-      monthly[1] || 0,
-      monthly[2] || 0,
-      monthly[3] || 0,
-      monthly[4] || 0,
-      monthly[5] || 0,
-      monthly[6] || 0,
-      monthly[7] || 0,
+      sanitizeForSpreadsheet(getCommodityName(it)),
+      ...monthlyVals,
       base,
       override,
       finalVal,
+      safetyBuffer,
+      growthTrend,
       price,
       cost
     ]);
@@ -4038,35 +4369,81 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
         left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
         right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
       };
-      if (cNum >= 5 && cNum <= 15) {
+      // Center align month columns and forecast numbers
+      const monthStart = 5;
+      const monthEnd = 4 + historyMonths.length;
+      if (cNum >= monthStart && cNum <= (monthEnd + 4)) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum >= 16) {
+      } else if (cNum === monthEnd + 5) { // Growth Trend
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum >= monthEnd + 6) { // Price and Cost
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
         cell.numFmt = '$#,##0.00';
       }
     });
   });
 
-  ws1.columns = [
-    { width: 14 }, // PN
-    { width: 28 }, // Desc
-    { width: 20 }, // Model
-    { width: 14 }, // Commodity
-    { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, { width: 6 }, // Months
+  // Footer Row for Sheet 1
+  const footerValues1 = [
+    'TOTAL',
+    `${forecastItems.length} Total SKUs`,
+    '',
+    '',
+    ...historyMonths.map((_, mIdx) => {
+      return forecastItems.reduce((sum, it) => {
+        const counts = it.ytd_monthly_counts || [];
+        return sum + (mIdx < counts.length ? (Number(counts[mIdx]) || 0) : 0);
+      }, 0);
+    }),
+    forecastItems.reduce((s, it) => s + (it.computed_forecast ?? 0), 0),
+    '',
+    totalForecastUnits,
+    forecastItems.reduce((s, it) => s + (it.safety_buffer || 0), 0),
+    '',
+    '',
+    totalValuation
+  ];
+  const footerRow1 = ws1.addRow(footerValues1);
+  footerRow1.height = 24;
+  footerRow1.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    if (cNum === lastColNum1) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  // Dynamic Column Widths for Sheet 1
+  const colWidths1 = [
+    { width: 15 }, // PN
+    { width: 32 }, // Desc
+    { width: 22 }, // Model
+    { width: 16 }  // Commodity
+  ];
+  historyMonths.forEach(() => colWidths1.push({ width: 11 }));
+  colWidths1.push(
     { width: 14 }, // Base
     { width: 14 }, // Override
-    { width: 14 }, // Final
+    { width: 22 }, // Final
+    { width: 16 }, // Buffer
+    { width: 14 }, // Trend %
     { width: 16 }, // Price
-    { width: 18 }  // Cost
-  ];
+    { width: 20 }  // Valuation
+  );
+  ws1.columns = colWidths1;
 
-  // 2. Sheet 2: Branch Demand Distribution
+  // ══════════════════════════════════════════════════════════════════════════
+  // SHEET 2: Service Branch Demand Distribution
+  // ══════════════════════════════════════════════════════════════════════════
   if (siteAllocations && siteAllocations.length > 0) {
     const ws2 = workbook.addWorksheet('Branch Demand Matrix', {
       pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
     });
 
-    ws2.mergeCells('A1:F1');
+    ws2.mergeCells('A1:G1');
     const tCell2 = ws2.getCell('A1');
     tCell2.value = `MOBILE CARE SERVICES PHILS. INC. — Service Branch Demand Distribution (${periodLabel})`;
     tCell2.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -4074,7 +4451,7 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
     tCell2.alignment = { horizontal: 'center', vertical: 'middle' };
     ws2.getRow(1).height = 28;
 
-    const headers2 = ['Branch Code', 'Branch Name', 'Region', 'Total Forecast Units', 'Projected Stock Value ($)', '% Share of DC Demand'];
+    const headers2 = ['#', 'Branch Code', 'Branch Name', 'Region', 'Total Forecast Units', 'Projected Stock Value ($)', '% Share of DC Demand'];
     const hRow2 = ws2.addRow(headers2);
     hRow2.height = 26;
     hRow2.eachCell((cell) => {
@@ -4083,8 +4460,9 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
 
-    siteAllocations.forEach(site => {
+    siteAllocations.forEach((site, idx) => {
       const row = ws2.addRow([
+        idx + 1,
         sanitizeForSpreadsheet(site.code || ''),
         sanitizeForSpreadsheet(site.name || ''),
         sanitizeForSpreadsheet(site.region || 'Metro Manila'),
@@ -4095,20 +4473,46 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
       row.height = 20;
       row.eachCell({ includeEmpty: true }, (cell, cNum) => {
         cell.font = { name: 'Arial', size: 9 };
-        if (cNum === 4) cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        if (cNum === 5) {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+        };
+        if (cNum === 1 || cNum === 2 || cNum === 4 || cNum === 5) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (cNum === 3) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+        if (cNum === 6) {
           cell.alignment = { horizontal: 'right', vertical: 'middle' };
           cell.numFmt = '$#,##0.00';
         }
-        if (cNum === 6) {
+        if (cNum === 7) {
           cell.alignment = { horizontal: 'right', vertical: 'middle' };
           cell.numFmt = '0.0%';
         }
       });
     });
 
+    const sumBranchUnits = siteAllocations.reduce((s, it) => s + (it.totalUnits || 0), 0);
+    const sumBranchVal = siteAllocations.reduce((s, it) => s + (it.totalVal || 0), 0);
+    const footerRow2 = ws2.addRow(['TOTAL', `${siteAllocations.length} Sites`, 'Nationwide Network', '', sumBranchUnits, sumBranchVal, 1.0]);
+    footerRow2.height = 24;
+    footerRow2.eachCell((cell, cNum) => {
+      cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      if (cNum === 6) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else if (cNum === 7) {
+        cell.numFmt = '0.0%';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+
     ws2.columns = [
-      { width: 14 },
+      { width: 6 },
+      { width: 16 },
       { width: 34 },
       { width: 18 },
       { width: 20 },
@@ -4116,6 +4520,404 @@ export async function exportForecastingReportToExcel(forecastItems = [], siteAll
       { width: 22 }
     ];
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SHEET 3: SKU Branch Allocation Cross-Tab Matrix (All 26 Service Branches)
+  // ══════════════════════════════════════════════════════════════════════════
+  if (serviceBranches && serviceBranches.length > 0) {
+    const ws3 = workbook.addWorksheet('SKU Branch Allocation Matrix', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      views: [{ state: 'frozen', xSplit: 4, ySplit: 3 }]
+    });
+
+    const branchList = serviceBranches.filter(s => s.code !== 'DC' && !s.code?.includes('CENTRAL'));
+    const totalBranchCols = 4 + branchList.length + 2;
+    const lastColLetter3 = getColLetter(totalBranchCols);
+
+    // Title
+    ws3.mergeCells(`A1:${lastColLetter3}1`);
+    const tCell3 = ws3.getCell('A1');
+    tCell3.value = `MOBILE CARE SERVICES PHILS. INC. — SKU × Service Branch Allocation Matrix (${periodLabel})`;
+    tCell3.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+    tCell3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    tCell3.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws3.getRow(1).height = 28;
+
+    // Subtitle Row
+    ws3.mergeCells(`A2:${lastColLetter3}2`);
+    const subCell3 = ws3.getCell('A2');
+    subCell3.value = `Complete Nationwide Hub Allocation Matrix across ${branchList.length} Service Branches • Part-by-Part Inventory Distribution`;
+    subCell3.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF94A3B8' } };
+    subCell3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    subCell3.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws3.getRow(2).height = 18;
+
+    // Headers
+    const headers3 = [
+      'Part Number',
+      'Description',
+      'iPhone Model',
+      'Commodity',
+      ...branchList.map(b => b.code || b.name),
+      'Total Allocated Units',
+      'Total Stock Value ($)'
+    ];
+
+    const hRow3 = ws3.addRow(headers3);
+    hRow3.height = 26;
+    hRow3.eachCell((cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cNum > 4 && cNum <= 4 + branchList.length ? 'FF0284C7' : 'FF0F172A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF334155' } },
+        bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+        left: { style: 'thin', color: { argb: 'FF334155' } },
+        right: { style: 'thin', color: { argb: 'FF334155' } }
+      };
+    });
+
+    // Map allocations by part_number for fast lookup
+    const allocByPart = new Map();
+    rawAllocations.forEach(a => {
+      if (a.part_number) allocByPart.set(a.part_number, a);
+    });
+
+    const branchTotals = new Array(branchList.length).fill(0);
+    let matrixGrandAllocUnits = 0;
+    let matrixGrandAllocVal = 0;
+
+    forecastItems.forEach(it => {
+      const pn = it.part_number || '';
+      const allocRecord = allocByPart.get(pn);
+      const siteQtys = allocRecord?.site_quantities || it.site_quantities || {};
+      const finalForecastVal = it.final_forecast ?? it.computed_forecast ?? 0;
+      const price = resolveStockPrice(it);
+
+      let rowAllocUnits = 0;
+      const branchQtyVals = branchList.map((b, bIdx) => {
+        let q = Number(siteQtys[b.id] ?? siteQtys[b.code] ?? 0);
+        // If site_quantities is empty but final forecast > 0, estimate based on site share
+        if (q === 0 && finalForecastVal > 0 && (!siteQtys || Object.keys(siteQtys).length === 0)) {
+          const weight = (b.pct ? b.pct / 100 : 1 / branchList.length);
+          q = Math.max(0, Math.round(finalForecastVal * weight));
+        }
+        rowAllocUnits += q;
+        branchTotals[bIdx] += q;
+        return q;
+      });
+
+      // If sum of branches is 0 but final forecast exists, assign total
+      const totalUnitsRow = rowAllocUnits > 0 ? rowAllocUnits : finalForecastVal;
+      const totalValRow = totalUnitsRow * price;
+      matrixGrandAllocUnits += totalUnitsRow;
+      matrixGrandAllocVal += totalValRow;
+
+      const dRow = ws3.addRow([
+        sanitizeForSpreadsheet(pn),
+        sanitizeForSpreadsheet(it.description || ''),
+        sanitizeForSpreadsheet(it.iphone_model || ''),
+        sanitizeForSpreadsheet(getCommodityName(it)),
+        ...branchQtyVals,
+        totalUnitsRow,
+        totalValRow
+      ]);
+      dRow.height = 20;
+
+      dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+        cell.font = { name: 'Arial', size: 8.5 };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+        };
+        if (cNum === 1 || cNum === 4) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (cNum === 2 || cNum === 3) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+        if (cNum > 4 && cNum <= 4 + branchList.length) {
+          const val = Number(cell.value) || 0;
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (val > 0) {
+            cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+          }
+        }
+        if (cNum === 4 + branchList.length + 1) {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0369A1' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+        if (cNum === 4 + branchList.length + 2) {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          cell.numFmt = '$#,##0.00';
+        }
+      });
+    });
+
+    // Footer row
+    const footerVals3 = [
+      'TOTAL',
+      `${forecastItems.length} SKUs`,
+      'Nationwide Matrix',
+      '',
+      ...branchTotals,
+      matrixGrandAllocUnits,
+      matrixGrandAllocVal
+    ];
+    const footerRow3 = ws3.addRow(footerVals3);
+    footerRow3.height = 24;
+    footerRow3.eachCell((cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      if (cNum === totalBranchCols) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+
+    const colWidths3 = [
+      { width: 15 },
+      { width: 30 },
+      { width: 20 },
+      { width: 16 }
+    ];
+    branchList.forEach(() => colWidths3.push({ width: 10 }));
+    colWidths3.push({ width: 18 }, { width: 22 });
+    ws3.columns = colWidths3;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SHEET 4: Commodity & Model Summary
+  // ══════════════════════════════════════════════════════════════════════════
+  const ws4 = workbook.addWorksheet('Commodity & Model Summary', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws4.mergeCells('A1:F1');
+  const tCell4 = ws4.getCell('A1');
+  tCell4.value = `MOBILE CARE SERVICES PHILS. INC. — Commodity & iPhone Model Family Portfolio (${periodLabel})`;
+  tCell4.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell4.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell4.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws4.getRow(1).height = 28;
+
+  // Table 1: Commodity Grouping
+  const commMap = new Map();
+  forecastItems.forEach(it => {
+    const cName = getCommodityName(it);
+    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
+    const val = qty * resolveStockPrice(it);
+    if (!commMap.has(cName)) {
+      commMap.set(cName, { name: cName, count: 0, units: 0, val: 0 });
+    }
+    const cObj = commMap.get(cName);
+    cObj.count += 1;
+    cObj.units += qty;
+    cObj.val += val;
+  });
+
+  const commHeaders = ['Commodity Group', 'Total SKUs', 'Recommended Forecast Units', '% Share of Units', 'Projected Valuation ($)', '% Share of Valuation'];
+  const cHeadRow = ws4.addRow(commHeaders);
+  cHeadRow.height = 26;
+  cHeadRow.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  Array.from(commMap.values()).sort((a, b) => b.units - a.units).forEach(c => {
+    const cRow = ws4.addRow([
+      c.name,
+      c.count,
+      c.units,
+      totalForecastUnits > 0 ? (c.units / totalForecastUnits) : 0,
+      c.val,
+      totalValuation > 0 ? (c.val / totalValuation) : 0
+    ]);
+    cRow.height = 20;
+    cRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum === 1) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      if (cNum === 2 || cNum === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 4 || cNum === 6) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '0.0%';
+      }
+      if (cNum === 5) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  ws4.addRow([]); // Blank spacer row
+
+  // Table 2: Model Family Breakdown
+  const modelMap = new Map();
+  forecastItems.forEach(it => {
+    const mName = it.iphone_model || it.description?.match(/iPhone\s+[0-9]+(?:\s+(?:Pro|Max|Plus|mini|e))*/i)?.[0] || 'Other Models';
+    const qty = it.final_forecast ?? it.computed_forecast ?? 0;
+    const val = qty * resolveStockPrice(it);
+    if (!modelMap.has(mName)) {
+      modelMap.set(mName, { name: mName, count: 0, units: 0, val: 0 });
+    }
+    const mObj = modelMap.get(mName);
+    mObj.count += 1;
+    mObj.units += qty;
+    mObj.val += val;
+  });
+
+  const mHeadRow = ws4.addRow(['iPhone Model Family', 'Total SKUs', 'Recommended Forecast Units', '% Share of Units', 'Projected Valuation ($)', '% Share of Valuation']);
+  mHeadRow.height = 26;
+  mHeadRow.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  Array.from(modelMap.values()).sort((a, b) => b.units - a.units).forEach(m => {
+    const mRow = ws4.addRow([
+      m.name,
+      m.count,
+      m.units,
+      totalForecastUnits > 0 ? (m.units / totalForecastUnits) : 0,
+      m.val,
+      totalValuation > 0 ? (m.val / totalValuation) : 0
+    ]);
+    mRow.height = 20;
+    mRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum === 1) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      if (cNum === 2 || cNum === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 4 || cNum === 6) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '0.0%';
+      }
+      if (cNum === 5) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '$#,##0.00';
+      }
+    });
+  });
+
+  ws4.columns = [
+    { width: 28 },
+    { width: 16 },
+    { width: 24 },
+    { width: 18 },
+    { width: 24 },
+    { width: 18 }
+  ];
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SHEET 5: Forecast vs Actual Backtesting Audit
+  // ══════════════════════════════════════════════════════════════════════════
+  const ws5 = workbook.addWorksheet('Forecast vs Actual Audit', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws5.mergeCells('A1:G1');
+  const tCell5 = ws5.getCell('A1');
+  tCell5.value = `MOBILE CARE SERVICES PHILS. INC. — Prior Period Demand Forecast vs Actual Accuracy Audit`;
+  tCell5.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell5.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell5.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws5.getRow(1).height = 28;
+
+  const headers5 = [
+    '#',
+    'Part Number',
+    'Description',
+    'Prior Month Actual Demand',
+    'Prior Month Predicted Forecast',
+    'Variance (Actual vs Forecast)',
+    'Accuracy Status'
+  ];
+  const hRow5 = ws5.addRow(headers5);
+  hRow5.height = 26;
+  hRow5.eachCell(cell => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  forecastItems.forEach((it, idx) => {
+    const rawCounts = it.ytd_monthly_counts || [];
+    let priorActual = 0;
+    let priorForecast = 0;
+    if (rawCounts.length >= 2) {
+      priorActual = Number(rawCounts[rawCounts.length - 1]) || 0;
+      priorForecast = Number(rawCounts[rawCounts.length - 2]) || 0;
+    } else if (rawCounts.length === 1) {
+      priorActual = Number(rawCounts[0]) || 0;
+      priorForecast = priorActual;
+    }
+    const variance = priorActual - priorForecast;
+    let remark = 'Accurate';
+    if (variance > 10) remark = 'Under-Forecast (High Demand)';
+    else if (variance < -10) remark = 'Over-Forecast (Excess Stock)';
+
+    const aRow = ws5.addRow([
+      idx + 1,
+      sanitizeForSpreadsheet(it.part_number || ''),
+      sanitizeForSpreadsheet(it.description || ''),
+      priorActual,
+      priorForecast,
+      variance,
+      remark
+    ]);
+    aRow.height = 20;
+    aRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+      if (cNum === 1 || cNum === 2) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 3) cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      if (cNum >= 4 && cNum <= 6) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (cNum === 7) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (remark.startsWith('Under')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FFB91C1C' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        } else if (remark.startsWith('Over')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF92400E' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        } else {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF15803D' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+        }
+      }
+    });
+  });
+
+  ws5.columns = [
+    { width: 6 },
+    { width: 16 },
+    { width: 34 },
+    { width: 22 },
+    { width: 24 },
+    { width: 24 },
+    { width: 28 }
+  ];
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
