@@ -72,7 +72,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     dcIntakeRecords,
     cloudSyncStatus,
     showToast,
-    commitUnitsToStock,
     _setActiveTab,
     setActiveTab,
     setPmgSubTab,
@@ -1113,44 +1112,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     setUnitToDelete(null);
   };
 
-  const [isAddingToStock, setIsAddingToStock] = useState(false);
-
-  const handleAddAllToStock = async () => {
-    setIsAddingToStock(true);
-    try {
-      let targetUnits = [];
-      if (availableInStockUnits && availableInStockUnits.length > 0) {
-        targetUnits = availableInStockUnits;
-      } else if (inventoryUnits && inventoryUnits.length > 0) {
-        targetUnits = inventoryUnits;
-      } else if (dcIntakeRecords && dcIntakeRecords.length > 0) {
-        targetUnits = dcIntakeRecords.flatMap(r => Array.isArray(r.items) ? r.items : []);
-      }
-
-      if (targetUnits.length === 0) {
-        showToast('No scanned or imported parts to add to stock. Please scan barcodes or import a spreadsheet first.', 'info');
-        return;
-      }
-
-      const res = await commitUnitsToStock(targetUnits);
-
-      if (res.success) {
-        setScanResult({
-          type: 'success',
-          message: `[STOCK FINALIZED] Successfully added ${targetUnits.length} units to ${isPmgUser ? activeReceivingSite?.name : 'DC'} Stock! All parts are now in-stock and confirmed in database.`
-        });
-        setSessionScans([]);
-        try { localStorage.removeItem('mdc_recent_scans'); } catch (e) {}
-      }
-    } catch (err) {
-      console.error('Add to stock error:', err);
-      showToast('Error finalizing parts to stock', 'error');
-    } finally {
-      setIsAddingToStock(false);
-    }
-  };
-
-
   return (
     <div className="scanner-container">
       {/* Top Segmented Navigation Tabs: Station vs Records */}
@@ -1437,19 +1398,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
                 {/* Batch Action Buttons Ribbon */}
                 <div className="workstation-buttons-ribbon">
-                  {!isPmgUser && (
-                    <button
-                      type="button"
-                      className="btn-batch-emerald"
-                      onClick={handleAddAllToStock}
-                      disabled={isAddingToStock || availableInStockUnits.length === 0}
-                      title="Finalize all parts, commit to DC Stock, and make visible for packing list creation across all accounts"
-                    >
-                      {isAddingToStock ? <RefreshCw size={14} className="spin" /> : <PackageCheck size={14} />}
-                      <span>Add to Stock ({availableInStockUnits.length})</span>
-                    </button>
-                  )}
-
                   <button
                     type="button"
                     className="btn-batch-sky"
@@ -1470,24 +1418,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                       <BookmarkPlus size={14} />
                       <span>Save Parts History Record</span>
                     </button>
-                  )}
-
-                  {isPmgUser && (
-                    <div style={{
-                      padding: '4px 10px',
-                      background: 'rgba(16, 185, 129, 0.12)',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      borderRadius: '6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '11.5px',
-                      color: '#34d399',
-                      fontWeight: 600
-                    }}>
-                      <CheckCircle2 size={13} color="#34d399" />
-                      <span>Permanent Database Sync Active</span>
-                    </div>
                   )}
                 </div>
               </div>
