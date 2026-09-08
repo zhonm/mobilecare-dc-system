@@ -1873,7 +1873,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, activePeriod, currentUser, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, activePeriod, categories, currentUser, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {

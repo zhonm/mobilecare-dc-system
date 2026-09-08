@@ -59,7 +59,7 @@ import {
   isPeriodMatching
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
-import { isPartMatchingCategoryFilter, getPartCategory } from '../utils/categoryFilter';
+import { isPartMatchingCategoryFilter } from '../utils/categoryFilter';
 import { filterActiveOutboundShipments, calculateActiveQueuePartsCount } from '../utils/shipmentHelpers';
 
 const USD_TO_PHP_RATE = 57;
@@ -94,9 +94,7 @@ export default function Dashboard() {
     setMasterlistData,
     repairUsageRecords = [],
     applyParsedDataset,
-    selectedCategories = ['BATTERY', 'DISPLAY'],
-    setSelectedCategories,
-    HARDWARE_CATEGORIES = []
+    selectedCategories = ['BATTERY', 'DISPLAY']
   } = useApp();
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -175,13 +173,6 @@ export default function Dashboard() {
     });
     return { agingUnits: aging, freshUnits: fresh };
   }, [availableInStockUnits]);
-
-  const packedUnits = useMemo(() => {
-    return (inventoryUnits || []).filter(u => {
-      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      return (cleanSerial && packedSerialsSet.has(cleanSerial)) || ((u.status === 'packed' || u.status === 'allocated') && !u.received_at);
-    });
-  }, [inventoryUnits, packedSerialsSet]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DYNAMIC IPHONE MASTERLIST SCANNED QUERIES (BASED ON USER UPLOADED MASTERLIST)

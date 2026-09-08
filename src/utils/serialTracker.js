@@ -135,9 +135,9 @@ export function resolveSerialFullDetails(serialInput, {
     linkedShipment.status !== 'received_confirmed'
   );
 
-  let statusKey = 'in_stock_dc';
-  let statusBadgeLabel = 'In Stock at DC Warehouse';
-  let statusBadgeType = 'dc'; // 'dc' | 'site' | 'transit' | 'used'
+  let statusKey;
+  let statusBadgeLabel;
+  let statusBadgeType;
 
   if (isUsed) {
     statusKey = 'used';

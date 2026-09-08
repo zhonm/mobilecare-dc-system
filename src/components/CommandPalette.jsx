@@ -21,11 +21,7 @@ import {
   Command,
   X,
   Package,
-  Layers,
-  Building2,
-  Calendar,
-  Wrench,
-  ShieldCheck
+  Layers
 } from 'lucide-react';
 
 const PAGE_ICONS = {

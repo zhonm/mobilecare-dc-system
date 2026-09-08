@@ -4,13 +4,11 @@ import {
   Copy,
   Check,
   Building2,
-  Package,
   Calendar,
   Wrench,
   Truck,
   CheckCircle2,
   Clock,
-  ExternalLink,
   ShieldCheck,
   Barcode
 } from 'lucide-react';

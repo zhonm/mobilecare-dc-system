@@ -903,16 +903,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     const isUnitsFulfilled = expectedUnits > 0 && Math.max(mergedItems.length, poReceivedUnits, maxGroupTotalUnits) >= expectedUnits;
 
     const isCompleted = isGroupCompleted || isPoReceived || isUnitsFulfilled;
-    let effectiveUnits = Math.max(
-      mergedItems.length,
-      poReceivedUnits,
-      maxGroupTotalUnits,
-      isCompleted ? expectedUnits : 0
-    );
-
-    let status = isCompleted
-      ? 'completed'
-      : (effectiveUnits > 0 || matchingPo?.status === 'partially_received' ? 'in_progress' : 'pending');
+    let status;
 
     // Author reconciliation: preserve specific user names over generic placeholders
     const isGenericUser = (name) => !name || name === 'Superadmin' || name === 'Warehouse Staff' || name === 'usr-system';
@@ -984,7 +975,7 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
       });
     }
 
-    effectiveUnits = Math.max(
+    const effectiveUnits = Math.max(
       mergedItems.length,
       poReceivedUnits,
       maxGroupTotalUnits,

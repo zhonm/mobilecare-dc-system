@@ -541,7 +541,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     });
 
     if (res.success) {
-      let poDetail = '';
+      let poDetail;
       const matchedPo = res.matchedPo;
       if (matchedPo) {
         const poItem = matchedPo.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());

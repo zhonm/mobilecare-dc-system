@@ -2,10 +2,8 @@ import assert from 'assert';
 import {
   generateAppleSerialNumber,
   consolidateDcIntakeRecordsList,
-  consolidatePurchaseOrdersList,
   formatDcIntakeRecordForDb,
-  parseDcIntakeRecordFromDb,
-  getBasePoNumber
+  parseDcIntakeRecordFromDb
 } from '../utils/appContextHelpers.js';
 
 console.log('====================================================');

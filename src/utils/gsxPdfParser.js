@@ -42,7 +42,7 @@ export async function extractPdfVisualLines(pdfInput) {
 
   while ((match = streamRegex.exec(rawStr)) !== null) {
     const streamData = match[1];
-    let decoded = '';
+    let decoded;
 
     // Check if stream is zlib compressed (starts with 0x78 0x9c or similar)
     const isZlib = streamData.length > 2 && streamData.charCodeAt(0) === 0x78;

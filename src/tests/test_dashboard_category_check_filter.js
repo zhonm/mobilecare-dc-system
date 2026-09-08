@@ -2,10 +2,9 @@ import assert from 'assert';
 import {
   getMasterlistParts,
   getMasterlistPartsForSite,
-  getMasterlistSites,
-  scanMasterlistData
+  getMasterlistSites
 } from '../utils/rawMasterlistScanner.js';
-import { isPartMatchingCategoryFilter, DEFAULT_SELECTED_CATEGORIES, HARDWARE_CATEGORIES } from '../utils/categoryFilter.js';
+import { DEFAULT_SELECTED_CATEGORIES, HARDWARE_CATEGORIES } from '../utils/categoryFilter.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Dashboard Report Category Check Filter');

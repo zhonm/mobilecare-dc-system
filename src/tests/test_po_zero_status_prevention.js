@@ -1,8 +1,6 @@
 import assert from 'assert';
 import {
   consolidateDcIntakeRecordsList,
-  formatDcIntakeRecordForDb,
-  parseDcIntakeRecordFromDb,
   getBasePoNumber
 } from '../utils/appContextHelpers.js';
 

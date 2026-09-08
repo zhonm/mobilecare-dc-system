@@ -1,9 +1,7 @@
 import assert from 'assert';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import XLSX from 'xlsx';
-import ExcelJS from 'exceljs';
 import {
   scanMasterlistData,
   getMasterlistSummary,
@@ -40,16 +38,12 @@ async function runAudit() {
   // Direct calculation from raw records
   const augIphoneRecords = usageAug.records;
   let manualAugUnits = 0;
-  let manualAugUSD = 0;
   const manualAugParts = new Map();
   const manualAugSites = new Map();
 
   augIphoneRecords.forEach(r => {
     const qty = parseInt(r.quantity, 10) || 1;
     manualAugUnits += qty;
-    const price = parseFloat(r.priceUSD) || (r.description?.toLowerCase().includes('display') ? 279 : 89);
-    manualAugUSD += (price * qty);
-
     const pn = r.partNumber;
     manualAugParts.set(pn, (manualAugParts.get(pn) || 0) + qty);
 
@@ -81,16 +75,12 @@ async function runAudit() {
   // Direct calculation from raw records
   const sepIphoneRecords = usageSep.records;
   let manualSepUnits = 0;
-  let manualSepUSD = 0;
   const manualSepParts = new Map();
   const manualSepSites = new Map();
 
   sepIphoneRecords.forEach(r => {
     const qty = parseInt(r.quantity, 10) || 1;
     manualSepUnits += qty;
-    const price = parseFloat(r.priceUSD) || (r.description?.toLowerCase().includes('display') ? 279 : 89);
-    manualSepUSD += (price * qty);
-
     const pn = r.partNumber;
     manualSepParts.set(pn, (manualSepParts.get(pn) || 0) + qty);
 

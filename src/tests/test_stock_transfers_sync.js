@@ -4,44 +4,6 @@ console.log('====================================================');
 console.log('TEST SUITE: Fixably Stock Transfer Reports Sync & Limits');
 console.log('====================================================');
 
-// Mock data
-const mockMetadata = {
-  fileName: 'DC Stock Transfer Report.xlsx - Masterlist.csv',
-  uploadedAt: '2026-09-07T02:00:53.000Z',
-  totalRows: 2163,
-  totalQty: 2343,
-  totalVal: 534296.00,
-  uniqueFromCount: 34,
-  uniqueToCount: 38
-};
-
-const mockRecords = [
-  {
-    id: 'trf-1788746453000-1',
-    transfer_received_date: '2026-08-15',
-    from_stock: 'DC_MSPI-Owned',
-    to_stock: 'APP BHS_MSPI-Owned',
-    product_code: '661-21988',
-    product_name: 'Display, iPhone 13',
-    transfer_quantity: 1,
-    serial_number: 'F2LWD980PLX1',
-    imei_number: '353098112345678',
-    transfer_value: 279
-  },
-  {
-    id: 'trf-1788746453000-2',
-    transfer_received_date: '2026-08-16',
-    from_stock: 'DC_MSPI-Owned',
-    to_stock: 'APP GB3_MSPI-Owned',
-    product_code: '661-21991',
-    product_name: 'Battery, iPhone 13',
-    transfer_quantity: 2,
-    serial_number: 'G6TWP091LK22',
-    imei_number: '',
-    transfer_value: 178
-  }
-];
-
 // Helper to simulate the Egress Defense logic from useCloudSync.js
 function evaluateNeedsFullPayload({
   stockHeader,

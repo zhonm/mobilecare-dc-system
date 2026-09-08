@@ -9,8 +9,6 @@ import {
   Plus,
   Search,
   X,
-  Clock,
-  CheckCircle2,
   CheckCircle,
   Files
 } from 'lucide-react';

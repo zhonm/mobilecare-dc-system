@@ -29,7 +29,6 @@ function excelSerialToDateStr(serial) {
 }
 
 const distinctArrivalDates = new Set();
-let totalArrivedRows = 0;
 
 weeklySheets.forEach(sheetName => {
   const ws = wb.Sheets[sheetName];
@@ -47,7 +46,6 @@ weeklySheets.forEach(sheetName => {
       const dStr = excelSerialToDateStr(val);
       if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
         distinctArrivalDates.add(dStr);
-        totalArrivedRows++;
       }
     }
   }

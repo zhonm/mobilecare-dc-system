@@ -238,7 +238,7 @@ export default function StockTransferReports() {
       })();
       return () => { isMounted = false; };
     }
-  }, []);
+  }, [autoRefreshData, importStockTransfersReport, stockTransferReports]);
 
   // ── File Upload ────────────────────────────────────────────────────────────
   const handleFileUpload = async (file) => {

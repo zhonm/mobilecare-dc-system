@@ -11,7 +11,7 @@ export const isShipmentReceived = (sh) => {
   if (status === 'received' || status === 'receivedconfirmed' || status === 'delivered' || status === 'completed') {
     return true;
   }
-  if (Boolean(sh.received_confirmed_at || sh.received_at || sh.received_date)) {
+  if (sh.received_confirmed_at || sh.received_at || sh.received_date) {
     return true;
   }
   return false;

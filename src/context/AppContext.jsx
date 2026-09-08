@@ -72,10 +72,10 @@ export function AppProvider({ children }) {
 
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
-  const setActiveTab = (newTab) => {
+  const setActiveTab = useCallback((newTab) => {
     setActiveTabState(newTab);
     setIsMobileNavOpen(false);
-  };
+  }, []);
 
   const [selectedCategories, setSelectedCategoriesState] = useState(() => {
     try {
@@ -166,7 +166,7 @@ export function AppProvider({ children }) {
         console.warn('Could not persist activeTab:', e);
       }
     }
-  }, [activeTab]);
+  }, [activeTab, setActiveTab]);
 
   // Listen for browser Back/Forward or manual URL hash changes
   useEffect(() => {
@@ -178,7 +178,7 @@ export function AppProvider({ children }) {
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [activeTab]);
+  }, [activeTab, setActiveTab]);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, id: Date.now() });

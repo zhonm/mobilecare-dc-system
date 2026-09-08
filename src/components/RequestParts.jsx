@@ -39,10 +39,8 @@ import {
   PackageCheck,
   ChevronRight,
   MapPin,
-  Sparkles,
   Smartphone,
   SearchX,
-  ExternalLink,
   Copy,
   Mail,
   Phone
@@ -229,7 +227,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return 'metro_manila';
   });
   const [allStocksSelectedSiteId, setAllStocksSelectedSiteId] = useState('');
-  const [allStocksSiteFilter, setAllStocksSiteFilter] = useState('ALL');
+  const [allStocksSiteFilter, _setAllStocksSiteFilter] = useState('ALL');
   const [allStocksSearchQuery, setAllStocksSearchQuery] = useState('');
   const [expandedPartKey, setExpandedPartKey] = useState(null);
 

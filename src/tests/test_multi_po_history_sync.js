@@ -69,7 +69,7 @@ const po1 = mockAddPurchaseOrder({
 });
 
 // Upload PO #2: MD04136490 (2 units)
-const po2 = mockAddPurchaseOrder({
+mockAddPurchaseOrder({
   po_number: 'MDC202600025',
   invoice_ref: 'MD04136490',
   items: [
@@ -352,7 +352,7 @@ console.log(`  ✓ PASS: Discrepancy resolved! Parts Saved History reconciled to
 
 // [Test 6] Multiple GSX Invoices with Same Base PO Number: Unified into ONE row per PO!
 console.log('\n[Test 6] Consolidating Multiple Invoices for Same PO into ONE Single Row (54 & 51 = 105 Units)...');
-import { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers.js';
+import { consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers.js';
 
 const multiInvoicePOs = [
   {

@@ -5,7 +5,6 @@ import { isUUID } from '../utils/appContextHelpers';
 import {
   DEFAULT_PART_CATEGORIES,
   resolvePartCategoryId,
-  getCategoryForPart,
   getPartCategory
 } from '../utils/categoryFilter';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
@@ -153,7 +152,7 @@ export function useCatalogAndSites({
 
       return parsed.map(p => {
         const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
-        const { exchange_price, ...rest } = p;
+        const { exchange_price: _exchangePrice, ...rest } = p;
         const correctCatId = resolvePartCategoryId(p, activeCats);
         return {
           ...rest,
@@ -209,7 +208,7 @@ export function useCatalogAndSites({
         })();
       }
     }
-  }, [categories, parts.length]);
+  }, [categories, parts]);
 
   const savePart = async (partData) => {
     const cleanPN = String(partData.part_number || '').trim();
