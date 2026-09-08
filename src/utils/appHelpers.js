@@ -4,9 +4,9 @@ export const safeUUID = (str) => isUUID(str) ? str : null;
 
 // Helper to guarantee serialized units that are in an active draft or saved shipments maintain their 'packed' or 'shipped' status
 // NOTE: Keep in sync with the identical function in appContextHelpers.js
-export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null) {
+export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null, activeStations = null) {
   const inputUnits = Array.isArray(units) ? units : [];
-  if (inputUnits.length === 0 && (!shipmentsList || shipmentsList.length === 0) && !explicitDraft && typeof window === 'undefined') {
+  if (inputUnits.length === 0 && (!shipmentsList || shipmentsList.length === 0) && !explicitDraft && !activeStations && typeof window === 'undefined') {
     return [];
   }
 
@@ -31,6 +31,50 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
           shipped_at: draft.shipment_date || new Date().toISOString(),
           isDraft: true
         });
+      }
+    });
+  }
+
+  // 1.5 Check active remote packing stations across all concurrent users
+  const stationsToScan = activeStations 
+    ? (Array.isArray(activeStations) ? activeStations : Object.values(activeStations))
+    : (typeof window !== 'undefined' && window.__mdc_active_packing_stations ? Object.values(window.__mdc_active_packing_stations) : []);
+
+  if (Array.isArray(stationsToScan)) {
+    stationsToScan.forEach(st => {
+      if (st && st.isPacking !== false) {
+        if (Array.isArray(st.items)) {
+          st.items.forEach(it => {
+            const s = String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase();
+            if (s) {
+              packedSerialsMap.set(s, {
+                status: 'packed',
+                box_number: it.box_number || 1,
+                current_site_id: st.siteId || 'site-dc',
+                site_code: st.siteCode || null,
+                shipped_at: new Date().toISOString(),
+                isDraft: true,
+                reservedBy: st.userName || 'Peer Station'
+              });
+            }
+          });
+        }
+        if (Array.isArray(st.serials)) {
+          st.serials.forEach(sn => {
+            const s = String(sn || '').trim().toUpperCase();
+            if (s && !packedSerialsMap.has(s)) {
+              packedSerialsMap.set(s, {
+                status: 'packed',
+                box_number: 1,
+                current_site_id: st.siteId || 'site-dc',
+                site_code: st.siteCode || null,
+                shipped_at: new Date().toISOString(),
+                isDraft: true,
+                reservedBy: st.userName || 'Peer Station'
+              });
+            }
+          });
+        }
       }
     });
   }

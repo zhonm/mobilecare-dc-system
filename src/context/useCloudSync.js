@@ -114,6 +114,7 @@ export function useCloudSync({
   const debounceRealtimeTimerRef = useRef(null);
 
   const [activePackingStations, setActivePackingStations] = useState({});
+  const activePackingStationsRef = useRef({});
 
   // Broadcast event across peers and browser tabs
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
@@ -138,9 +139,16 @@ export function useCloudSync({
     }
   }, [currentUser]);
 
-  // Broadcast and locally track active packing session presence
+  // Broadcast and locally track active packing session presence & draft reservations
   const broadcastPackingPresence = useCallback((presenceData) => {
     if (!presenceData) return;
+    const cleanItems = Array.isArray(presenceData.items) ? presenceData.items.map(it => ({
+      serial_number: String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase(),
+      part_number: it.part_number || '',
+      box_number: it.box_number || 1,
+      description: it.description || ''
+    })).filter(it => Boolean(it.serial_number)) : (Array.isArray(presenceData.serials) ? presenceData.serials.map(s => ({ serial_number: String(s).trim().toUpperCase(), box_number: 1 })) : []);
+
     const payload = {
       userId: presenceData.userId || currentUser?.id || 'anon',
       userName: presenceData.userName || currentUser?.fullName || currentUser?.name || 'Warehouse Staff',
@@ -148,21 +156,28 @@ export function useCloudSync({
       siteId: presenceData.siteId || '',
       siteCode: presenceData.siteCode || '',
       siteName: presenceData.siteName || '',
-      itemCount: typeof presenceData.itemCount === 'number' ? presenceData.itemCount : 0,
+      itemCount: typeof presenceData.itemCount === 'number' ? presenceData.itemCount : cleanItems.length,
+      items: cleanItems,
       isPacking: presenceData.isPacking !== false,
       timestamp: Date.now()
     };
 
     setActivePackingStations(prev => {
+      let next;
       if (!payload.isPacking) {
-        const next = { ...prev };
+        next = { ...prev };
         delete next[payload.userId];
-        return next;
+      } else {
+        next = {
+          ...prev,
+          [payload.userId]: payload
+        };
       }
-      return {
-        ...prev,
-        [payload.userId]: payload
-      };
+      activePackingStationsRef.current = next;
+      if (typeof window !== 'undefined') {
+        window.__mdc_active_packing_stations = next;
+      }
+      return next;
     });
 
     broadcastCloudEvent('PACKING_PRESENCE', payload);
@@ -1724,9 +1739,13 @@ export function useCloudSync({
                   map.set(s, u);
                 } else {
                   const existing = map.get(s);
+                  const isExistingPackedOrShipped = existing && (existing.status === 'packed' || existing.status === 'shipped');
                   map.set(s, {
                     ...existing,
                     ...u,
+                    status: isExistingPackedOrShipped ? existing.status : (u.status || existing.status || 'in_stock'),
+                    current_site_id: isExistingPackedOrShipped ? existing.current_site_id : (u.current_site_id || existing.current_site_id),
+                    box_number: isExistingPackedOrShipped ? (existing.box_number || 1) : (u.box_number || existing.box_number || 1),
                     po_number: u.po_number || existing.po_number || null,
                     po_id: u.po_id || existing.po_id || null,
                     intake_assignment: u.intake_assignment || existing.intake_assignment || null,
@@ -1841,7 +1860,7 @@ export function useCloudSync({
             })
             .sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
           const normalized = normalizeInventoryUnits(mergedRaw, allAvailableParts);
-          const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft);
+          const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft, activePackingStationsRef.current || activePackingStations);
           try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
           dbStorage.setItem('mdc_inventory', merged);
 
@@ -2141,8 +2160,73 @@ export function useCloudSync({
           return updated;
         });
       }
+    } else if (type === 'PACKING_PRESENCE' || type === 'PACKING_STATION_DRAFT_UPDATE') {
+      const p = payload;
+      if (p && p.userId) {
+        setActivePackingStations(prev => {
+          let next;
+          if (!p.isPacking) {
+            next = { ...prev };
+            delete next[p.userId];
+          } else {
+            next = {
+              ...prev,
+              [p.userId]: p
+            };
+          }
+          activePackingStationsRef.current = next;
+          if (typeof window !== 'undefined') {
+            window.__mdc_active_packing_stations = next;
+          }
+          return next;
+        });
+
+        if (Array.isArray(p.items) && p.items.length > 0) {
+          const serialsMap = new Map();
+          p.items.forEach(it => {
+            const s = String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase();
+            if (s) serialsMap.set(s, it);
+          });
+          setInventoryUnits(prev => {
+            let changed = false;
+            const updated = (prev || []).map(u => {
+              const cleanS = String(u.serial_number || '').trim().toUpperCase();
+              if (serialsMap.has(cleanS)) {
+                if (p.isPacking !== false) {
+                  if (u.status !== 'packed') {
+                    changed = true;
+                    return {
+                      ...u,
+                      status: 'packed',
+                      current_site_id: p.siteId || u.current_site_id,
+                      box_number: serialsMap.get(cleanS)?.box_number || u.box_number || 1
+                    };
+                  }
+                }
+              }
+              return u;
+            });
+            if (changed) {
+              try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+              dbStorage.setItem('mdc_inventory', updated);
+              return updated;
+            }
+            return prev;
+          });
+        }
+      }
+    } else if (type === 'REQUEST_PACKING_STATIONS') {
+      if (currentUser?.id && activePackingStationsRef.current[currentUser.id]) {
+        const myStation = activePackingStationsRef.current[currentUser.id];
+        if (myStation && myStation.isPacking && (myStation.itemCount > 0 || (Array.isArray(myStation.items) && myStation.items.length > 0))) {
+          broadcastCloudEvent('PACKING_STATION_DRAFT_UPDATE', {
+            ...myStation,
+            timestamp: Date.now()
+          });
+        }
+      }
     }
-  }, [setInventoryUnits]);
+  }, [setInventoryUnits, currentUser?.id, broadcastCloudEvent]);
 
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
@@ -2248,7 +2332,19 @@ export function useCloudSync({
                 dbStorage.setItem('mdc_stock_transfer_updated_at', ev.data.payload.updatedAt);
               }
             }
-            triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
+            const isLocalEventAlreadyHandled = [
+              'PACKING_PRESENCE', 'PACKING_STATION_DRAFT_UPDATE', 'REQUEST_PACKING_STATIONS',
+              'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNITS_BATCH_PACKED', 'UNIT_DELETED',
+              'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
+              'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
+              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
+              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED'
+            ].includes(ev.data.type);
+
+            if (!isLocalEventAlreadyHandled && ev.data.table) {
+              triggerDebouncedRealtimeSync(`Local Broadcast: ${ev.data.type}`, ev.data.table || null);
+            }
           }
         };
       }
@@ -2273,20 +2369,36 @@ export function useCloudSync({
                 setForecastingModel(incomingModel);
                 try { localStorage.setItem('mdc_forecasting_model', incomingModel); } catch (e) {}
               }
-            } else if (bType === 'PACKING_PRESENCE') {
+            } else if (bType === 'PACKING_PRESENCE' || bType === 'PACKING_STATION_DRAFT_UPDATE') {
               const p = bPayload;
               if (p && p.userId) {
                 setActivePackingStations(prev => {
+                  let next;
                   if (!p.isPacking) {
-                    const next = { ...prev };
+                    next = { ...prev };
                     delete next[p.userId];
-                    return next;
+                  } else {
+                    next = {
+                      ...prev,
+                      [p.userId]: p
+                    };
                   }
-                  return {
-                    ...prev,
-                    [p.userId]: p
-                  };
+                  activePackingStationsRef.current = next;
+                  if (typeof window !== 'undefined') {
+                    window.__mdc_active_packing_stations = next;
+                  }
+                  return next;
                 });
+              }
+            } else if (bType === 'REQUEST_PACKING_STATIONS') {
+              if (currentUser?.id && activePackingStationsRef.current[currentUser.id]) {
+                const myStation = activePackingStationsRef.current[currentUser.id];
+                if (myStation && myStation.isPacking && (myStation.itemCount > 0 || (Array.isArray(myStation.items) && myStation.items.length > 0))) {
+                  broadcastCloudEvent('PACKING_STATION_DRAFT_UPDATE', {
+                    ...myStation,
+                    timestamp: Date.now()
+                  });
+                }
               }
             } else if (bType === 'PERIOD_RECORD_DELETED' && bPayload?.recordId) {
               const delId = bPayload.recordId;
@@ -2377,12 +2489,13 @@ export function useCloudSync({
             // Egress Defense: Only trigger full/selective HTTP hydration if an unhandled table was explicitly targeted.
             // Events that are already applied in-memory (presences, pack updates, model changes) do not re-query the cloud DB.
             const isAlreadyHandledLocally = [
-              'PACKING_PRESENCE', 'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNIT_DELETED',
+              'PACKING_PRESENCE', 'PACKING_STATION_DRAFT_UPDATE', 'REQUEST_PACKING_STATIONS',
+              'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNITS_BATCH_PACKED', 'UNIT_DELETED',
               'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
               'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
-              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED'
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {

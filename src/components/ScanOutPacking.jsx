@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -209,42 +209,54 @@ export default function ScanOutPacking() {
     }
   }, [currentShipment, shipments, userDraftStorageKey]);
 
-  // Live Packing Presence Heartbeat: broadcast current user's active packing station to peers (throttled)
-  const currentItemCount = currentShipment?.items?.length || 0;
-  const currentItemCountRef = useRef(currentItemCount);
+  // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
+  const currentItems = currentShipment?.items || [];
+  const currentItemsRef = useRef(currentItems);
   useEffect(() => {
-    currentItemCountRef.current = currentItemCount;
-  }, [currentItemCount]);
+    currentItemsRef.current = currentItems;
+  }, [currentItems]);
 
+  // Request other active packing stations when mounting
   useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bus = new BroadcastChannel('mdc_sync_bus');
+        bus.postMessage({ type: 'REQUEST_PACKING_STATIONS', timestamp: Date.now() });
+        bus.close();
+      }
+    } catch (e) {}
+  }, []);
+
+  const sendPresence = useCallback((isPacking = true, explicitItems = null) => {
     if (!currentUser || !broadcastPackingPresence) return;
+    const itemsToSend = explicitItems !== null ? explicitItems : (currentItemsRef.current || []);
+    broadcastPackingPresence({
+      userId: currentUser.id || 'user',
+      userName: currentUser.fullName || currentUser.name || 'Warehouse Staff',
+      userEmail: currentUser.email || '',
+      siteId: selectedSiteId,
+      siteCode: selectedSite?.code || '',
+      siteName: selectedSite?.name || '',
+      itemCount: itemsToSend.length,
+      items: itemsToSend,
+      isPacking
+    });
+  }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, broadcastPackingPresence]);
 
-    const sendPresence = (isPacking = true) => {
-      broadcastPackingPresence({
-        userId: currentUser.id || 'user',
-        userName: currentUser.fullName || currentUser.name || 'Warehouse Staff',
-        userEmail: currentUser.email || '',
-        siteId: selectedSiteId,
-        siteCode: selectedSite?.code || '',
-        siteName: selectedSite?.name || '',
-        itemCount: currentItemCountRef.current,
-        isPacking
-      });
-    };
-
+  // Immediate presence broadcast when site or items change + 25s heartbeat
+  useEffect(() => {
     sendPresence(true);
-    // Low-egress 60s heartbeat (only when tab is actively visible)
     const heartbeatInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         sendPresence(true);
       }
-    }, 60000);
+    }, 25000);
 
     return () => {
       clearInterval(heartbeatInterval);
-      sendPresence(false);
+      sendPresence(false, []);
     };
-  }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, broadcastPackingPresence]);
+  }, [sendPresence]);
 
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null);
@@ -357,15 +369,43 @@ export default function ScanOutPacking() {
     return set;
   }, [currentShipment]);
 
-  // Reliable Available Stock Calculation (excluding items already in active draft)
+  // Map of serial numbers reserved by OTHER active packing stations across concurrent users
+  const otherUsersReservedSerialsMap = useMemo(() => {
+    const map = new Map();
+    const myId = currentUser?.id || 'user';
+    const now = Date.now();
+
+    Object.values(activePackingStations || {}).forEach(st => {
+      if (!st || st.userId === myId || st.isPacking === false) return;
+      if (now - (st.timestamp || 0) > 60000) return;
+
+      if (Array.isArray(st.items)) {
+        st.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase();
+          if (s) {
+            map.set(s, {
+              userId: st.userId,
+              userName: st.userName || 'Other Station',
+              siteCode: st.siteCode || st.siteName || 'Other Branch',
+              boxNumber: it.box_number || 1
+            });
+          }
+        });
+      }
+    });
+    return map;
+  }, [activePackingStations, currentUser?.id]);
+
+  // Reliable Available Stock Calculation (excluding items in local draft AND items reserved by other active stations)
   const availableStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
       if (packedSerialsSet.has(cleanSerial)) return false;
+      if (otherUsersReservedSerialsMap.has(cleanSerial)) return false;
       const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
       return (u.status === 'in_stock' || !u.status) && isDc;
     });
-  }, [inventoryUnits, packedSerialsSet]);
+  }, [inventoryUnits, packedSerialsSet, otherUsersReservedSerialsMap]);
 
   // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
   const packUnitBySerial = (targetSerialInput) => {
@@ -394,6 +434,20 @@ export default function ScanOutPacking() {
       setSerialInput('');
       serialInputRef.current?.focus();
       return { success: false, error: 'Already packed' };
+    }
+
+    // 1.5 Conflict check against other concurrent users' packing stations
+    if (otherUsersReservedSerialsMap.has(cleanSerial)) {
+      const reserved = otherUsersReservedSerialsMap.get(cleanSerial);
+      const conflictMsg = `Station Conflict: Unit #${cleanSerial} is currently being packed by ${reserved.userName} for ${reserved.siteCode}.`;
+      setScanResult({
+        type: 'error',
+        message: conflictMsg
+      });
+      showToast(conflictMsg, 'error');
+      setSerialInput('');
+      serialInputRef.current?.focus();
+      return { success: false, error: conflictMsg };
     }
 
     // 2. Lookup matching unit in DC stock
@@ -447,6 +501,7 @@ export default function ScanOutPacking() {
         updated_at: new Date().toISOString()
       };
       setCurrentShipment(updatedDraft);
+      sendPresence(true, updatedDraft.items);
 
       setSerialInput('');
       serialInputRef.current?.focus();
@@ -686,14 +741,15 @@ export default function ScanOutPacking() {
     if (res.success) {
       const updatedDraft = {
         ...currentShipment,
-        items: [...(currentShipment.items || []), ...res.items],
+        items: [...(currentShipment.items || []), ...(res.items || [])],
         updated_at: new Date().toISOString()
       };
       setCurrentShipment(updatedDraft);
+      sendPresence(true, updatedDraft.items);
 
       setScanResult({
         type: 'success',
-        message: `[BATCH PACK COMPLETE] Packed ${res.count} units from "${parsedBatch.fileName}" into Manifest ${currentShipment.invoice_ref}!`
+        message: `[BATCH PACK COMPLETE] Packed ${res.count || (res.items || []).length} units from "${parsedBatch.fileName}" into Manifest ${currentShipment.invoice_ref}!`
       });
 
       setParsedBatch(null);
@@ -734,6 +790,7 @@ export default function ScanOutPacking() {
       };
 
       setCurrentShipment(updatedDraft);
+      sendPresence(true, remainingItems);
 
       if (remainingItems.length > 0) {
         try {
@@ -795,6 +852,7 @@ export default function ScanOutPacking() {
 
     setIsClearModalOpen(false);
     setScanResult(null);
+    sendPresence(true, []);
     showToast('Active packing list cleared. Ready to create a new packing list for another site.', 'info');
   };
 
@@ -885,6 +943,7 @@ export default function ScanOutPacking() {
         remarks: 'KGB PARTS',
         items: []
       });
+      sendPresence(true, []);
       showToast(`Workstation ready for next shipment! (${nextInvoiceRef})`, 'info');
     } catch (err) {
       console.error('Finalize error:', err);
@@ -985,7 +1044,7 @@ export default function ScanOutPacking() {
   const activeStationsList = useMemo(() => {
     const now = Date.now();
     const list = Object.values(activePackingStations || {}).filter(st => {
-      return st && st.userId && st.isPacking && (now - (st.timestamp || 0) < 45000);
+      return st && st.userId && st.isPacking && (now - (st.timestamp || 0) < 60000);
     });
 
     // Ensure current user is always included in the active station list
@@ -1215,11 +1274,6 @@ export default function ScanOutPacking() {
                 <span>Clear Draft ({currentShipment.items.length})</span>
               </button>
             )}
-
-            <div className="scanner-status-indicator" style={{ height: '34px', boxSizing: 'border-box' }}>
-              <div className="pulse-dot" />
-              <span>HID Scanner Ready</span>
-            </div>
           </div>
         </div>
 
@@ -1603,6 +1657,11 @@ export default function ScanOutPacking() {
                 {currentShipment.items && currentShipment.items.length > 0 && (
                   <span className="badge" style={{ background: '#fef3c7', color: '#92400e', fontSize: '11px', padding: '2px 8px' }}>
                     {currentShipment.items.length} In Active Manifest
+                  </span>
+                )}
+                {otherUsersReservedSerialsMap && otherUsersReservedSerialsMap.size > 0 && (
+                  <span className="badge" style={{ background: '#ffedd5', color: '#c2410c', fontSize: '11px', padding: '2px 8px' }} title="Parts currently selected by other packing stations">
+                    {otherUsersReservedSerialsMap.size} In Other Stations
                   </span>
                 )}
               </div>
@@ -2123,11 +2182,6 @@ export default function ScanOutPacking() {
                   <strong style={{ fontSize: '12.5px', color: selectedSite ? '#0f172a' : '#d97706', textTransform: 'uppercase' }}>
                     {selectedSite?.name || '— PLEASE SELECT DESTINATION SITE —'}
                   </strong>
-                  {selectedSite?.ship_to && (
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#0284c7', background: '#e0f2fe', padding: '1px 6px', borderRadius: '4px', fontFamily: 'var(--font-mono, monospace)' }}>
-                      GSX: {selectedSite.ship_to}
-                    </span>
-                  )}
                 </div>
                 <div style={{ color: selectedSite ? '#334155' : '#94a3b8', fontSize: '11.5px', marginTop: '2px', lineHeight: '1.4' }}>
                   {selectedSite?.address || 'Click "Select Site" above to choose the target receiving branch.'}

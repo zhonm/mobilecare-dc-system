@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
@@ -1504,6 +1504,38 @@ export function useInventory({
     return { success: true };
   };
 
+  // Supabase Quota Defense: Debounced batch upsert buffer for scanning operations
+  const pendingPackUpsertBufferRef = useRef(new Map());
+  const packUpsertTimerRef = useRef(null);
+
+  const flushPackUpserts = useCallback(async () => {
+    if (packUpsertTimerRef.current) {
+      clearTimeout(packUpsertTimerRef.current);
+      packUpsertTimerRef.current = null;
+    }
+    if (!supabase || pendingPackUpsertBufferRef.current.size === 0) return;
+
+    const rows = Array.from(pendingPackUpsertBufferRef.current.values());
+    pendingPackUpsertBufferRef.current.clear();
+
+    try {
+      await supabase
+        .from('inventory_units')
+        .upsert(rows, { onConflict: 'serial_number' });
+    } catch (err) {
+      console.warn('Debounced batch pack unit upsert note:', err.message);
+    }
+  }, []);
+
+  const queuePackUpsert = useCallback((row) => {
+    if (!supabase || !row || !row.serial_number) return;
+    pendingPackUpsertBufferRef.current.set(row.serial_number, row);
+    if (packUpsertTimerRef.current) clearTimeout(packUpsertTimerRef.current);
+    packUpsertTimerRef.current = setTimeout(() => {
+      flushPackUpserts();
+    }, 1200);
+  }, [flushPackUpserts]);
+
   const addScanOutUnit = ({ shipmentId, siteId, partNumber, serialNumber, boxNumber = 1 }) => {
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
 
@@ -1557,28 +1589,15 @@ export function useInventory({
       return updated;
     });
 
-    if (supabase) {
-      (async () => {
-        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          await supabase
-            .from('inventory_units')
-            .upsert({
-              part_id: currentUnit.part_id,
-              serial_number: cleanSerial,
-              status: 'packed',
-              box_number: boxNumber,
-              current_site_id: siteId || 'site-dc',
-              shipped_at: new Date().toISOString()
-            }, { onConflict: 'serial_number' });
-
-          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        } catch (dbErr) {
-          console.warn('Supabase pack unit note:', dbErr.message);
-          if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
-        }
-      })();
-    }
+    // Supabase Quota Protection: Queue row into debounced batcher instead of sending 1 HTTP request per scan
+    queuePackUpsert({
+      part_id: currentUnit.part_id,
+      serial_number: cleanSerial,
+      status: 'packed',
+      box_number: boxNumber,
+      current_site_id: siteId || 'site-dc',
+      shipped_at: new Date().toISOString()
+    });
 
     if (setShipments) {
       setShipments(prev => prev.map(sh => {
@@ -1594,6 +1613,8 @@ export function useInventory({
 
     if (broadcastCloudEvent) {
       broadcastCloudEvent('UNIT_PACKED', {
+        userId: currentUser?.id || 'anon',
+        packerName: currentUser?.fullName || currentUser?.name || 'Warehouse Staff',
         serialNumber: cleanSerial,
         partNumber: cleanPN,
         siteId: siteId || 'site-dc',
@@ -1609,7 +1630,17 @@ export function useInventory({
     return { success: true, item: itemToAdd };
   };
 
-  const batchAddScanOutUnits = async (shipmentId, siteId, scannedRows = []) => {
+  const batchAddScanOutUnits = (shipmentIdOrOpts, maybeSiteId, maybeScannedRows = []) => {
+    let shipmentId = shipmentIdOrOpts;
+    let siteId = maybeSiteId;
+    let scannedRows = maybeScannedRows;
+
+    if (typeof shipmentIdOrOpts === 'object' && shipmentIdOrOpts !== null) {
+      shipmentId = shipmentIdOrOpts.shipmentId || shipmentIdOrOpts.id;
+      siteId = shipmentIdOrOpts.siteId || maybeSiteId;
+      scannedRows = shipmentIdOrOpts.items || shipmentIdOrOpts.scannedRows || [];
+    }
+
     if (!scannedRows || scannedRows.length === 0) {
       return { success: false, error: 'No parts to pack.' };
     }
@@ -1675,32 +1706,19 @@ export function useInventory({
       return updatedInventory;
     });
 
-    if (supabase) {
-      (async () => {
-        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          const rowsToUpsert = itemsToAdd.map(it => {
-            const matchUnit = updatedSerialsMap.get(it.serial_number.toUpperCase());
-            return {
-              part_id: matchUnit?.part_id || `part-${it.part_number}`,
-              serial_number: it.serial_number,
-              status: 'packed',
-              box_number: it.box_number || 1,
-              current_site_id: siteId || 'site-dc',
-              shipped_at: new Date().toISOString()
-            };
-          });
-          await supabase
-            .from('inventory_units')
-            .upsert(rowsToUpsert, { onConflict: 'serial_number' });
-
-          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        } catch (dbErr) {
-          console.warn('Supabase batch pack note:', dbErr.message);
-          if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
-        }
-      })();
-    }
+    // Queue and immediately flush batch upsert to Supabase in 1 single HTTP request
+    itemsToAdd.forEach(it => {
+      const matchUnit = updatedSerialsMap.get(it.serial_number.toUpperCase());
+      queuePackUpsert({
+        part_id: matchUnit?.part_id || `part-${it.part_number}`,
+        serial_number: it.serial_number,
+        status: 'packed',
+        box_number: it.box_number || 1,
+        current_site_id: siteId || 'site-dc',
+        shipped_at: new Date().toISOString()
+      });
+    });
+    flushPackUpserts();
 
     let targetShipmentNumber = '';
     if (setShipments) {
@@ -1719,8 +1737,11 @@ export function useInventory({
     setScanLogs(prev => [...newLogs, ...(prev || [])].slice(0, 300));
     if (broadcastCloudEvent) {
       broadcastCloudEvent('UNITS_BATCH_PACKED', {
+        userId: currentUser?.id || 'anon',
+        packerName: currentUser?.fullName || currentUser?.name || 'Warehouse Staff',
         count: itemsToAdd.length,
         serialNumbers: itemsToAdd.map(it => it.serial_number),
+        items: itemsToAdd,
         siteId: siteId || 'site-dc',
         status: 'packed'
       });
@@ -1845,8 +1866,14 @@ export function useInventory({
       })();
     }
 
+    if (pendingPackUpsertBufferRef.current.has(cleanSerial)) {
+      pendingPackUpsertBufferRef.current.delete(cleanSerial);
+    }
+
     if (broadcastCloudEvent) {
       broadcastCloudEvent('UNIT_UNPACKED', {
+        userId: currentUser?.id || 'anon',
+        packerName: currentUser?.fullName || currentUser?.name || 'Warehouse Staff',
         serialNumber: cleanSerial,
         status: 'in_stock',
         unit: revertedPart
