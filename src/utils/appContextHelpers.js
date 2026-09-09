@@ -974,6 +974,15 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     // 0. Heal legacy records corrupted by earlier consolidation bug (id set to 'DIRECT RECEIVING')
     let recordToProcess = r;
     const rawIdUpper = String(r.id || '').trim().toUpperCase();
+    const rawNameUpper = String(r.record_name || '').trim().toUpperCase();
+
+    // Check for and purge obsolete composite records (e.g. "MDC202600022 AND MDC202600024")
+    if (rawIdUpper.includes(' AND ') || rawNameUpper.includes(' AND ')) {
+      obsoleteIdsToPurge.add(String(r.id).trim());
+      if (r.record_name) obsoleteIdsToPurge.add(String(r.record_name).trim());
+      return;
+    }
+
     if (rawIdUpper === 'DIRECT RECEIVING' || rawIdUpper === 'DIRECT_RECEIVING' || rawIdUpper.startsWith('DIRECT RECEIVING')) {
       obsoleteIdsToPurge.add(String(r.id).trim());
       obsoleteIdsToPurge.add('DIRECT RECEIVING');
@@ -1060,42 +1069,6 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
       }
     });
 
-    const seenSerials = new Set();
-    const mergedItems = [];
-    group.forEach(r => {
-      (r.items || []).forEach(item => {
-        const serial = item.serial_number ? String(item.serial_number).trim().toUpperCase() : null;
-        if (serial) {
-          if (!seenSerials.has(serial)) {
-            seenSerials.add(serial);
-            mergedItems.push(item);
-          }
-        } else {
-          mergedItems.push(item);
-        }
-      });
-    });
-
-    // Check inventoryUnits for matching units
-    (inventoryUnits || []).forEach(u => {
-      if (!u || u.is_deleted || u.status === 'deleted') return;
-      const uBase = getBasePoNumber(u.po_number || u.po_id);
-      const uPoId = u.po_id ? String(u.po_id).trim().toLowerCase() : '';
-      const isMatch = (uBase && uBase === basePo) ||
-                      (uPoId && (uPoId === canonicalPoId.toLowerCase() || (matchingPo?.id && uPoId === matchingPo.id.toLowerCase())));
-      if (isMatch) {
-        const serial = u.serial_number ? String(u.serial_number).trim().toUpperCase() : null;
-        if (serial) {
-          if (!seenSerials.has(serial)) {
-            seenSerials.add(serial);
-            mergedItems.push(u);
-          }
-        } else {
-          mergedItems.push(u);
-        }
-      }
-    });
-
     let expectedUnits = 0;
     let expectedValue = 0;
     let expectedItems = [];
@@ -1108,10 +1081,11 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
       expectedUnits = matchingPo.items.reduce((s, it) => s + (Number(it.quantity_ordered) || 0), 0);
       expectedValue = matchingPo.total_amount || matchingPo.items.reduce((s, it) => s + (Number(it.extended_price) || 0), 0);
       expectedItems = matchingPo.items.map(it => ({
-        part_number: it.part_number,
-        description: it.description,
-        quantity_ordered: it.quantity_ordered,
-        unit_price: it.unit_price
+        part_number: String(it.part_number || '').trim().toUpperCase(),
+        description: it.description || 'Apple Genuine Service Part',
+        quantity_ordered: Number(it.quantity_ordered) || 0,
+        unit_price: Number(it.unit_price) || 0,
+        destination: it.destination || 'MDC - Forecasting'
       }));
     } else {
       group.forEach(r => {
@@ -1119,8 +1093,15 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
         expectedValue += (Number(r.expected_value) || 0);
         if (r.expected_items && Array.isArray(r.expected_items)) {
           r.expected_items.forEach(eit => {
-            if (!expectedItems.some(x => x.part_number === eit.part_number)) {
-              expectedItems.push(eit);
+            const pn = String(eit.part_number || '').trim().toUpperCase();
+            if (!expectedItems.some(x => x.part_number === pn)) {
+              expectedItems.push({
+                part_number: pn,
+                description: eit.description || 'Apple Genuine Service Part',
+                quantity_ordered: Number(eit.quantity_ordered) || 0,
+                unit_price: Number(eit.unit_price) || 0,
+                destination: eit.destination || 'MDC - Forecasting'
+              });
             }
           });
         }
@@ -1133,14 +1114,6 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
 
     const firstRec = group[0] || {};
     const poReceivedUnits = (matchingPo?.items || []).reduce((s, it) => s + (Number(it.quantity_received) || 0), 0);
-    const maxGroupTotalUnits = group.reduce((max, r) => Math.max(max, Number(r.total_units) || 0, (r.items ? r.items.length : 0)), 0);
-
-    const isGroupCompleted = group.some(r => r.status === 'completed' || r.status === 'fulfilled');
-    const isPoReceived = matchingPo?.status === 'received';
-    const isUnitsFulfilled = expectedUnits > 0 && Math.max(mergedItems.length, poReceivedUnits, maxGroupTotalUnits) >= expectedUnits;
-
-    const isCompleted = isGroupCompleted || isPoReceived || isUnitsFulfilled;
-    let status;
 
     // Resolved Intake Date:
     // Manual intakes retain their user-specified intake_date.
@@ -1173,15 +1146,6 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
         break;
       }
     }
-    if (!resolvedAuthorName) {
-      for (const it of mergedItems) {
-        if (!isGenericUser(it.received_by)) {
-          resolvedAuthorName = it.received_by;
-          resolvedAuthorId = it.received_by_id || it.added_by_user_id;
-          break;
-        }
-      }
-    }
     if (!resolvedAuthorName && matchingPo) {
       if (!isGenericUser(matchingPo.created_by)) {
         resolvedAuthorName = matchingPo.created_by;
@@ -1195,52 +1159,158 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
                            'Zhon Manaois';
     }
 
-    // Ensure every ordered part in the PO has full serial number traceability
+    // 1. Gather candidate pool from saved records in group and active inventory units
+    const candidatePool = [];
+    group.forEach(r => {
+      (r.items || []).forEach(item => {
+        if (item) candidatePool.push(item);
+      });
+    });
+
+    (inventoryUnits || []).forEach(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return;
+      const uBase = getBasePoNumber(u.po_number || u.po_id);
+      const uPoId = u.po_id ? String(u.po_id).trim().toLowerCase() : '';
+      const isMatch = (uBase && uBase === basePo) ||
+                      (uPoId && (uPoId === canonicalPoId.toLowerCase() || (matchingPo?.id && uPoId === matchingPo.id.toLowerCase())));
+      if (isMatch) {
+        candidatePool.push(u);
+      }
+    });
+
+    // Helper: determine if a unit is an auto-generated placeholder
+    const isGeneratedUnit = (it) => {
+      if (!it) return false;
+      if (it.is_generated === true || it.is_placeholder === true) return true;
+      const idStr = String(it.id || '').trim().toLowerCase();
+      if (idStr.startsWith('unit-mdc') || idStr.startsWith('unit-po') || idStr.startsWith('gen-')) return true;
+      return false;
+    };
+
+    // Separate candidate units into Real Scanned vs Generated Placeholders per part number
+    const candidateRealByPn = new Map();
+    const candidatePlaceholderByPn = new Map();
+    const seenSerials = new Set();
+
+    candidatePool.forEach(u => {
+      const pn = String(u.part_number || '').trim().toUpperCase();
+      if (!pn) return;
+      const serial = u.serial_number ? String(u.serial_number).trim().toUpperCase() : null;
+      if (serial && seenSerials.has(serial)) {
+        return;
+      }
+      if (serial) seenSerials.add(serial);
+
+      if (isGeneratedUnit(u)) {
+        if (!candidatePlaceholderByPn.has(pn)) candidatePlaceholderByPn.set(pn, []);
+        candidatePlaceholderByPn.get(pn).push(u);
+      } else {
+        if (!candidateRealByPn.has(pn)) candidateRealByPn.set(pn, []);
+        candidateRealByPn.get(pn).push(u);
+      }
+    });
+
+    // 2. Strict PO Structure Building:
+    // Real scanned physical units ALWAYS take priority (1-for-1 replacement of placeholders).
+    // All units inherit the official PO line item description to eliminate duplicate SVC/Non-SVC entries!
+    const mergedItems = [];
+    const processedPartNumbers = new Set();
+
     if (expectedItems.length > 0) {
       expectedItems.forEach(eit => {
         const pn = String(eit.part_number || '').trim().toUpperCase();
+        processedPartNumbers.add(pn);
         const targetQty = Number(eit.quantity_ordered) || 0;
-        const existingUnitsForPn = mergedItems.filter(it => String(it.part_number || '').trim().toUpperCase() === pn);
-        const needed = Math.max(0, targetQty - existingUnitsForPn.length);
+        const realUnits = candidateRealByPn.get(pn) || [];
+        const placeholders = candidatePlaceholderByPn.get(pn) || [];
 
-        for (let i = 0; i < needed; i++) {
-          const serial = generateAppleSerialNumber(basePo, pn, existingUnitsForPn.length + i, eit.description);
-          if (!seenSerials.has(serial)) {
-            seenSerials.add(serial);
-            mergedItems.push({
-              id: `unit-${basePo.toLowerCase()}-${pn.toLowerCase()}-${existingUnitsForPn.length + i}`,
-              part_number: pn,
-              description: eit.description || 'Apple Genuine Service Part',
-              serial_number: serial,
-              po_id: canonicalPoId,
-              po_number: basePo,
-              intake_assignment: eit.destination || 'MDC - Forecasting',
-              notes: eit.destination || 'MDC - Forecasting',
-              stocking_price: Number(eit.unit_price || 99),
-              site_code: 'DC-MDC',
-              site_name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
-              current_site_id: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
-              received_at: `${resolvedIntakeDate}T12:00:00.000Z`,
-              received_by: resolvedAuthorName,
-              status: 'in_stock',
-              box_number: 1,
-              is_generated: true
-            });
-          }
+        const selectedForPn = [];
+
+        // Add real scanned units first (unified to PO description)
+        realUnits.forEach(ru => {
+          selectedForPn.push({
+            ...ru,
+            part_number: pn,
+            description: eit.description || ru.description || 'Apple Genuine Service Part',
+            po_id: canonicalPoId,
+            po_number: basePo
+          });
+        });
+
+        // Fill remaining slots up to targetQty with placeholders
+        const neededPlaceholders = Math.max(0, targetQty - selectedForPn.length);
+        let usedPlaceholders = 0;
+
+        for (let i = 0; i < placeholders.length && usedPlaceholders < neededPlaceholders; i++) {
+          const pl = placeholders[i];
+          selectedForPn.push({
+            ...pl,
+            part_number: pn,
+            description: eit.description || pl.description || 'Apple Genuine Service Part',
+            po_id: canonicalPoId,
+            po_number: basePo
+          });
+          usedPlaceholders++;
         }
+
+        // If still fewer than targetQty, generate deterministic serial placeholders
+        const remainingToGenerate = neededPlaceholders - usedPlaceholders;
+        for (let i = 0; i < remainingToGenerate; i++) {
+          const unitIndex = selectedForPn.length;
+          const serial = generateAppleSerialNumber(basePo, pn, unitIndex, eit.description);
+          selectedForPn.push({
+            id: `unit-${basePo.toLowerCase()}-${pn.toLowerCase()}-${unitIndex}`,
+            part_number: pn,
+            description: eit.description || 'Apple Genuine Service Part',
+            serial_number: serial,
+            po_id: canonicalPoId,
+            po_number: basePo,
+            intake_assignment: eit.destination || 'MDC - Forecasting',
+            notes: eit.destination || 'MDC - Forecasting',
+            stocking_price: Number(eit.unit_price || 99),
+            site_code: 'DC-MDC',
+            site_name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
+            current_site_id: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+            received_at: `${resolvedIntakeDate}T12:00:00.000Z`,
+            received_by: resolvedAuthorName,
+            status: 'in_stock',
+            box_number: 1,
+            is_generated: true
+          });
+        }
+
+        mergedItems.push(...selectedForPn);
       });
     }
 
-    const effectiveUnits = Math.max(
-      mergedItems.length,
-      poReceivedUnits,
-      maxGroupTotalUnits,
-      isCompleted ? expectedUnits : 0
-    );
+    // Keep any real scanned units for parts not originally in expectedItems
+    candidateRealByPn.forEach((realUnits, pn) => {
+      if (!processedPartNumbers.has(pn)) {
+        realUnits.forEach(ru => {
+          mergedItems.push({
+            ...ru,
+            part_number: pn,
+            po_id: canonicalPoId,
+            po_number: basePo
+          });
+        });
+      }
+    });
 
-    status = isCompleted
+    const isGroupCompleted = group.some(r => r.status === 'completed' || r.status === 'fulfilled');
+    const isPoReceived = matchingPo?.status === 'received';
+    const realScannedCount = mergedItems.filter(it => !isGeneratedUnit(it)).length;
+    const isUnitsFulfilled = expectedUnits > 0 && (realScannedCount >= expectedUnits || poReceivedUnits >= expectedUnits);
+
+    const isCompleted = isGroupCompleted || isPoReceived || isUnitsFulfilled;
+
+    const effectiveUnits = mergedItems.length > 0
+      ? mergedItems.length
+      : (isCompleted ? expectedUnits : (poReceivedUnits > 0 ? poReceivedUnits : expectedUnits));
+
+    const status = isCompleted
       ? 'completed'
-      : (effectiveUnits > 0 || matchingPo?.status === 'partially_received' ? 'in_progress' : 'pending');
+      : (realScannedCount > 0 || matchingPo?.status === 'partially_received' ? 'in_progress' : 'pending');
 
     consolidatedPoRecords.push({
       ...firstRec,
@@ -1270,7 +1340,27 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     });
   });
 
-  const allConsolidated = [...consolidatedPoRecords, ...nonPoRecords];
+  const allConsolidated = [];
+  const seenCanonicalIds = new Set();
+
+  consolidatedPoRecords.forEach(r => {
+    const canonicalKey = String(r.id || '').trim().toUpperCase();
+    if (canonicalKey && !seenCanonicalIds.has(canonicalKey)) {
+      seenCanonicalIds.add(canonicalKey);
+      allConsolidated.push(r);
+    }
+  });
+
+  nonPoRecords.forEach(r => {
+    const canonicalKey = String(r.id || '').trim().toUpperCase();
+    if (canonicalKey && !seenCanonicalIds.has(canonicalKey)) {
+      seenCanonicalIds.add(canonicalKey);
+      allConsolidated.push(r);
+    } else if (canonicalKey) {
+      obsoleteIdsToPurge.add(String(r.id).trim());
+    }
+  });
+
   allConsolidated.sort(sortBatchesNewestFirst);
 
   return {

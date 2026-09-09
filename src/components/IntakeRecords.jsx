@@ -620,34 +620,85 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return map;
   }, [parts]);
 
-  // Resilient inspect items list (harvests matching units or generates full serialized traceability)
+  // Resilient inspect items list (strictly enforces PO structure, unifies descriptions, and replaces placeholders 1-for-1)
   const effectiveInspectItems = useMemo(() => {
     if (!selectedRecordToInspect) return [];
-    if (Array.isArray(selectedRecordToInspect.items) && selectedRecordToInspect.items.length > 0) {
-      return selectedRecordToInspect.items;
-    }
-    const basePo = getBasePoNumber(selectedRecordToInspect.po_number || selectedRecordToInspect.id);
-    const matchedFromInv = (inventoryUnits || []).filter(u => {
-      if (!u || u.is_deleted || u.status === 'deleted') return false;
-      const uBase = getBasePoNumber(u.po_number || u.po_id);
-      return (uBase && basePo && uBase === basePo) || (selectedRecordToInspect.po_id && u.po_id === selectedRecordToInspect.po_id);
-    });
-    if (matchedFromInv.length > 0) return matchedFromInv;
 
-    // Complete Serial Number Traceability Fallback: generate authentic Apple serial numbers from expected_items
+    const basePo = getBasePoNumber(selectedRecordToInspect.po_number || selectedRecordToInspect.id);
     const expectedList = Array.isArray(selectedRecordToInspect.expected_items) && selectedRecordToInspect.expected_items.length > 0
       ? selectedRecordToInspect.expected_items
       : null;
 
+    const candidatePool = [];
+    if (Array.isArray(selectedRecordToInspect.items)) {
+      candidatePool.push(...selectedRecordToInspect.items);
+    }
+    (inventoryUnits || []).forEach(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return;
+      const uBase = getBasePoNumber(u.po_number || u.po_id);
+      if ((uBase && basePo && uBase === basePo) || (selectedRecordToInspect.po_id && u.po_id === selectedRecordToInspect.po_id)) {
+        candidatePool.push(u);
+      }
+    });
+
     if (expectedList && expectedList.length > 0) {
-      const generated = [];
+      const isGenerated = (it) => Boolean(it.is_generated || it.is_placeholder || String(it.id || '').startsWith('unit-mdc') || String(it.id || '').startsWith('unit-po'));
+      const realByPn = new Map();
+      const placeholderByPn = new Map();
+      const seen = new Set();
+
+      candidatePool.forEach(it => {
+        const pn = String(it.part_number || '').trim().toUpperCase();
+        if (!pn) return;
+        const sn = it.serial_number ? String(it.serial_number).trim().toUpperCase() : null;
+        if (sn && seen.has(sn)) return;
+        if (sn) seen.add(sn);
+
+        if (isGenerated(it)) {
+          if (!placeholderByPn.has(pn)) placeholderByPn.set(pn, []);
+          placeholderByPn.get(pn).push(it);
+        } else {
+          if (!realByPn.has(pn)) realByPn.set(pn, []);
+          realByPn.get(pn).push(it);
+        }
+      });
+
+      const finalItems = [];
+      const processedPns = new Set();
+
       expectedList.forEach(eit => {
         const pn = String(eit.part_number || '').trim().toUpperCase();
-        const qty = Number(eit.quantity_ordered) || 1;
-        for (let i = 0; i < qty; i++) {
-          const serial = generateAppleSerialNumber(basePo || selectedRecordToInspect.id, pn, i, eit.description);
-          generated.push({
-            id: `unit-${(basePo || selectedRecordToInspect.id).toLowerCase()}-${pn.toLowerCase()}-${i}`,
+        processedPns.add(pn);
+        const targetQty = Number(eit.quantity_ordered) || 0;
+        const realUnits = realByPn.get(pn) || [];
+        const placeholders = placeholderByPn.get(pn) || [];
+
+        // Real units first, unified to PO description to eliminate SVC / Non-SVC duality
+        realUnits.forEach(ru => {
+          finalItems.push({
+            ...ru,
+            part_number: pn,
+            description: eit.description || ru.description || 'Apple Genuine Service Part'
+          });
+        });
+
+        // Remainder placeholders up to targetQty
+        const needed = Math.max(0, targetQty - realUnits.length);
+        let used = 0;
+        for (let i = 0; i < placeholders.length && used < needed; i++) {
+          finalItems.push({
+            ...placeholders[i],
+            part_number: pn,
+            description: eit.description || placeholders[i].description || 'Apple Genuine Service Part'
+          });
+          used++;
+        }
+
+        const remainingToGen = needed - used;
+        for (let i = 0; i < remainingToGen; i++) {
+          const serial = generateAppleSerialNumber(basePo || selectedRecordToInspect.id, pn, realUnits.length + used + i, eit.description);
+          finalItems.push({
+            id: `unit-${(basePo || selectedRecordToInspect.id).toLowerCase()}-${pn.toLowerCase()}-${realUnits.length + used + i}`,
             part_number: pn,
             description: eit.description || partDescMap.get(pn) || 'Apple Genuine Service Part',
             serial_number: serial,
@@ -657,14 +708,31 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
             notes: eit.destination || 'MDC - Forecasting',
             received_at: selectedRecordToInspect.intake_date || new Date().toISOString(),
             received_by: selectedRecordToInspect.saved_by_name || 'Zhon Manaois',
-            status: 'in_stock'
+            status: 'in_stock',
+            is_generated: true
           });
         }
       });
-      return generated;
+
+      realByPn.forEach((realUnits, pn) => {
+        if (!processedPns.has(pn)) {
+          realUnits.forEach(ru => finalItems.push({ ...ru, part_number: pn }));
+        }
+      });
+
+      return finalItems;
     }
 
-    return [];
+    if (Array.isArray(selectedRecordToInspect.items) && selectedRecordToInspect.items.length > 0) {
+      return selectedRecordToInspect.items;
+    }
+
+    const matchedFromInv = (inventoryUnits || []).filter(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return false;
+      const uBase = getBasePoNumber(u.po_number || u.po_id);
+      return (uBase && basePo && uBase === basePo) || (selectedRecordToInspect.po_id && u.po_id === selectedRecordToInspect.po_id);
+    });
+    return matchedFromInv;
   }, [selectedRecordToInspect, inventoryUnits, partDescMap]);
 
   // Model & Category breakdown for Batch Manifest Inspector
@@ -1583,13 +1651,15 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                                      linkedPo?.status === 'received' ||
                                      (effectiveExpectedUnits > 0 && Math.max(Number(rec.total_units) || 0, (rec.items ? rec.items.length : 0), poReceivedUnits, invUnitsForPo) >= effectiveExpectedUnits);
 
-                      const effectiveDisplayUnits = Math.max(
-                        Number(rec.total_units) || 0,
-                        (rec.items ? rec.items.length : 0),
-                        poReceivedUnits,
-                        invUnitsForPo,
-                        isDone && effectiveExpectedUnits > 0 ? effectiveExpectedUnits : 0
-                      );
+                      const effectiveDisplayUnits = (linkedPo && effectiveExpectedUnits > 0)
+                        ? (invUnitsForPo > effectiveExpectedUnits
+                            ? invUnitsForPo
+                            : (Number(rec.total_units) > 0 && Number(rec.total_units) <= effectiveExpectedUnits
+                                ? Number(rec.total_units)
+                                : (rec.items && rec.items.length > 0 && rec.items.length <= effectiveExpectedUnits
+                                    ? rec.items.length
+                                    : (isDone ? effectiveExpectedUnits : (poReceivedUnits > 0 ? poReceivedUnits : effectiveExpectedUnits)))))
+                        : Math.max(Number(rec.total_units) || 0, (rec.items ? rec.items.length : 0));
 
                       const rawPoCandidate = linkedPo?.po_number || rec.po_number || baseRecPo;
                       const effectivePoNumber = !isDirectOrNonPo(rawPoCandidate) ? rawPoCandidate : null;
