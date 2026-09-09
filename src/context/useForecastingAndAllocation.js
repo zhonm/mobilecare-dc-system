@@ -6,11 +6,14 @@ import {
   calculateWeeklySplit,
   generateAllocationsFromForecasts,
   allocatePartToSites,
-  getRowParityOffset
+  getRowParityOffset,
+  deriveForecastItemsFromAllocations,
+  deriveForecastItemsFromMasterlist
 } from '../utils/allocationEngine';
 import { calculateItemForecast } from '../utils/forecastEngine';
 import { isExplicitlyCleared } from '../utils/appContextHelpers';
 import { getPartCategory } from '../utils/categoryFilter';
+import { getActiveMasterlist } from '../utils/rawMasterlistScanner';
 
 export function useForecastingAndAllocation({
   parts = [],
@@ -39,7 +42,30 @@ export function useForecastingAndAllocation({
       const saved = localStorage.getItem('mdc_forecast');
       if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      // Bi-directional recovery: If forecast is empty but allocations exists, derive from allocations
+      const savedAlloc = localStorage.getItem('mdc_allocations');
+      if (savedAlloc) {
+        const parsedA = JSON.parse(savedAlloc);
+        if (Array.isArray(parsedA) && parsedA.length > 0) {
+          const derived = deriveForecastItemsFromAllocations(parsedA, parts);
+          if (derived.length > 0) {
+            try { localStorage.setItem('mdc_forecast', JSON.stringify(derived)); } catch (e) {}
+            dbStorage.setItem('mdc_forecast', derived);
+            return derived;
+          }
+        }
+      }
+      // Autonomous Masterlist recovery: If neither exists, check active period masterlist
+      const activeMl = getActiveMasterlist(null, activePeriod);
+      if (activeMl && Array.isArray(activeMl.partsSummary) && activeMl.partsSummary.length > 0) {
+        const derivedMl = deriveForecastItemsFromMasterlist(activeMl);
+        if (derivedMl.length > 0) {
+          try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedMl)); } catch (e) {}
+          dbStorage.setItem('mdc_forecast', derivedMl);
+          return derivedMl;
+        }
       }
       return [];
     } catch {
@@ -55,12 +81,21 @@ export function useForecastingAndAllocation({
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-      // If allocations is empty but forecast is present in localStorage, generate immediately
+      // If allocations is empty but forecast is present, generate immediately
       const savedForecast = localStorage.getItem('mdc_forecast');
       if (savedForecast) {
         const parsedF = JSON.parse(savedForecast);
         if (Array.isArray(parsedF) && parsedF.length > 0) {
           const generated = generateAllocationsFromForecasts(parsedF, sites, 'linear');
+          if (generated.length > 0) return generated;
+        }
+      }
+      // Masterlist fallback
+      const activeMl = getActiveMasterlist(null, activePeriod);
+      if (activeMl && Array.isArray(activeMl.partsSummary) && activeMl.partsSummary.length > 0) {
+        const derivedMl = deriveForecastItemsFromMasterlist(activeMl);
+        if (derivedMl.length > 0 && sites && sites.length > 0) {
+          const generated = generateAllocationsFromForecasts(derivedMl, sites, 'linear');
           if (generated.length > 0) return generated;
         }
       }
@@ -70,17 +105,51 @@ export function useForecastingAndAllocation({
     }
   });
 
-  // Self-healing synchronization: if allocations is empty but forecastItems has data, auto-generate allocations
+  // Bi-directional Self-Healing & Synchronization:
+  // 1. If allocations is empty but forecastItems has data -> auto-generate allocations
+  // 2. If forecastItems is empty but allocations has data -> auto-derive forecastItems
+  // 3. If BOTH are empty and NOT explicitly cleared -> auto-recover from active period masterlist
   useEffect(() => {
-    if ((!allocations || allocations.length === 0) && forecastItems && forecastItems.length > 0 && sites && sites.length > 0) {
+    if (isExplicitlyCleared()) return;
+
+    const hasForecast = Array.isArray(forecastItems) && forecastItems.length > 0;
+    const hasAlloc = Array.isArray(allocations) && allocations.length > 0;
+
+    if (!hasAlloc && hasForecast && sites && sites.length > 0) {
       const generated = generateAllocationsFromForecasts(forecastItems, sites, forecastingModel);
       if (generated.length > 0) {
         setAllocations(generated);
         try { localStorage.setItem('mdc_allocations', JSON.stringify(generated)); } catch (e) {}
         dbStorage.setItem('mdc_allocations', generated);
       }
+    } else if (!hasForecast && hasAlloc) {
+      const derived = deriveForecastItemsFromAllocations(allocations, parts);
+      if (derived.length > 0) {
+        setForecastItems(derived);
+        try { localStorage.setItem('mdc_forecast', JSON.stringify(derived)); } catch (e) {}
+        dbStorage.setItem('mdc_forecast', derived);
+      }
+    } else if (!hasForecast && !hasAlloc) {
+      const activeMl = getActiveMasterlist(null, activePeriod);
+      if (activeMl && Array.isArray(activeMl.partsSummary) && activeMl.partsSummary.length > 0) {
+        const derived = deriveForecastItemsFromMasterlist(activeMl);
+        if (derived.length > 0) {
+          setForecastItems(derived);
+          try { localStorage.setItem('mdc_forecast', JSON.stringify(derived)); } catch (e) {}
+          dbStorage.setItem('mdc_forecast', derived);
+
+          if (sites && sites.length > 0) {
+            const generated = generateAllocationsFromForecasts(derived, sites, forecastingModel);
+            if (generated.length > 0) {
+              setAllocations(generated);
+              try { localStorage.setItem('mdc_allocations', JSON.stringify(generated)); } catch (e) {}
+              dbStorage.setItem('mdc_allocations', generated);
+            }
+          }
+        }
+      }
     }
-  }, [allocations, forecastItems, sites, forecastingModel]);
+  }, [allocations, forecastItems, sites, parts, activePeriod, forecastingModel]);
 
   // Realtime multi-tab/window bus listener for calculation model changes
   useEffect(() => {
@@ -687,14 +756,31 @@ export function useForecastingAndAllocation({
     const rowParityOffset = getRowParityOffset(part);
     const split = calculateWeeklySplit(availableStock, totalCost, (idx >= 0 ? idx : allocations.length) + rowParityOffset);
 
-    setAllocations(prev => {
-      const exists = prev.some(a => a.part_id === partId || a.part_number === partId);
+    // Auto-allocation is an allocation edit, so publish the same quantity back to Forecasting.
+    const updatedForecastItems = (forecastItems || []).map(item => {
+      const matches = item.part_id === partId || item.part_number === partId || item.id === partId;
+      if (!matches) return item;
+
+      const computed = (typeof item.computed_forecast === 'number' && Number.isFinite(item.computed_forecast))
+        ? item.computed_forecast
+        : calculateItemForecast(item, forecastingModel, (item.ytd_monthly_counts || []).length);
+      return {
+        ...item,
+        computed_forecast: computed,
+        admin_override: availableStock === computed ? null : availableStock,
+        final_forecast: availableStock,
+        recommended_order: availableStock
+      };
+    });
+
+    const nextAllocations = (() => {
       const newAllocObj = {
         part_id: part.id || partId,
         part_number: part.part_number,
         description: part.description,
         category_id: part.category_id,
         stocking_price: part.stocking_price,
+        forecasted_qty: availableStock,
         total_allocated_qty: availableStock,
         total_stock_cost: totalCost,
         w1_qty: split.w1_qty,
@@ -707,13 +793,40 @@ export function useForecastingAndAllocation({
         w4_cost: split.w4_cost,
         site_quantities: siteQuantities
       };
-      const updated = exists
-        ? prev.map(a => (a.part_id === partId || a.part_number === partId) ? newAllocObj : a)
-        : [...prev, newAllocObj];
-      try { localStorage.setItem('mdc_allocations', JSON.stringify(updated)); } catch (e) {}
-      dbStorage.setItem('mdc_allocations', updated);
-      return updated;
-    });
+      const exists = allocations.some(a => a.part_id === partId || a.part_number === partId);
+      return exists
+        ? allocations.map(a => (a.part_id === partId || a.part_number === partId) ? newAllocObj : a)
+        : [...allocations, newAllocObj];
+    })();
+
+    setForecastItems(updatedForecastItems);
+    try { localStorage.setItem('mdc_forecast', JSON.stringify(updatedForecastItems)); } catch (e) {}
+    dbStorage.setItem('mdc_forecast', updatedForecastItems);
+
+    setAllocations(nextAllocations);
+    try { localStorage.setItem('mdc_allocations', JSON.stringify(nextAllocations)); } catch (e) {}
+    dbStorage.setItem('mdc_allocations', nextAllocations);
+
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(async () => {
+      if (supabase) {
+        try {
+          await supabase.from('saved_records').upsert({
+            id: LIVE_MASTER_RECORD_ID,
+            record_type: 'both',
+            period_label: activePeriod?.label || 'Current',
+            period_year: activePeriod?.year || new Date().getFullYear(),
+            period_month: activePeriod?.month || new Date().getMonth() + 1,
+            notes: 'Active live warehouse operational state (auto-allocation updated)',
+            snapshot_data: { forecastItems: updatedForecastItems, allocations: nextAllocations, forecastingModel },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (e) {
+          console.warn('Sync auto-allocation to cloud error:', e);
+        }
+      }
+      if (broadcastCloudEvent) broadcastCloudEvent('MASTER_DATA_UPDATED', { table: 'saved_records' });
+    }, 400);
 
     showToast(`Auto-allocated ${availableStock} units of ${part.description} across ${activeServiceSites.length} sites`, 'success');
   };

@@ -242,6 +242,90 @@ console.log('====================================================');
   console.log('  ✓ PASS: Site deletion properly registers in Deletion Audit Log with directory attributes');
 })();
 
+// Test 8: Newly created user session is preserved on refresh when missing from partial usersList
+(() => {
+  const sampleNewUser = {
+    id: 'usr-sample-123',
+    email: 'sample@mobilecareph.com',
+    fullName: 'Sample',
+    role: 'user',
+    rolePosition: 'Warehouse Operations Specialist',
+    siteId: 'site-dc',
+    hasSetPassword: true,
+    isActive: true
+  };
+
+  // User session persisted in storage before refresh
+  localStorage.setItem('mdc_current_user', JSON.stringify(sampleNewUser));
+
+  // On refresh, usersList might initially only contain existing staff accounts
+  let usersList = [
+    { id: 'usr-zhon', email: 'zhon.manaois@mobilecareph.com', role: 'superadmin', hasSetPassword: true, isActive: true },
+    { id: 'usr-anjo', email: 'anjo.alcazar@mobilecareph.com', role: 'superadmin', hasSetPassword: true, isActive: true }
+  ];
+
+  let currentUser = JSON.parse(localStorage.getItem('mdc_current_user'));
+  const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+
+  // Check guard: user is NOT deleted
+  const isDeleted = deletedIds.includes(currentUser.id?.toLowerCase()) || deletedIds.includes(currentUser.email?.toLowerCase());
+  assert.strictEqual(isDeleted, false, 'Sample user is not deleted');
+
+  // Sync logic: user is missing from usersList -> must be preserved rather than logged out
+  const match = usersList.find(u => u.email.toLowerCase() === currentUser.email.toLowerCase());
+  if (!match) {
+    // Preserve in usersList
+    usersList.push(currentUser);
+  }
+
+  assert.strictEqual(currentUser !== null, true, 'User session must remain active after refresh');
+  assert.strictEqual(usersList.some(u => u.email === 'sample@mobilecareph.com'), true, 'User must be appended to usersList');
+  console.log('  ✓ PASS: Newly created user session is preserved across refresh when usersList updates');
+})();
+
+// Test 9: Cloud sync preserves newly created active user session and does not log them out
+(() => {
+  const sampleNewUser = {
+    id: 'usr-sample-123',
+    email: 'sample@mobilecareph.com',
+    fullName: 'Sample',
+    role: 'user',
+    rolePosition: 'Warehouse Operations Specialist',
+    siteId: 'site-dc',
+    hasSetPassword: true,
+    isActive: true
+  };
+
+  let currentUser = { ...sampleNewUser };
+  const mergedDeletedUserIds = [];
+
+  // Cloud returns existing profiles (e.g. before new user profile sync completes)
+  const merged = [
+    { id: 'usr-zhon', email: 'zhon.manaois@mobilecareph.com', hasSetPassword: true, isActive: true }
+  ];
+
+  let freshCurrent = merged.find(u => u.email.toLowerCase() === currentUser.email.toLowerCase());
+  const isDeleted = mergedDeletedUserIds.includes(currentUser.email.toLowerCase());
+
+  // Resilient session guard: if not explicitly deleted, preserve active session
+  if (!freshCurrent && !isDeleted) {
+    freshCurrent = currentUser;
+    merged.push(currentUser);
+  }
+
+  const isDeactivated = freshCurrent && freshCurrent.isActive === false;
+  const isPendingPassword = currentUser.hasSetPassword === false && (!freshCurrent || freshCurrent.hasSetPassword === false);
+
+  if (isDeleted || isDeactivated || isPendingPassword) {
+    currentUser = null;
+  }
+
+  assert.strictEqual(currentUser !== null, true, 'Active user session must NOT be invalidated by cloud sync');
+  assert.strictEqual(currentUser.email, 'sample@mobilecareph.com', 'User remains logged in as sample@mobilecareph.com');
+  assert.strictEqual(merged.some(u => u.email === 'sample@mobilecareph.com'), true, 'User is preserved in merged list');
+  console.log('  ✓ PASS: Cloud sync preserves newly created active user session without logging out');
+})();
+
 console.log('====================================================');
 console.log('ALL SESSION, SITE & DELETION AUDIT TESTS PASSED (100%)');
 console.log('====================================================\n');

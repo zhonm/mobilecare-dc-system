@@ -783,16 +783,13 @@ export function usePartsRequests({
         const zeroSinceMs = new Date(zeroStockTracker[trackerKey].zeroStockSince).getTime();
         const elapsedMs = nowMs - zeroSinceMs;
         const elapsedDays = Math.floor(elapsedMs / (24 * 60 * 60 * 1000));
-        const daysUntilPurge = Math.max(0, 3 - elapsedDays);
 
         item.outOfStockDays = elapsedDays;
-        item.daysUntilPurge = daysUntilPurge;
+        item.daysUntilPurge = null;
         item.zeroStockSince = zeroStockTracker[trackerKey].zeroStockSince;
 
-        // Auto-purge rule: if 0 units for 3 consecutive days AND no units in transit/allocated, delete from branch table
-        if (elapsedMs >= THREE_DAYS_MS && (item.packed || 0) === 0 && (item.allocated || 0) === 0) {
-          delete partsSummary[pn];
-        }
+        // Strict Non-Deletion Policy: parts are NEVER deleted from the system under any circumstances.
+        // All catalog and inventory records remain 100% intact for consistency and auditability.
       }
     });
 
@@ -817,15 +814,21 @@ export function usePartsRequests({
   // 6. Multi-Site Stock Summary with Granular Serial Privacy & Masking
   const getAllSitesStockSummary = useCallback((targetSiteFilter = 'ALL') => {
     const isSuper = currentUser?.role === 'superadmin';
+    const isPmg = currentUser?.role === 'parts_management';
     const userSiteId = currentUser?.siteId;
     const userId = currentUser?.id;
 
-    const siteList = targetSiteFilter === 'ALL'
+    let siteList = targetSiteFilter === 'ALL'
       ? sites
       : sites.filter(s => s.id === targetSiteFilter || s.code === targetSiteFilter);
 
+    // PMG users cannot view or access DC stocks!
+    if (isPmg) {
+      siteList = siteList.filter(s => !s.is_dc && s.code !== 'DC-MDC' && s.code !== 'DC');
+    }
+
     return siteList.map(site => {
-            const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
+      const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
       const stock = getStockOnHandForSite(site.id);
 
       // Process parts summary with granular privacy
@@ -837,8 +840,13 @@ export function usePartsRequests({
 
         // Determine if user can see serialized details
         const serializedUnits = matchingUnitsForPart.map(u => {
-          const isAddedBySelf = userId && (u.added_by_user_id === userId || u.received_by_id === userId || u.received_by === currentUser?.fullName);
-          const canViewDetails = isSuper || isOwnSite || isAddedBySelf;
+          const isAddedBySelf = Boolean(userId && (
+            u.added_by_user_id === userId ||
+            u.received_by_id === userId ||
+            (u.received_by && currentUser?.fullName && u.received_by.toLowerCase() === currentUser.fullName.toLowerCase())
+          ));
+          // In PMG accounts, serial numbers are only visible to the user who added them!
+          const canViewDetails = isSuper || (isPmg ? isAddedBySelf : (isOwnSite || isAddedBySelf));
 
           if (canViewDetails) {
             return {
@@ -883,7 +891,7 @@ export function usePartsRequests({
           }
         });
 
-        const hasUnmaskedAccess = isSuper || isOwnSite || serializedUnits.some(u => !u.isMasked);
+        const hasUnmaskedAccess = isSuper || (isPmg ? serializedUnits.some(u => !u.isMasked) : isOwnSite);
 
         return {
           ...partItem,
@@ -1193,114 +1201,12 @@ export function usePartsRequests({
     return { success: true };
   }, [inventoryUnits, setInventoryUnits, currentUser, showToast, broadcastCloudEvent]);
 
-  // 10. Auto-Purge 3-Day Zero-Stock Parts from Database & Local State
+  // 10. Aging / Zero-Stock Awareness (Strict Non-Deletion Policy: all inventory units remain 100% intact)
   const purgeStaleZeroStockUnits = useCallback(async () => {
-    let tracker = {};
-    try {
-      tracker = JSON.parse(localStorage.getItem('mdc_zero_stock_tracker') || '{}');
-    } catch (e) {}
-
-    const now = Date.now();
-    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-    const expiredKeys = [];
-    const expiredPartSites = [];
-
-    Object.entries(tracker).forEach(([key, val]) => {
-      if (val && val.zeroStockSince) {
-        const valPN = String(val.partNumber || '').toUpperCase();
-        
-        // Active Transit & Allocation Protection: If any units for this part and site are packed, shipped, or in-transit, DO NOT purge!
-        const hasActiveTransitOrAllocated = (inventoryUnits || []).some(u => {
-          const uSiteId = u.current_site_id || u.siteId;
-          const uSiteCode = u.site_code || u.siteCode;
-          const uPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
-          const matchesPart = uPN === valPN;
-          const matchesSite = (uSiteId === val.siteId || uSiteId === val.siteCode || uSiteCode === val.siteCode || uSiteCode === val.siteId);
-          const status = String(u.status || '').toLowerCase();
-          const isTransitOrAllocated = status === 'packed' || status === 'shipped' || status === 'in_transit' || status === 'pending_pickup' || status === 'allocated';
-          return matchesPart && matchesSite && isTransitOrAllocated;
-        });
-
-        if (hasActiveTransitOrAllocated) {
-          // Remove from countdown tracker so it resets while parts are on their way
-          expiredKeys.push(key);
-          return;
-        }
-
-        const elapsed = now - new Date(val.zeroStockSince).getTime();
-        if (elapsed >= THREE_DAYS_MS) {
-          expiredKeys.push(key);
-          expiredPartSites.push({
-            siteId: val.siteId,
-            siteCode: val.siteCode,
-            partNumber: valPN
-          });
-        }
-      }
-    });
-
-    if (expiredPartSites.length === 0 && expiredKeys.length === 0) return;
-
-    let nextUnits = [];
-    if (setInventoryUnits && expiredPartSites.length > 0) {
-      setInventoryUnits(prev => {
-        nextUnits = (prev || []).filter(u => {
-          const uSiteId = u.current_site_id || u.siteId;
-          const uSiteCode = u.site_code || u.siteCode;
-          const uPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
-          const status = String(u.status || '').toLowerCase();
-          const isTransitOrAllocated = status === 'packed' || status === 'shipped' || status === 'in_transit' || status === 'pending_pickup' || status === 'allocated' || status === 'in_stock';
-
-          // Never purge in-transit, in-stock, or allocated units
-          if (isTransitOrAllocated) return true;
-
-          const isExpired = expiredPartSites.some(exp =>
-            uPN === exp.partNumber &&
-            (uSiteId === exp.siteId || uSiteId === exp.siteCode || uSiteCode === exp.siteCode || uSiteCode === exp.siteId)
-          );
-          return !isExpired;
-        });
-
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits)); } catch (e) {}
-        dbStorage.setItem('mdc_inventory', nextUnits);
-        return nextUnits;
-      });
-    }
-
-    expiredKeys.forEach(k => delete tracker[k]);
-    try {
-      localStorage.setItem('mdc_zero_stock_tracker', JSON.stringify(tracker));
-    } catch (e) {}
-
-    if (supabase) {
-      try {
-        await supabase.from('saved_records').upsert({
-          id: 'live_master_dc_inventory',
-          record_type: 'inventory_master',
-          period_label: 'Live Master DC Inventory',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          period_week: 1,
-          notes: 'Master In-Stock inventory pool across all accounts',
-          saved_by_name: 'Auto-Cleanup (3-Day Zero-Stock Purge)',
-          snapshot_data: { units: nextUnits.length > 0 ? nextUnits : inventoryUnits },
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-
-        await supabase.from('saved_records').upsert({
-          id: 'master_zero_stock_tracker',
-          record_type: 'zero_stock_tracker',
-          period_label: 'Zero Stock 3-Day Purge Tracker',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          snapshot_data: { tracker },
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-      } catch (err) {
-        console.warn('purgeStaleZeroStockUnits cloud sync notice:', err.message);
-      }
-    }
-  }, [inventoryUnits, setInventoryUnits]);
+    // Strictly preserve all inventory units without deletion under any circumstances.
+    // Aging and zero-stock notices serve only as informational awareness.
+    return { success: true, purged: 0 };
+  }, []);
 
   // Run periodic 3-day zero-stock auto-purge check on mount
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { hashPassword } from '../utils/security';
+import { hashPassword, getStoredUserSession } from '../utils/security';
 import { isAllowedCompanyEmail } from '../utils/userMatcher';
 import {
   INITIAL_USERS,
@@ -15,12 +15,22 @@ import { isUUID, toValidUUID } from '../utils/appContextHelpers';
 
 export function useUserManagement({
   currentUser,
+  getCurrentUser,
   setCurrentUser,
   showToast,
   broadcastCloudEvent,
   enqueueOfflineAction,
   setCloudSyncStatus
 }) {
+  const getActiveUser = () => {
+    if (currentUser) return currentUser;
+    if (typeof getCurrentUser === 'function') {
+      const u = getCurrentUser();
+      if (u) return u;
+    }
+    return getStoredUserSession();
+  };
+
   const [usersList, setUsersList] = useState(() => {
     try {
       const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
@@ -29,36 +39,46 @@ export function useUserManagement({
         saved = localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users');
       } catch (e) {}
 
+      let currentSavedUser = null;
+      try {
+        currentSavedUser = getStoredUserSession();
+      } catch (e) {}
+
+      let baseList = [];
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return sortUsersDeterministically(
-            parsed
-              .filter(u =>
-                !deletedIds.includes(u.id?.toLowerCase()) &&
-                !deletedIds.includes(u.email?.toLowerCase()) &&
-                !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-                !LEGACY_MOCK_IDS.includes(u.id)
-              )
-              .map(u => {
-                if (u.role === 'parts_management') {
-                  return {
-                    ...u,
-                    permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
-                  };
-                }
-                return u;
-              })
-          );
+          baseList = parsed;
         }
       }
+      if (baseList.length === 0) {
+        baseList = INITIAL_USERS;
+      }
+
+      // Preserve current active session user so they are never lost on initial load
+      if (currentSavedUser && currentSavedUser.email && !deletedIds.includes(currentSavedUser.email.toLowerCase()) && !deletedIds.includes(currentSavedUser.id?.toLowerCase())) {
+        if (!baseList.some(u => (currentSavedUser.id && u.id?.toLowerCase() === currentSavedUser.id.toLowerCase()) || (u.email && u.email.toLowerCase() === currentSavedUser.email.toLowerCase()))) {
+          baseList = [...baseList, currentSavedUser];
+        }
+      }
+
       return sortUsersDeterministically(
-        INITIAL_USERS.filter(u =>
-          !deletedIds.includes(u.id?.toLowerCase()) &&
-          !deletedIds.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_IDS.includes(u.id)
-        )
+        baseList
+          .filter(u =>
+            !deletedIds.includes(u.id?.toLowerCase()) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
+          )
+          .map(u => {
+            if (u.role === 'parts_management') {
+              return {
+                ...u,
+                permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
+              };
+            }
+            return u;
+          })
       );
     } catch (e) {
       console.warn('Error loading mdc_users:', e);
@@ -71,6 +91,9 @@ export function useUserManagement({
     let isMounted = true;
     const recoverUsersFromDb = async () => {
       try {
+        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+        const activeSessionUser = getActiveUser();
+
         if (supabase) {
           const { data: dbProf, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: true });
           if (!error && dbProf && dbProf.length > 0 && isMounted) {
@@ -81,39 +104,50 @@ export function useUserManagement({
               permsMap.get(p.user_id).push(p.page_id);
             });
 
-            const activeProfiles = sortUsersDeterministically(
-              dbProf
-                .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()))
-                .map(p => {
-                  const customPerms = permsMap.get(p.id);
-                  const role = p.role || 'user';
-                  const resolvedPosition = p.role_position || getDefaultRolePosition(role);
-                  const passHash = p.password_hash || null;
-                  const isPasswordSet = Boolean(p.has_set_password || passHash);
+            let activeProfiles = dbProf
+              .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()) && !deletedIds.includes(p.id?.toLowerCase()) && !deletedIds.includes(p.email.toLowerCase()))
+              .map(p => {
+                const customPerms = permsMap.get(p.id);
+                const role = p.role || 'user';
+                const resolvedPosition = p.role_position || getDefaultRolePosition(role);
+                const passHash = p.password_hash || null;
+                const isPasswordSet = Boolean(p.has_set_password || passHash);
 
-                  return {
-                    id: p.id || `usr-${Date.now()}`,
-                    email: p.email,
-                    fullName: p.full_name || p.email.split('@')[0],
-                    role: role,
-                    rolePosition: resolvedPosition,
-                    siteId: p.site_id || 'site-dc',
-                    hasSetPassword: isPasswordSet,
-                    passwordHash: passHash,
-                    isActive: p.is_active ?? true,
-                    permittedPages: role === 'superadmin'
-                      ? ROLE_PRESETS.superadmin
-                      : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
-                  };
-                })
-            );
+                return {
+                  id: p.id || `usr-${Date.now()}`,
+                  email: p.email,
+                  fullName: p.full_name || p.email.split('@')[0],
+                  role: role,
+                  rolePosition: resolvedPosition,
+                  siteId: p.site_id || 'site-dc',
+                  hasSetPassword: isPasswordSet,
+                  passwordHash: passHash,
+                  isActive: p.is_active ?? true,
+                  permittedPages: role === 'superadmin'
+                    ? ROLE_PRESETS.superadmin
+                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                };
+              });
 
-            if (activeProfiles.length > 0) {
-              setUsersList(activeProfiles);
+            // If activeSessionUser is logged in and not in activeProfiles, preserve them so refresh never drops session
+            if (activeSessionUser && activeSessionUser.email && !deletedIds.includes(activeSessionUser.email.toLowerCase()) && !deletedIds.includes(activeSessionUser.id?.toLowerCase())) {
+              const exists = activeProfiles.some(u =>
+                (activeSessionUser.id && u.id?.toLowerCase() === activeSessionUser.id.toLowerCase()) ||
+                (u.email && u.email.toLowerCase() === activeSessionUser.email.toLowerCase())
+              );
+              if (!exists) {
+                activeProfiles.push(activeSessionUser);
+              }
+            }
+
+            const sortedProfiles = sortUsersDeterministically(activeProfiles);
+
+            if (sortedProfiles.length > 0) {
+              setUsersList(sortedProfiles);
               try {
-                localStorage.setItem('mdc_users', JSON.stringify(activeProfiles));
-                sessionStorage.setItem('mdc_users', JSON.stringify(activeProfiles));
-                dbStorage.setItem('mdc_users', activeProfiles);
+                localStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
+                sessionStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
+                dbStorage.setItem('mdc_users', sortedProfiles);
               } catch (e) {}
               return;
             }
@@ -122,21 +156,29 @@ export function useUserManagement({
 
         const dbUsers = await dbStorage.getItem('mdc_users');
         if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
-          const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
-
-          const filtered = sortUsersDeterministically(
-            dbUsers.filter(u =>
-              !deletedIds.includes(u.id?.toLowerCase()) &&
-              !deletedIds.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            )
+          let filtered = dbUsers.filter(u =>
+            !deletedIds.includes(u.id?.toLowerCase()) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
           );
-          if (filtered.length > 0) {
-            setUsersList(filtered);
+
+          if (activeSessionUser && activeSessionUser.email && !deletedIds.includes(activeSessionUser.email.toLowerCase()) && !deletedIds.includes(activeSessionUser.id?.toLowerCase())) {
+            const exists = filtered.some(u =>
+              (activeSessionUser.id && u.id?.toLowerCase() === activeSessionUser.id.toLowerCase()) ||
+              (u.email && u.email.toLowerCase() === activeSessionUser.email.toLowerCase())
+            );
+            if (!exists) {
+              filtered.push(activeSessionUser);
+            }
+          }
+
+          const sortedFiltered = sortUsersDeterministically(filtered);
+          if (sortedFiltered.length > 0) {
+            setUsersList(sortedFiltered);
             try {
-              localStorage.setItem('mdc_users', JSON.stringify(filtered));
-              sessionStorage.setItem('mdc_users', JSON.stringify(filtered));
+              localStorage.setItem('mdc_users', JSON.stringify(sortedFiltered));
+              sessionStorage.setItem('mdc_users', JSON.stringify(sortedFiltered));
             } catch (e) {}
           }
         }

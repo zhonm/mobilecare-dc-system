@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Barcode,
@@ -32,7 +32,9 @@ import {
   Copy,
   Boxes,
   User,
-  Ban
+  Ban,
+  Lock,
+  Shield
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
@@ -106,6 +108,34 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (isPmgUser) return userSiteObj;
     return dcSiteObj;
   }, [isPmgUser, userSiteObj, dcSiteObj]);
+
+  // PMG Private / Site View Modes: 'my_added' | 'site_available' | 'site_summary'
+  const [pmgViewMode, setPmgViewMode] = useState('my_added');
+
+  // Detect whether a unit belongs to DC stock (which PMG users are strictly barred from viewing/accessing)
+  const isDcStockUnit = useCallback((unit) => {
+    if (!unit) return false;
+    const siteId = String(unit.current_site_id || unit.site_id || unit.siteId || '').toLowerCase();
+    const siteCode = String(unit.site_code || unit.siteCode || '').toUpperCase();
+    return (
+      siteId === 'site-dc' || siteId === 'dc' ||
+      siteCode === 'DC-MDC' || siteCode === 'DC' || siteCode.startsWith('DC-') ||
+      (!siteId && !siteCode)
+    );
+  }, []);
+
+  // Determine if the specified inventory unit was added/received by the current logged-in user
+  const isUnitAddedByCurrentUser = useCallback((unit) => {
+    if (!currentUser || !unit) return false;
+    if (currentUser.role === 'superadmin') return true;
+    const curId = String(currentUser.id || '').trim();
+    const curName = String(currentUser.fullName || currentUser.name || '').trim().toLowerCase();
+    const unitAddedId = String(unit.added_by_user_id || unit.received_by_id || '').trim();
+    const unitAddedName = String(unit.received_by || unit.saved_by_name || '').trim().toLowerCase();
+    if (curId && unitAddedId && curId === unitAddedId) return true;
+    if (curName && unitAddedName && curName === unitAddedName) return true;
+    return false;
+  }, [currentUser]);
 
   const pmgIncomingShipments = useMemo(() => {
     if (!isPmgUser) return [];
@@ -1057,7 +1087,23 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const targetSiteId = activeReceivingSite?.id;
       const targetSiteCode = activeReceivingSite?.code;
 
-      if (isPmgUser || (targetSiteCode && targetSiteCode !== 'DC-MDC' && targetSiteCode !== 'DC')) {
+      if (isPmgUser) {
+        // PMG users cannot view or access DC stocks under any circumstances!
+        if (isDcStockUnit(u)) return false;
+
+        const uSite = u.current_site_id || u.site_id || u.siteId;
+        const uCode = u.site_code || u.siteCode;
+        const isUserSite = (
+          uSite === targetSiteId ||
+          uSite === targetSiteCode ||
+          uCode === targetSiteCode ||
+          uCode === targetSiteId ||
+          isUnitAddedByCurrentUser(u)
+        );
+        return isUserSite;
+      }
+
+      if (targetSiteCode && targetSiteCode !== 'DC-MDC' && targetSiteCode !== 'DC') {
         const uSite = u.current_site_id || u.site_id || u.siteId;
         const uCode = u.site_code || u.siteCode;
         const isUserSite = (
@@ -1082,7 +1128,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return (u.status === 'in_stock' || !u.status) && isDc;
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, sessionScans, packedSerialsSet, parts, isPmgUser, activeReceivingSite, dcSiteObj, currentUser]);
+  }, [inventoryUnits, sessionScans, packedSerialsSet, parts, isPmgUser, activeReceivingSite, dcSiteObj, currentUser, isDcStockUnit, isUnitAddedByCurrentUser]);
 
   // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedReceivedUnits = useMemo(() => {
@@ -1098,49 +1144,44 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const isDisplay = descLower.includes('display') || descLower.includes('screen');
       const isBattery = descLower.includes('battery');
       const isCamera = descLower.includes('camera');
-      const isBackGlass = descLower.includes('back glass') || descLower.includes('rear glass');
-      const isMidSystem = descLower.includes('logic') || descLower.includes('mid system') || descLower.includes('rear system');
+      const isBackGlass = descLower.includes('back glass') || descLower.includes('rear glass') || descLower.includes('back cover');
+      const isLogicOrMid = descLower.includes('enclosure') || descLower.includes('mid rear') || descLower.includes('logic');
 
-      const categoryObj = partInfo?.category_id ? catMap.get(partInfo.category_id) : null;
-      let categoryName = 'General';
-      let categoryCode = 'GENERAL';
+      let category_code = 'OTHER';
+      let category_name = 'Service Parts';
 
       if (isDisplay) {
-        categoryName = 'Display';
-        categoryCode = 'DISPLAY';
+        category_code = 'DISPLAY';
+        category_name = 'Display Module';
       } else if (isBattery) {
-        categoryName = 'Battery';
-        categoryCode = 'BATTERY';
+        category_code = 'BATTERY';
+        category_name = 'Battery Unit';
       } else if (isCamera) {
-        categoryName = 'Camera';
-        categoryCode = 'CAMERA';
+        category_code = 'CAMERA';
+        category_name = 'Camera Module';
       } else if (isBackGlass) {
-        categoryName = 'Back Glass';
-        categoryCode = 'BACK_GLASS';
-      } else if (isMidSystem) {
-        categoryName = 'Logic / Mid System';
-        categoryCode = 'MID_REAR';
-      } else if (categoryObj?.name) {
-        categoryName = categoryObj.name;
-        categoryCode = categoryObj.code || 'GENERAL';
-      } else if (pn.startsWith('661-')) {
-        categoryName = 'Apple Part';
-        categoryCode = 'APPLE_PART';
+        category_code = 'BACK_GLASS';
+        category_name = 'Back Glass';
+      } else if (isLogicOrMid) {
+        category_code = 'MID_REAR';
+        category_name = 'Enclosure / Logic';
+      } else if (unit.category_code) {
+        category_code = unit.category_code;
+        category_name = unit.category_name || catMap.get(unit.category_id)?.name || 'Service Parts';
       }
-
-      const iphoneModel = partInfo?.iphone_model || unit.iphone_model || '';
 
       return {
         ...unit,
         description: desc,
-        iphone_model: iphoneModel,
-        category_name: categoryName,
-        category_code: categoryCode
+        iphone_model: unit.iphone_model || partInfo?.model || 'Universal / Multi-Model',
+        category_code,
+        category_name,
+        intake_assignment: unit.intake_assignment || unit.part_assignment || unit.assignment || 'MDC - Forecasting'
       };
     });
   }, [availableInStockUnits, parts, categories]);
 
-  // Metric counts for assignment
+  // Assignment counts for DC intake tabs
   const assignmentCounts = useMemo(() => {
     let forecasting = 0;
     let crbr = 0;
@@ -1160,13 +1201,37 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     };
   }, [availableInStockUnits]);
 
-  // Table items calculation with Assignment, Category & Search Filters
+  // PMG counts for PMG navigation tabs
+  const pmgCounts = useMemo(() => {
+    if (!isPmgUser) return { myAdded: 0, siteStock: 0, summaryKinds: 0 };
+    const siteUnits = (enrichedReceivedUnits || []).filter(u => !isDcStockUnit(u));
+    const myUnits = siteUnits.filter(u => isUnitAddedByCurrentUser(u));
+    const uniquePns = new Set(siteUnits.map(u => String(u.part_number || '').toUpperCase()));
+    return {
+      myAdded: myUnits.length,
+      siteStock: siteUnits.length,
+      summaryKinds: uniquePns.size
+    };
+  }, [isPmgUser, enrichedReceivedUnits, isDcStockUnit, isUnitAddedByCurrentUser]);
+
+  // Table items calculation with Assignment, Category, PMG View Mode & Search Filters
   const displayedUnits = useMemo(() => {
     return (enrichedReceivedUnits || []).filter(u => {
-      // 1. Assignment Filter
-      if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
-      if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
-      if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+      if (isPmgUser) {
+        // PMG users cannot view or access DC stocks under any circumstances
+        if (isDcStockUnit(u)) return false;
+        // In 'my_added' mode, strictly show units added by current user
+        if (pmgViewMode === 'my_added' && !isUnitAddedByCurrentUser(u)) {
+          return false;
+        }
+      }
+
+      // 1. Assignment Filter (DC only)
+      if (!isPmgUser) {
+        if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
+        if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
+        if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+      }
 
       // 2. Sub-Category Filter
       if (categoryFilter !== 'ALL') {
@@ -1180,7 +1245,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       if (tableSearch.trim()) {
         const q = tableSearch.toLowerCase().trim();
         const matchesPn = (u.part_number || '').toLowerCase().includes(q);
-        const matchesSn = (u.serial_number || '').toLowerCase().includes(q);
+        // Only allow searching by serial if the current user owns it or if not a PMG account
+        const matchesSn = (!isPmgUser || isUnitAddedByCurrentUser(u)) && (u.serial_number || '').toLowerCase().includes(q);
         const matchesDesc = (u.description || '').toLowerCase().includes(q);
         const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
         const matchesCat = (u.category_name || '').toLowerCase().includes(q);
@@ -1191,7 +1257,51 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
       return true;
     }).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-  }, [enrichedReceivedUnits, assignmentFilter, categoryFilter, tableSearch]);
+  }, [enrichedReceivedUnits, isPmgUser, pmgViewMode, isDcStockUnit, isUnitAddedByCurrentUser, assignmentFilter, categoryFilter, tableSearch]);
+
+  // Aggregated Designated Sites Summary Table (Part Numbers & Quantities Only - Zero Serial Visibility)
+  const pmgSiteSummaryRows = useMemo(() => {
+    if (!isPmgUser) return [];
+    const grouped = {};
+    (enrichedReceivedUnits || []).forEach(u => {
+      if (isDcStockUnit(u)) return;
+      const pn = String(u.part_number || '').trim().toUpperCase();
+      if (!pn) return;
+      if (!grouped[pn]) {
+        grouped[pn] = {
+          part_number: pn,
+          description: u.description || 'Apple Genuine Service Part',
+          iphone_model: u.iphone_model || 'Universal / Multi-Model',
+          category_name: u.category_name || 'Service Parts',
+          category_code: u.category_code || 'OTHER',
+          site_code: u.site_code || activeReceivingSite?.code || 'Branch',
+          site_name: activeReceivingSite?.name || 'Designated Site',
+          my_added_qty: 0,
+          total_qty: 0
+        };
+      }
+      grouped[pn].total_qty += 1;
+      if (isUnitAddedByCurrentUser(u)) {
+        grouped[pn].my_added_qty += 1;
+      }
+    });
+
+    let list = Object.values(grouped);
+    if (tableSearch.trim()) {
+      const q = tableSearch.toLowerCase().trim();
+      list = list.filter(r =>
+        r.part_number.toLowerCase().includes(q) ||
+        r.description.toLowerCase().includes(q) ||
+        r.iphone_model.toLowerCase().includes(q) ||
+        r.category_name.toLowerCase().includes(q)
+      );
+    }
+    if (categoryFilter !== 'ALL') {
+      const targetCode = categoryFilter.toUpperCase();
+      list = list.filter(r => (r.category_code || '').toUpperCase() === targetCode || (r.category_name || '').toUpperCase().includes(targetCode));
+    }
+    return list.sort((a, b) => b.total_qty - a.total_qty || a.part_number.localeCompare(b.part_number));
+  }, [isPmgUser, enrichedReceivedUnits, isDcStockUnit, activeReceivingSite, isUnitAddedByCurrentUser, tableSearch, categoryFilter]);
 
   const handleConfirmDeletePart = async () => {
     if (!unitToDelete) return;
@@ -1337,7 +1447,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <span className="workstation-meta-divider">•</span>
                   <span className="workstation-meta-item">
                     <Database size={13} color="#38bdf8" />
-                    <span>DC Stock: <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units</span>
+                    <span>{isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Stock:` : 'DC Stock:'} <strong style={{ color: '#38bdf8' }}>{availableInStockUnits.length}</strong> units</span>
                   </span>
                 </div>
               </div>
@@ -2087,9 +2197,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         )}
       </div>
 
-      {/* Scanned DC Inventory Units Table - Strictly DC Superadmin */}
-      {!isPmgUser && (
-        <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
+      {/* Scanned Inventory Units Table - Both Central DC Superadmin & Retail Branch PMG */}
+      <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
         {/* Table Header Controls */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2099,18 +2208,18 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h3 style={{ margin: 0, fontSize: '15.5px', color: '#0f172a', fontWeight: 700 }}>
-                  {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory History` : 'Received DC Stock & Intake History'}
+                  {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Received Stock & Inventory Table` : 'Received DC Stock & Intake History'}
                 </h3>
                 <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
                   {availableInStockUnits.length} in-stock
                 </span>
                 <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 8px' }}>
-                  {assignmentCounts.all} Total Units
+                  {isPmgUser ? `${pmgCounts.myAdded} Added by You` : `${assignmentCounts.all} Total Units`}
                 </span>
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
                 {isPmgUser
-                  ? 'All serialized units received and on-hand at your authorized retail branch'
+                  ? 'Private serial protection active: Your added parts show authentic serial numbers; other users see part numbers and quantities at designated sites.'
                   : 'Manage serialized inventory in DC and click any assignment badge to switch tags'}
               </p>
             </div>
@@ -2140,7 +2249,124 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           </div>
         </div>
 
-        {/* 1. Primary Part Assignment Tabs (Forecasting, CRBR, SVNR) */}
+        {/* 1. PMG User View Mode Tabs */}
+        {isPmgUser && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.4px', marginRight: '4px' }}>
+              Table View Mode:
+            </span>
+
+            {/* Mode 1: My Added Parts (Private View) */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setPmgViewMode('my_added')}
+              style={{
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: pmgViewMode === 'my_added' ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                background: pmgViewMode === 'my_added' ? '#0284c7' : '#ffffff',
+                color: pmgViewMode === 'my_added' ? '#ffffff' : '#334155',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: pmgViewMode === 'my_added' ? '0 1px 3px rgba(2,132,199,0.3)' : 'none'
+              }}
+            >
+              <User size={13} />
+              <span>My Added Parts (Private Serials)</span>
+              <span
+                style={{
+                  background: pmgViewMode === 'my_added' ? 'rgba(255,255,255,0.25)' : '#e0f2fe',
+                  color: pmgViewMode === 'my_added' ? '#ffffff' : '#0369a1',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {pmgCounts.myAdded}
+              </span>
+            </button>
+
+            {/* Mode 2: Designated Site Available Stock */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setPmgViewMode('site_available')}
+              style={{
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: pmgViewMode === 'site_available' ? '1px solid #059669' : '1px solid #cbd5e1',
+                background: pmgViewMode === 'site_available' ? '#059669' : '#ffffff',
+                color: pmgViewMode === 'site_available' ? '#ffffff' : '#334155',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: pmgViewMode === 'site_available' ? '0 1px 3px rgba(5,150,105,0.3)' : 'none'
+              }}
+            >
+              <Building2 size={13} />
+              <span>{activeReceivingSite?.code || 'Designated Site'} All Stock</span>
+              <span
+                style={{
+                  background: pmgViewMode === 'site_available' ? 'rgba(255,255,255,0.25)' : '#dcfce7',
+                  color: pmgViewMode === 'site_available' ? '#ffffff' : '#047857',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {pmgCounts.siteStock}
+              </span>
+            </button>
+
+            {/* Mode 3: Designated Sites Summary (Part Numbers & Quantities Only) */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setPmgViewMode('site_summary')}
+              style={{
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: pmgViewMode === 'site_summary' ? '1px solid #7c3aed' : '1px solid #cbd5e1',
+                background: pmgViewMode === 'site_summary' ? '#7c3aed' : '#ffffff',
+                color: pmgViewMode === 'site_summary' ? '#ffffff' : '#334155',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: pmgViewMode === 'site_summary' ? '0 1px 3px rgba(124,58,237,0.3)' : 'none'
+              }}
+            >
+              <Shield size={13} />
+              <span>Designated Sites Summary (P/N & Qty Only)</span>
+              <span
+                style={{
+                  background: pmgViewMode === 'site_summary' ? 'rgba(255,255,255,0.25)' : '#ede9fe',
+                  color: pmgViewMode === 'site_summary' ? '#ffffff' : '#6d28d9',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {pmgCounts.summaryKinds} P/Ns
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* 1b. Central DC Part Assignment Tabs (Superadmin Only) */}
         {!isPmgUser && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
             <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.4px', marginRight: '4px' }}>
@@ -2164,14 +2390,14 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 alignItems: 'center',
                 gap: '6px',
                 cursor: 'pointer',
-                boxShadow: assignmentFilter === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                boxShadow: assignmentFilter === 'ALL' ? '0 1px 3px rgba(15,23,42,0.2)' : 'none'
               }}
             >
-              <span>All Destinations</span>
+              <span>All Parts</span>
               <span
                 style={{
-                  background: assignmentFilter === 'ALL' ? 'rgba(255,255,255,0.22)' : '#e2e8f0',
-                  color: assignmentFilter === 'ALL' ? '#ffffff' : '#334155',
+                  background: assignmentFilter === 'ALL' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+                  color: assignmentFilter === 'ALL' ? '#ffffff' : '#0f172a',
                   padding: '1px 7px',
                   borderRadius: '10px',
                   fontSize: '11px',
@@ -2301,10 +2527,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             All Types
           </button>
           {['DISPLAY', 'BATTERY', 'CAMERA', 'BACK_GLASS', 'MID_REAR'].map(code => {
-            const countForCat = enrichedReceivedUnits.filter(u => {
-              if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
-              if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
-              if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+            const countForCat = (isPmgUser && pmgViewMode === 'site_summary' ? pmgSiteSummaryRows : displayedUnits).filter(u => {
+              if (!isPmgUser) {
+                if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
+                if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
+                if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+              }
               return u.category_code === code || u.category_name?.toUpperCase().includes(code);
             }).length;
             if (countForCat === 0 && categoryFilter !== code) return null;
@@ -2332,22 +2560,162 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               No parts currently in {isPmgUser ? (activeReceivingSite?.code || 'Branch') : 'DC'} inventory. Scan barcode or upload XLSX/CSV to receive parts.
             </p>
           </div>
+        ) : isPmgUser && pmgViewMode === 'site_summary' ? (
+          /* PMG Mode 3: Designated Sites Summary Table (Part Numbers & Quantities Only - Zero Serials) */
+          pmgSiteSummaryRows.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '28px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+              <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
+              <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                No part numbers match "{tableSearch}".
+              </p>
+            </div>
+          ) : (
+            <div className="table-container" style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+              <table className="data-table" style={{ fontSize: '12px', width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 2 }}>
+                  <tr>
+                    <th style={{ width: '40px', textAlign: 'center' }}>#</th>
+                    <th style={{ width: '130px' }}>Part Number</th>
+                    <th>Description / Model</th>
+                    <th style={{ width: '130px' }}>Category</th>
+                    <th style={{ width: '140px' }}>Designated Site</th>
+                    <th style={{ width: '120px', textAlign: 'center' }}>Your Added Qty</th>
+                    <th style={{ width: '130px', textAlign: 'center' }}>Total Available Qty</th>
+                    <th style={{ width: '110px', textAlign: 'center' }}>Privacy Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pmgSiteSummaryRows.map((row, idx) => {
+                    const catBadge = getCategoryBadgeStyle(row.category_code);
+                    return (
+                      <tr key={`${row.part_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '11px' }}>
+                          {idx + 1}
+                        </td>
+                        <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                            <span>{row.part_number}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                if (e && e.preventDefault) e.preventDefault();
+                                navigator.clipboard.writeText(row.part_number);
+                                showToast?.(`Copied ${row.part_number} to clipboard`, 'info');
+                              }}
+                              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                              title="Copy Part Number"
+                            >
+                              <Copy size={11} />
+                            </button>
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 500, color: '#1e293b' }}>{row.description}</div>
+                          {row.iphone_model && (
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>Model: <strong>{row.iphone_model}</strong></div>
+                          )}
+                        </td>
+                        <td>
+                          <span className="badge" style={{ ...catBadge, fontSize: '10px', padding: '1px 6px' }}>
+                            {row.category_name}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#f0fdf4',
+                              color: '#166534',
+                              border: '1px solid #bbf7d0',
+                              fontWeight: 600,
+                              fontSize: '11px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 7px',
+                              borderRadius: '4px'
+                            }}
+                          >
+                            <Building2 size={11} color="#16a34a" />
+                            <span>{row.site_code} Stock</span>
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            className="badge"
+                            style={{
+                              background: row.my_added_qty > 0 ? '#ecfdf5' : '#f8fafc',
+                              color: row.my_added_qty > 0 ? '#047857' : '#94a3b8',
+                              border: row.my_added_qty > 0 ? '1px solid #a7f3d0' : '1px solid #e2e8f0',
+                              fontWeight: 700,
+                              fontSize: '11.5px',
+                              padding: '2px 8px'
+                            }}
+                          >
+                            {row.my_added_qty} unit{row.my_added_qty === 1 ? '' : 's'}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            className="badge badge-success"
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: 800,
+                              padding: '3px 10px'
+                            }}
+                          >
+                            {row.total_qty} in-stock
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#f8fafc',
+                              color: '#475569',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '10px',
+                              padding: '2px 6px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px'
+                            }}
+                            title="Serial numbers hidden to preserve sensitive serial privacy across sites"
+                          >
+                            <Lock size={10} />
+                            <span>Serials Hidden</span>
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : displayedUnits.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '28px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
             <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
             <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
-              {assignmentFilter !== 'ALL'
+              {isPmgUser && pmgViewMode === 'my_added'
+                ? `You have not added any active in-stock parts at ${activeReceivingSite?.code || 'this branch'} yet.`
+                : assignmentFilter !== 'ALL'
                 ? `No available units found under "${assignmentFilter === 'MDC - Forecasting' ? 'MDC – Forecasting' : assignmentFilter === 'DC - CRBR' ? 'DC – CRBR' : 'SVNR'}".`
                 : `No available parts match "${tableSearch}".`}
             </p>
-            {(assignmentFilter !== 'ALL' || categoryFilter !== 'ALL' || tableSearch) && assignmentCounts.all > 0 && (
+            {((!isPmgUser && assignmentFilter !== 'ALL') || categoryFilter !== 'ALL' || tableSearch || (isPmgUser && pmgViewMode !== 'site_available')) && availableInStockUnits.length > 0 && (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => { setAssignmentFilter('ALL'); setCategoryFilter('ALL'); setTableSearch(''); }}
+                onClick={() => {
+                  if (!isPmgUser) setAssignmentFilter('ALL');
+                  if (isPmgUser) setPmgViewMode('site_available');
+                  setCategoryFilter('ALL');
+                  setTableSearch('');
+                }}
                 style={{ fontSize: '11px', padding: '3px 10px' }}
               >
-                View All Received Parts ({assignmentCounts.all})
+                View All {isPmgUser ? `${activeReceivingSite?.code || 'Branch'} Available Stock (${availableInStockUnits.length})` : `Received Parts (${assignmentCounts.all})`}
               </button>
             )}
           </div>
@@ -2360,9 +2728,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <th style={{ width: '110px' }}>Part Number</th>
                   <th>Description / Model</th>
                   <th style={{ width: '100px' }}>Category</th>
-                  <th style={{ width: '180px' }}>Serial Number</th>
+                  <th style={{ width: '190px' }}>Serial Number</th>
                   <th style={{ width: '160px' }}>{isPmgUser ? 'Receiving Branch' : 'Assignment (Click to switch)'}</th>
-                  <th style={{ width: '130px' }}>Intake Source</th>
+                  <th style={{ width: '140px' }}>Intake Source</th>
                   <th style={{ width: '90px' }}>Timestamp</th>
                   <th style={{ width: '80px' }}>Status</th>
                   <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
@@ -2377,6 +2745,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   const badgeColor = isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1';
                   const badgeBorder = isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
                   const badgeLabel = isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting';
+                  const isAddedBySelf = isUnitAddedByCurrentUser(unit);
 
                   return (
                     <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -2398,20 +2767,60 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         </span>
                       </td>
                       <td className="font-mono" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <span>{unit.serial_number}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              if (e && e.preventDefault) e.preventDefault();
-                              handleCopySerial(unit.serial_number);
-                            }}
-                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
-                            title="Copy Serial Number"
-                          >
-                            <Copy size={11} />
-                          </button>
-                        </div>
+                        {isPmgUser && !isAddedBySelf ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                            <span style={{ color: '#94a3b8', letterSpacing: '0.08em', fontSize: '11.5px' }}>
+                              ••••••••••••••••
+                            </span>
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#fef2f2',
+                                color: '#b91c1c',
+                                border: '1px solid #fecaca',
+                                fontSize: '10px',
+                                padding: '1px 5px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px'
+                              }}
+                              title="Protected: Serial numbers are only visible to the user who added them."
+                            >
+                              <Lock size={10} />
+                              <span>Protected</span>
+                            </span>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <span>{unit.serial_number}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                if (e && e.preventDefault) e.preventDefault();
+                                handleCopySerial(unit.serial_number);
+                              }}
+                              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                              title="Copy Serial Number"
+                            >
+                              <Copy size={11} />
+                            </button>
+                            {isPmgUser && (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#ecfdf5',
+                                  color: '#047857',
+                                  border: '1px solid #a7f3d0',
+                                  fontSize: '9.5px',
+                                  padding: '1px 5px',
+                                  fontWeight: 700
+                                }}
+                              >
+                                Added by You
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td>
                         {isPmgUser ? (
@@ -2483,6 +2892,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             Barcode Scan
                           </span>
                         )}
+                        {isPmgUser && (
+                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
+                            By: {isAddedBySelf ? 'You' : 'Branch Staff'}
+                          </div>
+                        )}
                       </td>
                       <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         {unit.received_at ? new Date(unit.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
@@ -2491,26 +2905,43 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => setUnitToDelete(unit)}
-                          style={{
-                            padding: '3px 7px',
-                            fontSize: '11px',
-                            color: '#ef4444',
-                            borderColor: '#fca5a5',
-                            background: '#fff',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            borderRadius: '4px'
-                          }}
-                          title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
-                        >
-                          <Trash2 size={12} />
-                          <span>Delete</span>
-                        </button>
+                        {isPmgUser && !isAddedBySelf ? (
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              color: '#94a3b8',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              fontStyle: 'italic'
+                            }}
+                            title="Only the user who added this unit can modify or delete it."
+                          >
+                            <Lock size={11} />
+                            <span>Restricted</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setUnitToDelete(unit)}
+                            style={{
+                              padding: '3px 7px',
+                              fontSize: '11px',
+                              color: '#ef4444',
+                              borderColor: '#fca5a5',
+                              background: '#fff',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              borderRadius: '4px'
+                            }}
+                            title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
+                          >
+                            <Trash2 size={12} />
+                            <span>Delete</span>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -2520,7 +2951,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           </div>
         )}
       </div>
-      )}
 
       {/* --- XLSX / CSV Import Modal Dialog --- */}
       {isImportModalOpen && (

@@ -427,7 +427,15 @@ export default function ForecastingReports() {
         ? parseInt(it.admin_override, 10)
         : null;
       const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
-      const computed = calculateItemForecast(it, forecastingModel);
+      const hasCounts = counts.some(c => c > 0);
+      const calculated = hasCounts ? calculateItemForecast(it, forecastingModel) : 0;
+      const computed = hasCounts
+        ? calculated
+        : (typeof it.computed_forecast === 'number'
+            ? it.computed_forecast
+            : (typeof it.final_forecast === 'number'
+                ? it.final_forecast
+                : calculated));
       const finalVal = hasOverride ? parsedOverride : computed;
       const price = getPartStockPrice(it);
 
@@ -566,7 +574,6 @@ export default function ForecastingReports() {
       });
     });
 
-    let totalAllocatedInBranchMap = 0;
     activeAllocations.forEach(alloc => {
       const siteQtys = alloc.site_quantities || {};
       const allocPrice = getPartStockPrice(alloc);
@@ -592,7 +599,6 @@ export default function ForecastingReports() {
             if (entry) {
               entry.totalUnits += qty;
               entry.totalVal += (qty * allocPrice);
-              totalAllocatedInBranchMap += qty;
               if (isBattery) entry.batteryUnits += qty;
               else if (isDisplay) entry.displayUnits += qty;
               else if (isCamera) entry.cameraUnits += qty;
@@ -602,39 +608,6 @@ export default function ForecastingReports() {
         }
       });
     });
-
-    // Fallback baseline distribution when activeAllocations is empty
-    if (totalAllocatedInBranchMap === 0 && totalRecommendedUnits > 0) {
-      const CANONICAL_SITE_WEIGHTS = {
-        'VN': 0.175, 'FESTIVAL': 0.112, 'PODIUM': 0.098, 'GL5': 0.094, 'GLS': 0.094,
-        'SMS': 0.086, 'MOA': 0.071, 'BHS': 0.062, 'NEWPOINT': 0.048, 'GB3': 0.042,
-        'CEBU': 0.038, 'DAVAO': 0.032, 'MEG': 0.030, 'TRI': 0.028, 'PPM': 0.025,
-        'ANX': 0.022, 'BACOLOD': 0.018, 'CDO': 0.016, 'GENSAN': 0.012, 'ILOILO': 0.010,
-        'LIMA': 0.008, 'NAGA': 0.006, 'LAUNION': 0.005, 'TUGUE': 0.004
-      };
-
-      const avgPrice = totalRecommendedUnits > 0 ? (totalStockValuation / totalRecommendedUnits) : 175;
-
-      serviceBranches.forEach(s => {
-        const cleanCode = (s.code || '').toUpperCase().replace(/^(SITE-|ASP-|APP-)/, '').trim();
-        let weight = 0.015;
-        for (const [k, w] of Object.entries(CANONICAL_SITE_WEIGHTS)) {
-          if (cleanCode.includes(k) || (s.name || '').toUpperCase().includes(k)) {
-            weight = w;
-            break;
-          }
-        }
-        const assignedUnits = Math.max(1, Math.round(totalRecommendedUnits * weight));
-        const entry = branchMap.get(s.id);
-        if (entry) {
-          entry.totalUnits = assignedUnits;
-          entry.totalVal = assignedUnits * avgPrice;
-          entry.batteryUnits = Math.round(assignedUnits * 0.52);
-          entry.displayUnits = Math.round(assignedUnits * 0.40);
-          entry.cameraUnits = Math.max(0, assignedUnits - entry.batteryUnits - entry.displayUnits);
-        }
-      });
-    }
 
     const siteAllocationsList = Array.from(branchMap.values())
       .sort((a, b) => b.totalUnits - a.totalUnits)
@@ -1744,7 +1717,16 @@ export default function ForecastingReports() {
                       ? parseInt(it.admin_override, 10)
                       : null;
                     const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
-                    const base = calculateItemForecast(it, forecastingModel);
+                    const rowMonthly = it.ytd_monthly_counts || [];
+                    const hasCounts = rowMonthly.some(c => Number(c) > 0);
+                    const calculated = hasCounts ? calculateItemForecast(it, forecastingModel) : 0;
+                    const base = hasCounts
+                      ? calculated
+                      : (typeof it.computed_forecast === 'number'
+                          ? it.computed_forecast
+                          : (typeof it.final_forecast === 'number'
+                              ? it.final_forecast
+                              : calculated));
                     const finalVal = hasOverride ? parsedOverride : base;
                     const price = getPartStockPrice(it);
                     const totalCost = finalVal * price;

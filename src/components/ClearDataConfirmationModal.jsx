@@ -53,7 +53,7 @@ export default function ClearDataConfirmationModal({
   const totalAllocUnits = (allocations || []).reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
   const currentPeriodLabel = activePeriod?.label || 'September 2026';
 
-  const isPhraseMatched = confirmationInput.trim() === REQUIRED_PHRASE;
+  const isPhraseMatched = confirmationInput.trim().toLowerCase() === REQUIRED_PHRASE.toLowerCase();
 
   const handleConfirm = async (e) => {
     e?.preventDefault();

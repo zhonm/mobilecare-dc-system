@@ -567,3 +567,92 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
     };
   });
 }
+
+/**
+ * Bi-directional Reconciliation: Derive forecastItems array from allocations.
+ * Guarantees that forecastItems is never empty when allocations exist.
+ */
+export function deriveForecastItemsFromAllocations(allocations = [], existingParts = []) {
+  if (!Array.isArray(allocations) || allocations.length === 0) return [];
+
+  const partsMap = new Map();
+  (existingParts || []).forEach(p => {
+    if (p.part_number) partsMap.set(p.part_number.trim().toUpperCase(), p);
+    if (p.id) partsMap.set(p.id, p);
+  });
+
+  return allocations.map((a, idx) => {
+    const cleanPn = String(a.part_number || '').trim().toUpperCase();
+    const matchedPart = partsMap.get(cleanPn) || partsMap.get(a.part_id) || {};
+    const qty = Number(
+      a.forecasted_qty ??
+      a.total_allocated_qty ??
+      a.computed_forecast ??
+      a.final_forecast ??
+      0
+    );
+    const price = Number(a.stocking_price || matchedPart.stocking_price || (isDisplayCategoryOrDesc(a) ? 279 : 99));
+    const resolvedCat = getPartCategory(a);
+    let catId = a.category_id || matchedPart.category_id;
+    if (!catId) {
+      catId = resolvedCat === 'DISPLAY' ? 'cat-display' : (resolvedCat === 'BATTERY' ? 'cat-battery' : 'cat-other');
+    }
+
+    return {
+      id: a.id || a.part_id || `fc-${cleanPn || idx}`,
+      part_id: a.part_id || matchedPart.id || a.id || `part-${cleanPn || idx}`,
+      part_number: a.part_number || matchedPart.part_number || cleanPn,
+      description: a.description || matchedPart.description || '',
+      category_id: catId,
+      stocking_price: price,
+      computed_forecast: qty,
+      final_forecast: qty,
+      admin_override: a.admin_override !== undefined ? a.admin_override : null,
+      safety_stock_units: a.safety_stock_units ?? Math.ceil(qty * 0.05),
+      recommended_order: a.recommended_order ?? (qty + Math.ceil(qty * 0.05)),
+      ytd_monthly_counts: Array.isArray(a.ytd_monthly_counts) && a.ytd_monthly_counts.length > 0
+        ? a.ytd_monthly_counts
+        : []
+    };
+  });
+}
+
+/**
+ * Autonomous Masterlist Recovery: Derive forecastItems array from masterlist data.
+ * Guarantees that if an active cycle or masterlist exists, forecasting items are fully reconstituted.
+ */
+export function deriveForecastItemsFromMasterlist(masterlistData, options = {}) {
+  if (!masterlistData) return [];
+  const partsSummary = Array.isArray(masterlistData.partsSummary)
+    ? masterlistData.partsSummary
+    : (Array.isArray(masterlistData.records) ? masterlistData.records : []);
+
+  if (partsSummary.length === 0) return [];
+
+  return partsSummary.map((p, idx) => {
+    const cleanPn = String(p.part_number || p.raw_part_number || '').trim().toUpperCase();
+    const desc = p.description || p.raw_part_description || '';
+    const categoryKey = p.category || (isDisplayCategoryOrDesc({ description: desc }) ? 'Display' : 'Battery');
+    const catId = categoryKey === 'Display' ? 'cat-display' : (categoryKey === 'Battery' ? 'cat-battery' : 'cat-other');
+    const qty = Number(p.totalUnits ?? p.units ?? p.septemberDemand ?? p.augustDemand ?? p.quantity ?? 0);
+    const price = Number(p.priceUSD ?? p.price ?? (isDisplayCategoryOrDesc({ description: desc }) ? 279 : 99));
+
+    return {
+      id: `fc-ml-${cleanPn}-${idx}`,
+      part_id: `part-ml-${cleanPn}`,
+      part_number: p.part_number || cleanPn,
+      description: desc,
+      category_id: catId,
+      stocking_price: price,
+      computed_forecast: qty,
+      final_forecast: qty,
+      admin_override: null,
+      safety_stock_units: Math.ceil(qty * 0.05),
+      recommended_order: qty + Math.ceil(qty * 0.05),
+      ytd_monthly_counts: Array.isArray(p.history)
+        ? p.history
+        : (p.monthlyBreakdown ? Object.values(p.monthlyBreakdown) : [])
+    };
+  });
+}
+

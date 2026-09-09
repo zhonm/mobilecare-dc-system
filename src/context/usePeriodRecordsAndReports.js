@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isExplicitlyCleared, canUserDeleteRecord } from '../utils/appContextHelpers';
-import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import {
+  generateAllocationsFromForecasts,
+  deriveForecastItemsFromAllocations,
+  deriveForecastItemsFromMasterlist
+} from '../utils/allocationEngine';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { getActiveMasterlist, setActiveScannedMasterlist } from '../utils/rawMasterlistScanner';
 
@@ -273,39 +277,6 @@ export function usePeriodRecordsAndReports({
       });
     }
 
-    let restoredCountDesc = [];
-    const restoredForecasts = options.restoreForecast ? (snap.forecastItems || []) : forecastItems;
-    let restoredAllocations = options.restoreAllocation ? (snap.allocations || []) : allocations;
-
-    if (options.restoreForecast && snap.forecastItems && snap.forecastItems.length > 0 && setForecastItems) {
-      setForecastItems(snap.forecastItems);
-      dbStorage.setItem('mdc_forecast', snap.forecastItems);
-      try {
-        localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems));
-      } catch (e) {}
-      restoredCountDesc.push(`${snap.forecastItems.length} forecasts`);
-    }
-
-    if (options.restoreAllocation && snap.allocations && snap.allocations.length > 0 && setAllocations) {
-      setAllocations(snap.allocations);
-      dbStorage.setItem('mdc_allocations', snap.allocations);
-      try {
-        localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
-      } catch (e) {}
-      restoredCountDesc.push(`${snap.allocations.length} allocations`);
-    } else if (options.restoreAllocation && snap.forecastItems && snap.forecastItems.length > 0 && setAllocations) {
-      const generated = generateAllocationsFromForecasts(snap.forecastItems, sites);
-      if (generated.length > 0) {
-        restoredAllocations = generated;
-        setAllocations(generated);
-        dbStorage.setItem('mdc_allocations', generated);
-        try {
-          localStorage.setItem('mdc_allocations', JSON.stringify(generated));
-        } catch (e) {}
-        restoredCountDesc.push(`${generated.length} allocations`);
-      }
-    }
-
     const MONTHS_LIST = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const pMonth = record.period_month || snap.activePeriod?.month || 8;
     const pYear = record.period_year || snap.activePeriod?.year || 2026;
@@ -329,6 +300,54 @@ export function usePeriodRecordsAndReports({
         localStorage.setItem('mdc_masterlist_data', JSON.stringify(restoredMasterlist));
       } catch (e) {}
       dbStorage.setItem('mdc_masterlist_data', restoredMasterlist);
+    }
+
+    let restoredCountDesc = [];
+    let activeRestoredForecasts = [];
+
+    if (options.restoreForecast && setForecastItems) {
+      if (snap.forecastItems && snap.forecastItems.length > 0) {
+        activeRestoredForecasts = snap.forecastItems;
+      } else if (snap.allocations && snap.allocations.length > 0) {
+        activeRestoredForecasts = deriveForecastItemsFromAllocations(snap.allocations, parts);
+      } else if (restoredMasterlist && Array.isArray(restoredMasterlist.partsSummary) && restoredMasterlist.partsSummary.length > 0) {
+        activeRestoredForecasts = deriveForecastItemsFromMasterlist(restoredMasterlist);
+      }
+
+      if (activeRestoredForecasts.length > 0) {
+        setForecastItems(activeRestoredForecasts);
+        dbStorage.setItem('mdc_forecast', activeRestoredForecasts);
+        try {
+          localStorage.setItem('mdc_forecast', JSON.stringify(activeRestoredForecasts));
+        } catch (e) {}
+        restoredCountDesc.push(`${activeRestoredForecasts.length} forecasts`);
+      }
+    }
+
+    if (options.restoreAllocation && setAllocations) {
+      if (snap.allocations && snap.allocations.length > 0) {
+        setAllocations(snap.allocations);
+        dbStorage.setItem('mdc_allocations', snap.allocations);
+        try {
+          localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
+        } catch (e) {}
+        restoredCountDesc.push(`${snap.allocations.length} allocations`);
+      } else {
+        const sourceForAlloc = activeRestoredForecasts.length > 0
+          ? activeRestoredForecasts
+          : (snap.forecastItems && snap.forecastItems.length > 0 ? snap.forecastItems : forecastItems);
+        if (sourceForAlloc && sourceForAlloc.length > 0) {
+          const generated = generateAllocationsFromForecasts(sourceForAlloc, sites);
+          if (generated.length > 0) {
+            setAllocations(generated);
+            dbStorage.setItem('mdc_allocations', generated);
+            try {
+              localStorage.setItem('mdc_allocations', JSON.stringify(generated));
+            } catch (e) {}
+            restoredCountDesc.push(`${generated.length} allocations`);
+          }
+        }
+      }
     }
 
     // Restore calculation model if preserved in snapshot

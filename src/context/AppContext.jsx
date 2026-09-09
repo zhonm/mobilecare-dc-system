@@ -209,7 +209,8 @@ export function AppProvider({ children }) {
 
   // 2. User Management Domain
   const userManagement = useUserManagement({
-    currentUser: null, // wired dynamically below
+    currentUser: null,
+    getCurrentUser: () => auth.currentUser,
     setCurrentUser: (...args) => auth.setCurrentUser(...args),
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
@@ -239,6 +240,7 @@ export function AppProvider({ children }) {
   const forecastingAndAllocation = useForecastingAndAllocation({
     parts: catalogAndSites.parts,
     sites: catalogAndSites.sites,
+    activePeriod,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)

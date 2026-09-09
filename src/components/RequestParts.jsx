@@ -87,6 +87,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   } = useApp();
 
   const isSuperadmin = currentUser?.role === 'superadmin';
+  const isPmgUser = currentUser?.role === 'parts_management';
 
   // User site resolution (Superadmin is explicitly Central DC, not retail branches)
   const userSiteObj = useMemo(() => {
@@ -853,7 +854,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     (multiSiteStockData || []).forEach(summary => {
       const siteObj = sites.find(s => s.id === summary.siteId || s.code === summary.siteCode) || {};
       const isProv = isProvincialSite(siteObj);
-      const isDc = siteObj.is_dc || siteObj.code === 'DC-MDC' || siteObj.code === 'DC';
+      const isDc = siteObj.is_dc || siteObj.code === 'DC-MDC' || siteObj.code === 'DC' || summary.siteId === 'site-dc' || summary.siteCode === 'DC-MDC' || summary.siteCode === 'DC';
+      // PMG users cannot view or access DC stocks under any circumstances
+      if (isPmgUser && isDc) return;
       const regionLabel = isDc ? 'Central DC' : (isProv ? 'Provincial' : 'Metro Manila');
       const regionKey = isDc ? 'dc' : (isProv ? 'provincial' : 'metro_manila');
 
@@ -881,12 +884,16 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     });
 
     return matches.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [allStocksSearchQuery, multiSiteStockData, sites]);
+  }, [allStocksSearchQuery, multiSiteStockData, sites, isPmgUser]);
 
   // Flattened Multi-Site Parts Rows for All Stocks Tab fallback/count
   const flattenedAllStocksRows = useMemo(() => {
     const all = [];
     (multiSiteStockData || []).forEach(siteSummary => {
+      const isDcSite = siteSummary.siteId === 'site-dc' || siteSummary.siteCode === 'DC-MDC' || siteSummary.siteCode === 'DC';
+      // PMG users cannot view or access DC stocks under any circumstances
+      if (isPmgUser && isDcSite) return;
+
       (siteSummary.parts || []).forEach(partItem => {
         if (allStocksSearchQuery.trim()) {
           const q = allStocksSearchQuery.toLowerCase().trim();
@@ -918,7 +925,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       });
     });
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin]);
+  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin, isPmgUser]);
 
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
@@ -2233,27 +2240,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                           gap: '3px',
                                           padding: '3px 8px'
                                         }}
-                                        title={row.outOfStockDays != null ? `0 units in stock for ${row.outOfStockDays} day(s). The system automatically purges parts from branch list after 3 consecutive days of 0 stock.` : "Out of stock at this branch"}
+                                        title="Out of stock at this branch. Part record remains permanently preserved in catalog."
                                       >
                                         <AlertTriangle size={11} color="#dc2626" />
                                         <span>Out of Stock</span>
                                       </span>
-                                      {row.daysUntilPurge != null && (
-                                        <span
-                                          style={{
-                                            fontSize: '10px',
-                                            color: '#ef4444',
-                                            background: '#fff1f2',
-                                            padding: '2px 5px',
-                                            borderRadius: '4px',
-                                            border: '1px solid #ffe4e6',
-                                            fontWeight: 600
-                                          }}
-                                          title="Auto-cleans from active branch view after 3 consecutive days with 0 units. You can re-add it anytime via Receive Scan-In."
-                                        >
-                                          {row.daysUntilPurge <= 0 ? 'Purging today' : `Auto-cleans in ${row.daysUntilPurge}d`}
-                                        </span>
-                                      )}
                                     </>
                                   )}
                                   <button
@@ -2794,7 +2785,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         const rowKey = `${currentActiveMultiSite.id}-${row.partNumber}-${idx}`;
                         const isExpanded = expandedPartKey === rowKey;
                         const isOwnSite = currentActiveMultiSite.id === currentUser?.siteId || currentActiveMultiSite.code === userSiteObj?.code;
-                        const canSeeFullDetails = isSuperadmin || isOwnSite;
+                        const canSeeFullDetails = isSuperadmin || (isPmgUser ? Boolean(row.canViewDetails) : isOwnSite);
 
                         return (
                           <tr key={rowKey} style={{ background: isOwnSite ? '#f8fafc' : '#ffffff' }}>
@@ -2881,11 +2872,23 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                   {isExpanded && row.serializedUnits && (
                                     <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
                                       {row.serializedUnits.map(u => {
-                                        const canManageUnit = isSuperadmin || isOwnSite || (currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
+                                        const isAddedByCurUser = isSuperadmin || Boolean(currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
+                                        const canManageUnit = isSuperadmin || (!isPmgUser && isOwnSite) || isAddedByCurUser;
+                                        const isMaskedUnit = u.isMasked || (isPmgUser && !isAddedByCurUser);
+
                                         return (
                                           <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
+                                              {isMaskedUnit ? (
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                  <span style={{ fontFamily: 'var(--font-mono)', color: '#94a3b8', fontSize: '11px', letterSpacing: '0.04em' }}>••••••••••••••••</span>
+                                                  <span className="badge" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontSize: '9px', padding: '1px 4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                                    <Lock size={9} /> Protected
+                                                  </span>
+                                                </span>
+                                              ) : (
+                                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
+                                              )}
                                               <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
                                               {u.work_order_number && (
                                                 <span style={{ color: '#0284c7', background: '#e0f2fe', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>
@@ -2894,7 +2897,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                               )}
                                               {u.notes && <span style={{ color: '#64748b', fontStyle: 'italic' }}>({u.notes})</span>}
                                             </div>
-                                            {canManageUnit && !u.isMasked && (
+                                            {canManageUnit && !isMaskedUnit && (
                                               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                 <button
                                                   type="button"
@@ -2928,7 +2931,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
                                   <Lock size={13} color="#94a3b8" />
                                   <span style={{ fontStyle: 'italic' }}>
-                                    Serials restricted to {currentActiveMultiSite.code} authorized staff
+                                    {isPmgUser
+                                      ? 'Serial numbers protected (only visible to the user who added them)'
+                                      : `Serials restricted to ${currentActiveMultiSite.code} authorized staff`}
                                   </span>
                                 </div>
                               )}

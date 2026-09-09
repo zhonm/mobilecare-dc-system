@@ -2,7 +2,6 @@ import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
 import { safeUUID } from '../utils/appContextHelpers.js';
 import { unmarkDeletedIntakeIds, unmarkDeletedSerials, registerDeletedIntakeId } from './deletionRegistryService.js';
-import { LIVE_MASTER_RECORD_ID } from '../constants/config.js';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue.js';
 
 export const generateNextIntakeRecordId = (targetDate = new Date(), dcIntakeRecords = []) => {
@@ -99,18 +98,6 @@ export const executeSaveIntakeRecord = async ({
   if (supabase) {
     setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
     try {
-      queuedSavedRecordsUpsert({
-        id: LIVE_MASTER_RECORD_ID,
-        record_type: 'both',
-        period_label: 'Master Operational Data',
-        period_year: new Date().getFullYear(),
-        period_month: new Date().getMonth() + 1,
-        notes: 'Active live warehouse operational state',
-        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-        snapshot_data: { isCleared: false },
-        updated_at: new Date().toISOString()
-      }, { debounceMs: 1200 });
-
       // Channel 1: Upsert to direct dc_intake_records table
       try {
         const directRow = {

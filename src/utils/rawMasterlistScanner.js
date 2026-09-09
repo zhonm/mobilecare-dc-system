@@ -404,6 +404,7 @@ export function isPeriodMatching(datasetPeriodLabel, targetPeriod) {
  * 4. Authoritative baseline seed for targetPeriod (August 2026: 6,383 units | September 2026: 7,611 units)
  */
 export function getActiveMasterlist(customData = null, targetPeriod = null) {
+  if (isMasterlistCleared()) return null;
   let period = targetPeriod;
   if (!period && typeof window !== 'undefined') {
     try {

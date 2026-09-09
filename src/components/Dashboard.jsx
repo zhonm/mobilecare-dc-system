@@ -697,14 +697,11 @@ export default function Dashboard() {
               <AlertTriangle size={20} />
             </div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#92400e', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>DC Aging Alert: {agingUnits.length} Part{agingUnits.length > 1 ? 's' : ''} Stagnant in DC Warehouse for ≥ 4 Days</span>
-                <span className="badge" style={{ background: '#f59e0b', color: '#fff', fontSize: '11px', fontWeight: 700 }}>
-                  Priority Dispatch
-                </span>
+              <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#92400e', display: 'flex', alignItems: 'center' }}>
+                <span>DC Aging Alert: {agingUnits.length} Part{agingUnits.length > 1 ? 's' : ''} in DC Warehouse for ≥ 4 Days</span>
               </div>
-              <div style={{ fontSize: '12px', color: '#b45309', marginTop: '2px' }}>
-                These parts have exceeded the 4-day retention threshold. Please pack and dispatch them for site delivery.
+              <div style={{ fontSize: '12px', color: '#b45309', marginTop: '3px' }}>
+                <strong>Operational Visibility Notice:</strong> These parts have been on-hand in DC for 4 or more days. All inventory records remain 100% permanent, safe, and intact (no parts are ever deleted by the system). Please pack and dispatch them for site delivery as needed.
               </div>
             </div>
           </div>
@@ -761,7 +758,7 @@ export default function Dashboard() {
             {availableInStockUnits.length === 0 ? (
               <span style={{ color: '#047857', fontWeight: 600 }}>Clean Pipeline (0 in DC)</span>
             ) : agingUnits.length > 0 ? (
-              <span style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Operational awareness alert only: All parts records remain 100% permanent and intact.">
                 <Clock size={12} /> {agingUnits.length} Aging (≥4d in DC) • {freshUnits.length} Fresh
               </span>
             ) : (
@@ -2136,7 +2133,7 @@ export default function Dashboard() {
               </span>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-              Aggregated stock counts by part SKU currently available in Distribution Center with 4-day retention tracking
+              Aggregated stock counts by part SKU currently available in Distribution Center with aging visibility tracking (all inventory records remain 100% permanent and intact)
             </p>
           </div>
 
@@ -2306,7 +2303,7 @@ export default function Dashboard() {
                             whiteSpace: 'nowrap'
                           }}
                         >
-                          <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging)
+                          <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging Notice)
                         </span>
                       ) : (
                         <span

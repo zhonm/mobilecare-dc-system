@@ -181,17 +181,6 @@ export function useAuth({
             return;
           }
 
-          // If Supabase is connected, verify we have an active backend session before trusting stale local storage
-          if (supabase) {
-            const { data: sessionData } = await supabase.auth.getSession();
-            if (!sessionData?.session?.user) {
-              // Stale unauthenticated session; clear and require fresh login
-              clearStoredUserSession();
-              await dbStorage.removeItem('mdc_current_user');
-              setCurrentUser(null);
-              return;
-            }
-          }
           if (dbUser.role === 'parts_management') {
             dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
           }
@@ -243,22 +232,41 @@ export function useAuth({
           (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
         );
 
-        // Security Guard 1: If usersList is populated and current user is NOT in the list, they have been deleted!
-        if (!match || match.isDeleted === true) {
+        // Security Guard 1: If current user is explicitly deleted, sign out
+        if (match && match.isDeleted === true) {
           signOut();
           showToast('Your account is no longer registered. You have been signed out.', 'warning');
           return;
         }
 
         // Security Guard 2: If user was deactivated
-        if (match.isActive === false) {
+        if (match && match.isActive === false) {
           signOut();
           showToast('Your account has been deactivated. You have been signed out.', 'warning');
           return;
         }
 
-        // Security Guard 3: If user has not created a password or is pending password creation, they cannot have an active session!
-        if (match.hasSetPassword === false || !match.hasSetPassword) {
+        // Security Guard 3: If user is missing from usersList, PRESERVE them in usersList rather than signing out!
+        if (!match) {
+          setUsersList(prev => {
+            const exists = (prev || []).some(u =>
+              (currentUser.id && u.id?.toLowerCase() === currentUser.id.toLowerCase()) ||
+              (u.email && currentUser.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+            );
+            if (exists) return prev;
+            const next = [...(prev || []), currentUser];
+            try {
+              localStorage.setItem('mdc_users', JSON.stringify(next));
+              sessionStorage.setItem('mdc_users', JSON.stringify(next));
+              dbStorage.setItem('mdc_users', next);
+            } catch (e) {}
+            return next;
+          });
+          return;
+        }
+
+        // Security Guard 4: If neither currentUser nor match has a password set, require password setup
+        if (currentUser.hasSetPassword === false && (match.hasSetPassword === false || !match.hasSetPassword)) {
           signOut();
           if (setPendingFirstTimeUser) setPendingFirstTimeUser(match);
           showToast('Password creation pending: Please set your password before logging in.', 'info');
@@ -862,16 +870,29 @@ export function useAuth({
     // Update profiles directly in Supabase PostgreSQL
     if (supabase) {
       try {
-        await supabase
-          .from('profiles')
-          .update({
-            has_set_password: true,
-            password_hash: secureHash,
-            is_deleted: false,
-            is_active: true,
-            updated_at: new Date().toISOString()
-          })
-          .ilike('email', cleanEmail);
+        const passUpdateQuery = (user.id && isUUID(user.id))
+          ? supabase
+              .from('profiles')
+              .update({
+                has_set_password: true,
+                password_hash: secureHash,
+                is_deleted: false,
+                is_active: true,
+                updated_at: new Date().toISOString()
+              })
+              .or(`id.eq.${user.id},email.ilike.${cleanEmail}`)
+          : supabase
+              .from('profiles')
+              .update({
+                has_set_password: true,
+                password_hash: secureHash,
+                is_deleted: false,
+                is_active: true,
+                updated_at: new Date().toISOString()
+              })
+              .ilike('email', cleanEmail);
+
+        await passUpdateQuery;
       } catch (e) {
         console.warn('Supabase password hash profile update error:', e.message);
       }

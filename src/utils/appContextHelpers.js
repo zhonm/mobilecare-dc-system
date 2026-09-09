@@ -246,13 +246,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
 // Check if system master data has been explicitly cleared to empty slate
 export const isExplicitlyCleared = () => {
   try {
-    const isClearedFlag = localStorage.getItem('mdc_is_cleared') === 'true';
-    if (!isClearedFlag) return false;
-    const savedIntakes = localStorage.getItem('mdc_dc_intake_records');
-    if (savedIntakes && JSON.parse(savedIntakes).length > 0) return false;
-    const savedInv = localStorage.getItem('mdc_inventory');
-    if (savedInv && JSON.parse(savedInv).length > 0) return false;
-    return true;
+    return localStorage.getItem('mdc_is_cleared') === 'true';
   } catch {
     return false;
   }

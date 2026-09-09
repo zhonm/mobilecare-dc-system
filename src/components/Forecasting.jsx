@@ -130,7 +130,15 @@ export default function Forecasting() {
         : null;
       // An override is active if the user explicitly provided an admin override value
       const hasOverride = parsedOverride !== null && !isNaN(parsedOverride);
-      const computed = calculateItemForecast(item, forecastingModel);
+      const hasCounts = counts.some(c => c > 0);
+      const calculated = hasCounts ? calculateItemForecast(item, forecastingModel) : 0;
+      const computed = hasCounts
+        ? calculated
+        : (typeof item.computed_forecast === 'number'
+            ? item.computed_forecast
+            : (typeof item.final_forecast === 'number'
+                ? item.final_forecast
+                : calculated));
       const finalVal = hasOverride ? parsedOverride : computed;
       const trendMetrics = calculateForecastTrendMetrics(counts);
       const stockPrice = getStockPrice(item);

@@ -17,11 +17,16 @@ import {
   normalizeDateToIso,
   generateAppleSerialNumber,
   consolidatePurchaseOrdersList,
-  consolidateDcIntakeRecordsList
+  consolidateDcIntakeRecordsList,
+  isExplicitlyCleared
 } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
-import { generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import {
+  generateAllocationsFromForecasts,
+  deriveForecastItemsFromAllocations,
+  deriveForecastItemsFromMasterlist
+} from '../utils/allocationEngine';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
@@ -531,9 +536,36 @@ export function useCloudSync({
               !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
               !LEGACY_MOCK_IDS.includes(u.id)
             ) {
-              profileMap.set(cleanEmail, { ...(profileMap.get(cleanEmail) || {}), ...u });
+              const existing = profileMap.get(cleanEmail) || {};
+              profileMap.set(cleanEmail, {
+                ...existing,
+                ...u,
+                hasSetPassword: Boolean(u.hasSetPassword || existing.hasSetPassword || u.passwordHash || existing.passwordHash),
+                passwordHash: u.passwordHash || existing.passwordHash || null
+              });
             }
           });
+
+          // 4. Ensure currentUser is preserved in profileMap if not in mergedDeletedUserIds
+          if (currentUser && currentUser.email) {
+            const cleanCurEmail = currentUser.email.toLowerCase();
+            const cleanCurId = currentUser.id?.toLowerCase();
+            const isUserExplicitlyDeleted = mergedDeletedUserIds.includes(cleanCurEmail) ||
+              (cleanCurId && mergedDeletedUserIds.includes(cleanCurId));
+
+            if (!isUserExplicitlyDeleted) {
+              const existingInMap = profileMap.get(cleanCurEmail);
+              if (!existingInMap) {
+                profileMap.set(cleanCurEmail, currentUser);
+              } else if (currentUser.hasSetPassword && !existingInMap.hasSetPassword) {
+                profileMap.set(cleanCurEmail, {
+                  ...existingInMap,
+                  hasSetPassword: true,
+                  passwordHash: currentUser.passwordHash || existingInMap.passwordHash
+                });
+              }
+            }
+          }
 
           // Strict final filter and deterministic sort to ensure no deleted user id or email leaks through and list never shuffles
           const merged = sortUsersDeterministically(
@@ -550,17 +582,20 @@ export function useCloudSync({
             const isDeleted = mergedDeletedUserIds.includes(cleanCurEmail) ||
               (cleanCurId && mergedDeletedUserIds.includes(cleanCurId));
 
-            const freshCurrent = merged.find(u =>
+            let freshCurrent = merged.find(u =>
               u.email?.toLowerCase() === cleanCurEmail ||
               (cleanCurId && u.id?.toLowerCase() === cleanCurId)
             );
 
-            if (isDeleted || !freshCurrent || freshCurrent.isActive === false || freshCurrent.hasSetPassword === false) {
+            // If user is explicitly deleted, or deactivated by admin, or neither session nor cloud has set a password
+            const isDeactivated = freshCurrent && freshCurrent.isActive === false;
+            const isPendingPassword = currentUser.hasSetPassword === false && (!freshCurrent || freshCurrent.hasSetPassword === false);
+
+            if (isDeleted || isDeactivated || isPendingPassword) {
               console.warn('[Security Guard] Active session invalidated on cloud sync:', {
                 isDeleted,
-                exists: Boolean(freshCurrent),
-                isActive: freshCurrent?.isActive,
-                hasSetPassword: freshCurrent?.hasSetPassword
+                isDeactivated,
+                isPendingPassword
               });
 
               clearStoredUserSession();
@@ -571,21 +606,21 @@ export function useCloudSync({
               if (setCurrentUser) {
                 setCurrentUser(null);
               }
-              if (freshCurrent && freshCurrent.hasSetPassword === false && setPendingFirstTimeUser) {
+              if (isPendingPassword && freshCurrent && setPendingFirstTimeUser) {
                 setPendingFirstTimeUser(freshCurrent);
               }
               if (showToast) {
                 showToast(
-                  isDeleted || !freshCurrent
+                  isDeleted
                     ? 'Your account was removed by an administrator. You have been signed out.'
-                    : freshCurrent.isActive === false
+                    : isDeactivated
                       ? 'Your account was deactivated. You have been signed out.'
                       : 'Password configuration required before system access.',
                   'warning'
                 );
               }
-            } else if (freshCurrent && (freshCurrent.siteId !== currentUser.siteId || freshCurrent.role !== currentUser.role || freshCurrent.rolePosition !== currentUser.rolePosition)) {
-              const updatedSession = { ...currentUser, ...freshCurrent };
+            } else if (freshCurrent && (freshCurrent.siteId !== currentUser.siteId || freshCurrent.role !== currentUser.role || freshCurrent.rolePosition !== currentUser.rolePosition || (!currentUser.hasSetPassword && freshCurrent.hasSetPassword))) {
+              const updatedSession = { ...currentUser, ...freshCurrent, hasSetPassword: Boolean(currentUser.hasSetPassword || freshCurrent.hasSetPassword) };
               if (setCurrentUser) setCurrentUser(updatedSession);
               try {
                 localStorage.setItem('mdc_current_user', JSON.stringify(updatedSession));
@@ -754,7 +789,20 @@ export function useCloudSync({
                   dbStorage.setItem('mdc_forecasting_model', incomingModel);
                 }
               }
-              if (snap.forecastItems && snap.forecastItems.length > 0) {
+              const masterlistRegistryDoc = dbSavedRecords.find(r => r.id === 'master_masterlist_data_registry');
+              const cloudMasterlist = masterlistRegistryDoc?.snapshot_data?.masterlistData || snap.masterlistData;
+              const targetPeriodToMatch = cloudPeriod || (typeof activePeriod === 'object' ? activePeriod : null);
+              const resolvedMasterlist = getActiveMasterlist(cloudMasterlist, targetPeriodToMatch);
+
+              if (resolvedMasterlist && setMasterlistData) {
+                setMasterlistData(resolvedMasterlist);
+                setActiveScannedMasterlist(resolvedMasterlist);
+                try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(resolvedMasterlist)); } catch (e) {}
+                dbStorage.setItem('mdc_masterlist_data', resolvedMasterlist);
+              }
+
+              // Case 1: Snapshot has forecastItems
+              if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
                 setForecastItems(snap.forecastItems);
                 try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
                 dbStorage.setItem('mdc_forecast', snap.forecastItems);
@@ -766,22 +814,31 @@ export function useCloudSync({
                 setAllocations(restoredAlloc);
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(restoredAlloc)); } catch (e) {}
                 dbStorage.setItem('mdc_allocations', restoredAlloc);
-              } else if (snap.allocations && snap.allocations.length > 0) {
+              }
+              // Case 2: Snapshot has allocations but missing/empty forecastItems -> Derive forecastItems!
+              else if (Array.isArray(snap.allocations) && snap.allocations.length > 0) {
+                const derivedForecast = deriveForecastItemsFromAllocations(snap.allocations, parts);
+                setForecastItems(derivedForecast);
+                try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
+                dbStorage.setItem('mdc_forecast', derivedForecast);
+
                 setAllocations(snap.allocations);
                 try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
                 dbStorage.setItem('mdc_allocations', snap.allocations);
               }
+              // Case 3: Snapshot has neither forecast nor allocations, but active masterlist exists for period -> Reconstitute from masterlist!
+              else if (resolvedMasterlist && Array.isArray(resolvedMasterlist.partsSummary) && resolvedMasterlist.partsSummary.length > 0) {
+                const derivedForecast = deriveForecastItemsFromMasterlist(resolvedMasterlist);
+                if (derivedForecast.length > 0) {
+                  setForecastItems(derivedForecast);
+                  try { localStorage.setItem('mdc_forecast', JSON.stringify(derivedForecast)); } catch (e) {}
+                  dbStorage.setItem('mdc_forecast', derivedForecast);
 
-              const masterlistRegistryDoc = dbSavedRecords.find(r => r.id === 'master_masterlist_data_registry');
-              const cloudMasterlist = masterlistRegistryDoc?.snapshot_data?.masterlistData || snap.masterlistData;
-              const targetPeriodToMatch = cloudPeriod || (typeof activePeriod === 'object' ? activePeriod : null);
-              const resolvedMasterlist = getActiveMasterlist(cloudMasterlist, targetPeriodToMatch);
-
-              if (resolvedMasterlist && setMasterlistData) {
-                setMasterlistData(resolvedMasterlist);
-                setActiveScannedMasterlist(resolvedMasterlist);
-                try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(resolvedMasterlist)); } catch (e) {}
-                dbStorage.setItem('mdc_masterlist_data', resolvedMasterlist);
+                  const restoredAlloc = generateAllocationsFromForecasts(derivedForecast, sites, snap.forecastingModel || 'linear');
+                  setAllocations(restoredAlloc);
+                  try { localStorage.setItem('mdc_allocations', JSON.stringify(restoredAlloc)); } catch (e) {}
+                  dbStorage.setItem('mdc_allocations', restoredAlloc);
+                }
               }
             }
           }
@@ -2627,19 +2684,40 @@ export function useCloudSync({
       return { success: false };
     }
 
-    const currentForecast = overrideData?.forecastItems || forecastItems;
-    const currentAllocs = overrideData?.allocations || allocations;
+    let currentForecast = overrideData?.forecastItems || forecastItems;
+    let currentAllocs = overrideData?.allocations || allocations;
     const currentParts = overrideData?.parts || parts;
     const currentSites = overrideData?.sites || sites;
     const currentUploadLogs = overrideData?.uploadAuditLogs || uploadAuditLogs;
     const currentDeletionLogs = overrideData?.deletionAuditLogs || deletionAuditLogs;
     const currentMasterlistData = overrideData?.masterlistData || masterlistData;
+    const currentActivePeriod = overrideData?.activePeriod || activePeriod || { month: 9, year: 2026, label: 'September 2026' };
+    const currentForecastingModel = overrideData?.forecastingModel || _forecastingModel || 'linear';
+
+    // Safeguards for active cycles (only when NOT explicitly cleared)
+    if (!isExplicitlyCleared()) {
+      // Safeguard 1: If currentForecast is empty but currentAllocs has items, derive currentForecast
+      if ((!currentForecast || currentForecast.length === 0) && currentAllocs && currentAllocs.length > 0) {
+        currentForecast = deriveForecastItemsFromAllocations(currentAllocs, currentParts);
+      }
+      // Safeguard 2: If currentAllocs is empty but currentForecast has items, generate currentAllocs
+      if ((!currentAllocs || currentAllocs.length === 0) && currentForecast && currentForecast.length > 0 && currentSites && currentSites.length > 0) {
+        currentAllocs = generateAllocationsFromForecasts(currentForecast, currentSites, _forecastingModel || 'linear');
+      }
+      // Safeguard 3: If both are empty and masterlistData exists, derive from masterlistData
+      if ((!currentForecast || currentForecast.length === 0) && (!currentAllocs || currentAllocs.length === 0) && currentMasterlistData) {
+        currentForecast = deriveForecastItemsFromMasterlist(currentMasterlistData);
+        if (currentForecast.length > 0 && currentSites && currentSites.length > 0) {
+          currentAllocs = generateAllocationsFromForecasts(currentForecast, currentSites, _forecastingModel || 'linear');
+        }
+      }
+    }
 
     try {
       showToast('Syncing master data to Supabase cloud...', 'info');
 
       try {
-        const resolvedActivePeriod = activePeriod || { month: 9, year: 2026, label: 'September 2026' };
+        const resolvedActivePeriod = currentActivePeriod;
         const liveSnapshotPayload = {
           id: LIVE_MASTER_RECORD_ID,
           record_type: 'both',
@@ -2650,11 +2728,11 @@ export function useCloudSync({
           saved_by_user_id: null,
           notes: 'Real-time multi-user synchronized Distribution Center state',
           snapshot_data: {
-            isCleared: false,
+            isCleared: isExplicitlyCleared(),
             activePeriod: resolvedActivePeriod,
-            forecastingModel: _forecastingModel || 'linear',
-            forecastItems: currentForecast || [],
-            allocations: currentAllocs || [],
+            forecastingModel: currentForecastingModel,
+            forecastItems: isExplicitlyCleared() ? [] : (currentForecast || []),
+            allocations: isExplicitlyCleared() ? [] : (currentAllocs || []),
             parts: currentParts || [],
             sites: currentSites || [],
             masterlistSummary: currentMasterlistData ? {
@@ -2898,6 +2976,7 @@ export function useCloudSync({
     dbStorage.setItem('mdc_upload_audit_logs', []);
     dbStorage.setItem('mdc_stock_transfer_reports', []);
     dbStorage.setItem('mdc_stock_transfer_metadata', null);
+    dbStorage.setItem('mdc_dc_intake_records', []);
 
     try {
       localStorage.setItem('mdc_is_cleared', 'true');
@@ -2913,6 +2992,7 @@ export function useCloudSync({
       localStorage.removeItem('mdc_stock_transfer_metadata');
       localStorage.setItem('mdc_upload_audit_logs', '[]');
       localStorage.removeItem('mdc_masterlist_data');
+      localStorage.setItem('mdc_dc_intake_records', '[]');
     } catch (e) {
       console.warn('LocalStorage clear error:', e);
     }
@@ -2929,48 +3009,68 @@ export function useCloudSync({
     setScanLogs([]);
     setRepairUsageRecords([]);
     setUploadAuditLogs([]);
+    if (setDcIntakeRecords) setDcIntakeRecords([]);
 
-    if (logDeletionAudit) {
-      await logDeletionAudit({
-        entityType: 'System State Reset',
-        entityId: 'ALL_OPERATIONAL_DATA',
-        entityLabel: 'Clear System to Fresh Empty State',
-        summary: {
-          action: 'CLEARED_ALL_DATA',
-          securityPhrase: 'Delete Data',
-          securityPhraseVerified: Boolean(securityPhraseVerified),
-          previousForecastCount: forecastItems?.length || 0,
-          previousAllocCount: allocations?.length || 0,
-          previousInventoryCount: inventoryUnits?.length || 0,
-          clearedBy: currentUser?.fullName || 'Superadmin User',
-          clearedByEmail: currentUser?.email || '',
-          clearedByRole: currentUser?.role || 'admin',
-          clearedAt: new Date().toISOString()
-        },
-        reason
-      });
+    try {
+      if (logDeletionAudit) {
+        await logDeletionAudit({
+          entityType: 'System State Reset',
+          entityId: 'ALL_OPERATIONAL_DATA',
+          entityLabel: 'Clear System to Fresh Empty State',
+          summary: {
+            action: 'CLEARED_ALL_DATA',
+            securityPhrase: 'Delete Data',
+            securityPhraseVerified: Boolean(securityPhraseVerified),
+            previousForecastCount: forecastItems?.length || 0,
+            previousAllocCount: allocations?.length || 0,
+            previousInventoryCount: inventoryUnits?.length || 0,
+            clearedBy: currentUser?.fullName || 'Superadmin User',
+            clearedByEmail: currentUser?.email || '',
+            clearedByRole: currentUser?.role || 'admin',
+            clearedAt: new Date().toISOString()
+          },
+          reason
+        });
+      }
+    } catch (auditErr) {
+      console.warn('logDeletionAudit error:', auditErr);
+    }
+
+    const clearedSnapshot = {
+      id: LIVE_MASTER_RECORD_ID,
+      record_type: 'both',
+      period_label: 'Cleared Empty State',
+      period_year: new Date().getFullYear(),
+      period_month: new Date().getMonth() + 1,
+      notes: 'Master operational data cleared by user',
+      saved_by_name: currentUser?.fullName || 'Parts Management Specialist',
+      snapshot_data: {
+        isCleared: true,
+        forecastItems: [],
+        allocations: [],
+        uploadAuditLogs: [],
+        deletionAuditLogs: deletionAuditLogs || []
+      },
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      dbStorage.putSavedRecord(clearedSnapshot);
+      dbStorage.deleteSavedRecord('master_masterlist_data_registry');
+      if (setSavedRecords) {
+        setSavedRecords(prev => {
+          const next = (prev || []).filter(r => r.id !== LIVE_MASTER_RECORD_ID && r.id !== 'master_masterlist_data_registry');
+          return [clearedSnapshot, ...next];
+        });
+      }
+    } catch (localStoreErr) {
+      console.warn('Local saved records store error:', localStoreErr);
     }
 
     if (supabase) {
       setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        await supabase.from('saved_records').upsert({
-          id: LIVE_MASTER_RECORD_ID,
-          record_type: 'both',
-          period_label: 'Cleared Empty State',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          notes: 'Master operational data cleared by user',
-          saved_by_name: currentUser?.fullName || 'Parts Management Specialist',
-          snapshot_data: {
-            isCleared: true,
-            forecastItems: [],
-            allocations: [],
-            uploadAuditLogs: uploadAuditLogs || [],
-            deletionAuditLogs: deletionAuditLogs || []
-          },
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        await supabase.from('saved_records').upsert(clearedSnapshot, { onConflict: 'id' });
 
         await supabase.from('saved_records').upsert({
           id: 'live_master_dc_inventory',
@@ -2990,6 +3090,7 @@ export function useCloudSync({
         try { await supabase.from('allocation_entries').delete().neq('part_id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('repair_usage_records').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('saved_records').delete().eq('id', 'master_masterlist_data_registry'); } catch (e) {}
+        try { await supabase.from('saved_records').delete().eq('id', 'master_upload_audit_logs_registry'); } catch (e) {}
 
         setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         broadcastCloudEvent('MASTER_DATA_CLEARED', { timestamp: new Date().toISOString() });
@@ -3069,6 +3170,9 @@ export function useCloudSync({
       dbStorage.setItem('mdc_upload_audit_logs', updatedAuditLogs);
       try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(updatedAuditLogs)); } catch (e) {}
 
+      let appliedForecastItems = null;
+      let appliedAllocations = null;
+
       if (type === 'WORKBOOK_BUNDLE') {
         if (payload.sites && payload.sites.length > 0) {
           setSites(payload.sites);
@@ -3089,6 +3193,8 @@ export function useCloudSync({
             return merged;
           });
         }
+        appliedForecastItems = payload.forecastItems || [];
+        appliedAllocations = payload.allocations || [];
         if (payload.forecastItems && payload.forecastItems.length > 0) {
           setForecastItems(payload.forecastItems);
           dbStorage.setItem('mdc_forecast', payload.forecastItems);
@@ -3128,6 +3234,9 @@ export function useCloudSync({
         setAllocations(newAllocations);
         dbStorage.setItem('mdc_allocations', newAllocations);
         try { localStorage.setItem('mdc_allocations', JSON.stringify(newAllocations)); } catch (e) {}
+
+        appliedForecastItems = newForecasts;
+        appliedAllocations = newAllocations;
 
         showToast(`Dynamic forecast matrix updated with ${newForecasts.length} parts and ${newAllocations.length} branch allocations!`, 'success');
         if (setActiveTab) setActiveTab('forecast');
@@ -3175,6 +3284,9 @@ export function useCloudSync({
         setForecastItems(newForecastItems);
         dbStorage.setItem('mdc_forecast', newForecastItems);
         try { localStorage.setItem('mdc_forecast', JSON.stringify(newForecastItems)); } catch (e) {}
+
+        appliedForecastItems = newForecastItems;
+        appliedAllocations = newAllocations;
 
         showToast(`Dynamic Master Allocation updated with ${newAllocations.length} parts from "${sheetName}"!`, 'success');
         if (setActiveTab) setActiveTab('allocation');
@@ -3270,16 +3382,19 @@ export function useCloudSync({
           try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(scannedMasterlist)); } catch (e) {}
         }
 
+        appliedForecastItems = finalForecastItems;
+        appliedAllocations = (payload.allocations && payload.allocations.length > 0)
+          ? payload.allocations
+          : generateAllocationsFromForecasts(finalForecastItems, payload.sites || sites);
+
         if (finalForecastItems.length > 0) {
           setForecastItems(finalForecastItems);
           dbStorage.setItem('mdc_forecast', finalForecastItems);
           try { localStorage.setItem('mdc_forecast', JSON.stringify(finalForecastItems)); } catch (e) {}
         }
-        if (payload.allocations && payload.allocations.length > 0) {
-          setAllocations(payload.allocations);
-          dbStorage.setItem('mdc_allocations', payload.allocations);
-          try { localStorage.setItem('mdc_allocations', JSON.stringify(payload.allocations)); } catch (e) {}
-        }
+        setAllocations(appliedAllocations);
+        dbStorage.setItem('mdc_allocations', appliedAllocations);
+        try { localStorage.setItem('mdc_allocations', JSON.stringify(appliedAllocations)); } catch (e) {}
         showToast(`Masterlist ingested! Recomputed ${finalForecastItems.length} forecasts and ${payload.allocations?.length || 0} allocations across all ${payload.sites?.length || 27} branches!`, 'success');
         if (setActiveTab) setActiveTab('allocation');
       } else if (type === 'USAGE_RECORDS') {
@@ -3291,12 +3406,22 @@ export function useCloudSync({
         showToast(`Imported ${payload.records?.length || 0} raw repair usage records!`, 'success');
       }
 
+      const resolvedForecastsToSync = (appliedForecastItems && appliedForecastItems.length > 0)
+        ? appliedForecastItems
+        : (forecastItems && forecastItems.length > 0 ? forecastItems : (appliedAllocations ? deriveForecastItemsFromAllocations(appliedAllocations, parts) : []));
+
+      const resolvedAllocationsToSync = (appliedAllocations && appliedAllocations.length > 0)
+        ? appliedAllocations
+        : (allocations && allocations.length > 0 ? allocations : (resolvedForecastsToSync ? generateAllocationsFromForecasts(resolvedForecastsToSync, sites) : []));
+
       const fullSyncSnapshot = {
-        forecastItems: payload.forecastItems || forecastItems,
-        allocations: payload.allocations || allocations,
+        forecastItems: resolvedForecastsToSync,
+        allocations: resolvedAllocationsToSync,
         parts: payload.parts || parts,
         sites: payload.sites || sites,
         masterlistData: scannedMasterlist || masterlistData || null,
+        activePeriod: newPeriod,
+        forecastingModel: _forecastingModel || 'linear',
         uploadAuditLogs: updatedAuditLogs,
         deletionAuditLogs: deletionAuditLogs || []
       };

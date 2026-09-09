@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
-import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export function useIntakeRecords({
@@ -184,22 +183,6 @@ export function useIntakeRecords({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        try {
-          await queuedSavedRecordsUpsert(supabase, {
-            id: LIVE_MASTER_RECORD_ID,
-            record_type: 'both',
-            period_label: 'Master Operational Data',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            notes: 'Active live warehouse operational state',
-            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-            snapshot_data: {
-              isCleared: false
-            },
-            updated_at: new Date().toISOString()
-          }, { debounceMs: 1200 });
-        } catch (e) {}
-
         try {
           const directRow = {
             id: String(newRecord.id),

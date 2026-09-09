@@ -1,7 +1,6 @@
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { unmarkDeletedSerials } from './deletionRegistryService';
-import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { getPartCategory } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
@@ -73,18 +72,6 @@ export const executeSaveUnitsToSupabase = async ({
       notes: 'Master operational serialized inventory snapshot synchronized across all users',
       saved_by_name: currentUser?.fullName || 'Warehouse Staff',
       snapshot_data: { units },
-      updated_at: new Date().toISOString()
-    }, { debounceMs: 1200 });
-
-    queuedSavedRecordsUpsert({
-      id: LIVE_MASTER_RECORD_ID,
-      record_type: 'both',
-      period_label: 'Master Operational Data',
-      period_year: new Date().getFullYear(),
-      period_month: new Date().getMonth() + 1,
-      notes: 'Active live warehouse operational state',
-      saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-      snapshot_data: { isCleared: false },
       updated_at: new Date().toISOString()
     }, { debounceMs: 1200 });
 

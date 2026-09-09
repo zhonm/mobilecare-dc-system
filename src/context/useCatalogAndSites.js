@@ -211,6 +211,12 @@ export function useCatalogAndSites({
   }, [categories, parts]);
 
   const savePart = async (partData) => {
+    if (!['superadmin', 'admin'].includes(currentUser?.role)) {
+      showToast('Permission denied: Only Superadmin or Admin can modify the parts catalog.', 'error');
+      return { success: false, error: 'Insufficient catalog permissions' };
+    }
+
+    const previousParts = parts;
     const cleanPN = String(partData.part_number || '').trim();
     const cleanDesc = String(partData.description || '').trim();
 
@@ -269,6 +275,7 @@ export function useCatalogAndSites({
       return updated;
     });
 
+    let persistenceFailed = false;
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
@@ -296,6 +303,10 @@ export function useCatalogAndSites({
         if (broadcastCloudEvent) broadcastCloudEvent('PART_SAVED', { partNumber: cleanPN });
       } catch (e) {
         console.error('Supabase part save error:', e.message);
+        persistenceFailed = true;
+        setParts(previousParts);
+        try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
+        dbStorage.setItem('mdc_parts', previousParts);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) {
           enqueueOfflineAction('PART_UPSERT', {
@@ -313,11 +324,22 @@ export function useCatalogAndSites({
       if (broadcastCloudEvent) broadcastCloudEvent('PART_SAVED', { partNumber: cleanPN });
     }
 
+    if (persistenceFailed) {
+      showToast(`Could not persist part ${cleanPN}; the previous catalog state was restored.`, 'error');
+      return { success: false, error: 'Parts catalog persistence failed', part: savedPartObj };
+    }
+
     showToast(`Saved part ${cleanPN} (${cleanDesc || 'Standard'}) in catalog`, 'success');
     return { success: true, part: savedPartObj };
   };
 
   const deletePart = async (partIdOrObj) => {
+    if (!['superadmin', 'admin'].includes(currentUser?.role)) {
+      showToast('Permission denied: Only Superadmin or Admin can modify the parts catalog.', 'error');
+      return { success: false, error: 'Insufficient catalog permissions' };
+    }
+
+    const previousParts = parts;
     let deletedPart = null;
     setParts(prev => {
       let targetId = typeof partIdOrObj === 'object' ? partIdOrObj.id : partIdOrObj;
@@ -344,6 +366,7 @@ export function useCatalogAndSites({
     });
 
     if (deletedPart) {
+      let persistenceFailed = false;
       if (supabase) {
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
         try {
@@ -358,12 +381,21 @@ export function useCatalogAndSites({
           if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
         } catch (e) {
           console.error('Supabase part delete error:', e.message);
+          persistenceFailed = true;
+          setParts(previousParts);
+          try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
+          dbStorage.setItem('mdc_parts', previousParts);
           if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
           if (enqueueOfflineAction) enqueueOfflineAction('PART_DELETE', { id: deletedPart.id, part_number: deletedPart.part_number });
           if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
         }
       } else {
         if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
+      }
+
+      if (persistenceFailed) {
+        showToast(`Could not delete part ${deletedPart.part_number}; the previous catalog state was restored.`, 'error');
+        return { success: false, error: 'Parts catalog persistence failed', part: deletedPart };
       }
 
       if (typeof logDeletionAudit === 'function') {
