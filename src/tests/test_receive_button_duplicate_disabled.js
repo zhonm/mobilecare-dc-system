@@ -42,10 +42,12 @@ console.log('  ✓ PASS: Receive button onClick is guarded against duplicate ser
 
 // Check handleSerialKeyDown guard
 assert(
-  scanInContent.includes('if (duplicateSerialMatch) {\n        barcodeAudio.playError();\n        return;\n      }'),
-  'handleSerialKeyDown must reject Enter when duplicateSerialMatch is present'
+  scanInContent.includes('if (duplicateSerialMatch) {') &&
+  scanInContent.includes('barcodeAudio.playError();') &&
+  scanInContent.includes('serialInputRef.current?.select();'),
+  'handleSerialKeyDown must reject Enter and select input when duplicateSerialMatch is present'
 );
-console.log('  ✓ PASS: Enter key press is blocked when duplicate serial is present');
+console.log('  ✓ PASS: Enter key press is blocked and serial is selected when duplicate serial is present');
 
 // Check blocked label & icon
 assert(scanInContent.includes('Receive (Blocked)'), 'Button should display Receive (Blocked) when duplicate');
@@ -103,6 +105,27 @@ console.log('  ✓ PASS: Button disabled = false for unique new serial');
 // Case D: Short input (<4 chars)
 assert(isButtonDisabled('F8Y') === false, 'Button MUST NOT be disabled for short prefix');
 console.log('  ✓ PASS: Button disabled = false for short input');
+
+// 4. Automatic Duplicate Text Selection / Highlighting Verification
+console.log('\n--- 4. Automatic Text Highlighting on Duplicate Detection ---');
+assert(
+  scanInContent.includes('serialInputRef.current.select()') &&
+  scanInContent.includes('duplicateSerialMatch && serialInputRef.current'),
+  'ScanInReceiving must have an effect auto-selecting serialInputRef when duplicate is detected'
+);
+console.log('  ✓ PASS: useEffect auto-focuses and selects duplicate serial text');
+
+assert(
+  scanInContent.includes('scanner-input-duplicate'),
+  'ScanInReceiving must apply scanner-input-duplicate CSS class'
+);
+console.log('  ✓ PASS: scanner-input-duplicate CSS class applied dynamically');
+
+assert(
+  appCssContent.includes('.scanner-input.scanner-input-duplicate::selection'),
+  'App.css must have selection highlight rule for .scanner-input.scanner-input-duplicate'
+);
+console.log('  ✓ PASS: App.css defines ::selection styling for duplicate input');
 
 console.log('\n====================================================');
 console.log('ALL RECEIVE BUTTON & DUPLICATE TESTS PASSED (100%)');

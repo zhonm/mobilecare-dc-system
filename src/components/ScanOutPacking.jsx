@@ -431,8 +431,11 @@ export default function ScanOutPacking() {
         message: `Duplicate Protection: Unit #${cleanSerial} is already packed ${boxMsg}.`
       });
       showToast(`Duplicate: #${cleanSerial} is already packed ${boxMsg}`, 'warning');
-      setSerialInput('');
-      serialInputRef.current?.focus();
+      setSerialInput(cleanSerial);
+      setTimeout(() => {
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+      }, 30);
       return { success: false, error: 'Already packed' };
     }
 
@@ -445,8 +448,11 @@ export default function ScanOutPacking() {
         message: conflictMsg
       });
       showToast(conflictMsg, 'error');
-      setSerialInput('');
-      serialInputRef.current?.focus();
+      setSerialInput(cleanSerial);
+      setTimeout(() => {
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+      }, 30);
       return { success: false, error: conflictMsg };
     }
 

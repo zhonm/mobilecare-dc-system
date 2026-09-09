@@ -61,28 +61,39 @@ export function validateAppleSerialNumber(rawSerial, currentPn = '', partsCatalo
   }
 
   // 4. Security Check: Alphanumeric format check (Apple serials contain only letters and digits, no hyphens, spaces, or symbols)
-  if (!/^[A-Z0-9]{8,26}$/.test(cleanSerial)) {
-    if (/[^A-Z0-9]/i.test(cleanSerial)) {
-      return {
-        isValid: false,
-        error: `Invalid Serial Format: Serial contains illegal characters. Apple serial numbers contain only uppercase letters and digits.`,
-        cleanSerial
-      };
-    }
-    if (cleanSerial.length < 8) {
-      return {
-        isValid: false,
-        error: `Serial Number too short (${cleanSerial.length} chars). Apple serial numbers must be at least 8-10 alphanumeric characters.`,
-        cleanSerial
-      };
-    }
-    if (cleanSerial.length > 26) {
-      return {
-        isValid: false,
-        error: `Serial Number too long (${cleanSerial.length} chars). Maximum allowed is 26 characters.`,
-        cleanSerial
-      };
-    }
+  if (/[^A-Z0-9]/i.test(cleanSerial)) {
+    return {
+      isValid: false,
+      error: `Invalid Serial Format: Serial contains illegal characters. Apple serial numbers contain only uppercase letters and digits.`,
+      cleanSerial
+    };
+  }
+
+  // Apple replacement parts (P/N 661-xxxxx or catalog components like Battery, Display, Camera)
+  // ALWAYS have full serial numbers of at least 15 characters (standard Apple component format is 17 alphanumeric chars).
+  // Device serials (Macs, iPads, iPhones) can be 10 or 12 characters.
+  const isComponentPart = /^66[0-9]-?\d{4,6}$/i.test(cleanPn) || 
+    (Array.isArray(partsCatalog) && partsCatalog.some(p => p.part_number?.toUpperCase() === cleanPn && 
+      (p.category_id === 'cat-battery' || p.category_id === 'cat-display' || /battery|display|camera/i.test(p.description || ''))));
+
+  const minAllowedLength = isComponentPart ? 15 : 8;
+
+  if (cleanSerial.length < minAllowedLength) {
+    return {
+      isValid: false,
+      error: isComponentPart
+        ? `⚠️ Incomplete Serial Number (${cleanSerial.length} chars). Apple component replacement serials must be complete (17 characters, min 15). Please scan the full barcode.`
+        : `Serial Number too short (${cleanSerial.length} chars). Apple serial numbers must be at least 8-10 alphanumeric characters.`,
+      cleanSerial
+    };
+  }
+
+  if (cleanSerial.length > 26) {
+    return {
+      isValid: false,
+      error: `Serial Number too long (${cleanSerial.length} chars). Maximum allowed is 26 characters.`,
+      cleanSerial
+    };
   }
 
   // 5. Security Check: Reject generic dummy test words

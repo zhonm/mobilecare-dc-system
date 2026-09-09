@@ -272,6 +272,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const fileInputRef = useRef(null);
   const autoScanTimerRef = useRef(null);
   const dropdownRef = useRef(null);
+  const isScanningRef = useRef(false);
+  const sessionSerialsSetRef = useRef(new Set());
+
+  // Keep synchronous deduplication set in sync with session scans
+  useEffect(() => {
+    const set = sessionSerialsSetRef.current;
+    (sessionScans || []).forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) set.add(s);
+    });
+  }, [sessionScans]);
 
   // Auto-focus Part Number input on mount
   useEffect(() => {
@@ -432,6 +443,21 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     };
   }, [serialInput, matchedPart, partNumberInput, parts, duplicateSerialMatch]);
 
+  // Auto-highlight/select the serial input text when a duplicate serial number is detected
+  // so warehouse operators immediately see the duplicate entry and can scan or type the correct serial number
+  // without needing to click the "X" clear button
+  useEffect(() => {
+    if (duplicateSerialMatch && serialInputRef.current) {
+      const timer = setTimeout(() => {
+        if (serialInputRef.current) {
+          serialInputRef.current.focus();
+          serialInputRef.current.select();
+        }
+      }, 30);
+      return () => clearTimeout(timer);
+    }
+  }, [duplicateSerialMatch]);
+
   // Select part from autocomplete dropdown
   const handleSelectSuggestedPart = (p) => {
     setPartNumberInput(p.part_number);
@@ -481,118 +507,141 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   };
 
   const executeScan = (overridePn = null, overrideSn = null) => {
+    if (isScanningRef.current) return false;
+    isScanningRef.current = true;
+
     if (autoScanTimerRef.current) {
       clearTimeout(autoScanTimerRef.current);
       autoScanTimerRef.current = null;
     }
 
-    const rawPn = (overridePn !== null ? overridePn : partNumberInput).trim();
-    const rawSn = (overrideSn !== null ? overrideSn : serialInput).trim();
+    try {
+      const domSn = serialInputRef.current ? serialInputRef.current.value : '';
+      const rawPn = (overridePn !== null ? overridePn : partNumberInput).trim();
+      const rawSn = (overrideSn !== null ? overrideSn : (domSn || serialInput)).trim();
 
-    if (!rawSn) {
-      barcodeAudio.playError();
-      setScanResult({
-        type: 'error',
-        message: 'Please scan or enter a Serial Number'
-      });
-      serialInputRef.current?.focus();
-      return false;
-    }
-
-    // 1. Immediate Duplicate Detection: Check if serial is already in the system (Session, Inventory, Batches, Shipments)
-    const cleanSN = rawSn.toUpperCase();
-    const dup = systemSerialsMap.get(cleanSN);
-    if (dup) {
-      barcodeAudio.playError();
-      const dupMsg = `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
-      setScanResult({
-        type: 'error',
-        message: dupMsg
-      });
-      showToast(`Duplicate S/N: ${cleanSN} is already scanned in the system!`, 'error');
-      serialInputRef.current?.select();
-      return false;
-    }
-
-    if (!rawPn) {
-      barcodeAudio.playError();
-      setScanResult({
-        type: 'error',
-        message: `Please scan or select a Part Number for S/N ${rawSn}`
-      });
-      pnInputRef.current?.focus();
-      return false;
-    }
-
-    // Resolve canonical Apple Part Number (661-xxxxx)
-    const resolved = resolvePartInfo(rawPn, parts);
-    const pnToUse = resolved ? resolved.part_number : rawPn;
-
-    // Security Verification: Validate Serial Number before adding
-    const validation = validateAppleSerialNumber(rawSn, pnToUse, parts);
-    if (!validation.isValid) {
-      barcodeAudio.playError();
-      setScanResult({
-        type: 'error',
-        message: validation.error
-      });
-      serialInputRef.current?.select();
-      return false;
-    }
-
-    const snToUse = validation.cleanSerial;
-    const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
-
-    const res = addScanInUnit({
-      partNumber: pnToUse,
-      serialNumber: snToUse,
-      poId: selectedPoId || null,
-      intakeAssignment: currentAssignment,
-      notes: currentAssignment,
-      targetSiteId: activeReceivingSite.id,
-      targetSiteCode: activeReceivingSite.code,
-      targetSiteName: activeReceivingSite.name
-    });
-
-    if (res.success) {
-      barcodeAudio.playSuccess();
-      let poDetail;
-      const matchedPo = res.matchedPo;
-      if (matchedPo) {
-        const poItem = matchedPo.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
-        const recCount = poItem ? (poItem.quantity_received || 0) + 1 : 1;
-        const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
-        const isDone = recCount >= totalOrd;
-        const routeLabel = res.isAutoRouted ? ` ➜ Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
-        poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
-      } else {
-        poDetail = ` [Direct Stock Intake — Added to DC Warehouse]`;
-      }
-
-      setScanResult({
-        type: 'success',
-        message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
-      });
-      setSessionScans(prev => [res.unit, ...prev]);
-      setShowPnDropdown(false);
-      
-      // Clear inputs and refocus based on continuous batch scanning preferences
-      setSerialInput('');
-      if (!keepPartNumber && overridePn === null) {
-        setPartNumberInput('');
-        pnInputRef.current?.focus();
-      } else {
+      if (!rawSn) {
+        barcodeAudio.playError();
+        setScanResult({
+          type: 'error',
+          message: 'Please scan or enter a Serial Number'
+        });
         serialInputRef.current?.focus();
+        return false;
       }
-      return true;
-    } else {
-      barcodeAudio.playError();
-      setScanResult({
-        type: 'error',
-        message: res.error
+
+      // 1. Immediate Duplicate Detection: Check if serial is already in the system (Session, Inventory, Batches, Shipments)
+      const cleanSN = rawSn.toUpperCase();
+      const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
+      const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+        part_number: rawPn,
+        description: 'Received in Current Session',
+        assignment: intakeAssignmentRef.current || intakeAssignment,
+        location: 'Current Session'
+      } : null);
+
+      if (dup) {
+        barcodeAudio.playError();
+        const dupMsg = `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
+        setScanResult({
+          type: 'error',
+          message: dupMsg
+        });
+        showToast(`Duplicate S/N: ${cleanSN} is already scanned in the system!`, 'error');
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+        return false;
+      }
+
+      if (!rawPn) {
+        barcodeAudio.playError();
+        setScanResult({
+          type: 'error',
+          message: `Please scan or select a Part Number for S/N ${rawSn}`
+        });
+        pnInputRef.current?.focus();
+        return false;
+      }
+
+      // Resolve canonical Apple Part Number (661-xxxxx)
+      const resolved = resolvePartInfo(rawPn, parts);
+      const pnToUse = resolved ? resolved.part_number : rawPn;
+
+      // Security Verification: Validate Serial Number before adding
+      const validation = validateAppleSerialNumber(rawSn, pnToUse, parts);
+      if (!validation.isValid) {
+        barcodeAudio.playError();
+        setScanResult({
+          type: 'error',
+          message: validation.error
+        });
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+        return false;
+      }
+
+      const snToUse = validation.cleanSerial;
+      const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
+
+      const res = addScanInUnit({
+        partNumber: pnToUse,
+        serialNumber: snToUse,
+        poId: selectedPoId || null,
+        intakeAssignment: currentAssignment,
+        notes: currentAssignment,
+        targetSiteId: activeReceivingSite.id,
+        targetSiteCode: activeReceivingSite.code,
+        targetSiteName: activeReceivingSite.name
       });
-      serialInputRef.current?.select();
-      return false;
+
+      if (res.success) {
+        barcodeAudio.playSuccess();
+        sessionSerialsSetRef.current.add(snToUse);
+        let poDetail;
+        const matchedPo = res.matchedPo;
+        if (matchedPo) {
+          const poItem = matchedPo.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
+          const recCount = poItem ? (poItem.quantity_received || 0) + 1 : 1;
+          const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
+          const isDone = recCount >= totalOrd;
+          const routeLabel = res.isAutoRouted ? ` ➜ Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
+          poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
+        } else {
+          poDetail = ` [Direct Stock Intake — Added to DC Warehouse]`;
+        }
+
+        setScanResult({
+          type: 'success',
+          message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
+        });
+        setSessionScans(prev => [res.unit, ...prev]);
+        setShowPnDropdown(false);
+        
+        // Immediately and synchronously clear DOM input and state
+        if (serialInputRef.current) {
+          serialInputRef.current.value = '';
+        }
+        setSerialInput('');
+        if (!keepPartNumber && overridePn === null) {
+          if (pnInputRef.current) pnInputRef.current.value = '';
+          setPartNumberInput('');
+          pnInputRef.current?.focus();
+        } else {
+          serialInputRef.current?.focus();
+        }
+        return true;
+      } else {
+        barcodeAudio.playError();
+        setScanResult({
+          type: 'error',
+          message: res.error
+        });
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+        return false;
+      }
+    } finally {
+      isScanningRef.current = false;
     }
   };
 
@@ -664,13 +713,27 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // Immediate Duplicate Alert: If entered value matches an existing serial in the system (even if Part Number is empty!), warn user immediately
     const cleanSN = cleanSerial.toUpperCase();
-    const dup = systemSerialsMap.get(cleanSN);
+    const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
+    const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+      part_number: cleanPn,
+      description: 'Received in Current Session',
+      assignment: intakeAssignmentRef.current || intakeAssignment,
+      location: 'Current Session'
+    } : null);
+
     if (dup) {
       barcodeAudio.playError();
       setScanResult({
         type: 'error',
         message: `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`
       });
+      // Automatically highlight/select entered text immediately so user can rescan directly without clicking "X"
+      setTimeout(() => {
+        if (serialInputRef.current) {
+          serialInputRef.current.focus();
+          serialInputRef.current.select();
+        }
+      }, 20);
       return; // Do NOT auto-receive duplicate serial numbers!
     }
 
@@ -691,11 +754,25 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return; // Do NOT auto-receive when a Part Number is entered into Serial field!
     }
 
-    // When full valid serial number is scanned and part number is present, auto-receive!
+    // When valid serial number is scanned and part number is present, auto-receive!
+    // Protect against premature cutoff while barcode scanner is actively transmitting keystrokes.
+    // For Apple component replacement parts (661-xxxxx, batteries, displays), full serial is at least 17 characters.
     if (autoReceive && cleanPn && validation.isValid) {
-      autoScanTimerRef.current = setTimeout(() => {
-        executeScan(cleanPn, validation.cleanSerial);
-      }, 160);
+      const isComponent = /^66[0-9]-?\d{4,6}$/i.test(cleanPn);
+      const isCompleteLength = isComponent ? validation.cleanSerial.length >= 17 : validation.cleanSerial.length >= 10;
+
+      // NEVER schedule auto-receive on timer for partial/incomplete serial lengths
+      if (isCompleteLength) {
+        // Debounce delay of 300ms ensures the physical barcode scanner has completely finished transmitting all characters
+        autoScanTimerRef.current = setTimeout(() => {
+          // Read true latest DOM input value at execution time rather than stale closure
+          const latestDomVal = (serialInputRef.current?.value || '').trim();
+          const latestValidation = validateAppleSerialNumber(latestDomVal, cleanPn, parts);
+          if (latestValidation.isValid) {
+            executeScan(cleanPn, latestValidation.cleanSerial);
+          }
+        }, 300);
+      }
     }
   };
 
@@ -735,11 +812,19 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const handleSerialKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (duplicateSerialMatch) {
+      if (autoScanTimerRef.current) {
+        clearTimeout(autoScanTimerRef.current);
+        autoScanTimerRef.current = null;
+      }
+      const domSn = (serialInputRef.current?.value || serialInput).trim();
+      const cleanSN = domSn.toUpperCase();
+      if (duplicateSerialMatch || sessionSerialsSetRef.current.has(cleanSN)) {
         barcodeAudio.playError();
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
         return;
       }
-      const combined = parseBarcodeData(serialInput);
+      const combined = parseBarcodeData(domSn);
       if (combined) {
         const resolved = resolvePartInfo(combined.pn, parts);
         const actualPn = resolved ? resolved.part_number : combined.pn;
@@ -747,8 +832,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         setSerialInput(combined.sn);
         setShowPnDropdown(false);
         const cleanCombinedSn = String(combined.sn || '').trim().toUpperCase();
-        if (cleanCombinedSn && systemSerialsMap.get(cleanCombinedSn)) {
+        if (cleanCombinedSn && (systemSerialsMap.get(cleanCombinedSn) || sessionSerialsSetRef.current.has(cleanCombinedSn))) {
           barcodeAudio.playError();
+          setTimeout(() => {
+            serialInputRef.current?.focus();
+            serialInputRef.current?.select();
+          }, 20);
           return;
         }
         if (autoReceive) {
@@ -758,7 +847,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         }
         return;
       }
-      executeScan();
+      executeScan(null, domSn);
     }
   };
 
@@ -1109,6 +1198,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     const serial = unitToDelete.serial_number;
     await deleteScanInUnit(unitToDelete);
     setSessionScans(prev => prev.filter(u => String(u.serial_number).toUpperCase() !== String(serial).toUpperCase()));
+    if (serial) {
+      sessionSerialsSetRef.current.delete(String(serial).trim().toUpperCase());
+    }
     setUnitToDelete(null);
   };
 
@@ -1646,7 +1738,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <label className="scanner-field-label">Serial Number (S/N)</label>
               {duplicateSerialMatch ? (
-                <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 8px', background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                <span 
+                  className="badge badge-danger" 
+                  onClick={() => {
+                    serialInputRef.current?.focus();
+                    serialInputRef.current?.select();
+                  }}
+                  title="Click to highlight and replace duplicate S/N"
+                  style={{ fontSize: '11px', padding: '2px 8px', background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, cursor: 'pointer' }}
+                >
                   <AlertCircle size={11} /> DUPLICATE S/N (ALREADY RECEIVED)
                 </span>
               ) : serialValidation && serialValidation.isPartNumber ? (
@@ -1664,14 +1764,24 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               <input
                 ref={serialInputRef}
                 type="text"
-                className="scanner-input"
+                className={`scanner-input ${duplicateSerialMatch ? 'scanner-input-duplicate' : ''}`}
                 placeholder="Scan barcode e.g. F8Y6234C9AR231LB3"
                 value={serialInput}
                 onChange={handleSerialChange}
                 onKeyDown={handleSerialKeyDown}
+                onFocus={(e) => {
+                  if (duplicateSerialMatch) {
+                    e.target.select();
+                  }
+                }}
+                onClick={(e) => {
+                  if (duplicateSerialMatch) {
+                    e.target.select();
+                  }
+                }}
                 style={{
                   borderColor: duplicateSerialMatch ? '#ef4444' : serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
-                  boxShadow: duplicateSerialMatch ? '0 0 0 1.5px rgba(239, 68, 68, 0.5)' : serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined,
+                  boxShadow: duplicateSerialMatch ? '0 0 0 2px rgba(239, 68, 68, 0.5)' : serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined,
                   background: duplicateSerialMatch ? '#241419' : undefined
                 }}
               />
@@ -1684,6 +1794,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     setSerialInput('');
                     serialInputRef.current?.focus();
                   }}
+                  title="Clear serial (or simply scan new barcode)"
                   style={{
                     position: 'absolute',
                     right: '12px',
@@ -1702,25 +1813,36 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
             {/* Serial Number Duplicate Alert Banner */}
             {duplicateSerialMatch && (
-              <div style={{
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.45)',
-                borderRadius: '6px',
-                padding: '8px 12px',
-                marginTop: '6px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '8px',
-                fontSize: '12px',
-                color: '#fca5a5'
-              }}>
+              <div 
+                onClick={() => {
+                  serialInputRef.current?.focus();
+                  serialInputRef.current?.select();
+                }}
+                title="Click to highlight and replace duplicate S/N"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.45)',
+                  borderRadius: '6px',
+                  padding: '8px 12px',
+                  marginTop: '6px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '8px',
+                  fontSize: '12px',
+                  color: '#fca5a5',
+                  cursor: 'pointer'
+                }}
+              >
                 <AlertTriangle size={16} color="#ef4444" style={{ marginTop: '1px', flexShrink: 0 }} />
                 <div>
                   <div style={{ color: '#f87171', fontWeight: 700 }}>
-                    Duplicate Serial Detected: "{serialInput.trim()}" has already been received in the system!
+                    Duplicate Serial Detected: &quot;{serialInput.trim()}&quot; has already been received in the system!
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '2px' }}>
                     <strong>Recorded Unit:</strong> {duplicateSerialMatch.part_number} — {duplicateSerialMatch.description} ({duplicateSerialMatch.assignment}) • <strong>Location:</strong> {duplicateSerialMatch.location}
+                  </div>
+                  <div style={{ color: '#f87171', fontSize: '11px', marginTop: '3px', fontWeight: 600 }}>
+                    ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
                   </div>
                 </div>
               </div>
