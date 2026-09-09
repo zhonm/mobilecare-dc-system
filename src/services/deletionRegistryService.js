@@ -1,4 +1,5 @@
 import { supabase } from '../supabase/client.js';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue.js';
 
 export const unmarkDeletedSerials = async (serialsToKeep) => {
   if (!serialsToKeep || serialsToKeep.length === 0) return;
@@ -14,7 +15,7 @@ export const unmarkDeletedSerials = async (serialsToKeep) => {
       const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
       if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
         const updatedCloud = reg.snapshot_data.deletedSerials.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
-        await supabase.from('saved_records').upsert({
+        queuedSavedRecordsUpsert({
           id: 'deleted_unit_serials_registry',
           record_type: 'deletion_registry',
           period_label: 'Deleted Unit Serials Registry',
@@ -22,7 +23,7 @@ export const unmarkDeletedSerials = async (serialsToKeep) => {
           period_month: new Date().getMonth() + 1,
           snapshot_data: { deletedSerials: updatedCloud },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1000 });
       }
     } catch (e) {}
   }
@@ -42,7 +43,7 @@ export const unmarkDeletedIntakeIds = async (idsToKeep) => {
       const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_intake_ids_registry').maybeSingle();
       if (reg?.snapshot_data?.deletedIds && Array.isArray(reg.snapshot_data.deletedIds)) {
         const updatedCloud = reg.snapshot_data.deletedIds.filter(id => !idSetToKeep.has(String(id).trim().toUpperCase()));
-        await supabase.from('saved_records').upsert({
+        queuedSavedRecordsUpsert({
           id: 'deleted_intake_ids_registry',
           record_type: 'deletion_registry',
           period_label: 'Deleted Intake IDs Registry',
@@ -50,7 +51,7 @@ export const unmarkDeletedIntakeIds = async (idsToKeep) => {
           period_month: new Date().getMonth() + 1,
           snapshot_data: { deletedIds: updatedCloud },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1000 });
       }
     } catch (e) {}
   }
@@ -70,7 +71,7 @@ export const registerDeletedIntakeId = async (recordId) => {
       const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_intake_ids_registry').maybeSingle();
       const cloudDeleted = reg?.snapshot_data?.deletedIds || [];
       const updatedCloud = Array.from(new Set([...cloudDeleted, cleanId]));
-      await supabase.from('saved_records').upsert({
+      queuedSavedRecordsUpsert({
         id: 'deleted_intake_ids_registry',
         record_type: 'deletion_registry',
         period_label: 'Deleted Intake IDs Registry',
@@ -78,7 +79,7 @@ export const registerDeletedIntakeId = async (recordId) => {
         period_month: new Date().getMonth() + 1,
         snapshot_data: { deletedIds: updatedCloud },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 800 });
     } catch (e) {}
   }
 };
@@ -97,7 +98,7 @@ export const unmarkDeletedShipmentIds = async (idsToKeep) => {
       const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_shipment_ids_registry').maybeSingle();
       if (reg?.snapshot_data?.deletedIds && Array.isArray(reg.snapshot_data.deletedIds)) {
         const updatedCloud = reg.snapshot_data.deletedIds.filter(id => !idSetToKeep.has(String(id || '').trim().toUpperCase()));
-        await supabase.from('saved_records').upsert({
+        queuedSavedRecordsUpsert({
           id: 'deleted_shipment_ids_registry',
           record_type: 'deletion_registry',
           period_label: 'Deleted Shipment IDs Registry',
@@ -105,7 +106,7 @@ export const unmarkDeletedShipmentIds = async (idsToKeep) => {
           period_month: new Date().getMonth() + 1,
           snapshot_data: { deletedIds: updatedCloud },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1000 });
       }
     } catch (e) {}
   }
@@ -125,7 +126,7 @@ export const registerDeletedShipmentId = async (recordId) => {
       const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_shipment_ids_registry').maybeSingle();
       const cloudDeleted = reg?.snapshot_data?.deletedIds || [];
       const updatedCloud = Array.from(new Set([...cloudDeleted, cleanId]));
-      await supabase.from('saved_records').upsert({
+      queuedSavedRecordsUpsert({
         id: 'deleted_shipment_ids_registry',
         record_type: 'deletion_registry',
         period_label: 'Deleted Shipment IDs Registry',
@@ -133,7 +134,7 @@ export const registerDeletedShipmentId = async (recordId) => {
         period_month: new Date().getMonth() + 1,
         snapshot_data: { deletedIds: updatedCloud },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 800 });
     } catch (e) {}
   }
 };

@@ -3,6 +3,7 @@ import dbStorage from '../utils/dbStorage';
 import { unmarkDeletedSerials } from './deletionRegistryService';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { getPartCategory } from '../utils/categoryFilter';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export const executeSaveUnitsToSupabase = async ({
   units,
@@ -62,7 +63,8 @@ export const executeSaveUnitsToSupabase = async ({
       console.warn('Direct inventory_units table notice:', upsertErr.message);
     }
 
-    await supabase.from('saved_records').upsert({
+    // Debounce & sequentialize singleton master snapshots to eliminate ShareLock contention
+    queuedSavedRecordsUpsert({
       id: 'live_master_dc_inventory',
       record_type: 'master_inventory',
       period_label: 'Live Master DC Inventory',
@@ -72,9 +74,9 @@ export const executeSaveUnitsToSupabase = async ({
       saved_by_name: currentUser?.fullName || 'Warehouse Staff',
       snapshot_data: { units },
       updated_at: new Date().toISOString()
-    }, { onConflict: 'id' });
+    }, { debounceMs: 1200 });
 
-    await supabase.from('saved_records').upsert({
+    queuedSavedRecordsUpsert({
       id: LIVE_MASTER_RECORD_ID,
       record_type: 'both',
       period_label: 'Master Operational Data',
@@ -84,7 +86,7 @@ export const executeSaveUnitsToSupabase = async ({
       saved_by_name: currentUser?.fullName || 'Warehouse Staff',
       snapshot_data: { isCleared: false },
       updated_at: new Date().toISOString()
-    }, { onConflict: 'id' });
+    }, { debounceMs: 1200 });
 
     setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
   } catch (e) {
@@ -164,7 +166,7 @@ export const executeUpdateUnitAssignment = async ({
         }).eq('serial_number', targetSerial);
       } catch (e) {}
 
-      await supabase.from('saved_records').upsert({
+      queuedSavedRecordsUpsert({
         id: 'live_master_dc_inventory',
         record_type: 'master_inventory',
         period_label: 'Live Master DC Inventory',
@@ -174,9 +176,9 @@ export const executeUpdateUnitAssignment = async ({
         saved_by_name: currentUser?.fullName || 'Warehouse Staff',
         snapshot_data: { units: updatedUnits },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 1000 });
 
-      await supabase.from('saved_records').upsert({
+      queuedSavedRecordsUpsert({
         id: 'master_dc_intakes_registry',
         record_type: 'intake_registry',
         period_label: 'Master DC Intakes Registry',
@@ -186,7 +188,7 @@ export const executeUpdateUnitAssignment = async ({
         saved_by_name: currentUser?.fullName || 'Warehouse Staff',
         snapshot_data: { records: updatedIntakes },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 1000 });
 
       setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       broadcastCloudEvent('UNIT_SAVED', { serialNumber: targetSerial, assignment: validAssignment });

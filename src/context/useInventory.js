@@ -16,6 +16,7 @@ import {
   consolidateDcIntakeRecordsList
 } from '../utils/appContextHelpers';
 import { getPartCategory } from '../utils/categoryFilter';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
 
@@ -151,7 +152,7 @@ export function useInventory({
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
         if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
           const updatedCloud = reg.snapshot_data.deletedSerials.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
-          await supabase.from('saved_records').upsert({
+          queuedSavedRecordsUpsert({
             id: 'deleted_unit_serials_registry',
             record_type: 'deletion_registry',
             period_label: 'Deleted Unit Serials Registry',
@@ -159,7 +160,7 @@ export function useInventory({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { deletedSerials: updatedCloud },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1000 });
         }
       } catch (e) {}
     }
@@ -177,7 +178,7 @@ export function useInventory({
 
     if (supabase) {
       try {
-        await supabase.from('saved_records').upsert({
+        queuedSavedRecordsUpsert({
           id: 'master_purchase_orders_registry',
           record_type: 'purchase_orders_registry',
           period_label: 'Master Purchase Orders Registry',
@@ -186,7 +187,7 @@ export function useInventory({
           snapshot_data: { orders },
           saved_by_name: currentUser?.fullName || 'Warehouse Staff',
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1200 });
       } catch (err) {
         console.warn('master_purchase_orders_registry sync note:', err.message);
       }
@@ -532,7 +533,7 @@ export function useInventory({
           }
         });
         const allPoolUnits = Array.from(mergedMap.values());
-        await supabase.from('saved_records').upsert({
+        queuedSavedRecordsUpsert({
           id: 'live_master_dc_inventory',
           record_type: 'inventory_master',
           period_label: 'Live Master DC Inventory',
@@ -545,7 +546,7 @@ export function useInventory({
             units: allPoolUnits
           },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1200 });
       } catch (poolErr) {
         console.warn('live_master_dc_inventory sync note:', poolErr.message);
       }
@@ -829,7 +830,7 @@ export function useInventory({
               if (formatted) {
                 supabase.from('dc_intake_records').upsert(formatted, { onConflict: 'id' }).then(() => {}).catch(() => {});
               }
-              supabase.from('saved_records').upsert({
+              queuedSavedRecordsUpsert({
                 id: 'master_dc_intakes_registry',
                 record_type: 'intake_registry',
                 period_label: 'Master DC Intakes Registry',
@@ -839,7 +840,7 @@ export function useInventory({
                 saved_by_name: currentUser?.fullName || 'Warehouse Staff',
                 snapshot_data: { records: nextList },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+              }, { debounceMs: 1200 });
             }
 
             return nextList;
@@ -851,7 +852,7 @@ export function useInventory({
           dbStorage.setItem('mdc_dc_intake_records', nextRecords);
 
           if (supabase) {
-            supabase.from('saved_records').upsert({
+            queuedSavedRecordsUpsert({
               id: 'master_dc_intakes_registry',
               record_type: 'intake_registry',
               period_label: 'Master DC Intakes Registry',
@@ -861,7 +862,7 @@ export function useInventory({
               saved_by_name: currentUser?.fullName || 'Warehouse Staff',
               snapshot_data: { records: nextRecords },
               updated_at: new Date().toISOString()
-            }, { onConflict: 'id' }).then(() => {}).catch(() => {});
+            }, { debounceMs: 1200 });
           }
 
           return nextRecords;
@@ -1401,7 +1402,7 @@ export function useInventory({
           const cloudDeleted = reg?.snapshot_data?.deletedSerials || [];
           const updatedCloudDeleted = Array.from(new Set([...cloudDeleted, ...updatedDeleted, cleanSerial]));
 
-          await supabase.from('saved_records').upsert({
+          queuedSavedRecordsUpsert({
             id: 'deleted_unit_serials_registry',
             record_type: 'deletion_registry',
             period_label: 'Deleted Unit Serials Registry',
@@ -1409,7 +1410,7 @@ export function useInventory({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { deletedSerials: updatedCloudDeleted },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 800 });
 
           try { await supabase.from('inventory_units').update({ is_deleted: true, status: 'deleted' }).eq('serial_number', cleanSerial); } catch (e) {}
           try { await supabase.from('inventory_units').delete().eq('serial_number', cleanSerial); } catch (e) {}
@@ -1417,7 +1418,7 @@ export function useInventory({
             try { await supabase.from('inventory_units').delete().eq('id', existing.id); } catch (e) {}
           }
 
-          await supabase.from('saved_records').upsert({
+          queuedSavedRecordsUpsert({
             id: 'live_master_dc_inventory',
             record_type: 'inventory_master',
             period_label: 'Live Master DC Inventory',
@@ -1425,20 +1426,18 @@ export function useInventory({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { units: nextUnits },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1000 });
 
           if (updatedRecords.length > 0) {
-            try {
-              await supabase.from('saved_records').upsert({
-                id: 'master_dc_intakes_registry',
-                record_type: 'intake_registry',
-                period_label: 'Master DC Intakes Registry',
-                period_year: new Date().getFullYear(),
-                period_month: new Date().getMonth() + 1,
-                snapshot_data: { records: updatedRecords },
-                updated_at: new Date().toISOString()
-              }, { onConflict: 'id' });
-            } catch (e) {}
+            queuedSavedRecordsUpsert({
+              id: 'master_dc_intakes_registry',
+              record_type: 'intake_registry',
+              period_label: 'Master DC Intakes Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { records: updatedRecords },
+              updated_at: new Date().toISOString()
+            }, { debounceMs: 1000 });
           }
 
           for (const rec of recordsToUpdateInDb) {

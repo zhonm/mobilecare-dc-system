@@ -3,6 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef } from '../utils/appContextHelpers';
 import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export function useShipments({
   currentUser,
@@ -393,7 +394,7 @@ export function useShipments({
           try { await supabase.from('shipments').delete().eq('shipment_number', targetNum); } catch (e) {}
         }
 
-        await supabase.from('saved_records').upsert({
+        await queuedSavedRecordsUpsert(supabase, {
           id: 'deleted_shipment_ids_registry',
           record_type: 'deletion_registry',
           period_label: 'Deleted Shipment IDs Registry',
@@ -401,10 +402,10 @@ export function useShipments({
           period_month: new Date().getMonth() + 1,
           snapshot_data: { deletedIds: updatedDeletedList },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 500 });
 
         try {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'master_shipments_registry',
             record_type: 'shipments_registry',
             period_label: 'Master Shipments Registry',
@@ -418,13 +419,13 @@ export function useShipments({
               updatedAt: new Date().toISOString()
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1200 });
         } catch (mErr) {
           console.warn('master_shipments_registry delete note:', mErr.message);
         }
 
         if (updatedInventory && updatedInventory.length > 0) {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'live_master_dc_inventory',
             record_type: 'inventory_master',
             period_label: 'Live Master DC Inventory',
@@ -437,7 +438,7 @@ export function useShipments({
               units: updatedInventory
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1200 });
         }
 
         // Permanently delete units from Supabase inventory_units and update deletion registry
@@ -450,7 +451,7 @@ export function useShipments({
 
           try {
             const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-            await supabase.from('saved_records').upsert({
+            await queuedSavedRecordsUpsert(supabase, {
               id: 'deleted_unit_serials_registry',
               record_type: 'deletion_registry',
               period_label: 'Deleted Unit Serials Registry',
@@ -458,7 +459,7 @@ export function useShipments({
               period_month: new Date().getMonth() + 1,
               snapshot_data: { deletedSerials: localDeleted },
               updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
+            }, { debounceMs: 500 });
           } catch (regErr) {
             console.warn('Deleted unit serials registry update notice:', regErr.message);
           }
@@ -515,7 +516,7 @@ export function useShipments({
         if (error) throw error;
 
         try {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'master_shipments_registry',
             record_type: 'shipments_registry',
             period_label: 'Master Shipments Registry',
@@ -528,7 +529,7 @@ export function useShipments({
               updatedAt: new Date().toISOString()
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 800 });
         } catch (mErr) {
           console.warn('master_shipments_registry batch import note:', mErr.message);
         }
@@ -582,7 +583,7 @@ export function useShipments({
       try {
         await supabase.from('saved_records').delete().eq('record_type', 'shipment');
         try {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'master_shipments_registry',
             record_type: 'shipments_registry',
             period_label: 'Master Shipments Registry',
@@ -595,7 +596,7 @@ export function useShipments({
               updatedAt: new Date().toISOString()
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 0 });
         } catch (mErr) {}
         try { await supabase.from('shipment_items').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
         try { await supabase.from('shipments').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch (e) {}
@@ -740,7 +741,7 @@ export function useShipments({
 
         // Channel 0: Upsert to authoritative master_shipments_registry
         try {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'master_shipments_registry',
             record_type: 'shipments_registry',
             period_label: 'Master Shipments Registry',
@@ -754,7 +755,7 @@ export function useShipments({
               updatedAt: new Date().toISOString()
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1200 });
         } catch (mErr) {
           console.warn('master_shipments_registry save note:', mErr.message);
         }
@@ -867,7 +868,7 @@ export function useShipments({
 
         if (updatedInv && updatedInv.length > 0) {
           try {
-            await supabase.from('saved_records').upsert({
+            await queuedSavedRecordsUpsert(supabase, {
               id: 'live_master_dc_inventory',
               record_type: 'inventory_master',
               period_label: 'Live Master DC Inventory',
@@ -880,7 +881,7 @@ export function useShipments({
                 units: updatedInv
               },
               updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
+            }, { debounceMs: 1200 });
           } catch (invErr) {
             console.warn('live_master_dc_inventory update note:', invErr.message);
           }

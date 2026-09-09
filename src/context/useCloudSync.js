@@ -26,6 +26,7 @@ import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export function useCloudSync({
   currentUser,
@@ -94,6 +95,7 @@ export function useCloudSync({
   const realtimeChannelRef = useRef(null);
   const isSavingRef = useRef(false);
   const lastShipmentsBackfillAttemptRef = useRef(0);
+  const lastIntakesBackfillAttemptRef = useRef(0);
 
   useEffect(() => {
     isSavingRef.current = cloudSyncStatus.isSaving;
@@ -956,37 +958,8 @@ export function useCloudSync({
           if (stockTransferDoc.updated_at) {
             dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
           }
-        } else if (!stockTransferDoc) {
-          // Self-heal: If cloud registry is missing, but this client already has local records, upload them to cloud
-          try {
-            let localSavedReports = null;
-            let localSavedMeta = null;
-            try {
-              localSavedReports = JSON.parse(localStorage.getItem('mdc_stock_transfer_reports') || 'null');
-              localSavedMeta = JSON.parse(localStorage.getItem('mdc_stock_transfer_metadata') || 'null');
-            } catch (e) {}
-            if (!Array.isArray(localSavedReports) || localSavedReports.length === 0) {
-              localSavedReports = await dbStorage.getItem('mdc_stock_transfer_reports');
-              localSavedMeta = await dbStorage.getItem('mdc_stock_transfer_metadata');
-            }
-            if (Array.isArray(localSavedReports) && localSavedReports.length > 0 && supabase) {
-              const nowIso = new Date().toISOString();
-              supabase.from('saved_records').upsert({
-                id: 'master_stock_transfers_report_registry',
-                record_type: 'stock_transfer_report',
-                period_label: localSavedMeta?.fileName || 'Reports - Stock Transfers',
-                period_year: new Date().getFullYear(),
-                period_month: new Date().getMonth() + 1,
-                notes: 'Master Fixably stock transfer movement dataset',
-                snapshot_data: {
-                  records: localSavedReports,
-                  metadata: localSavedMeta
-                },
-                updated_at: nowIso
-              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed stock transfers to cloud notice:', e));
-            }
-          } catch (e) {}
         }
+        // End of stock transfer hydration (pure read - zero database writes during hydration)
 
         let localDraftSnapshot = null;
         try {
@@ -1146,7 +1119,7 @@ export function useCloudSync({
           // Self-heal / Auto-seed master_shipments_registry in cloud if missing or has fewer records than merged list
           if (supabase) {
             if (!cloudShipmentsRegistryDoc || cloudShipmentsList.length < effectiveShipments.length) {
-              supabase.from('saved_records').upsert({
+              queuedSavedRecordsUpsert({
                 id: 'master_shipments_registry',
                 record_type: 'shipments_registry',
                 period_label: 'Master Shipments Registry',
@@ -1160,7 +1133,7 @@ export function useCloudSync({
                   updatedAt: new Date().toISOString()
                 },
                 updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {}).catch(e => console.warn('Auto-seed master_shipments_registry notice:', e));
+              }, { debounceMs: 2000 });
             }
           }
 
@@ -1553,8 +1526,9 @@ export function useCloudSync({
           try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(effectiveIntakeRecords)); } catch (e) {}
           dbStorage.setItem('mdc_dc_intake_records', effectiveIntakeRecords);
 
-          // If Supabase direct dc_intake_records table is empty or missing rows, backfill them with compliant schema
-          if (supabase && effectiveIntakeRecords.length > 0 && (!dbIntakes || dbIntakes.length < effectiveIntakeRecords.length)) {
+          // If Supabase direct dc_intake_records table is empty or missing rows, backfill them with compliant schema (throttled to once every 60s)
+          if (supabase && effectiveIntakeRecords.length > 0 && (!dbIntakes || dbIntakes.length < effectiveIntakeRecords.length) && (Date.now() - lastIntakesBackfillAttemptRef.current > 60000)) {
+            lastIntakesBackfillAttemptRef.current = Date.now();
             const rowsToInsert = effectiveIntakeRecords
               .map(r => formatDcIntakeRecordForDb(r))
               .filter(Boolean);

@@ -3,6 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
 export function useIntakeRecords({
   currentUser,
@@ -55,7 +56,7 @@ export function useIntakeRecords({
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_intake_ids_registry').maybeSingle();
         if (reg?.snapshot_data?.deletedIds && Array.isArray(reg.snapshot_data.deletedIds)) {
           const updatedCloud = reg.snapshot_data.deletedIds.filter(id => !idSetToKeep.has(String(id).trim().toUpperCase()));
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: 'deleted_intake_ids_registry',
             record_type: 'deletion_registry',
             period_label: 'Deleted Intake IDs Registry',
@@ -63,7 +64,7 @@ export function useIntakeRecords({
             period_month: new Date().getMonth() + 1,
             snapshot_data: { deletedIds: updatedCloud },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 500 });
         }
       } catch (e) {}
     }
@@ -83,7 +84,7 @@ export function useIntakeRecords({
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_intake_ids_registry').maybeSingle();
         const cloudDeleted = reg?.snapshot_data?.deletedIds || [];
         const updatedCloud = Array.from(new Set([...cloudDeleted, cleanId]));
-        await supabase.from('saved_records').upsert({
+        await queuedSavedRecordsUpsert(supabase, {
           id: 'deleted_intake_ids_registry',
           record_type: 'deletion_registry',
           period_label: 'Deleted Intake IDs Registry',
@@ -91,7 +92,7 @@ export function useIntakeRecords({
           period_month: new Date().getMonth() + 1,
           snapshot_data: { deletedIds: updatedCloud },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 500 });
       } catch (e) {}
     }
   };
@@ -184,7 +185,7 @@ export function useIntakeRecords({
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         try {
-          await supabase.from('saved_records').upsert({
+          await queuedSavedRecordsUpsert(supabase, {
             id: LIVE_MASTER_RECORD_ID,
             record_type: 'both',
             period_label: 'Master Operational Data',
@@ -196,7 +197,7 @@ export function useIntakeRecords({
               isCleared: false
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          }, { debounceMs: 1200 });
         } catch (e) {}
 
         try {
@@ -240,7 +241,7 @@ export function useIntakeRecords({
           updated_at: new Date().toISOString()
         }, { onConflict: 'id' });
 
-        await supabase.from('saved_records').upsert({
+        await queuedSavedRecordsUpsert(supabase, {
           id: 'master_dc_intakes_registry',
           record_type: 'intake_registry',
           period_label: 'Master DC Intakes Registry',
@@ -252,7 +253,7 @@ export function useIntakeRecords({
             records: nextList
           },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1200 });
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
@@ -361,7 +362,7 @@ export function useIntakeRecords({
         } catch (e) {}
 
         // Update master_dc_intakes_registry in saved_records
-        await supabase.from('saved_records').upsert({
+        await queuedSavedRecordsUpsert(supabase, {
           id: 'master_dc_intakes_registry',
           record_type: 'intake_registry',
           period_label: 'Master DC Intakes Registry',
@@ -373,7 +374,7 @@ export function useIntakeRecords({
             records: nextRecords
           },
           updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
+        }, { debounceMs: 1200 });
 
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('INTAKE_DELETED', { recordId });

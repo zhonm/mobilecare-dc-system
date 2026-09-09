@@ -3,6 +3,7 @@ import dbStorage from '../utils/dbStorage.js';
 import { safeUUID } from '../utils/appContextHelpers.js';
 import { unmarkDeletedIntakeIds, unmarkDeletedSerials, registerDeletedIntakeId } from './deletionRegistryService.js';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config.js';
+import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue.js';
 
 export const generateNextIntakeRecordId = (targetDate = new Date(), dcIntakeRecords = []) => {
   let year = 2026;
@@ -98,19 +99,17 @@ export const executeSaveIntakeRecord = async ({
   if (supabase) {
     setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
     try {
-      try {
-        await supabase.from('saved_records').upsert({
-          id: LIVE_MASTER_RECORD_ID,
-          record_type: 'both',
-          period_label: 'Master Operational Data',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          notes: 'Active live warehouse operational state',
-          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-          snapshot_data: { isCleared: false },
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-      } catch (e) {}
+      queuedSavedRecordsUpsert({
+        id: LIVE_MASTER_RECORD_ID,
+        record_type: 'both',
+        period_label: 'Master Operational Data',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        notes: 'Active live warehouse operational state',
+        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+        snapshot_data: { isCleared: false },
+        updated_at: new Date().toISOString()
+      }, { debounceMs: 1200 });
 
       // Channel 1: Upsert to direct dc_intake_records table
       try {
@@ -155,8 +154,8 @@ export const executeSaveIntakeRecord = async ({
         updated_at: new Date().toISOString()
       }, { onConflict: 'id' });
 
-      // Channel 3: Upsert complete master intake registry in saved_records (synced to all users in realtime)
-      await supabase.from('saved_records').upsert({
+      // Channel 3: Upsert complete master intake registry in saved_records (debounced to eliminate lock contention)
+      queuedSavedRecordsUpsert({
         id: 'master_dc_intakes_registry',
         record_type: 'intake_registry',
         period_label: 'Master DC Intakes Registry',
@@ -166,7 +165,7 @@ export const executeSaveIntakeRecord = async ({
         saved_by_name: currentUser?.fullName || 'Warehouse Staff',
         snapshot_data: { records: nextList },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 1200 });
 
       setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
@@ -180,7 +179,7 @@ export const executeSaveIntakeRecord = async ({
     broadcastCloudEvent('INTAKE_SAVED', { recordId: newRecord.id });
   }
 
-  showToast(`Saved Parts History Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+  showToast(`Saved Parts History Record "${newRecord.record_name}" (${newRecord.total_units} parts) to Database!`, 'success');
   return { success: true, record: newRecord };
 };
 
@@ -188,14 +187,15 @@ export const executeDeleteIntakeRecord = async ({
   recordId,
   dcIntakeRecords,
   setDcIntakeRecords,
-  _setInventoryUnits,
-  logDeletionAudit,
   currentUser,
   setCloudSyncStatus,
   broadcastCloudEvent,
+  logDeletionAudit,
   showToast
 }) => {
-  const cleanRecId = String(recordId || '').trim();
+  if (!recordId) return { success: false, error: 'Missing record ID' };
+
+  const cleanRecId = String(recordId).trim();
   const cleanRecIdUpper = cleanRecId.toUpperCase();
   const target = (dcIntakeRecords || []).find(r => String(r.id || '').trim().toUpperCase() === cleanRecIdUpper);
   const targetName = target?.record_name ? String(target.record_name).trim() : '';
@@ -264,7 +264,7 @@ export const executeDeleteIntakeRecord = async ({
         }
       } catch (e) {}
 
-      await supabase.from('saved_records').upsert({
+      queuedSavedRecordsUpsert({
         id: 'master_dc_intakes_registry',
         record_type: 'intake_registry',
         period_label: 'Master DC Intakes Registry',
@@ -274,7 +274,7 @@ export const executeDeleteIntakeRecord = async ({
         saved_by_name: currentUser?.fullName || 'Warehouse Staff',
         snapshot_data: { records: nextRecords },
         updated_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { debounceMs: 1200 });
 
       setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       broadcastCloudEvent('INTAKE_DELETED', { recordId });
