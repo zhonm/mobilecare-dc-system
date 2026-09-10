@@ -1788,7 +1788,6 @@ export default function SettingsCatalog() {
                   <div>
                     <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>DATE PICKED UP:</div>
                     <div style={{ fontSize: '9.5pt', minHeight: '18px', paddingBottom: '2px', borderBottom: '1px solid #64748b' }}>
-                      {new Date().toLocaleDateString('en-US')}
                     </div>
                   </div>
                 </div>

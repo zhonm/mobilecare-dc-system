@@ -76,7 +76,8 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   const createdDateStr = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));
   const shipmentDateStr = shipment.shipment_date || '___________________';
-  const trackingNumberStr = shipment.tracking_number || shipment.booking_id || '___________________';
+  const rawTrackingNum = String(shipment.tracking_number || shipment.booking_id || '').trim();
+  const trackingNumberStr = (rawTrackingNum && rawTrackingNum.toUpperCase() !== 'N/A') ? rawTrackingNum : '___________________';
 
   const metaRows = [
     { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________' },
@@ -320,9 +321,11 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   // Dynamic values
   const destSiteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
   const courierType = (shipment.carrier || shipment.courier || 'Lite Express').toUpperCase();
-  const bookingId = (shipment.booking_id || shipment.tracking_number || shipment.airway_bill || 'N/A').toUpperCase();
+  const rawBookingId = String(shipment.booking_id || shipment.tracking_number || shipment.airway_bill || '').trim();
+  const bookingId = (rawBookingId === 'N/A' || rawBookingId === 'n/a' || rawBookingId === 'NA' || !rawBookingId) ? '' : rawBookingId.toUpperCase();
   const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
-  const pickupDate = options.pickupDate || shipment.pickup_date || shipment.shipment_date || new Date().toLocaleDateString('en-US');
+  // Pickup Date field remains completely blank per warehouse requirement (no text or placeholder values displayed)
+  const pickupDate = '';
 
   // Left Column Fields
   const decRowGap = 31;
@@ -355,9 +358,11 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.text('BOOKING ID / AIRWAY BILL:', decLeftColX, f3Y);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.text(bookingId, decLeftColX, f3Y + 7.5, { maxWidth: decLeftColWidth });
+  if (bookingId && bookingId !== 'N/A') {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(bookingId, decLeftColX, f3Y + 7.5, { maxWidth: decLeftColWidth });
+  }
   doc.line(decLeftColX, f3Y + 11, decLeftColX + decLeftColWidth, f3Y + 11);
 
   // 4. COURIER NAME AND SIGNATURE
@@ -428,9 +433,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
   doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9.5);
-  doc.text(pickupDate, rightBottomColX, bottomDateY + 12);
+  // Pickup Date field remains completely blank, with no text or placeholder values displayed
   doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
 
   // Save / Export
