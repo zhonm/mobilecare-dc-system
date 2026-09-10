@@ -34,6 +34,8 @@ import {
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 import { generateNextInvoiceRef } from '../utils/appContextHelpers';
+import { cleanSerialNumberInput, extractSerialNumber, parseBarcodeData } from '../utils/serialTracker';
+import { barcodeAudio } from '../utils/barcodeAudio';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 // Pure category & assignment classification helpers
@@ -262,6 +264,35 @@ export default function ScanOutPacking() {
   const [scanResult, setScanResult] = useState(null);
   const [manifestSearch, setManifestSearch] = useState('');
 
+  // Auto-Add on Scan Toggle state with localStorage persistence
+  const [autoAdd, setAutoAdd] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_pack_auto_add');
+      return saved !== null ? saved === 'true' : true;
+    } catch (e) {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mdc_pack_auto_add', String(autoAdd));
+    } catch (e) {}
+  }, [autoAdd]);
+
+  // Auto-highlight helper: selects entered text so scanning next barcode overwrites without clicking "X"
+  const highlightSerialInput = (valToHighlight = null) => {
+    if (valToHighlight !== null) {
+      setSerialInput(valToHighlight);
+    }
+    setTimeout(() => {
+      if (serialInputRef.current) {
+        serialInputRef.current.focus();
+        serialInputRef.current.select();
+      }
+    }, 20);
+  };
+
   // Clear Confirmation Modal State
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
@@ -274,6 +305,28 @@ export default function ScanOutPacking() {
 
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const autoPackTimerRef = useRef(null);
+  const isPackingRef = useRef(false);
+  const sessionPackedSerialsRef = useRef(new Set());
+  const currentShipmentRef = useRef(currentShipment);
+
+  useEffect(() => {
+    currentShipmentRef.current = currentShipment;
+    const newSet = new Set();
+    (currentShipment?.items || []).forEach(it => {
+      const s = cleanSerialNumberInput(it.serial_number || it.serialNumber);
+      if (s) newSet.add(s);
+    });
+    sessionPackedSerialsRef.current = newSet;
+  }, [currentShipment]);
+
+  useEffect(() => {
+    return () => {
+      if (autoPackTimerRef.current) {
+        clearTimeout(autoPackTimerRef.current);
+      }
+    };
+  }, []);
 
   // Part price map for Declared Value calculations
   const partPriceMap = useMemo(() => {
@@ -362,8 +415,9 @@ export default function ScanOutPacking() {
   // Packed serial numbers in active draft set for O(1) deduplication
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
-    (currentShipment?.items || []).forEach(it => {
-      const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+    const items = currentShipment?.items || currentShipmentRef.current?.items || [];
+    items.forEach(it => {
+      const s = cleanSerialNumberInput(it.serial_number || it.serialNumber);
       if (s) set.add(s);
     });
     return set;
@@ -381,7 +435,8 @@ export default function ScanOutPacking() {
 
       if (Array.isArray(st.items)) {
         st.items.forEach(it => {
-          const s = String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase();
+          const raw = it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '');
+          const s = cleanSerialNumberInput(raw);
           if (s) {
             map.set(s, {
               userId: st.userId,
@@ -399,8 +454,9 @@ export default function ScanOutPacking() {
   // Reliable Available Stock Calculation (excluding items in local draft AND items reserved by other active stations)
   const availableStockUnits = useMemo(() => {
     return (inventoryUnits || []).filter(u => {
-      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      if (packedSerialsSet.has(cleanSerial)) return false;
+      const cleanSerial = cleanSerialNumberInput(u.serial_number);
+      if (!cleanSerial) return false;
+      if (packedSerialsSet.has(cleanSerial) || sessionPackedSerialsRef.current?.has(cleanSerial)) return false;
       if (otherUsersReservedSerialsMap.has(cleanSerial)) return false;
       const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
       return (u.status === 'in_stock' || !u.status) && isDc;
@@ -409,38 +465,60 @@ export default function ScanOutPacking() {
 
   // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
   const packUnitBySerial = (targetSerialInput) => {
-    const cleanSerial = String(targetSerialInput || serialInput || '').trim().toUpperCase();
+    const rawInput = String(targetSerialInput !== undefined ? targetSerialInput : (serialInputRef.current?.value || serialInput || '')).trim();
+    const cleanSerial = extractSerialNumber(rawInput);
     if (!cleanSerial) {
       setScanResult({ type: 'error', message: 'Please scan or paste a Serial Number.' });
+      highlightSerialInput('');
       return { success: false, error: 'Empty serial number' };
     }
 
     if (!selectedSiteId || !selectedSite) {
+      barcodeAudio?.playError?.();
       showToast('Please select a destination site first before packing parts.', 'warning');
       setIsSiteModalOpen(true);
       setScanResult({ type: 'error', message: 'Destination site required. Please select a destination branch first.' });
       return { success: false, error: 'Destination site required' };
     }
 
+    // Security Check: Alert if entered value is an Apple Part Number (e.g. 661-xxxxx) instead of a serial
+    if (/^(?:ZP|PP|Z|1P|P)?66[0-9]-?\d{4,6}$/i.test(cleanSerial) || /^\d{3}-\d{4,6}$/.test(cleanSerial)) {
+      barcodeAudio?.playError?.();
+      const msg = `⚠️ "${cleanSerial}" is an Apple Part Number (P/N), not a Serial Number. Please scan the part's unique Serial Number (S/N).`;
+      setScanResult({ type: 'error', message: msg, isNotSerial: true });
+      showToast(msg, 'warning');
+      highlightSerialInput(cleanSerial);
+      return { success: false, error: 'Part Number scanned instead of Serial Number' };
+    }
+
+    // Security Check: Alert if entered value has invalid characters or is too short to be an Apple serial
+    if (/[^A-Z0-9]/i.test(cleanSerial) || cleanSerial.length < 8) {
+      barcodeAudio?.playError?.();
+      const msg = `⚠️ "${cleanSerial}" is not a valid Apple Serial Number. Please scan the component's unique Serial Number barcode (S/N).`;
+      setScanResult({ type: 'error', message: msg, isNotSerial: true });
+      showToast(msg, 'warning');
+      highlightSerialInput(cleanSerial);
+      return { success: false, error: 'Invalid serial format' };
+    }
+
     // 1. Duplicate check in active draft
-    if (packedSerialsSet.has(cleanSerial)) {
-      const alreadyPackedItem = (currentShipment?.items || []).find(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial);
+    if (packedSerialsSet.has(cleanSerial) || sessionPackedSerialsRef.current.has(cleanSerial)) {
+      barcodeAudio?.playError?.();
+      const activeItems = currentShipmentRef.current?.items || currentShipment?.items || [];
+      const alreadyPackedItem = activeItems.find(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
       const boxMsg = alreadyPackedItem?.box_number ? `in Box #${alreadyPackedItem.box_number}` : 'in this shipment';
       setScanResult({
         type: 'error',
         message: `Duplicate Protection: Unit #${cleanSerial} is already packed ${boxMsg}.`
       });
       showToast(`Duplicate: #${cleanSerial} is already packed ${boxMsg}`, 'warning');
-      setSerialInput(cleanSerial);
-      setTimeout(() => {
-        serialInputRef.current?.focus();
-        serialInputRef.current?.select();
-      }, 30);
+      highlightSerialInput(cleanSerial);
       return { success: false, error: 'Already packed' };
     }
 
     // 1.5 Conflict check against other concurrent users' packing stations
     if (otherUsersReservedSerialsMap.has(cleanSerial)) {
+      barcodeAudio?.playError?.();
       const reserved = otherUsersReservedSerialsMap.get(cleanSerial);
       const conflictMsg = `Station Conflict: Unit #${cleanSerial} is currently being packed by ${reserved.userName} for ${reserved.siteCode}.`;
       setScanResult({
@@ -448,101 +526,193 @@ export default function ScanOutPacking() {
         message: conflictMsg
       });
       showToast(conflictMsg, 'error');
-      setSerialInput(cleanSerial);
-      setTimeout(() => {
-        serialInputRef.current?.focus();
-        serialInputRef.current?.select();
-      }, 30);
+      highlightSerialInput(cleanSerial);
       return { success: false, error: conflictMsg };
     }
 
     // 2. Lookup matching unit in DC stock
     const matchingUnit = (inventoryUnits || []).find(u => {
-      const s = String(u.serial_number || '').trim().toUpperCase();
-      return s === cleanSerial;
+      const uClean = cleanSerialNumberInput(u.serial_number);
+      const uRaw = String(u.serial_number || '').trim().toUpperCase();
+      return uClean === cleanSerial || uRaw === cleanSerial;
     });
 
     if (!matchingUnit) {
+      barcodeAudio?.playError?.();
       setScanResult({
         type: 'error',
         message: `Stock Error: Serial #${cleanSerial} not found in DC inventory records.`
       });
       showToast(`Serial #${cleanSerial} not found in DC inventory`, 'error');
-      serialInputRef.current?.select();
+      highlightSerialInput(cleanSerial);
       return { success: false, error: 'Unit not found' };
     }
 
     const isDc = matchingUnit.current_site_id === 'site-dc' || matchingUnit.site_code === 'DC-MDC' || matchingUnit.site_code === 'DC' || (!matchingUnit.current_site_id && !matchingUnit.site_code);
     if (!isDc || (matchingUnit.status && matchingUnit.status !== 'in_stock' && matchingUnit.status !== 'allocated')) {
+      barcodeAudio?.playError?.();
       setScanResult({
         type: 'error',
         message: `Unavailable: Unit #${cleanSerial} is currently "${matchingUnit.status || 'not in DC stock'}".`
       });
       showToast(`Unit #${cleanSerial} is not available in DC (Status: ${matchingUnit.status || 'Other Site'})`, 'error');
-      serialInputRef.current?.select();
+      highlightSerialInput(cleanSerial);
       return { success: false, error: 'Unit not available' };
     }
 
     // 3. Execute Pack
     markLocalDraftEdit();
+    sessionPackedSerialsRef.current.add(cleanSerial);
 
     const res = addScanOutUnit({
       shipmentId: currentShipment.id,
       siteId: selectedSiteId,
       partNumber: matchingUnit.part_number,
-      serialNumber: cleanSerial,
+      serialNumber: matchingUnit.serial_number || cleanSerial,
       boxNumber: boxNumber
     });
 
     if (res.success) {
+      barcodeAudio?.playSuccess?.();
       setScanResult({
         type: 'success',
         message: `⚡ Auto-Packed: ${res.item.description || matchingUnit.description || 'Part'} (SN: ${cleanSerial}) → Box ${boxNumber}`
       });
       showToast(`Packed ${matchingUnit.part_number} (${cleanSerial}) into Box #${boxNumber}`, 'success');
 
-      const updatedDraft = {
-        ...currentShipment,
-        items: [...(currentShipment.items || []), res.item],
-        updated_at: new Date().toISOString()
-      };
-      setCurrentShipment(updatedDraft);
-      sendPresence(true, updatedDraft.items);
+      setCurrentShipment(prev => {
+        const prevItems = prev.items || [];
+        const nextItems = prevItems.some(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial)
+          ? prevItems
+          : [...prevItems, res.item];
+        const updatedDraft = {
+          ...prev,
+          items: nextItems,
+          updated_at: new Date().toISOString()
+        };
+        currentShipmentRef.current = updatedDraft;
+        sendPresence(true, updatedDraft.items);
+        return updatedDraft;
+      });
 
       setSerialInput('');
-      serialInputRef.current?.focus();
+      if (serialInputRef.current) {
+        serialInputRef.current.value = '';
+        serialInputRef.current.focus();
+      }
       return { success: true, item: res.item };
     } else {
+      sessionPackedSerialsRef.current.delete(cleanSerial);
+      barcodeAudio?.playError?.();
       setScanResult({
         type: 'error',
         message: res.error || 'Failed to pack unit'
       });
+      highlightSerialInput(cleanSerial);
       return { success: false, error: res.error };
     }
   };
 
-  // Keyboard and Paste Handlers
+  // Safe Auto-Pack execution wrapper with double-scan debouncing protection
+  const executeAutoPack = useCallback((candidateVal) => {
+    if (isPackingRef.current) return;
+    isPackingRef.current = true;
+
+    if (autoPackTimerRef.current) {
+      clearTimeout(autoPackTimerRef.current);
+      autoPackTimerRef.current = null;
+    }
+
+    try {
+      const raw = candidateVal !== undefined ? candidateVal : (serialInputRef.current?.value || serialInput);
+      packUnitBySerial(raw);
+    } finally {
+      // 120ms safety guard window to absorb any trailing keystroke/Enter event from physical scanner
+      setTimeout(() => {
+        isPackingRef.current = false;
+      }, 120);
+    }
+  }, [packUnitBySerial, serialInput]);
+
+  // Keyboard, Paste, and Scanner Input Handlers
+  const handleSerialChange = (e) => {
+    const val = e.target.value;
+    setSerialInput(val);
+
+    if (autoPackTimerRef.current) {
+      clearTimeout(autoPackTimerRef.current);
+      autoPackTimerRef.current = null;
+    }
+
+    // If Auto-Add toggle is OFF, do not auto-pack on typing/scanning. Wait for Enter or button click.
+    if (!autoAdd) {
+      return;
+    }
+
+    // Delimiter check: If scanner output includes newline or carriage return, trigger immediately
+    if (val.includes('\n') || val.includes('\r')) {
+      executeAutoPack(val);
+      return;
+    }
+
+    const cleanCandidate = extractSerialNumber(val);
+    if (!cleanCandidate) return;
+
+    // Instant Match: If the scanned string already matches an in-stock DC unit, pack immediately with zero delay!
+    const isDirectMatch = availableStockUnits.some(u => {
+      const uClean = cleanSerialNumberInput(u.serial_number);
+      return uClean === cleanCandidate || String(u.serial_number || '').trim().toUpperCase() === cleanCandidate;
+    });
+
+    if (isDirectMatch) {
+      executeAutoPack(cleanCandidate);
+      return;
+    }
+
+    // Debounce fallback: Wait 220ms after last character input.
+    // If input is at least 8 chars long and typing has ceased, attempt auto-pack
+    // (This triggers auto-packing for scanners without Enter or triggers clear error messages / auto-highlighting)
+    if (cleanCandidate.length >= 8) {
+      autoPackTimerRef.current = setTimeout(() => {
+        const latestVal = serialInputRef.current?.value || val;
+        executeAutoPack(latestVal);
+      }, 220);
+    }
+  };
+
   const handleSerialPaste = (e) => {
     const pasted = e.clipboardData?.getData('text');
     if (pasted) {
-      const clean = pasted.trim().toUpperCase();
+      const clean = pasted.trim();
       if (clean) {
         e.preventDefault();
+        if (autoPackTimerRef.current) {
+          clearTimeout(autoPackTimerRef.current);
+          autoPackTimerRef.current = null;
+        }
         setSerialInput(clean);
-        packUnitBySerial(clean);
+        executeAutoPack(clean);
       }
     }
   };
 
   const handleSerialKeyDown = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.keyCode === 13 || e.which === 13 || e.key === 'Tab' || e.keyCode === 9) {
       e.preventDefault();
-      packUnitBySerial(serialInput);
+      if (autoPackTimerRef.current) {
+        clearTimeout(autoPackTimerRef.current);
+        autoPackTimerRef.current = null;
+      }
+      const valToPack = (e.target.value || serialInputRef.current?.value || serialInput).trim();
+      if (valToPack) {
+        executeAutoPack(valToPack);
+      }
     }
   };
 
   const executePackScan = () => {
-    packUnitBySerial(serialInput);
+    const val = (serialInputRef.current?.value || serialInput).trim();
+    executeAutoPack(val);
   };
 
   // State for upgraded Available Stock Verification UI
@@ -768,13 +938,14 @@ export default function ScanOutPacking() {
 
   // --- Safe Individual Item Removal (returns part to DC stock) ---
   const handleRemoveItem = (serialNumber) => {
-    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    const cleanSerial = cleanSerialNumberInput(serialNumber);
     if (!cleanSerial) return;
 
     markLocalDraftEdit();
+    sessionPackedSerialsRef.current.delete(cleanSerial);
 
-    const targetItem = (currentShipment.items || []).find(it => 
-      String(it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial
+    const targetItem = (currentShipmentRef.current?.items || currentShipment.items || []).find(it => 
+      cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial
     );
 
     const res = removeScanOutUnit({
@@ -784,35 +955,38 @@ export default function ScanOutPacking() {
     });
 
     if (res.success) {
-      const remainingItems = (currentShipment.items || []).filter(it => {
-        const itemSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-        return itemSerial !== cleanSerial;
+      setCurrentShipment(prev => {
+        const remainingItems = (prev.items || []).filter(it => {
+          const itemSerial = cleanSerialNumberInput(it.serial_number || it.serialNumber);
+          return itemSerial !== cleanSerial;
+        });
+
+        const updatedDraft = {
+          ...prev,
+          items: remainingItems,
+          updated_at: new Date().toISOString()
+        };
+        currentShipmentRef.current = updatedDraft;
+        sendPresence(true, remainingItems);
+
+        if (remainingItems.length > 0) {
+          try {
+            localStorage.setItem(userDraftStorageKey, JSON.stringify(updatedDraft));
+          } catch (e) {}
+        } else {
+          try {
+            localStorage.removeItem(userDraftStorageKey);
+          } catch (e) {}
+        }
+        return updatedDraft;
       });
-
-      const updatedDraft = {
-        ...currentShipment,
-        items: remainingItems,
-        updated_at: new Date().toISOString()
-      };
-
-      setCurrentShipment(updatedDraft);
-      sendPresence(true, remainingItems);
-
-      if (remainingItems.length > 0) {
-        try {
-          localStorage.setItem(userDraftStorageKey, JSON.stringify(updatedDraft));
-        } catch (e) {}
-      } else {
-        try {
-          localStorage.removeItem(userDraftStorageKey);
-        } catch (e) {}
-      }
     }
   };
 
   // --- Safe Clear / Unpack Handling (Clears ONLY active draft, preserves all database history below) ---
   const handleConfirmClearDraft = async () => {
     markLocalDraftEdit();
+    sessionPackedSerialsRef.current.clear();
 
     // If the active draft has items not yet saved to the database, restore them to DC stock
     if (currentShipment.items && currentShipment.items.length > 0) {
@@ -1468,15 +1642,42 @@ export default function ScanOutPacking() {
             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)'
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
-            <label style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px', letterSpacing: '0.4px', margin: 0 }}>
-              <span>Serial Number (S/N)</span>
-              <span style={{ fontSize: '10.5px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.4)', padding: '2px 8px', borderRadius: '6px', fontWeight: 600 }}>
-                ⚡ Instant Auto-Pack on Scan / Paste
-              </span>
-            </label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <label style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '8px', letterSpacing: '0.4px', margin: 0 }}>
+                <span>Serial Number (S/N)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !autoAdd;
+                  setAutoAdd(next);
+                  showToast(`Auto-Add on scan ${next ? 'ENABLED (Instant pack on scan)' : 'DISABLED (Manual pack required)'}`, next ? 'success' : 'info');
+                }}
+                style={{
+                  background: autoAdd ? 'rgba(16, 185, 129, 0.18)' : 'rgba(148, 163, 184, 0.15)',
+                  color: autoAdd ? '#34d399' : '#94a3b8',
+                  border: autoAdd ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(148, 163, 184, 0.3)',
+                  padding: '3px 10px',
+                  borderRadius: '20px',
+                  fontWeight: 700,
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.15s ease'
+                }}
+                title={autoAdd ? "Auto-Add is active: Click to turn OFF" : "Auto-Add is disabled: Click to turn ON"}
+              >
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: autoAdd ? '#10b981' : '#64748b' }} />
+                <span>{autoAdd ? '⚡ Auto-Add: ON' : 'Auto-Add: OFF'}</span>
+              </button>
+            </div>
             <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-              Paste or scan serial to auto-detect part &amp; pack to Box #{boxNumber}
+              {autoAdd
+                ? `Paste or scan serial to auto-detect part & pack to Box #${boxNumber}`
+                : `Scan or type serial, then press Enter or click "Pack Unit"`}
             </span>
           </div>
 
@@ -1488,16 +1689,33 @@ export default function ScanOutPacking() {
                 className="scanner-input"
                 placeholder="Scan or paste Serial Number (e.g. G9PQHU084CQ9D088S5L4B)..."
                 value={serialInput}
-                onChange={(e) => setSerialInput(e.target.value)}
+                onChange={handleSerialChange}
                 onKeyDown={handleSerialKeyDown}
                 onPaste={handleSerialPaste}
                 autoFocus
-                style={{ height: '48px', fontSize: '15px', borderRadius: '8px', width: '100%', paddingRight: serialInput ? '36px' : '14px' }}
+                style={{
+                  height: '48px',
+                  fontSize: '15px',
+                  borderRadius: '8px',
+                  width: '100%',
+                  paddingRight: serialInput ? '36px' : '14px',
+                  border: scanResult?.type === 'error' ? '2px solid #ef4444' : '1px solid rgba(56, 189, 248, 0.45)'
+                }}
               />
               {serialInput && (
                 <button
                   type="button"
-                  onClick={() => { setSerialInput(''); serialInputRef.current?.focus(); }}
+                  onClick={() => {
+                    if (autoPackTimerRef.current) {
+                      clearTimeout(autoPackTimerRef.current);
+                      autoPackTimerRef.current = null;
+                    }
+                    setSerialInput('');
+                    if (serialInputRef.current) {
+                      serialInputRef.current.value = '';
+                      serialInputRef.current.focus();
+                    }
+                  }}
                   style={{
                     position: 'absolute',
                     right: '10px',
@@ -1521,7 +1739,7 @@ export default function ScanOutPacking() {
               onClick={executePackScan}
               style={{ height: '48px', padding: '0 24px', fontSize: '14px', fontWeight: 700, borderRadius: '8px', display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
             >
-              <span>Pack Unit</span>
+              <span>{autoAdd ? 'Pack Unit ↵' : 'Pack Unit'}</span>
               <ArrowRight size={17} />
             </button>
           </div>
@@ -1533,14 +1751,21 @@ export default function ScanOutPacking() {
             className={`scanner-feedback-box ${
               scanResult.type === 'success' ? 'scanner-feedback-success' : 'scanner-feedback-error'
             }`}
-            style={{ marginBottom: '14px' }}
+            style={{ marginBottom: '14px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}
           >
             {scanResult.type === 'success' ? (
-              <CheckCircle2 size={18} color="#10b981" />
+              <CheckCircle2 size={18} color="#10b981" style={{ marginTop: '2px', flexShrink: 0 }} />
             ) : (
-              <AlertCircle size={18} color="#ef4444" />
+              <AlertCircle size={18} color="#ef4444" style={{ marginTop: '2px', flexShrink: 0 }} />
             )}
-            <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
+              {scanResult.type === 'error' && (
+                <span style={{ fontSize: '11.5px', color: '#fca5a5', fontWeight: 600 }}>
+                  ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
+                </span>
+              )}
+            </div>
           </div>
         )}
 

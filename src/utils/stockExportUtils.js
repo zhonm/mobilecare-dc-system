@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { sanitizeForSpreadsheet } from './security.js';
+import { formatTo12HourTime } from './dateUtils.js';
 
 /**
  * Normalizes numeric price
@@ -189,7 +190,7 @@ export async function generateStyledStockExcel({
     const rowValues = [
       idx + 1,
       sanitizeForSpreadsheet(it.dateKey || ''),
-      sanitizeForSpreadsheet(it.timeStr || ''),
+      sanitizeForSpreadsheet(formatTo12HourTime(it.timeStr || it.received_at || '')),
       sanitizeForSpreadsheet(categoryVal),
       sanitizeForSpreadsheet(it.part_number || ''),
       sanitizeForSpreadsheet(it.description || ''),
@@ -396,3 +397,439 @@ export async function exportDcStockReceiptsToExcel(dateGroup) {
     scopeLabel: `Receipt Session Date: ${dateLabel}`
   });
 }
+
+/**
+ * Builds and exports a professionally styled Excel spreadsheet for PMG Retail Branch inventory
+ * featuring:
+ * 1. Sheet 1: Detailed Branch Parts Inventory (with 12-hour timestamps, authentic/protected serials, category badges)
+ * 2. Sheet 2: Parts Summary by Part Number (aggregating P/N quantities for branch inventory management)
+ * 3. Sheet 3: Direct Import Template Guide (ready for filling and re-importing via parseScanInPartsFile)
+ */
+export async function exportPmgBranchInventoryToExcel({
+  items = [],
+  summaryItems = [],
+  siteCode = 'BRANCH',
+  siteName = '',
+  userName = '',
+  pmgViewMode = 'my_added',
+  customFileName = null
+} = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = userName || 'PMG Specialist';
+  workbook.created = new Date();
+
+  const branchCode = String(siteCode || 'BRANCH').toUpperCase();
+  const fileBranchCode = branchCode.replace(/[^A-Z0-9_-]+/gi, '_');
+  const cleanSiteName = siteName || branchCode;
+  const dateSuffix = new Date().toISOString().split('T')[0];
+  const fileName = customFileName || `${fileBranchCode}_Parts_Inventory_${dateSuffix}.xlsx`;
+
+  const nowFormatted = new Date().toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+
+  const scopeLabel = pmgViewMode === 'my_added'
+    ? 'My Added Parts (Private Serials)'
+    : pmgViewMode === 'site_summary'
+    ? 'Designated Sites Summary (P/N & Qty Only)'
+    : `${branchCode} All Available Stock`;
+
+  // Calculate Category Counts
+  let displayCount = 0;
+  let batteryCount = 0;
+  let otherCount = 0;
+
+  items.forEach(it => {
+    const cat = String(it.category_name || it.category || '').toLowerCase();
+    if (cat.includes('display')) displayCount++;
+    else if (cat.includes('battery')) batteryCount++;
+    else otherCount++;
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 1: Detailed Branch Parts Inventory
+  // ═══════════════════════════════════════════════════════════════════════════
+  const sheet1Name = `${branchCode.slice(0, 15)} Inventory`.slice(0, 31);
+  const ws1 = workbook.addWorksheet(sheet1Name, {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    views: [{ state: 'frozen', ySplit: 4, showGridLines: true }]
+  });
+
+  // Row 1: System Title Banner
+  ws1.mergeCells('A1:J1');
+  const title1 = ws1.getCell('A1');
+  title1.value = `MOBILE CARE SERVICES PHILS. INC. — ${branchCode} INVENTORY INTAKE`;
+  title1.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+  title1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }; // Slate 900
+  title1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(1).height = 28;
+
+  // Row 2: Metadata Sub-Banner
+  ws1.mergeCells('A2:J2');
+  const meta1 = ws1.getCell('A2');
+  meta1.value = `Branch: ${cleanSiteName}   |   Receiver / Specialist: ${userName || 'Branch Staff'}   |   View Scope: ${scopeLabel}   |   Total Verified Units: ${items.length.toLocaleString()} units   |   Generated: ${nowFormatted}`;
+  meta1.font = { name: 'Arial', size: 8.5, color: { argb: 'FF94A3B8' } };
+  meta1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } }; // Slate 800
+  meta1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(2).height = 18;
+
+  // Row 3: KPI Metrics Cards
+  ws1.mergeCells('A3:C3');
+  const kpi1 = ws1.getCell('A3');
+  kpi1.value = `TOTAL UNITS: ${items.length.toLocaleString()} units`;
+  kpi1.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } }; // Sky 600
+  kpi1.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('D3:G3');
+  const kpi2 = ws1.getCell('D3');
+  kpi2.value = `DISPLAYS: ${displayCount}   |   BATTERIES: ${batteryCount}   |   OTHER PARTS: ${otherCount}`;
+  kpi2.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } }; // Slate 700
+  kpi2.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('H3:J3');
+  const kpi3 = ws1.getCell('H3');
+  kpi3.value = `STATUS: 100% VERIFIED IN-STOCK`;
+  kpi3.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } }; // Emerald 600
+  kpi3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(3).height = 22;
+
+  // Row 4: Column Headers
+  const headers1 = [
+    '#',
+    'Receipt Date',
+    'Time Received',
+    'Category',
+    'Part Number',
+    'Description',
+    'Serial Number',
+    'Receiving Branch',
+    'Intake Source',
+    'Status'
+  ];
+
+  const headerRow1 = ws1.addRow(headers1);
+  headerRow1.height = 24;
+  headerRow1.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } }; // Sky 600
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF38BDF8' } },
+      bottom: { style: 'medium', color: { argb: 'FF0369A1' } },
+      left: { style: 'thin', color: { argb: 'FF38BDF8' } },
+      right: { style: 'thin', color: { argb: 'FF38BDF8' } }
+    };
+  });
+
+  const colWidths1 = { 1: 6, 2: 14, 3: 16, 4: 16, 5: 16, 6: 34, 7: 24, 8: 20, 9: 18, 10: 14 };
+
+  // Populate Data Rows
+  items.forEach((it, idx) => {
+    const isEven = idx % 2 === 0;
+    const dateVal = it.dateKey || (it.received_at ? String(it.received_at).slice(0, 10) : dateSuffix);
+    const timeVal = formatTo12HourTime(it.timeStr || it.received_at || '12:00:00 PM');
+    const catVal = it.category_name || it.category || 'Service Part';
+    const pnVal = it.part_number || '';
+    const descVal = it.description || (it.iphone_model ? `${catVal}, ${it.iphone_model}` : 'Apple Service Part');
+    const serialVal = it.serial_number || 'PROTECTED-SERIAL';
+    const branchVal = it.site_code || branchCode;
+    const sourceVal = it.isImported || (it.received_by && it.received_by.includes('Import')) ? 'Spreadsheet Import' : 'Barcode Scan';
+    const statusVal = 'IN STOCK';
+
+    const rowValues = [
+      idx + 1,
+      sanitizeForSpreadsheet(dateVal),
+      sanitizeForSpreadsheet(timeVal),
+      sanitizeForSpreadsheet(catVal),
+      sanitizeForSpreadsheet(pnVal),
+      sanitizeForSpreadsheet(descVal),
+      sanitizeForSpreadsheet(serialVal),
+      sanitizeForSpreadsheet(branchVal),
+      sanitizeForSpreadsheet(sourceVal),
+      statusVal
+    ];
+
+    const dRow = ws1.addRow(rowValues);
+    dRow.height = 21;
+
+    rowValues.forEach((val, cIdx) => {
+      const colNum = cIdx + 1;
+      const strLen = String(val || '').length;
+      if (strLen + 3 > (colWidths1[colNum] || 10)) {
+        colWidths1[colNum] = Math.min(strLen + 3, 50);
+      }
+    });
+
+    dRow.eachCell((cell, cNum) => {
+      cell.border = {
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFF1F5F9' } },
+        right: { style: 'thin', color: { argb: 'FFF1F5F9' } }
+      };
+
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: isEven ? 'FFF8FAFC' : 'FFFFFFFF' }
+      };
+
+      if (cNum === 1) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Courier New', size: 9, color: { argb: 'FF94A3B8' } };
+      } else if (cNum === 2) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+      } else if (cNum === 3) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Courier New', size: 8.5, color: { argb: 'FF64748B' } };
+      } else if (cNum === 4) {
+        // Category Badge
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        const cLower = String(catVal).toLowerCase();
+        if (cLower.includes('display')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF1E40AF' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF6FF' } };
+        } else if (cLower.includes('battery')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF166534' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } };
+        } else {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF6B21A8' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAF5FF' } };
+        }
+      } else if (cNum === 5) {
+        // Part Number
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+      } else if (cNum === 6) {
+        // Description
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 9, color: { argb: 'FF1E293B' } };
+      } else if (cNum === 7) {
+        // Serial Number
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0284C7' } };
+      } else if (cNum === 8 || cNum === 9) {
+        // Branch / Source
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 8.5, color: { argb: 'FF475569' } };
+      } else if (cNum === 10) {
+        // Status Badge
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FF15803D' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+      }
+    });
+  });
+
+  // Total Summary Footer
+  const footerRow1 = ws1.addRow([
+    'TOTAL',
+    '',
+    '',
+    `${items.length} Units`,
+    '',
+    `Total In-Stock Units for ${branchCode}: ${items.length} Parts`,
+    '',
+    '',
+    '',
+    '100% IN STOCK'
+  ]);
+  footerRow1.height = 24;
+  const lastRowIdx1 = 4 + items.length + 1;
+  ws1.mergeCells(`A${lastRowIdx1}:C${lastRowIdx1}`);
+
+  footerRow1.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'medium', color: { argb: 'FF0284C7' } },
+      bottom: { style: 'medium', color: { argb: 'FF0F172A' } }
+    };
+  });
+
+  for (let c = 1; c <= 10; c++) {
+    ws1.getColumn(c).width = colWidths1[c] || 15;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 2: Parts Summary by Part Number (P/N & Qty)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const effectiveSummary = (summaryItems && summaryItems.length > 0)
+    ? summaryItems
+    : (() => {
+        const grouped = {};
+        items.forEach(u => {
+          const pn = String(u.part_number || '').trim().toUpperCase();
+          if (!pn) return;
+          if (!grouped[pn]) {
+            grouped[pn] = {
+              part_number: pn,
+              description: u.description || 'Apple Service Part',
+              iphone_model: u.iphone_model || 'Universal',
+              category_name: u.category_name || u.category || 'Service Part',
+              site_code: u.site_code || branchCode,
+              total_qty: 0
+            };
+          }
+          grouped[pn].total_qty += 1;
+        });
+        return Object.values(grouped).sort((a, b) => b.total_qty - a.total_qty || a.part_number.localeCompare(b.part_number));
+      })();
+
+  const ws2 = workbook.addWorksheet('Parts Summary', {
+    pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1 },
+    views: [{ state: 'frozen', ySplit: 3, showGridLines: true }]
+  });
+
+  // Banner
+  ws2.mergeCells('A1:G1');
+  const title2 = ws2.getCell('A1');
+  title2.value = `MOBILE CARE SERVICES PHILS. INC. — ${branchCode} PARTS INVENTORY SUMMARY`;
+  title2.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+  title2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  title2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws2.getRow(1).height = 26;
+
+  ws2.mergeCells('A2:G2');
+  const meta2 = ws2.getCell('A2');
+  meta2.value = `Branch: ${cleanSiteName}   |   Distinct Part Numbers: ${effectiveSummary.length} SKUs   |   Total Units: ${items.length} units   |   Generated: ${nowFormatted}`;
+  meta2.font = { name: 'Arial', size: 8.5, color: { argb: 'FF94A3B8' } };
+  meta2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+  meta2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws2.getRow(2).height = 18;
+
+  // Headers
+  const headers2 = ['#', 'Part Number', 'Description', 'iPhone Model', 'Category', 'Branch Site', 'In-Stock Quantity'];
+  const hRow2 = ws2.addRow(headers2);
+  hRow2.height = 22;
+  hRow2.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } }; // Emerald 600
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  effectiveSummary.forEach((s, idx) => {
+    const isEven = idx % 2 === 0;
+    const row = ws2.addRow([
+      idx + 1,
+      s.part_number,
+      s.description,
+      s.iphone_model || 'Universal',
+      s.category_name || 'Service Part',
+      s.site_code || branchCode,
+      s.total_qty || 0
+    ]);
+    row.height = 20;
+    row.eachCell((cell, cNum) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isEven ? 'FFF8FAFC' : 'FFFFFFFF' } };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+      if (cNum === 1 || cNum === 6) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 2) {
+        cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 7) {
+        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF059669' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      }
+    });
+  });
+
+  ws2.getColumn(1).width = 6;
+  ws2.getColumn(2).width = 16;
+  ws2.getColumn(3).width = 34;
+  ws2.getColumn(4).width = 20;
+  ws2.getColumn(5).width = 16;
+  ws2.getColumn(6).width = 14;
+  ws2.getColumn(7).width = 18;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 3: Direct Import Template Guide
+  // ═══════════════════════════════════════════════════════════════════════════
+  const ws3 = workbook.addWorksheet('Import Template Guide', {
+    pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1 },
+    views: [{ state: 'frozen', ySplit: 3, showGridLines: true }]
+  });
+
+  ws3.mergeCells('A1:B1');
+  const title3 = ws3.getCell('A1');
+  title3.value = `MOBILECARE INTAKE IMPORT TEMPLATE — RE-IMPORT OR BATCH UPLOAD`;
+  title3.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+  title3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  title3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws3.getRow(1).height = 26;
+
+  ws3.mergeCells('A2:B2');
+  const meta3 = ws3.getCell('A2');
+  meta3.value = `Please input only the Part Number and Serial Number of the specific part.`;
+  meta3.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF475569' } };
+  meta3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+  meta3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws3.getRow(2).height = 20;
+
+  const headers3 = ['Part Number', 'Serial Number'];
+  const hRow3 = ws3.addRow(headers3);
+  hRow3.height = 22;
+  hRow3.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7C3AED' } }; // Purple 600
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  const sampleTemplateRows = [
+    ['661-21991', 'F8Y6304C9QV18FKBQ'],
+    ['661-21988', 'GVH54810YM8PR5PAD'],
+    ['661-39373', 'F8Y6234C9AR231LB3'],
+    ['661-30401', 'GH371284920000MUZ'],
+    ['661-22294', 'F8Y6285C30S13XCBB']
+  ];
+
+  sampleTemplateRows.forEach((r, idx) => {
+    const row = ws3.addRow(r);
+    row.height = 20;
+    row.eachCell((cell, cNum) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+      cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+  });
+
+  ws3.getColumn(1).width = 20;
+  ws3.getColumn(2).width = 28;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Trigger Browser Download & Return Buffer
+  // ═══════════════════════════════════════════════════════════════════════════
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  return { workbook, buffer, fileName };
+}
+

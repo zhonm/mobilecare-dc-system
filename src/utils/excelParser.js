@@ -2714,59 +2714,38 @@ export function downloadSampleGsxFixablyCsv() {
 /**
  * Download a sample XLSX or CSV template specifically for Receive Scan-In parts intake
  */
-export function downloadScanInTemplate(format = 'xlsx', purchaseOrders = []) {
-  const defaultPoNumber = purchaseOrders[0]?.po_number || 'PO-2026-08-001';
+export function downloadScanInTemplate(format = 'xlsx') {
+  const noteText = 'Please input only the Part Number and Serial Number of the specific part.';
   
-  const sampleRows = [
-    {
-      'Part Number': '661-21991',
-      'Serial Number': `F8Y${Math.floor(100000 + Math.random() * 900000)}13XCB`,
-      'Description': 'Battery, iPhone 13',
-      'PO Number': defaultPoNumber,
-      'Box Number': 1
-    },
-    {
-      'Part Number': '661-21996',
-      'Serial Number': `DNM${Math.floor(100000 + Math.random() * 900000)}33817`,
-      'Description': 'Battery, iPhone 13 Pro',
-      'PO Number': defaultPoNumber,
-      'Box Number': 1
-    },
-    {
-      'Part Number': '661-22294',
-      'Serial Number': `DN8${Math.floor(100000 + Math.random() * 900000)}MCN3R`,
-      'Description': 'Battery, iPhone 13 Pro Max',
-      'PO Number': defaultPoNumber,
-      'Box Number': 1
-    },
-    {
-      'Part Number': '661-30401',
-      'Serial Number': `GH3${Math.floor(100000 + Math.random() * 900000)}00MUZ`,
-      'Description': 'Display, iPhone 14 Pro Max',
-      'PO Number': defaultPoNumber,
-      'Box Number': 2
-    },
-    {
-      'Part Number': '661-31422',
-      'Serial Number': `CK9${Math.floor(100000 + Math.random() * 900000)}449KL`,
-      'Description': 'Display, iPhone 15 Pro',
-      'PO Number': defaultPoNumber,
-      'Box Number': 2
-    }
+  const sampleAoa = [
+    [noteText, ''],
+    ['Part Number', 'Serial Number'],
+    ['661-21991', 'F8Y6304C9QV18FKBQ'],
+    ['661-21988', 'GVH54810YM8PR5PAD'],
+    ['661-39373', 'F8Y6234C9AR231LB3'],
+    ['661-30401', 'GH371284920000MUZ'],
+    ['661-22294', 'F8Y6285C30S13XCBB']
   ];
 
-  const ws = XLSX.utils.json_to_sheet(sampleRows);
-  // Set nice column widths
+  const ws = XLSX.utils.aoa_to_sheet(sampleAoa);
+  // Merge A1:B1 for the instructional note
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }];
+  // Column widths
   ws['!cols'] = [
-    { wch: 16 }, // Part Number
-    { wch: 24 }, // Serial Number
-    { wch: 32 }, // Description
-    { wch: 20 }, // PO Number
-    { wch: 12 }  // Box Number
+    { wch: 20 }, // Part Number
+    { wch: 28 }  // Serial Number
   ];
 
   if (format === 'csv') {
-    const csvContent = XLSX.utils.sheet_to_csv(ws);
+    const csvContent = [
+      `"${noteText}",`,
+      'Part Number,Serial Number',
+      '661-21991,F8Y6304C9QV18FKBQ',
+      '661-21988,GVH54810YM8PR5PAD',
+      '661-39373,F8Y6234C9AR231LB3',
+      '661-30401,GH371284920000MUZ',
+      '661-22294,F8Y6285C30S13XCBB'
+    ].join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2840,8 +2819,9 @@ export async function parseScanInPartsFile(
     for (let i = 0; i < Math.min(15, rawRows.length); i++) {
       const row = rawRows[i] || [];
       const nonEmpty = row.filter(c => String(c).trim().length > 0);
-      if (nonEmpty.length < 2) continue; // Skip single-cell banner/title rows
       const rowStr = row.map(c => String(c).toLowerCase()).join(' ');
+      if (rowStr.includes('please input only') || rowStr.includes('specific part')) continue;
+      if (nonEmpty.length < 2) continue; // Skip single-cell banner/title rows
       if (/(part|product|serial|kgb|kbb|code|item|s\/n|p\/n|imei|desc|order|box)/i.test(rowStr)) {
         headerIdx = i;
         break;
@@ -2895,6 +2875,11 @@ export async function parseScanInPartsFile(
       const row = rawRows[i];
       if (!row || row.length === 0 || row.every(cell => String(cell || '').trim() === '')) {
         continue; // Skip empty rows
+      }
+
+      const rowStr = row.map(cell => String(cell || '').toLowerCase()).join(' ');
+      if (rowStr.includes('please input only') || rowStr.includes('specific part')) {
+        continue;
       }
 
       // Extract Part Number from mapped columns

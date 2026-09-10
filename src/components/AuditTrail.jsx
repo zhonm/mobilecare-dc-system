@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
 import { generateAuditTrailPDF } from '../utils/pdfGenerator';
 import { resolveSerialFullDetails } from '../utils/serialTracker';
+import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
 import SerialDossierModal from './SerialDossierModal';
 import {
   History,
@@ -202,7 +203,7 @@ export default function AuditTrail() {
     }
     const rows = filteredUploads.map((l, idx) => ({
       '#': idx + 1,
-      'Date & Time': new Date(l.timestamp).toLocaleString(),
+      'Date & Time': formatTo12HourDateTime(l.timestamp),
       'Uploaded By (Name)': l.user_name || 'Superadmin',
       'Uploaded By (Email)': l.user_email || '',
       'Role': (l.user_role || 'SUPERADMIN').toUpperCase(),
@@ -230,7 +231,7 @@ export default function AuditTrail() {
     }
     const rows = filteredDeletions.map((d, idx) => ({
       '#': idx + 1,
-      'Date & Time': new Date(d.timestamp).toLocaleString(),
+      'Date & Time': formatTo12HourDateTime(d.timestamp),
       'Entity Type': d.entity_type || 'Record',
       'Record ID': d.entity_id || '',
       'Record Label': d.entity_label || '',
@@ -238,16 +239,7 @@ export default function AuditTrail() {
       'Deleted By (Email)': d.deleted_by_email || '',
       'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
       'Reason / Note': d.reason || 'User initiated deletion',
-      'Part Description': d.summary?.description ?? '',
-      'iPhone Model': d.summary?.iphone_model ?? '',
-      'Stocking Price': d.summary?.stocking_price !== undefined ? `$${Number(d.summary.stocking_price).toFixed(2)}` : '',
-      'Site Name': d.summary?.site_name ?? '',
-      'Site Region': d.summary?.region ?? '',
-      'Items Purged': d.summary?.itemsCount ?? '',
-      'PO Reference': d.summary?.poNumber ?? '',
-      'Destination Site': d.summary?.destinationSite ?? '',
-      'Forecast Parts': d.summary?.forecastPartsCount ?? '',
-      'Intake Date': d.summary?.intakeDate ?? ''
+      'Deleted Details': JSON.stringify(d.summary || {})
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -263,7 +255,7 @@ export default function AuditTrail() {
     }
     const rows = filteredScanLogs.map((s, idx) => ({
       '#': idx + 1,
-      'Date & Time': new Date(s.created_at || s.timestamp).toLocaleString(),
+      'Date & Time': formatTo12HourDateTime(s.created_at || s.timestamp),
       'Operation': s.scan_type || 'SCAN_IN',
       'Part Number': s.part_number || 'N/A',
       'Serial Number': s.serial_number || 'N/A',
@@ -297,10 +289,10 @@ export default function AuditTrail() {
       { Property: 'Technician / User', Value: matchedUnit.usedByName || 'N/A' },
       { Property: 'Box Number', Value: matchedUnit.box_number || 1 },
       { Property: 'PO Number', Value: matchedUnit.po_number || 'N/A' },
-      { Property: 'DC Intake Date', Value: matchedUnit.received_at ? new Date(matchedUnit.received_at).toLocaleString() : 'Recorded' },
+      { Property: 'DC Intake Date', Value: matchedUnit.received_at ? formatTo12HourDateTime(matchedUnit.received_at) : 'Recorded' },
       { Property: 'DC Intake By', Value: matchedUnit.received_by || 'Warehouse Staff' },
       { Property: 'Outbound Manifest #', Value: matchedUnit.linkedShipment?.shipmentNumber || 'N/A' },
-      { Property: 'Shipped Date', Value: matchedUnit.shipped_at ? new Date(matchedUnit.shipped_at).toLocaleString() : 'N/A' }
+      { Property: 'Shipped Date', Value: matchedUnit.shipped_at ? formatTo12HourDateTime(matchedUnit.shipped_at) : 'N/A' }
     ];
     const ws = XLSX.utils.json_to_sheet(unitSheet);
     const wb = XLSX.utils.book_new();
@@ -315,7 +307,7 @@ export default function AuditTrail() {
     // Sheet 1: Uploads
     const uploadRows = (uploadAuditLogs || []).map((l, idx) => ({
       '#': idx + 1,
-      'Timestamp': new Date(l.timestamp).toLocaleString(),
+      'Timestamp': formatTo12HourDateTime(l.timestamp),
       'Uploaded By': l.user_name || 'Superadmin',
       'Email': l.user_email || '',
       'Role': (l.user_role || 'SUPERADMIN').toUpperCase(),
@@ -332,7 +324,7 @@ export default function AuditTrail() {
     // Sheet 2: Deletions
     const delRows = (deletionAuditLogs || []).map((d, idx) => ({
       '#': idx + 1,
-      'Timestamp': new Date(d.timestamp).toLocaleString(),
+      'Timestamp': formatTo12HourDateTime(d.timestamp),
       'Entity Type': d.entity_type || '',
       'Record ID': d.entity_id || '',
       'Record Label': d.entity_label || '',
@@ -347,7 +339,7 @@ export default function AuditTrail() {
     // Sheet 3: Scan Logs
     const scanRows = (scanLogs || []).map((s, idx) => ({
       '#': idx + 1,
-      'Timestamp': new Date(s.created_at || s.timestamp).toLocaleString(),
+      'Timestamp': formatTo12HourDateTime(s.created_at || s.timestamp),
       'Operation': s.scan_type || 'SCAN_IN',
       'Part Number': s.part_number || '',
       'Serial Number': s.serial_number || '',
@@ -1047,7 +1039,7 @@ export default function AuditTrail() {
                             {new Date(log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                           </div>
                           <div style={{ fontSize: '10px', color: '#64748b', marginTop: '1px' }}>
-                            {new Date(log.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                            {formatTo12HourTime(log.timestamp, false)}
                           </div>
                         </td>
                         <td style={{ padding: '9px 10px' }}>
@@ -1330,7 +1322,7 @@ export default function AuditTrail() {
                             {new Date(log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                           </div>
                           <div style={{ fontSize: '10px', color: '#64748b', marginTop: '1px' }}>
-                            {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {formatTo12HourTime(log.timestamp, false)}
                           </div>
                         </td>
                         <td style={{ padding: '9px 10px' }}>
@@ -1818,7 +1810,7 @@ export default function AuditTrail() {
                           {new Date(log.created_at || log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                         </div>
                         <div style={{ fontSize: '10px', color: '#64748b', marginTop: '1px' }}>
-                          {new Date(log.created_at || log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {formatTo12HourTime(log.created_at || log.timestamp, false)}
                         </div>
                       </td>
                       <td style={{ textAlign: 'center', padding: '9px 10px' }}>

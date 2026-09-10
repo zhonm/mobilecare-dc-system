@@ -25,6 +25,62 @@ export function cleanSerialNumberInput(rawInput) {
 }
 
 /**
+ * Helper to parse combined 2D / GS1 DataMatrix / Tab / Slash / Space delimited barcode formats
+ * Returns { pn, sn } or { sn } or null
+ */
+export function parseBarcodeData(raw) {
+  if (!raw) return null;
+  let str = String(raw).trim();
+
+  // 1. GS1 DataMatrix with Group Separators or control headers
+  if (str.startsWith('[)>') || str.includes('06\x1d') || str.includes('\x1d') || str.includes('\x1e')) {
+    const pMatch = str.match(/P([0-9]{3}-?[0-9]{4,6})/i);
+    const sMatch = str.match(/S([A-Za-z0-9]{8,24})/i);
+    if (pMatch && sMatch) {
+      let pn = pMatch[1];
+      if (/^[0-9]{7,9}$/.test(pn)) pn = `${pn.slice(0, 3)}-${pn.slice(3)}`;
+      return { pn, sn: sMatch[1] };
+    }
+    if (sMatch) {
+      return { pn: null, sn: sMatch[1] };
+    }
+  }
+
+  // 2. Delimited formats: PN,SN or PN/SN or PN\tSN or PN|SN or PN#SN
+  const match = str.match(/^([A-Za-z0-9-,s]+?)[,\t/|#;]([A-Za-z0-9-]+)$/);
+  if (match) {
+    let pn = match[1].trim();
+    let sn = match[2].trim();
+    if (/^1?P[0-9]{3}-?[0-9]{4,6}$/i.test(pn)) pn = pn.replace(/^1?P/i, '');
+    if (/^1?S[A-Za-z0-9]{8,24}$/i.test(sn) && sn.length > 10) sn = sn.replace(/^1?S/i, '');
+    if (pn.toUpperCase() === 'PART' || pn.toUpperCase() === 'PART-UNKNOWN') return null;
+    return { pn, sn };
+  }
+
+  // 3. Space-separated: PN SN
+  const spaceMatch = str.match(/^([0-9]{3}-?[0-9]{4,6}|[A-Za-z0-9-,s]+?)\s+([A-Za-z0-9]{8,24})$/);
+  if (spaceMatch) {
+    let pn = spaceMatch[1].trim();
+    let sn = spaceMatch[2].trim();
+    if (pn.toUpperCase() === 'PART' || pn.toUpperCase() === 'PART-UNKNOWN') return null;
+    return { pn, sn };
+  }
+
+  return null;
+}
+
+/**
+ * Robust serial number extractor that handles 2D barcodes, delimited strings,
+ * GS1 prefixes (S/1S), control chars, and whitespace.
+ */
+export function extractSerialNumber(rawInput) {
+  if (!rawInput) return '';
+  const parsed = parseBarcodeData(rawInput);
+  const target = parsed?.sn || rawInput;
+  return cleanSerialNumberInput(target);
+}
+
+/**
  * Resolves complete intelligence for a specific serial number or list of serials
  *
  * @param {string} serialInput - The serial number or partial string to query

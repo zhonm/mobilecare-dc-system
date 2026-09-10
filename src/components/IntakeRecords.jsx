@@ -7,6 +7,7 @@ import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
 } from '../utils/stockExportUtils';
+import { formatTo12HourTime } from '../utils/dateUtils';
 import {
   BookmarkPlus,
   Package,
@@ -217,13 +218,13 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
 
       // Parse date key (YYYY-MM-DD)
       let dateKey = todayDateStr;
-      let timeStr = '12:00:00';
+      let timeStr = '12:00:00 PM';
       if (u.received_at) {
         try {
           const d = new Date(u.received_at);
           if (!isNaN(d.getTime())) {
             dateKey = d.toISOString().split('T')[0];
-            timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            timeStr = formatTo12HourTime(d);
           }
         } catch (e) {}
       }
@@ -518,7 +519,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.description}</td>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${it.serial_number}</td>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.intake_assignment || 'MDC - Forecasting'}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${it.timeStr}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${formatTo12HourTime(it.timeStr)}</td>
       </tr>
     `).join('');
 
@@ -805,7 +806,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
           </div>
           <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
             Live Stock Parts Tracking • Destination Tracking (<code>MDC - Forecasting</code> vs <code>DC - CRBR</code>)
-            {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+            {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {formatTo12HourTime(lastSyncedAt)}</span>}
           </p>
         </div>
 
@@ -1436,7 +1437,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                                 <tr key={u.id || `${u.serial_number}-${idx}`}>
                                   <td className="font-mono" style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
                                   <td style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                                    {u.timeStr}
+                                    {formatTo12HourTime(u.timeStr)}
                                   </td>
                                   <td>
                                     <span
@@ -1948,7 +1949,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                               )}
                             </td>
                             <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                              {it.received_at ? new Date(it.received_at).toLocaleTimeString() : 'Recorded'}
+                              {it.received_at ? formatTo12HourTime(it.received_at) : 'Recorded'}
                             </td>
                           </tr>
                         );

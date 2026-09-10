@@ -38,6 +38,8 @@ import {
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
+import { formatTo12HourTime } from '../utils/dateUtils';
+import { exportPmgBranchInventoryToExcel, exportDcCompleteStockInventoryToExcel } from '../utils/stockExportUtils';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import IntakeRecords from './IntakeRecords';
@@ -1314,6 +1316,51 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     setUnitToDelete(null);
   };
 
+  const handleExportPmgPartsXLSX = async () => {
+    try {
+      if (isPmgUser) {
+        const itemsToExport = (displayedUnits && displayedUnits.length > 0)
+          ? displayedUnits
+          : (pmgViewMode === 'my_added'
+              ? availableInStockUnits.filter(u => isUnitAddedByCurrentUser(u))
+              : availableInStockUnits);
+
+        if (!itemsToExport || itemsToExport.length === 0) {
+          showToast(`No parts currently found in ${pmgViewMode === 'my_added' ? 'your added parts' : 'inventory'} to export.`, 'warning');
+          return;
+        }
+
+        const res = await exportPmgBranchInventoryToExcel({
+          items: itemsToExport,
+          summaryItems: pmgSiteSummaryRows,
+          siteCode: activeReceivingSite?.code || 'BRANCH',
+          siteName: activeReceivingSite?.name || 'Retail Branch',
+          userName: currentUser?.fullName || 'PMG Specialist',
+          pmgViewMode
+        });
+
+        if (res) {
+          showToast(`Exported ${itemsToExport.length} parts to Excel (.xlsx)`, 'success');
+        }
+      } else {
+        const itemsToExport = (displayedUnits && displayedUnits.length > 0)
+          ? displayedUnits
+          : availableInStockUnits;
+
+        if (!itemsToExport || itemsToExport.length === 0) {
+          showToast('No DC stock parts found to export.', 'warning');
+          return;
+        }
+
+        await exportDcCompleteStockInventoryToExcel(itemsToExport);
+        showToast(`Exported ${itemsToExport.length} DC stock parts to Excel (.xlsx)`, 'success');
+      }
+    } catch (err) {
+      console.error('Error exporting parts to Excel:', err);
+      showToast(`Export failed: ${err.message}`, 'error');
+    }
+  };
+
   return (
     <div className="scanner-container">
       {/* Top Segmented Navigation Tabs: Station vs Records */}
@@ -1609,6 +1656,42 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     <FileSpreadsheet size={14} />
                     <span>Import Spreadsheet (XLSX/CSV)</span>
                   </button>
+
+                  {isPmgUser && (
+                    <button
+                      type="button"
+                      className="btn-batch-outline"
+                      onClick={handleExportPmgPartsXLSX}
+                      title="Download branch parts inventory as Excel (.xlsx)"
+                    >
+                      <Download size={14} />
+                      <span>Download Parts (XLSX)</span>
+                    </button>
+                  )}
+
+                  {isPmgUser && (
+                    <button
+                      type="button"
+                      className="btn-batch-outline"
+                      onClick={() => handleDownloadTemplate('xlsx')}
+                      title="Download sample Excel template for importing parts (.xlsx)"
+                    >
+                      <FileSpreadsheet size={14} />
+                      <span>Download Template (.xlsx)</span>
+                    </button>
+                  )}
+
+                  {isPmgUser && (
+                    <button
+                      type="button"
+                      className="btn-batch-outline"
+                      onClick={() => handleDownloadTemplate('csv')}
+                      title="Download clean CSV template with exact 2 columns for Apple Numbers (.csv)"
+                    >
+                      <FileSpreadsheet size={14} />
+                      <span>Download Template (.csv)</span>
+                    </button>
+                  )}
 
                   {!isPmgUser && (
                     <button
@@ -2246,6 +2329,32 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 </button>
               )}
             </div>
+
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportPmgPartsXLSX}
+              title={isPmgUser ? "Download parts table as Excel (.xlsx)" : "Export stock inventory to Excel (.xlsx)"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                height: '32px',
+                fontSize: '12px',
+                fontWeight: 600,
+                padding: '0 12px',
+                whiteSpace: 'nowrap',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                color: '#0f172a',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+              }}
+            >
+              <Download size={13} color="#0284c7" />
+              <span>Download XLSX</span>
+            </button>
           </div>
         </div>
 
@@ -2899,7 +3008,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         )}
                       </td>
                       <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {unit.received_at ? new Date(unit.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
+                        {unit.received_at ? formatTo12HourTime(unit.received_at, false) : 'Recent'}
                       </td>
                       <td>
                         <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>

@@ -5,6 +5,7 @@ import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdf
 import { calculateWeeklySplit, generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { CANONICAL_SITE_CODES } from '../constants/config';
+import { formatTo12HourTime } from '../utils/dateUtils';
 import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
@@ -649,7 +650,7 @@ export default function AllocationMatrix() {
                 {lastSyncedAt && (
                   <>
                     <span>•</span>
-                    <span style={{ opacity: 0.85 }}>Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    <span style={{ opacity: 0.85 }}>Verified: {formatTo12HourTime(lastSyncedAt)}</span>
                   </>
                 )}
               </p>

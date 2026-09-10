@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
 import { getCategoryForPart } from '../utils/categoryFilter';
+import { formatTo12HourTime } from '../utils/dateUtils';
 import {
   Settings,
   Plus,
@@ -320,7 +321,7 @@ export default function SettingsCatalog() {
         : await syncAllDataToCloud();
       if (res && res.success !== false) {
         setLastSyncResult({
-          timestamp: new Date().toLocaleTimeString(),
+          timestamp: formatTo12HourTime(new Date()),
           syncedBy: currentUser?.fullName || 'Superadmin',
           success: true
         });
@@ -1916,7 +1917,7 @@ export default function SettingsCatalog() {
                   Last Synchronized
                 </div>
                 <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#f8fafc', marginTop: '2px' }}>
-                  {lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : 'Just now'}
+                  {lastSyncedAt ? formatTo12HourTime(lastSyncedAt) : 'Just now'}
                 </div>
               </div>
 

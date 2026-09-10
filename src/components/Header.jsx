@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
 import HeaderCategoryFilter from './HeaderCategoryFilter';
+import { formatTo12HourTime } from '../utils/dateUtils';
 
 export default function Header() {
   const {
@@ -89,7 +90,7 @@ export default function Header() {
   const currentMeta = tabConfig[activeTab] || { title: 'MobileCare DC System', section: 'Operations', showCategories: false };
 
   const formattedSyncTime = lastSyncedAt
-    ? new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    ? formatTo12HourTime(lastSyncedAt)
     : 'Just now';
 
   // Dynamic Month & Auto-Updating System Year Display (e.g. August 2026, September 2026)

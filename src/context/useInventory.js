@@ -17,6 +17,7 @@ import {
 } from '../utils/appContextHelpers';
 import { getPartCategory } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
+import { cleanSerialNumberInput } from '../utils/serialTracker';
 
 export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
 
@@ -1536,11 +1537,14 @@ export function useInventory({
   }, [flushPackUpserts]);
 
   const addScanOutUnit = ({ shipmentId, siteId, partNumber, serialNumber, boxNumber = 1 }) => {
-    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    const rawSerial = String(serialNumber || '').trim().toUpperCase();
+    const cleanSerial = cleanSerialNumberInput(rawSerial) || rawSerial;
 
-    const currentUnit = (inventoryUnits || []).find(u => 
-      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
-    );
+    const currentUnit = (inventoryUnits || []).find(u => {
+      const uRaw = String(u.serial_number || '').trim().toUpperCase();
+      const uClean = cleanSerialNumberInput(uRaw);
+      return uClean === cleanSerial || uRaw === rawSerial || uRaw === cleanSerial;
+    });
 
     const cleanPN = String(partNumber || currentUnit?.part_number || '').trim().toUpperCase();
 
@@ -1569,7 +1573,9 @@ export function useInventory({
 
     setInventoryUnits(prev => {
       const updated = (prev || []).map(u => {
-        if (String(u.serial_number || '').trim().toUpperCase() === cleanSerial) {
+        const uRaw = String(u.serial_number || '').trim().toUpperCase();
+        const uClean = cleanSerialNumberInput(uRaw);
+        if (uClean === cleanSerial || uRaw === rawSerial || uRaw === cleanSerial) {
           return {
             ...u,
             status: 'packed',
@@ -1752,13 +1758,17 @@ export function useInventory({
   };
 
   const removeScanOutUnit = ({ shipmentId, serialNumber, partInfo = null }) => {
-    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    const rawSerial = String(serialNumber || '').trim().toUpperCase();
+    const cleanSerial = cleanSerialNumberInput(rawSerial) || rawSerial;
     if (!cleanSerial) return { success: false };
 
     // 1. Unmark from deleted serials registry
     try {
       const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-      const filtered = localDeleted.filter(s => String(s).trim().toUpperCase() !== cleanSerial);
+      const filtered = localDeleted.filter(s => {
+        const sRaw = String(s).trim().toUpperCase();
+        return cleanSerialNumberInput(sRaw) !== cleanSerial && sRaw !== rawSerial;
+      });
       localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filtered));
     } catch (e) {}
 
@@ -1766,7 +1776,9 @@ export function useInventory({
     setInventoryUnits(prev => {
       let found = false;
       const updated = (prev || []).map(u => {
-        if (String(u.serial_number || '').trim().toUpperCase() === cleanSerial) {
+        const uRaw = String(u.serial_number || '').trim().toUpperCase();
+        const uClean = cleanSerialNumberInput(uRaw);
+        if (uClean === cleanSerial || uRaw === rawSerial || uRaw === cleanSerial) {
           found = true;
           revertedPart = {
             ...u,

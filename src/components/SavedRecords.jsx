@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
+import { formatTo12HourTime } from '../utils/dateUtils';
 
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -258,7 +259,7 @@ export default function SavedRecords() {
                 </div>
                 <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
                   Permanent, immutable snapshots of Demand Forecasting & Master Allocation matrices across weeks and months.
-                  {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+                  {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {formatTo12HourTime(lastSyncedAt)}</span>}
                 </p>
               </div>
             </div>

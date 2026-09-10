@@ -5,6 +5,7 @@ import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus } from '../utils/pa
 import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
+import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
 import {
   Inbox,
   Send,
@@ -738,7 +739,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       'Work Order #': u.work_order_number || 'N/A',
       'Used By (Technician)': u.used_by_name || u.used_by || 'Branch Specialist',
       'Used Date': u.used_at ? new Date(u.used_at).toLocaleDateString() : 'N/A',
-      'Used Time': u.used_at ? new Date(u.used_at).toLocaleTimeString() : 'N/A',
+      'Used Time': u.used_at ? formatTo12HourTime(u.used_at) : 'N/A',
       'Branch Site': u.site_code || activeSiteObj.code,
       'Usage Notes': u.usage_notes || u.notes || ''
     }));
@@ -3560,7 +3561,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                             )}
                           </td>
                           <td style={{ fontSize: '12px', color: '#475569' }}>
-                            {u.used_at ? new Date(u.used_at).toLocaleString() : 'Recent'}
+                            {u.used_at ? formatTo12HourDateTime(u.used_at) : 'Recent'}
                           </td>
                           <td style={{ fontSize: '12px', color: '#0f172a', fontWeight: 600 }}>
                             {u.used_by_name || u.used_by || 'Branch Specialist'}
