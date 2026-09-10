@@ -19,52 +19,17 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
     format: 'a4'
   });
 
+  const CHUNK_SIZE = 50;
   const totalItemsCount = items?.length || 0;
+  const manifestPagesCount = Math.max(1, Math.ceil(totalItemsCount / CHUNK_SIZE));
   const pageWidth = doc.internal.pageSize.getWidth();
-  const isDense = totalItemsCount > 45;
-  const isMedium = totalItemsCount > 25;
-  const margin = isDense ? 9 : isMedium ? 11 : 14;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
   const tableWidth = pageWidth - (margin * 2);
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // PAGE 1: PACKING LIST MANIFEST
-  // ══════════════════════════════════════════════════════════════════════════
-
-  // Title: "Packing List" Centered
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(isDense ? 13 : 15);
-  doc.setTextColor(0, 0, 0);
-  doc.text('Packing List', pageWidth / 2, isDense ? 10 : 13, { align: 'center' });
-
-  // Top Left: Mobile Care Logo + Company Info
-  const headerTopY = isDense ? 14 : 18;
-  try {
-    if (MOBILECARE_LOGO_BASE64) {
-      doc.addImage(MOBILECARE_LOGO_BASE64, 'PNG', margin, headerTopY - 1, 13, 13);
-    }
-  } catch (e) {
-    console.warn('Could not render logo in PDF:', e);
-  }
-
-  const compX = margin + 16;
-  doc.setFontSize(isDense ? 8.5 : 9.5);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(15, 23, 42);
-  doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, headerTopY + 2);
-  
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(isDense ? 6.8 : 7.5);
-  doc.setTextColor(51, 65, 85);
-  const lineGap = isDense ? 2.7 : 3.3;
-  doc.text('Business and Distribution Center', compX, headerTopY + 2 + lineGap);
-  doc.text('2/L Northeast Square, #47', compX, headerTopY + 2 + lineGap * 2);
-  doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 2 + lineGap * 3);
-  doc.text('San Juan City, Metro Manila', compX, headerTopY + 2 + lineGap * 4);
-
-  // Top Right: Invoice / Shipment Metadata Box
-  const rightBoxWidth = 84;
-  const rightColX = pageWidth - margin - rightBoxWidth;
-  const rightValX = pageWidth - margin;
+  const logoToUse = MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
+  const logoWidth = 22; // Slightly smaller for better balance & readability (was 28)
+  const logoHeight = 10.65; // exact 1442:698 aspect ratio (balanced, high-res & transparent)
 
   // Calculate Total Declared Value in PHP (part price × 85 PHP)
   const totalDeclaredValuePHP = items.reduce((sum, it) => {
@@ -73,214 +38,333 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   }, 0);
 
   const boxDisplay = shipment.box_number_label || (shipment.box_number ? `${shipment.box_number}/${shipment.total_boxes || 1}` : `1/${shipment.total_boxes || 1}`);
-
   const createdDateStr = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));
   const shipmentDateStr = shipment.shipment_date || '___________________';
   const rawTrackingNum = String(shipment.tracking_number || shipment.booking_id || '').trim();
   const trackingNumberStr = (rawTrackingNum && rawTrackingNum.toUpperCase() !== 'N/A') ? rawTrackingNum : '___________________';
 
-  const metaRows = [
-    { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________' },
-    { label: 'CREATED DATE:', val: createdDateStr },
-    { label: 'SHIPMENT DATE:', val: shipmentDateStr },
-    { label: 'TRACKING NUMBER:', val: trackingNumberStr },
-    { label: 'BOX/S #:', val: boxDisplay },
-    { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
-    ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
-  ];
-
-  let metaY = headerTopY + 1.2;
-  const metaGap = isDense ? 2.8 : 3.4;
-  metaRows.forEach(row => {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(isDense ? 6.8 : 7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(row.label, rightColX, metaY);
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(isDense ? 6.8 : 7.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text(String(row.val), rightValX, metaY, { align: 'right' });
-    metaY += metaGap;
-  });
-
-  // Calculate safe Ship To Y (ensuring zero overlap with company address or right metadata box)
-  const companyBottomY = headerTopY + 2 + lineGap * 4;
-  const metaBottomY = headerTopY + 1.2 + (metaRows.length * metaGap);
-  const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY);
-  const shipToY = maxHeaderBottomY + (isDense ? 3.5 : 5.5);
-
-  // Ship To Section
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(isDense ? 7.8 : 8.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text('Ship To:', margin, shipToY);
-  doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 16, shipToY);
-  
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(isDense ? 6.8 : 7.5);
-  doc.setTextColor(71, 85, 105);
-  const siteAddr = site.address || `${site.name || 'Branch'}, Philippines`;
-  doc.text(siteAddr, margin + 16, shipToY + 3.4, { maxWidth: tableWidth - 16 });
-
-  // Items Table Sizing (Adaptive to fit 1 to 75 parts on exactly 1 single page)
-  let tableFontSize = 8.2;
-  let cellPaddingY = 1.4;
-  if (totalItemsCount > 55) {
-    tableFontSize = 5.8;
-    cellPaddingY = 0.25;
-  } else if (totalItemsCount > 40) {
-    tableFontSize = 6.4;
-    cellPaddingY = 0.45;
-  } else if (totalItemsCount > 25) {
-    tableFontSize = 7.2;
-    cellPaddingY = 0.75;
-  }
-
-  const tableData = items.map((item, index) => {
-    const itemBoxStr = item.box_number 
-      ? (String(item.box_number).includes('/') ? item.box_number : `${item.box_number}/${shipment.total_boxes || 1}`)
-      : boxDisplay;
-
-    return [
-      index + 1,
-      item.part_number || item.partNumber || '',
-      item.description || item.partDescription || '',
-      item.serial_number || item.serialNumber || '',
-      itemBoxStr
-    ];
-  });
-
-  const tableStartY = shipToY + (isDense ? 7 : 9);
-
-  const col0 = 8;
-  const col1 = 28;
-  const col4 = 16;
-  const col3 = isDense ? 58 : 56;
-  const col2 = tableWidth - col0 - col1 - col3 - col4;
-
-  autoTable(doc, {
-    startY: tableStartY,
-    head: [['#', 'PART NUMBER', 'DESCRIPTION', 'SERIAL NUMBER', 'BOX #']],
-    body: tableData,
-    theme: 'grid',
-    showHead: 'firstPage',
-    headStyles: {
-      fillColor: [84, 89, 95], // Charcoal #54595F matching MSPI DC Packing List
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-      fontSize: tableFontSize + 0.2,
-      halign: 'center',
-      valign: 'middle',
-      cellPadding: cellPaddingY + 0.2
-    },
-    bodyStyles: {
-      fontSize: tableFontSize,
-      textColor: [15, 23, 42],
-      cellPadding: cellPaddingY
-    },
-    columnStyles: {
-      0: { halign: 'center', cellWidth: col0 },
-      1: { halign: 'center', cellWidth: col1, fontStyle: 'bold' },
-      2: { halign: 'left', cellWidth: col2 },
-      3: { halign: 'center', cellWidth: col3, font: 'helvetica', fontStyle: 'normal' },
-      4: { halign: 'center', cellWidth: col4 }
-    },
-    margin: { left: margin, right: margin }
-  });
-
-  const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : (tableStartY + 30);
-
-  // Remarks & Totals Block
-  const totalsY = finalY + (isDense ? 2.5 : 4.5);
-  const totalBoxWidth = 74;
-  const totalBoxX = pageWidth - margin - totalBoxWidth;
-  const totalValX = pageWidth - margin - 3;
-  const boxRowHeight = isDense ? 3.6 : 4.4;
-
-  // Remarks (Left Aligned)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(isDense ? 7.2 : 8);
-  doc.setTextColor(15, 23, 42);
-  doc.text('Remarks', margin, totalsY + 2.2);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(isDense ? 7.2 : 8);
-  doc.text(shipment.remarks || 'KGB PARTS', margin, totalsY + (isDense ? 5.2 : 6.5));
-
-  // Totals Box (Right Aligned)
-  doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, totalsY, 40, boxRowHeight, 'F');
-  doc.setDrawColor(84, 89, 95);
-  doc.rect(totalBoxX + 40, totalsY, totalBoxWidth - 40, boxRowHeight, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(isDense ? 6.5 : 7.5);
-  doc.text('TOTAL QTY', totalBoxX + 20, totalsY + (boxRowHeight * 0.7), { align: 'center' });
-  doc.setTextColor(15, 23, 42);
-  doc.text(String(items.length), totalValX, totalsY + (boxRowHeight * 0.7), { align: 'right' });
-
-  // Total Boxes Row
-  doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, totalsY + boxRowHeight, 40, boxRowHeight, 'F');
-  doc.rect(totalBoxX + 40, totalsY + boxRowHeight, totalBoxWidth - 40, boxRowHeight, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(255, 255, 255);
-  doc.text('TOTAL BOXES', totalBoxX + 20, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'center' });
-  doc.setTextColor(15, 23, 42);
-  doc.text(String(shipment.total_boxes || 1), totalValX, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'right' });
-
-  // Total Declared Value Row (PHP = part price × 85)
-  doc.setFillColor(84, 89, 95);
-  doc.rect(totalBoxX, totalsY + boxRowHeight * 2, 40, boxRowHeight, 'F');
-  doc.rect(totalBoxX + 40, totalsY + boxRowHeight * 2, totalBoxWidth - 40, boxRowHeight, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(isDense ? 5.8 : 6.8);
-  doc.text('DECLARED VALUE', totalBoxX + 20, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'center' });
-  doc.setTextColor(15, 23, 42);
-  doc.setFontSize(isDense ? 6.2 : 7.2);
-  doc.text(`PHP ${totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalValX, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'right' });
-
-  // Signatures Section (Clean divider and crisp 2-column layout with generous label spacing)
-  const sigLineY = totalsY + (boxRowHeight * 3) + (isDense ? 3.5 : 5.5);
-
-  doc.setDrawColor(203, 213, 225);
-  doc.setLineWidth(0.3);
-  doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
-
-  const sigRow1Y = sigLineY + (isDense ? 4 : 5.5);
-  const sigRow2Y = sigRow1Y + (isDense ? 4 : 5.5);
-  doc.setFontSize(isDense ? 6.8 : 7.8);
-  doc.setTextColor(15, 23, 42);
-
-  const colRightX = margin + 92;
-
-  // Row 1 - Left: Prepared and Counted by
-  doc.setFont('helvetica', 'bold');
-  doc.text('Prepared and Counted by:', margin, sigRow1Y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(shipment.prepared_by_name || 'Zhon Manaois', margin + 42, sigRow1Y);
-
-  // Row 1 - Right: Verified by
   const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
-  doc.setFont('helvetica', 'bold');
-  doc.text('Verified by:', colRightX, sigRow1Y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(supervisorName, colRightX + 20, sigRow1Y);
-
-  // Row 2 - Left: Receiving Branch Signature
-  doc.setFont('helvetica', 'bold');
-  doc.text('Receiving Branch Signature:', margin, sigRow2Y);
-  doc.setFont('helvetica', 'normal');
-  doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 42, sigRow2Y);
-
-  // Row 2 - Right: Pickup By (Always aligned on the right under Verified By)
   const pickupByName = shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
-  if (pickupByName) {
-    doc.setFont('helvetica', 'bold');
-    doc.text('Pickup By:', colRightX, sigRow2Y);
-    doc.setFont('helvetica', 'normal');
-    doc.text(pickupByName, colRightX + 20, sigRow2Y);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RENDER PACKING LIST MANIFEST (50 items max per page)
+  // ══════════════════════════════════════════════════════════════════════════
+  for (let pageIdx = 0; pageIdx < manifestPagesCount; pageIdx++) {
+    if (pageIdx > 0) {
+      doc.addPage();
+    }
+
+    const isFirstManifestPage = (pageIdx === 0);
+    const isLastManifestPage = (pageIdx === manifestPagesCount - 1);
+    let tableStartY = 0;
+
+    if (isFirstManifestPage) {
+      // Title: "Packing List" Centered
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(0, 0, 0);
+      doc.text('Packing List', pageWidth / 2, 12, { align: 'center' });
+
+      // Top Left: Mobile Care Logo (Crisp mobilecareNoBGLogo) + Company Info
+      const headerTopY = 16;
+      try {
+        if (logoToUse) {
+          doc.addImage(logoToUse, 'PNG', margin, headerTopY - 0.5, logoWidth, logoHeight);
+        }
+      } catch (e) {
+        console.warn('Could not render logo in PDF:', e);
+      }
+
+      const compX = margin + logoWidth + 4; // margin + 26 = 38
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, headerTopY + 2);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(51, 65, 85);
+      const lineGap = 3.0;
+      doc.text('Business and Distribution Center', compX, headerTopY + 2 + lineGap);
+      doc.text('2/L Northeast Square, #47', compX, headerTopY + 2 + lineGap * 2);
+      doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 2 + lineGap * 3);
+      doc.text('San Juan City, Metro Manila', compX, headerTopY + 2 + lineGap * 4);
+
+      // Top Right: Invoice / Shipment Metadata Box
+      const rightBoxWidth = 84;
+      const rightColX = pageWidth - margin - rightBoxWidth;
+      const rightValX = pageWidth - margin;
+
+      const metaRows = [
+        { label: 'INVOICE REF:', val: shipment.invoice_ref || shipment.shipment_number || '___________________' },
+        { label: 'CREATED DATE:', val: createdDateStr },
+        { label: 'SHIPMENT DATE:', val: shipmentDateStr },
+        { label: 'TRACKING NUMBER:', val: trackingNumberStr },
+        { label: 'BOX/S #:', val: boxDisplay },
+        { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
+        ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
+      ];
+
+      let metaY = headerTopY + 1;
+      const metaGap = 3.1;
+      metaRows.forEach(row => {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.2);
+        doc.setTextColor(15, 23, 42);
+        doc.text(row.label, rightColX, metaY);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.2);
+        doc.setTextColor(15, 23, 42);
+        doc.text(String(row.val), rightValX, metaY, { align: 'right' });
+        metaY += metaGap;
+      });
+
+      // Ship To Section
+      const companyBottomY = headerTopY + 2 + lineGap * 4;
+      const metaBottomY = headerTopY + 1 + (metaRows.length * metaGap);
+      const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY);
+      const shipToY = maxHeaderBottomY + 4;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.2);
+      doc.setTextColor(15, 23, 42);
+      doc.text('Ship To:', margin, shipToY);
+      doc.text((site.name || shipment.site_name || 'SERVICE HUB').toUpperCase(), margin + 16, shipToY);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(71, 85, 105);
+      const siteAddr = site.address || `${site.name || 'Branch'}, Philippines`;
+      doc.text(siteAddr, margin + 16, shipToY + 3.4, { maxWidth: tableWidth - 16 });
+
+      tableStartY = shipToY + 8;
+    } else {
+      // Continuation Header for Subsequent Pages (clean, balanced & consistent with Page 1)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(0, 0, 0);
+      doc.text('Packing List (Continuation)', pageWidth / 2, 12, { align: 'center' });
+
+      const contHeaderTopY = 16;
+      const contLogoW = 16;
+      const contLogoH = 7.74; // exact 1442:698 aspect ratio
+
+      try {
+        if (logoToUse) {
+          doc.addImage(logoToUse, 'PNG', margin, contHeaderTopY, contLogoW, contLogoH);
+        }
+      } catch (e) {
+        console.warn('Could not render logo in continuation header:', e);
+      }
+
+      // Left: Company name & department beside logo
+      const contCompX = margin + contLogoW + 3;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text('MOBILE CARE SERVICES PHILS. INC.', contCompX, contHeaderTopY + 3.2);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Business and Distribution Center', contCompX, contHeaderTopY + 6.8);
+
+      // Right: Key shipment metadata summary
+      const contRightW = 85;
+      const contRightColX = pageWidth - margin - contRightW;
+      const contRightValX = pageWidth - margin;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.setTextColor(15, 23, 42);
+      doc.text('INVOICE REF:', contRightColX, contHeaderTopY + 3);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(shipment.invoice_ref || shipment.shipment_number || 'DRAFT'), contRightValX, contHeaderTopY + 3, { align: 'right' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('SHIP TO:', contRightColX, contHeaderTopY + 6.8);
+      doc.setFont('helvetica', 'normal');
+      const destNameShort = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
+      doc.text(destNameShort, contRightValX, contHeaderTopY + 6.8, { align: 'right' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('COURIER:', contRightColX, contHeaderTopY + 10.4);
+      doc.setFont('helvetica', 'normal');
+      doc.text(String(shipment.carrier || shipment.courier || 'Lite Express'), contRightValX, contHeaderTopY + 10.4, { align: 'right' });
+
+      // Clean divider line
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.line(margin, contHeaderTopY + 13, pageWidth - margin, contHeaderTopY + 13);
+
+      tableStartY = contHeaderTopY + 16;
+    }
+
+    // Slice current page items (maximum 50 per page)
+    const startIndex = pageIdx * CHUNK_SIZE;
+    const chunkItems = items.slice(startIndex, startIndex + CHUNK_SIZE);
+
+    let tableFontSize = 7.8;
+    let cellPaddingY = 1.0;
+    if (chunkItems.length > 40) {
+      tableFontSize = 6.8;
+      cellPaddingY = 0.55;
+    } else if (chunkItems.length > 25) {
+      tableFontSize = 7.2;
+      cellPaddingY = 0.8;
+    }
+
+    const tableData = chunkItems.map((item, index) => {
+      const globalIndex = startIndex + index + 1;
+      const itemBoxStr = item.box_number 
+        ? (String(item.box_number).includes('/') ? item.box_number : `${item.box_number}/${shipment.total_boxes || 1}`)
+        : boxDisplay;
+
+      return [
+        globalIndex,
+        item.part_number || item.partNumber || '',
+        item.description || item.partDescription || '',
+        item.serial_number || item.serialNumber || '',
+        itemBoxStr
+      ];
+    });
+
+    const col0 = 8;
+    const col1 = 28;
+    const col4 = 16;
+    const col3 = 56;
+    const col2 = tableWidth - col0 - col1 - col3 - col4;
+
+    autoTable(doc, {
+      startY: tableStartY,
+      head: [['#', 'PART NUMBER', 'DESCRIPTION', 'SERIAL NUMBER', 'BOX #']],
+      body: tableData,
+      theme: 'grid',
+      showHead: 'firstPage',
+      headStyles: {
+        fillColor: [84, 89, 95], // Charcoal #54595F matching MSPI DC Packing List
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: tableFontSize + 0.2,
+        halign: 'center',
+        valign: 'middle',
+        cellPadding: cellPaddingY + 0.2
+      },
+      bodyStyles: {
+        fontSize: tableFontSize,
+        textColor: [15, 23, 42],
+        cellPadding: cellPaddingY
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: col0 },
+        1: { halign: 'center', cellWidth: col1, fontStyle: 'bold' },
+        2: { halign: 'left', cellWidth: col2 },
+        3: { halign: 'center', cellWidth: col3, font: 'helvetica', fontStyle: 'normal' },
+        4: { halign: 'center', cellWidth: col4 }
+      },
+      margin: { left: margin, right: margin }
+    });
+
+    const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : (tableStartY + 30);
+
+    if (!isLastManifestPage) {
+      // Continuation Note at bottom of page
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('(Packing List continued on next page...)', pageWidth / 2, finalY + 5, { align: 'center' });
+    } else {
+      // Last Manifest Page: Remarks & Totals Block + Signatures
+      const totalsY = finalY + 4;
+      const totalBoxWidth = 74;
+      const totalBoxX = pageWidth - margin - totalBoxWidth;
+      const totalValX = pageWidth - margin - 3;
+      const boxRowHeight = 4.2;
+
+      // Remarks (Left Aligned)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.8);
+      doc.setTextColor(15, 23, 42);
+      doc.text('Remarks', margin, totalsY + 2.2);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.8);
+      doc.text(shipment.remarks || 'KGB PARTS', margin, totalsY + 6.2);
+
+      // Totals Box (Right Aligned)
+      doc.setFillColor(84, 89, 95);
+      doc.rect(totalBoxX, totalsY, 40, boxRowHeight, 'F');
+      doc.setDrawColor(84, 89, 95);
+      doc.rect(totalBoxX + 40, totalsY, totalBoxWidth - 40, boxRowHeight, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(7.2);
+      doc.text('TOTAL QTY', totalBoxX + 20, totalsY + (boxRowHeight * 0.7), { align: 'center' });
+      doc.setTextColor(15, 23, 42);
+      doc.text(String(items.length), totalValX, totalsY + (boxRowHeight * 0.7), { align: 'right' });
+
+      // Total Boxes Row
+      doc.setFillColor(84, 89, 95);
+      doc.rect(totalBoxX, totalsY + boxRowHeight, 40, boxRowHeight, 'F');
+      doc.rect(totalBoxX + 40, totalsY + boxRowHeight, totalBoxWidth - 40, boxRowHeight, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text('TOTAL BOXES', totalBoxX + 20, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'center' });
+      doc.setTextColor(15, 23, 42);
+      doc.text(String(shipment.total_boxes || 1), totalValX, totalsY + boxRowHeight + (boxRowHeight * 0.7), { align: 'right' });
+
+      // Total Declared Value Row (PHP = part price × 85)
+      doc.setFillColor(84, 89, 95);
+      doc.rect(totalBoxX, totalsY + boxRowHeight * 2, 40, boxRowHeight, 'F');
+      doc.rect(totalBoxX + 40, totalsY + boxRowHeight * 2, totalBoxWidth - 40, boxRowHeight, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(6.8);
+      doc.text('DECLARED VALUE', totalBoxX + 20, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'center' });
+      doc.setTextColor(15, 23, 42);
+      doc.setFontSize(7);
+      doc.text(`PHP ${totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalValX, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'right' });
+
+      // Signatures Section (Clean divider and crisp 2-column layout with generous label spacing)
+      const sigLineY = totalsY + (boxRowHeight * 3) + 5;
+
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.3);
+      doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
+
+      const sigRow1Y = sigLineY + 5;
+      const sigRow2Y = sigRow1Y + 5;
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+
+      const colRightX = margin + 92;
+
+      // Row 1 - Left: Prepared and Counted by
+      doc.setFont('helvetica', 'bold');
+      doc.text('Prepared and Counted by:', margin, sigRow1Y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(shipment.prepared_by_name || 'Zhon Manaois', margin + 42, sigRow1Y);
+
+      // Row 1 - Right: Verified by
+      doc.setFont('helvetica', 'bold');
+      doc.text('Verified by:', colRightX, sigRow1Y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(supervisorName, colRightX + 20, sigRow1Y);
+
+      // Row 2 - Left: Receiving Branch Signature
+      doc.setFont('helvetica', 'bold');
+      doc.text('Receiving Branch Signature:', margin, sigRow2Y);
+      doc.setFont('helvetica', 'normal');
+      doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 42, sigRow2Y);
+
+      // Row 2 - Right: Pickup By (Always aligned on the right under Verified By)
+      if (pickupByName) {
+        doc.setFont('helvetica', 'bold');
+        doc.text('Pickup By:', colRightX, sigRow2Y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(pickupByName, colRightX + 20, sigRow2Y);
+      }
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -291,15 +375,15 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const decMargin = 20;
   const decPageWidth = doc.internal.pageSize.getWidth();
   const decHeaderY = 26;
-  const logoWidth = 30;
-  const logoHeight = 14.5; // medium size: preserves exact 1442:698 aspect ratio
-  const decCompX = decMargin + logoWidth + 6;
+  const decLogoWidth = 24; // slightly smaller: preserves exact 1442:698 aspect ratio (balanced)
+  const decLogoHeight = 11.62;
+  const decCompX = decMargin + decLogoWidth + 5;
 
   // Top Left: Mobile Care Logo (Medium size, transparent background) + BUSINESS DISTRIBUTION CENTER
   try {
     const logoToUse = MOBILECARE_NO_BG_LOGO_BASE64 || MOBILECARE_LOGO_BASE64;
     if (logoToUse) {
-      doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, logoWidth, logoHeight);
+      doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, decLogoWidth, decLogoHeight);
     }
   } catch (e) {
     console.warn('Could not render logo in Declaration Form PDF:', e);
@@ -308,7 +392,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
   doc.setTextColor(15, 23, 42);
-  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + (logoHeight / 2) + 1.4);
+  doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + (decLogoHeight / 2) + 1.4);
 
   // Two-Column Section Geometry
   const formStartY = 58;
@@ -436,9 +520,38 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   // Pickup Date field remains completely blank, with no text or placeholder values displayed
   doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // UNIVERSAL FOOTER PAGINATION (Packing List pages only; omitted on Declaration Form)
+  // ══════════════════════════════════════════════════════════════════════════
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    
+    // Left footer confidentiality notice
+    doc.text(
+      'CONFIDENTIAL — MOBILE CARE SERVICES PHILS. INC. (DISTRIBUTION CENTER)',
+      margin,
+      pageHeight - 5
+    );
+
+    // Right footer pagination: Only for Packing List manifest pages (omitted on Declaration Form)
+    if (p <= manifestPagesCount) {
+      doc.text(
+        `Page ${p} of ${manifestPagesCount}`,
+        pageWidth - margin,
+        pageHeight - 5,
+        { align: 'right' }
+      );
+    }
+  }
+
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
   doc.save(filename);
+  return { doc, filename };
 }
 
 /**

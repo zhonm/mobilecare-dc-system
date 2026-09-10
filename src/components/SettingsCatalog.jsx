@@ -1749,8 +1749,7 @@ export default function SettingsCatalog() {
 
                   <div>
                     <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>BOOKING ID / AIRWAY BILL:</div>
-                    <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
-                      TRK-20260827-001
+                    <div style={{ fontSize: '10pt', fontWeight: 600, minHeight: '18px', paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
                     </div>
                   </div>
 

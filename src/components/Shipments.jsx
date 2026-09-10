@@ -25,7 +25,7 @@ import {
   ChevronUp,
   Calendar
 } from 'lucide-react';
-import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
+import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
 import {
   isShipmentMetroManila,
@@ -113,6 +113,24 @@ export default function Shipments() {
 
     generatePackingListPDF(shipmentObj, resolvedItems, siteObj || {}, pdfOptions);
     showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+  };
+
+  // Direct Corporate Excel (.xlsx) Request Handler
+  const handleDownloadXLSX = async (shipmentObj, items, siteObj) => {
+    try {
+      const sourceItems = items && items.length > 0 ? items : (shipmentObj?.items || []);
+      const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+      const exportOptions = {
+        supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
+        supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois'
+      };
+      await exportPackingListXLSX(shipmentObj, resolvedItems, siteObj || {}, exportOptions);
+      showToast(`Downloaded Excel Packing List (.xlsx) for ${shipmentObj.invoice_ref || shipmentObj.shipment_number || 'manifest'}`, 'success');
+    } catch (err) {
+      console.error('Failed to export XLSX:', err);
+      showToast('Failed to export Excel file: ' + err.message, 'error');
+    }
   };
 
   // Helper to normalize status
@@ -1009,6 +1027,16 @@ export default function Shipments() {
                         <span>PDF</span>
                       </button>
 
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
+                        title="Download Excel (.xlsx) Backup"
+                        style={{ background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <FileSpreadsheet size={13} color="#16a34a" />
+                        <span>XLSX</span>
+                      </button>
+
                       {normStatus === 'pending_pickup' && (
                         <button
                           className="btn btn-sm"
@@ -1245,6 +1273,16 @@ export default function Shipments() {
                           >
                             <Download size={13} />
                             <span>PDF</span>
+                          </button>
+
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
+                            title="Download Excel (.xlsx) Backup"
+                            style={{ background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <FileSpreadsheet size={13} color="#16a34a" />
+                            <span>XLSX</span>
                           </button>
 
                           {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
@@ -2326,15 +2364,26 @@ export default function Shipments() {
             </div>
 
             <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleRequestPrintOrPDF(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site, 'pdf')}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <Download size={14} />
-                <span>Download PDF Packing List</span>
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleRequestPrintOrPDF(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site, 'pdf')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Download size={14} />
+                  <span>Download PDF</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleDownloadXLSX(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0' }}
+                >
+                  <FileSpreadsheet size={14} color="#16a34a" />
+                  <span>Download Excel (.xlsx)</span>
+                </button>
+              </div>
 
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button

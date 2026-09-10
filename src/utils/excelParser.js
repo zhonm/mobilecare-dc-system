@@ -3117,7 +3117,7 @@ export function downloadScanOutTemplate(format = 'xlsx', existingSites = [], exi
 /**
  * Parse an uploaded XLSX or CSV file for Pack Scan-Out
  */
-export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [], defaultSiteId = null) {
+export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [], defaultSiteId = null, extraContext = {}) {
   try {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
@@ -3155,17 +3155,35 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
       return { success: false, error: 'File is empty or contains no data rows.' };
     }
 
-    let headerIdx = 0;
+    let headerIdx = -1;
     for (let i = 0; i < Math.min(15, rawRows.length); i++) {
       const row = rawRows[i] || [];
       const nonEmpty = row.filter(c => String(c).trim().length > 0);
       if (nonEmpty.length < 2) continue;
       const rowStr = row.map(c => String(c).toLowerCase()).join(' ');
-      if (/(part|serial|box|site|p\/n|s\/n|kgb|kbb|code|branch)/i.test(rowStr)) {
+      // Strong match: row containing both part identifier and serial/box identifier
+      if (
+        (/(part|p\/n|item|code)/i.test(rowStr) && /(serial|s\/n|sn|kgb|imei|box)/i.test(rowStr)) ||
+        /(part\s*number|serial\s*number)/i.test(rowStr)
+      ) {
         headerIdx = i;
         break;
       }
     }
+    // Fallback if no strong compound match was found
+    if (headerIdx === -1) {
+      for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+        const row = rawRows[i] || [];
+        const nonEmpty = row.filter(c => String(c).trim().length > 0);
+        if (nonEmpty.length < 2) continue;
+        const rowStr = row.map(c => String(c).toLowerCase()).join(' ');
+        if (/(part|serial|box|site|p\/n|s\/n|kgb|kbb|code|branch)/i.test(rowStr)) {
+          headerIdx = i;
+          break;
+        }
+      }
+    }
+    if (headerIdx === -1) headerIdx = 0;
 
     const headers = (rawRows[headerIdx] || []).map(h => String(h || '').trim());
     const headerMap = {
@@ -3213,7 +3231,10 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
       let rawSerial = '';
       for (const col of headerMap.serialCols) {
         const val = String(row[col] || '').trim();
-        if (val && !/^(n\/?a|none|null|-)$/i.test(val)) { rawSerial = val; break; }
+        if (val && !/^(n\/?a|none|null|-)$/i.test(val) && !/(verified|prepared|signature|pickup|driver)/i.test(val)) {
+          rawSerial = val;
+          break;
+        }
       }
 
       let rawBox = 1;
@@ -3241,15 +3262,15 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
         });
       }
 
-      // Skip Excel summary, total, subtotal, and count footer rows
+      // Skip Excel summary, total, subtotal, and count footer rows, plus signatures
       const isSummaryRow = row.some(cell => {
         const str = String(cell || '').trim();
-        return /^(total|totals|grand total|grandtotal|subtotal|sub-total|count|total count|summary|all totals|report total|end of report|page \d+.*)$/i.test(str);
+        return /^(total|totals|grand total|grandtotal|subtotal|sub-total|count|total count|summary|all totals|report total|end of report|page \d+.*|prepared.*|verified.*|pickup.*|signature.*)$/i.test(str);
       });
-      if (isSummaryRow && (!rawSerial || /^(total|subtotal|count)$/i.test(rawSerial))) {
+      if (isSummaryRow && (!rawSerial || /(verified|prepared|signature|pickup|total|subtotal|count)/i.test(rawSerial))) {
         continue;
       }
-      if (/^(total|totals|grand total|subtotal|count|summary|end of report)$/i.test(rawPn)) {
+      if (/^(total|totals|grand total|subtotal|count|summary|end of report|prepared.*|verified.*)$/i.test(rawPn)) {
         continue;
       }
 
@@ -3274,15 +3295,41 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
         }
       }
 
+      const isAlreadyInActiveDraft = Boolean(
+        extraContext?.activeDraftItems?.some(it => 
+          (it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial
+        )
+      );
+      const isBelongingToCurrentShipment = Boolean(
+        extraContext?.currentShipmentId && matchedUnit?.current_shipment_id === extraContext.currentShipmentId
+      );
+
+      if (!matchedUnit && isAlreadyInActiveDraft) {
+        const draftIt = extraContext.activeDraftItems.find(it => 
+          (it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial
+        );
+        matchedUnit = {
+          part_number: draftIt.part_number || draftIt.partNumber || cleanPN,
+          description: draftIt.description || draftIt.partDescription || cleanPN,
+          serial_number: cleanSerial,
+          status: 'packed'
+        };
+      }
+
       if (!matchedUnit) {
         status = 'NOT_FOUND';
         statusMessage = 'Serial not found in DC inventory';
-      } else if (matchedUnit.status !== 'in_stock' && matchedUnit.status !== 'allocated') {
-        status = 'ALREADY_PACKED';
-        statusMessage = `Unit already has status "${matchedUnit.status}"`;
       } else if (cleanSerial && seenSerials.has(cleanSerial)) {
         status = 'DUPLICATE';
         statusMessage = 'Duplicate Serial in file';
+      } else if (matchedUnit.status !== 'in_stock' && matchedUnit.status !== 'allocated') {
+        if (isAlreadyInActiveDraft || isBelongingToCurrentShipment) {
+          status = 'VALID';
+          statusMessage = 'Part of current packing list (Updated)';
+        } else {
+          status = 'ALREADY_PACKED';
+          statusMessage = `Unit already has status "${matchedUnit.status}"`;
+        }
       }
 
       if (cleanSerial) {
@@ -4984,6 +5031,259 @@ export function downloadSampleFixablyForecastingTemplate(format = 'xlsx') {
     XLSX.utils.book_append_sheet(wb, ws, 'Forecasting Masterlist');
     XLSX.writeFile(wb, 'Fixably_Forecasting_Masterlist_Template.xlsx');
   }
+}
+
+/**
+ * Export a Packing List (PL) to a beautifully styled, corporate Excel workbook (.xlsx)
+ * designed as an offline backup that can be edited and re-uploaded seamlessly.
+ */
+export async function exportPackingListXLSX(shipment = {}, items = [], site = {}, options = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = options.userName || shipment.prepared_by_name || 'MDC DC System 2';
+  workbook.created = new Date();
+  
+  const invoiceRef = shipment.invoice_ref || shipment.shipment_number || 'DRAFT';
+  workbook.title = `Packing List - ${invoiceRef}`;
+
+  const ws = workbook.addWorksheet('Packing List', {
+    pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 },
+    views: [{ showGridLines: true }]
+  });
+
+  const siteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
+  const siteCode = site.code || (site.name ? site.name.replace(/^MOBILECARE\s*-\s*/i, '') : 'SERVICE HUB');
+  const carrierName = shipment.carrier || shipment.courier || 'Lite Express';
+  const trackingNum = shipment.tracking_number || shipment.booking_id || '';
+  const shipmentDate = shipment.shipment_date || '';
+  const createdDate = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));
+  const totalBoxes = shipment.total_boxes || 1;
+  const remarks = shipment.remarks || 'KGB PARTS';
+
+  const totalDeclaredValuePHP = (items || []).reduce((sum, it) => {
+    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
+    return sum + (priceUSD * 85);
+  }, 0);
+
+  // 1. Company Branding Banner
+  ws.mergeCells('A1:I1');
+  const title1 = ws.getCell('A1');
+  title1.value = 'MOBILE CARE SERVICES PHILS. INC.';
+  title1.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+  title1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF54595F' } }; // Charcoal #54595F
+  title1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(1).height = 26;
+
+  ws.mergeCells('A2:I2');
+  const title2 = ws.getCell('A2');
+  title2.value = 'Business and Distribution Center — Corporate Packing List & Manifest';
+  title2.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  title2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+  title2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(2).height = 20;
+
+  ws.mergeCells('A3:I3');
+  const title3 = ws.getCell('A3');
+  title3.value = '2/L Northeast Square, #47 Connecticut St. Northeast Greenhills, San Juan City, Metro Manila';
+  title3.font = { name: 'Arial', size: 8.5, italic: true, color: { argb: 'FF64748B' } };
+  title3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.getRow(3).height = 18;
+
+  // 2. Metadata Block (Rows 5 to 7)
+  const metaStyleLabel = { font: { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } }, alignment: { horizontal: 'left', vertical: 'middle' } };
+  const metaStyleVal = { font: { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0284C7' } }, alignment: { horizontal: 'left', vertical: 'middle' } };
+
+  ws.getCell('A5').value = 'INVOICE REF:';
+  ws.getCell('A5').font = metaStyleLabel.font;
+  ws.getCell('B5').value = invoiceRef;
+  ws.getCell('B5').font = metaStyleVal.font;
+
+  ws.getCell('D5').value = 'SHIPMENT DATE:';
+  ws.getCell('D5').font = metaStyleLabel.font;
+  ws.getCell('E5').value = shipmentDate || '—';
+  ws.getCell('E5').font = { name: 'Arial', size: 9, color: { argb: 'FF334155' } };
+
+  ws.getCell('G5').value = 'TOTAL QTY:';
+  ws.getCell('G5').font = metaStyleLabel.font;
+  ws.getCell('H5').value = `${items.length} units`;
+  ws.getCell('H5').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+
+  ws.getCell('A6').value = 'DESTINATION SITE:';
+  ws.getCell('A6').font = metaStyleLabel.font;
+  ws.getCell('B6').value = siteName;
+  ws.getCell('B6').font = metaStyleVal.font;
+
+  ws.getCell('D6').value = 'CREATED DATE:';
+  ws.getCell('D6').font = metaStyleLabel.font;
+  ws.getCell('E6').value = createdDate;
+  ws.getCell('E6').font = { name: 'Arial', size: 9, color: { argb: 'FF334155' } };
+
+  ws.getCell('G6').value = 'TOTAL BOXES:';
+  ws.getCell('G6').font = metaStyleLabel.font;
+  ws.getCell('H6').value = totalBoxes;
+  ws.getCell('H6').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+
+  ws.getCell('A7').value = 'COURIER:';
+  ws.getCell('A7').font = metaStyleLabel.font;
+  ws.getCell('B7').value = carrierName;
+  ws.getCell('B7').font = { name: 'Arial', size: 9, color: { argb: 'FF334155' } };
+
+  ws.getCell('D7').value = 'TRACKING NUMBER:';
+  ws.getCell('D7').font = metaStyleLabel.font;
+  ws.getCell('E7').value = trackingNum || '—';
+  ws.getCell('E7').font = { name: 'Arial', size: 9, color: { argb: 'FF334155' } };
+
+  ws.getCell('G7').value = 'DECLARED VALUE:';
+  ws.getCell('G7').font = metaStyleLabel.font;
+  ws.getCell('H7').value = totalDeclaredValuePHP;
+  ws.getCell('H7').numFmt = '₱#,##0.00';
+  ws.getCell('H7').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF15803D' } };
+
+  // 3. Table Header (Row 9)
+  const headerRow = ws.getRow(9);
+  headerRow.values = [
+    '#',
+    'Part Number',
+    'Description',
+    'Serial Number',
+    'Box Number',
+    'Destination Site',
+    'Price (USD)',
+    'Declared Value (PHP)',
+    'Remarks'
+  ];
+  headerRow.height = 24;
+  headerRow.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF54595F' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+      left: { style: 'thin', color: { argb: 'FF94A3B8' } },
+      bottom: { style: 'medium', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF94A3B8' } }
+    };
+  });
+
+  // 4. Item Data Rows
+  items.forEach((it, idx) => {
+    const rowNum = 10 + idx;
+    const row = ws.getRow(rowNum);
+    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
+    const pricePHP = priceUSD * 85;
+    const boxNum = it.box_number ? (typeof it.box_number === 'number' ? it.box_number : parseInt(String(it.box_number).split('/')[0], 10) || 1) : 1;
+
+    row.values = [
+      idx + 1,
+      it.part_number || it.partNumber || '',
+      it.description || it.partDescription || '',
+      it.serial_number || it.serialNumber || '',
+      boxNum,
+      siteCode,
+      priceUSD,
+      pricePHP,
+      remarks
+    ];
+    row.height = 20;
+
+    row.eachCell((cell, colNumber) => {
+      cell.font = { name: 'Arial', size: 9, color: { argb: 'FF0F172A' } };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+
+      if (colNumber === 1 || colNumber === 5) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (colNumber === 2 || colNumber === 4) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 9, bold: colNumber === 2, color: { argb: 'FF0F172A' } };
+      } else if (colNumber === 7) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else if (colNumber === 8) {
+        cell.numFmt = '₱#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      }
+    });
+  });
+
+  // 5. Total Row
+  const totalRowNum = 10 + items.length;
+  const totalRow = ws.getRow(totalRowNum);
+  totalRow.values = [
+    'TOTAL',
+    '',
+    `${items.length} Total Units`,
+    '',
+    totalBoxes,
+    '',
+    '',
+    totalDeclaredValuePHP,
+    ''
+  ];
+  totalRow.height = 24;
+  totalRow.eachCell((cell, colNumber) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF54595F' } };
+    cell.border = {
+      top: { style: 'medium', color: { argb: 'FF334155' } },
+      bottom: { style: 'medium', color: { argb: 'FF334155' } }
+    };
+    if (colNumber === 8) {
+      cell.numFmt = '₱#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else if (colNumber === 1 || colNumber === 5) {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'left', vertical: 'middle' };
+    }
+  });
+
+  // 6. Signatures Row
+  const sigRowNum = totalRowNum + 3;
+  ws.getCell(`A${sigRowNum}`).value = `Prepared and Counted by: ${shipment.prepared_by_name || 'Zhon Manaois'}`;
+  ws.getCell(`A${sigRowNum}`).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF334155' } };
+
+  ws.getCell(`D${sigRowNum}`).value = `Verified by: ${options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar'}`;
+  ws.getCell(`D${sigRowNum}`).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF334155' } };
+
+  const pickupDisplay = shipment.pickup_by_name || shipment.courier_name || '';
+  ws.getCell(`G${sigRowNum}`).value = `Pickup By: ${pickupDisplay || '—'}`;
+  ws.getCell(`G${sigRowNum}`).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF334155' } };
+
+  // Set column widths
+  ws.columns = [
+    { width: 6 },  // #
+    { width: 18 }, // Part Number
+    { width: 34 }, // Description
+    { width: 26 }, // Serial Number
+    { width: 13 }, // Box Number
+    { width: 22 }, // Destination Site
+    { width: 15 }, // Price (USD)
+    { width: 22 }, // Declared Value (PHP)
+    { width: 18 }  // Remarks
+  ];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const cleanRef = (shipment.invoice_ref || shipment.shipment_number || 'Manifest').replace(/[^a-zA-Z0-9#_-]/g, '_');
+    link.href = url;
+    link.download = `PackingList_${cleanRef}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  return { workbook, buffer };
 }
 
 

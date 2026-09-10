@@ -32,7 +32,7 @@ import {
   SlidersHorizontal,
   Clock
 } from 'lucide-react';
-import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
+import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { generateNextInvoiceRef } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber, parseBarcodeData } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
@@ -302,6 +302,7 @@ export default function ScanOutPacking() {
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
   const [importFilter, setImportFilter] = useState('ALL'); // 'ALL' | 'VALID' | 'NOT_FOUND'
+  const [importMode, setImportMode] = useState('replace'); // 'replace' | 'append'
 
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -875,9 +876,14 @@ export default function ScanOutPacking() {
     }
     setIsParsing(true);
     try {
-      const res = await parseScanOutPartsFile(file, inventoryUnits, sites, selectedSiteId);
+      const res = await parseScanOutPartsFile(file, inventoryUnits, sites, selectedSiteId, {
+        activeDraftItems: currentShipment?.items || [],
+        currentShipmentId: currentShipment?.id
+      });
       if (res.success) {
         setParsedBatch(res);
+        // Default to 'replace' if draft already has items, otherwise 'append'
+        setImportMode((currentShipment?.items && currentShipment.items.length > 0) ? 'replace' : 'append');
         showToast(`Parsed ${res.summary.total} rows (${res.summary.valid} ready to pack)`, 'info');
       } else {
         showToast(res.error || 'Failed to parse pack file', 'error');
@@ -897,7 +903,7 @@ export default function ScanOutPacking() {
     showToast(`Downloaded Scan-Out template (${format.toUpperCase()})`, 'info');
   };
 
-  const handleConfirmBatchPack = () => {
+  const handleConfirmBatchPack = async () => {
     if (!parsedBatch || !parsedBatch.items) return;
 
     const validItems = parsedBatch.items.filter(it => it.status === 'VALID');
@@ -908,6 +914,18 @@ export default function ScanOutPacking() {
 
     markLocalDraftEdit();
 
+    // If replace mode: restore removed parts back to DC stock
+    if (importMode === 'replace' && currentShipment.items && currentShipment.items.length > 0) {
+      const validSerialsSet = new Set(validItems.map(it => (it.serialNumber || it.serial_number || '').trim().toUpperCase()));
+      const itemsToRestore = currentShipment.items.filter(it => {
+        const s = (it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        return s && !validSerialsSet.has(s);
+      });
+      if (itemsToRestore.length > 0) {
+        await clearShipmentDraftItems(currentShipment.id, itemsToRestore);
+      }
+    }
+
     const res = batchAddScanOutUnits({
       shipmentId: currentShipment.id,
       siteId: selectedSiteId,
@@ -917,7 +935,9 @@ export default function ScanOutPacking() {
     if (res.success) {
       const updatedDraft = {
         ...currentShipment,
-        items: [...(currentShipment.items || []), ...(res.items || [])],
+        items: importMode === 'replace'
+          ? (res.items || validItems)
+          : [...(currentShipment.items || []), ...(res.items || [])],
         updated_at: new Date().toISOString()
       };
       setCurrentShipment(updatedDraft);
@@ -925,7 +945,7 @@ export default function ScanOutPacking() {
 
       setScanResult({
         type: 'success',
-        message: `[BATCH PACK COMPLETE] Packed ${res.count || (res.items || []).length} units from "${parsedBatch.fileName}" into Manifest ${currentShipment.invoice_ref}!`
+        message: `[BATCH PACK COMPLETE] ${importMode === 'replace' ? 'Replaced draft with' : 'Packed'} ${res.count || (res.items || []).length} units from "${parsedBatch.fileName}" into Manifest ${currentShipment.invoice_ref}!`
       });
 
       setParsedBatch(null);
@@ -1142,6 +1162,22 @@ export default function ScanOutPacking() {
 
     generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
     showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+  };
+
+  // --- Corporate Excel (.xlsx) Download Handler ---
+  const handleDownloadXLSX = async (shipmentObj, items, siteObj) => {
+    try {
+      const exportOptions = {
+        supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
+        supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois'
+      };
+      await exportPackingListXLSX(shipmentObj, items || [], siteObj || {}, exportOptions);
+      showToast(`Downloaded Excel Packing List (.xlsx) for ${shipmentObj.invoice_ref || shipmentObj.shipment_number || 'manifest'}`, 'success');
+    } catch (err) {
+      console.error('Failed to export XLSX:', err);
+      showToast('Failed to export Excel file: ' + err.message, 'error');
+    }
   };
 
   const handleConfirmTrackingModal = async () => {
@@ -2260,15 +2296,37 @@ export default function ScanOutPacking() {
             </div>
 
             {currentShipment.items && currentShipment.items.length > 0 && (
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={() => setIsClearModalOpen(true)}
-                style={{ height: '34px' }}
-                title="Remove all parts and return them to In-Stock inventory"
-              >
-                <RotateCcw size={13} />
-                <span>Clear Draft</span>
-              </button>
+              <>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleDownloadXLSX(currentShipment, currentShipment.items || [], selectedSite)}
+                  style={{
+                    height: '34px',
+                    background: '#f0fdf4',
+                    color: '#15803d',
+                    borderColor: '#bbf7d0',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer'
+                  }}
+                  title="Download Packing List as Excel (.xlsx) spreadsheet backup"
+                >
+                  <FileSpreadsheet size={15} color="#16a34a" />
+                  <span>Download XLSX</span>
+                </button>
+
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={() => setIsClearModalOpen(true)}
+                  style={{ height: '34px' }}
+                  title="Remove all parts and return them to In-Stock inventory"
+                >
+                  <RotateCcw size={13} />
+                  <span>Clear Draft</span>
+                </button>
+              </>
             )}
 
             <button
@@ -2699,6 +2757,15 @@ export default function ScanOutPacking() {
                           <Download size={12} />
                           <span>PDF</span>
                         </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleDownloadXLSX(s, s.items || [], destSite)}
+                          title="Download Draft Excel (.xlsx) Backup"
+                          style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0' }}
+                        >
+                          <FileSpreadsheet size={12} color="#16a34a" />
+                          <span>XLSX</span>
+                        </button>
                         {canUserDeleteRecord(s, currentUser) ? (
                           <button
                             className="btn btn-danger btn-sm"
@@ -2796,6 +2863,17 @@ export default function ScanOutPacking() {
                 >
                   <Download size={14} />
                   <span>Download PDF</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const dest = sites.find(s => s.id === inspectShipmentModal.site_id) || {};
+                    handleDownloadXLSX(inspectShipmentModal, inspectShipmentModal.items || [], dest);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0' }}
+                >
+                  <FileSpreadsheet size={14} color="#16a34a" />
+                  <span>Download Excel (.xlsx)</span>
                 </button>
                 <button className="btn btn-primary" onClick={() => setInspectShipmentModal(null)}>
                   Close
@@ -3136,6 +3214,43 @@ export default function ScanOutPacking() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Mode Selector when current draft already has packed items */}
+                  {currentShipment.items && currentShipment.items.length > 0 && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '16px',
+                      background: '#f8fafc',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      marginTop: '12px',
+                      flexWrap: 'wrap'
+                    }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a' }}>Import Mode:</span>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: importMode === 'replace' ? 700 : 500 }}>
+                        <input
+                          type="radio"
+                          name="importMode"
+                          value="replace"
+                          checked={importMode === 'replace'}
+                          onChange={() => setImportMode('replace')}
+                        />
+                        <span>Sync / Replace Draft (Apply edits from Excel)</span>
+                      </label>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', fontWeight: importMode === 'append' ? 700 : 500 }}>
+                        <input
+                          type="radio"
+                          name="importMode"
+                          value="append"
+                          checked={importMode === 'append'}
+                          onChange={() => setImportMode('append')}
+                        />
+                        <span>Append New Parts Only</span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -3152,7 +3267,11 @@ export default function ScanOutPacking() {
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
                   <CheckCircle2 size={16} />
-                  <span>Pack {parsedBatch.summary.valid} Valid Units into Manifest</span>
+                  <span>
+                    {importMode === 'replace' && currentShipment.items?.length > 0
+                      ? `Sync & Replace Draft (${parsedBatch.summary.valid} Parts)`
+                      : `Pack ${parsedBatch.summary.valid} Valid Units into Manifest`}
+                  </span>
                 </button>
               )}
             </div>
