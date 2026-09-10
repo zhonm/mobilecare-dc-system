@@ -21,7 +21,8 @@ const PRESERVED_SESSION_KEYS = [
   'mdc_default_forecasting_model',
   'mdc_allocation_mode',
   'mdc_filter_scope',
-  'mdc_is_cleared'
+  'mdc_is_cleared',
+  'mdc_supervisor_settings'
 ];
 
 /**

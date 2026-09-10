@@ -43,7 +43,9 @@ import {
   SearchX,
   Copy,
   Mail,
-  Phone
+  Phone,
+  Globe,
+  Barcode
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -927,6 +929,273 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
   }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin, isPmgUser]);
 
+  // Dynamic header configuration based on active view and role
+  const viewHeaderMeta = useMemo(() => {
+    switch (activeTab) {
+      case 'stock_on_hand':
+        return {
+          icon: Package,
+          iconBg: 'rgba(56, 189, 248, 0.2)',
+          iconColor: '#38bdf8',
+          title: 'Branch Stock On Hand',
+          subtitle: `Live physical inventory, verified serialized units, and arriving shipments for ${activeSiteObj.name || activeSiteObj.code}`,
+          badgeText: activeSiteObj.name || activeSiteObj.code || 'Service Center',
+          badgeIcon: Building2
+        };
+      case 'all_stocks':
+        return {
+          icon: Globe,
+          iconBg: 'rgba(129, 140, 248, 0.2)',
+          iconColor: '#818cf8',
+          title: 'All Stocks & Multi-Site Inventory',
+          subtitle: 'Directory-wide stock visibility across all MobileCare Authorized Service Points and Central DC',
+          badgeText: 'Network Directory',
+          badgeIcon: Globe
+        };
+      case 'usage_history':
+        return {
+          icon: Wrench,
+          iconBg: 'rgba(52, 211, 153, 0.2)',
+          iconColor: '#34d399',
+          title: 'Parts Consumption Log',
+          subtitle: `Serialized audit history of parts installed in repair work orders at ${activeSiteObj.name || activeSiteObj.code}`,
+          badgeText: activeSiteObj.name || activeSiteObj.code || 'Service Center',
+          badgeIcon: Building2
+        };
+      case 'requests_table':
+      default:
+        return {
+          icon: Inbox,
+          iconBg: 'rgba(56, 189, 248, 0.2)',
+          iconColor: '#38bdf8',
+          title: isSuperadmin ? 'Branch Parts Requests & Replenishment Review' : 'Parts Requests & Replenishment',
+          subtitle: isSuperadmin
+            ? 'Master DC replenishment governance • Review, approve, and manage branch replenishment orders'
+            : 'Request iPhone displays and batteries from Central DC, and monitor shipment fulfillment status',
+          badgeText: activeSiteObj.name || activeSiteObj.code || 'Service Center',
+          badgeIcon: Building2
+        };
+    }
+  }, [activeTab, isSuperadmin, activeSiteObj]);
+
+  // Dynamic KPI cards configuration tailored per view
+  const kpiCards = useMemo(() => {
+    switch (activeTab) {
+      case 'stock_on_hand':
+        return [
+          {
+            id: 'stock-units',
+            label: 'Branch Stock On Hand',
+            value: siteStockData.totalInStock,
+            unit: 'units in stock',
+            subtext: `${Object.keys(siteStockData.partsSummary || {}).length} unique part numbers`,
+            icon: Package,
+            accent: '#0284c7',
+            iconBg: '#e0f2fe',
+            iconColor: '#0284c7'
+          },
+          {
+            id: 'stock-incoming',
+            label: 'Incoming Shipments',
+            value: incomingShipments.length,
+            unit: 'manifests in-transit',
+            subtext: `${incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} parts en route from DC`,
+            icon: Truck,
+            accent: '#f59e0b',
+            iconBg: '#fef3c7',
+            iconColor: '#d97706'
+          },
+          {
+            id: 'stock-used',
+            label: 'Parts Consumed',
+            value: liveUsedUnitsLog.length,
+            unit: 'lifetime units',
+            subtext: 'Installed in customer repairs',
+            icon: Wrench,
+            accent: '#10b981',
+            iconBg: '#dcfce7',
+            iconColor: '#059669'
+          },
+          {
+            id: 'stock-health',
+            label: 'Stock Health',
+            value: 'Verified',
+            unit: 'active status',
+            subtext: 'Granular serial tracking protected',
+            icon: ShieldCheck,
+            accent: '#8b5cf6',
+            iconBg: '#ede9fe',
+            iconColor: '#7c3aed'
+          }
+        ];
+      case 'all_stocks':
+        return [
+          {
+            id: 'all-network',
+            label: 'Total Network Inventory',
+            value: regionStockTotals.mmUnits + regionStockTotals.provUnits,
+            unit: 'units across ASPs',
+            subtext: 'Physical branch on-hand stock',
+            icon: Globe,
+            accent: '#0284c7',
+            iconBg: '#e0f2fe',
+            iconColor: '#0284c7'
+          },
+          {
+            id: 'all-mm',
+            label: 'Metro Manila ASPs',
+            value: regionStockTotals.mmUnits,
+            unit: 'units on-hand',
+            subtext: `${metroManilaSites.length} Metro Manila service points`,
+            icon: Building2,
+            accent: '#3b82f6',
+            iconBg: '#dbeafe',
+            iconColor: '#2563eb'
+          },
+          {
+            id: 'all-prov',
+            label: 'Provincial ASPs',
+            value: regionStockTotals.provUnits,
+            unit: 'units on-hand',
+            subtext: `${provincialSites.length} Provincial service points`,
+            icon: MapPin,
+            accent: '#f59e0b',
+            iconBg: '#fef3c7',
+            iconColor: '#d97706'
+          },
+          {
+            id: 'all-dc',
+            label: 'Central DC Stock',
+            value: Object.values(dcStockSummary || {}).reduce((acc, p) => acc + (p.inStock || 0), 0),
+            unit: 'units available',
+            subtext: 'Master replenishment hub',
+            icon: ShieldCheck,
+            accent: '#8b5cf6',
+            iconBg: '#ede9fe',
+            iconColor: '#7c3aed'
+          }
+        ];
+      case 'usage_history': {
+        const displayCount = liveUsedUnitsLog.filter(u =>
+          (u.description || u.part_number || '').toLowerCase().includes('disp') ||
+          (u.part_category || '').toLowerCase().includes('disp')
+        ).length;
+        const batteryCount = liveUsedUnitsLog.filter(u =>
+          (u.description || u.part_number || '').toLowerCase().includes('batt') ||
+          (u.part_category || '').toLowerCase().includes('batt')
+        ).length;
+        return [
+          {
+            id: 'usage-total',
+            label: 'Total Consumed Units',
+            value: liveUsedUnitsLog.length,
+            unit: 'parts recorded',
+            subtext: 'Serialized repair installations',
+            icon: Wrench,
+            accent: '#10b981',
+            iconBg: '#dcfce7',
+            iconColor: '#059669'
+          },
+          {
+            id: 'usage-displays',
+            label: 'Display Assemblies',
+            value: displayCount,
+            unit: 'screens consumed',
+            subtext: 'Screen repair work orders',
+            icon: Smartphone,
+            accent: '#0284c7',
+            iconBg: '#e0f2fe',
+            iconColor: '#0284c7'
+          },
+          {
+            id: 'usage-batteries',
+            label: 'Batteries Consumed',
+            value: batteryCount,
+            unit: 'batteries consumed',
+            subtext: 'Battery replacement work orders',
+            icon: Zap,
+            accent: '#f59e0b',
+            iconBg: '#fef3c7',
+            iconColor: '#d97706'
+          },
+          {
+            id: 'usage-skus',
+            label: 'Distinct Part Numbers',
+            value: new Set(liveUsedUnitsLog.map(u => u.part_number).filter(Boolean)).size,
+            unit: 'unique SKUs',
+            subtext: 'Serviced display & battery models',
+            icon: Boxes,
+            accent: '#8b5cf6',
+            iconBg: '#ede9fe',
+            iconColor: '#7c3aed'
+          }
+        ];
+      }
+      case 'requests_table':
+      default:
+        return [
+          {
+            id: 'req-pending',
+            label: 'Pending Review',
+            value: metrics.pending,
+            unit: 'open requests',
+            subtext: isSuperadmin ? 'Requires Superadmin approval' : 'Awaiting DC Superadmin approval',
+            icon: Clock,
+            accent: '#f59e0b',
+            iconBg: '#fef3c7',
+            iconColor: '#d97706'
+          },
+          {
+            id: 'req-approved',
+            label: 'Approved & In-Packing',
+            value: metrics.approved,
+            unit: 'approved requests',
+            subtext: 'Queued for DC dispatch batch',
+            icon: ShieldCheck,
+            accent: '#8b5cf6',
+            iconBg: '#ede9fe',
+            iconColor: '#7c3aed'
+          },
+          {
+            id: 'req-fulfilled',
+            label: 'Fulfilled Requests',
+            value: metrics.fulfilled,
+            unit: 'completed',
+            subtext: 'Dispatched / Shipped to site',
+            icon: CheckCircle2,
+            accent: '#10b981',
+            iconBg: '#dcfce7',
+            iconColor: '#059669'
+          },
+          {
+            id: 'req-branch-stock',
+            label: 'Branch Stock On Hand',
+            value: siteStockData.totalInStock,
+            unit: 'units in stock',
+            subtext: `${Object.keys(siteStockData.partsSummary || {}).length} unique part numbers`,
+            icon: Package,
+            accent: '#0284c7',
+            iconBg: '#e0f2fe',
+            iconColor: '#0284c7'
+          }
+        ];
+    }
+  }, [
+    activeTab,
+    metrics,
+    siteStockData,
+    incomingShipments,
+    liveUsedUnitsLog,
+    regionStockTotals,
+    metroManilaSites.length,
+    provincialSites.length,
+    dcStockSummary,
+    isSuperadmin
+  ]);
+
+  const HeaderIcon = viewHeaderMeta.icon;
+  const BadgeIcon = viewHeaderMeta.badgeIcon;
+
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
       
@@ -935,46 +1204,43 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         className="card"
         style={{
           marginBottom: '20px',
-          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
+          background: 'linear-gradient(135deg, #090f1d 0%, #0f172a 45%, #1e293b 100%)',
           color: '#ffffff',
           padding: '24px 28px',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid #334155'
+          borderRadius: '12px',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          boxShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.25)'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-              <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#38bdf8' }}>
-                <Inbox size={20} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
+              <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: viewHeaderMeta.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: viewHeaderMeta.iconColor }}>
+                <HeaderIcon size={20} />
               </div>
-              <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0 }}>
-                {activeTab === 'all_stocks'
-                  ? 'All Stocks & Multi-Site Inventory'
-                  : (isSuperadmin ? 'Branch Parts Requests & Replenishment Review' : 'New Request of Parts & Site Stock')}
+              <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
+                {viewHeaderMeta.title}
               </h2>
               <span
                 style={{
-                  background: 'rgba(56, 189, 248, 0.15)',
+                  background: 'rgba(56, 189, 248, 0.12)',
                   color: '#38bdf8',
-                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
                   padding: '3px 10px',
                   borderRadius: '999px',
                   fontSize: '11.5px',
                   fontWeight: 700,
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px'
+                  gap: '5px'
                 }}
               >
-                <Building2 size={13} />
-                {activeSiteObj.name || activeSiteObj.code || 'Service Center'}
+                <BadgeIcon size={13} />
+                {viewHeaderMeta.badgeText}
               </span>
             </div>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-              {isSuperadmin
-                ? 'Master DC replenishment governance • Review and approve branch parts requests'
-                : 'Live branch stock visibility • Granular serial privacy • Superadmin replenishment governance'}
+            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0, lineHeight: 1.4 }}>
+              {viewHeaderMeta.subtitle}
             </p>
           </div>
 
@@ -1010,27 +1276,98 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             {/* Sync / Refresh Button */}
             <button
               className="btn btn-secondary"
-              style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+              style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}
               onClick={() => {
                 fetchPartsRequests();
                 if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'Parts requests refresh' });
               }}
               disabled={isLoadingPartsRequests || isAutoRefreshing}
-              title="Refresh parts requests and live stock from cloud database"
+              title="Refresh live data from cloud database"
             >
               <RefreshCw size={14} className={isLoadingPartsRequests || isAutoRefreshing ? 'spin' : ''} />
               <span>{isLoadingPartsRequests ? 'Syncing…' : 'Sync'}</span>
             </button>
 
-            {/* New Request Button (Strictly for PMG Branch Users) */}
-            {!isSuperadmin && (
+            {/* View-Specific Primary Actions */}
+            {activeTab === 'requests_table' && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExportRequestsToXlsx}
+                  style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' }}
+                  title="Export parts requests to Excel"
+                >
+                  <FileSpreadsheet size={14} color="#34d399" />
+                  <span>Export to Excel</span>
+                </button>
+                {!isSuperadmin && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setIsFormOpen(prev => !prev)}
+                    style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                  >
+                    {isFormOpen ? <X size={16} /> : <Plus size={16} />}
+                    <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {activeTab === 'stock_on_hand' && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => openMarkUsedModal()}
+                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                  title="Record part consumed in customer repair"
+                >
+                  <Wrench size={14} />
+                  <span>Record Part Used</span>
+                </button>
+                {isPmgUser && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setActiveTab('scan-in')}
+                    style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    title="Open Receive Scan-In Station"
+                  >
+                    <Barcode size={14} />
+                    <span>Receive Scan-In</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {activeTab === 'usage_history' && (
               <button
+                type="button"
                 className="btn btn-primary"
-                onClick={() => setIsFormOpen(prev => !prev)}
-                style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                onClick={() => openMarkUsedModal()}
+                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                title="Record part consumed in customer repair"
               >
-                {isFormOpen ? <X size={16} /> : <Plus size={16} />}
-                <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
+                <Wrench size={14} />
+                <span>Record Part Used</span>
+              </button>
+            )}
+
+            {activeTab === 'all_stocks' && !isSuperadmin && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  handleTabChange('requests_table');
+                  setIsFormOpen(true);
+                }}
+                style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                title="Create a new parts replenishment requisition"
+              >
+                <Plus size={16} />
+                <span>New Request</span>
               </button>
             )}
           </div>
@@ -1046,65 +1383,48 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           marginBottom: '20px'
         }}
       >
-        <div className="card" style={{ padding: '16px 18px', borderLeft: '4px solid #0284c7', background: '#ffffff' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>Branch Stock On Hand</span>
-            <div style={{ padding: '6px', background: '#e0f2fe', color: '#0284c7', borderRadius: '6px' }}>
-              <Package size={16} />
+        {kpiCards.map(card => {
+          const Icon = card.icon;
+          return (
+            <div
+              key={card.id}
+              className="card"
+              style={{
+                padding: '16px 18px',
+                borderLeft: `4px solid ${card.accent}`,
+                background: '#ffffff',
+                borderRadius: '10px',
+                borderTop: '1px solid #e2e8f0',
+                borderRight: '1px solid #e2e8f0',
+                borderBottom: '1px solid #e2e8f0',
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                gap: '8px',
+                transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  {card.label}
+                </span>
+                <div style={{ padding: '6px', background: card.iconBg, color: card.iconColor, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon size={16} />
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                  {card.value}{' '}
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>{card.unit}</span>
+                </div>
+                <div style={{ fontSize: '11px', color: card.iconColor, marginTop: '4px', fontWeight: 600 }}>
+                  {card.subtext}
+                </div>
+              </div>
             </div>
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>
-            {siteStockData.totalInStock} <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>units in stock</span>
-          </div>
-          <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '4px', fontWeight: 600 }}>
-            {Object.keys(siteStockData.partsSummary || {}).length} unique part numbers
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '16px 18px', borderLeft: '4px solid #f59e0b', background: '#ffffff' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>Pending Review</span>
-            <div style={{ padding: '6px', background: '#fef3c7', color: '#d97706', borderRadius: '6px' }}>
-              <Clock size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>
-            {metrics.pending} <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>open requests</span>
-          </div>
-          <div style={{ fontSize: '11px', color: '#d97706', marginTop: '4px', fontWeight: 600 }}>
-            {isSuperadmin ? 'Requires Superadmin approval' : 'Awaiting DC Superadmin approval'}
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '16px 18px', borderLeft: '4px solid #8b5cf6', background: '#ffffff' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>Approved &amp; In-Packing</span>
-            <div style={{ padding: '6px', background: '#ede9fe', color: '#7c3aed', borderRadius: '6px' }}>
-              <ShieldCheck size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>
-            {metrics.approved} <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>approved</span>
-          </div>
-          <div style={{ fontSize: '11px', color: '#7c3aed', marginTop: '4px', fontWeight: 600 }}>
-            Queued for DC dispatch batch
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '16px 18px', borderLeft: '4px solid #10b981', background: '#ffffff' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>Fulfilled Requests</span>
-            <div style={{ padding: '6px', background: '#dcfce7', color: '#059669', borderRadius: '6px' }}>
-              <CheckCircle2 size={16} />
-            </div>
-          </div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>
-            {metrics.fulfilled} <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>completed</span>
-          </div>
-          <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px', fontWeight: 600 }}>
-            Dispatched / Shipped to site
-          </div>
-        </div>
+          );
+        })}
       </div>
 
       {/* 3. New Parts Request Submission Form Modal / Collapsible Section (Strictly PMG Users) */}
@@ -1597,82 +1917,98 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 4. Sub-Navigation Tabs */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-light)', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button
-            className={`btn btn-sm ${activeTab === 'requests_table' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleTabChange('requests_table')}
-            style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-          >
-            <Inbox size={15} />
-            <span>Parts Requests ({filteredRequests.length})</span>
-          </button>
-          <button
-            className={`btn btn-sm ${activeTab === 'stock_on_hand' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleTabChange('stock_on_hand')}
-            style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-          >
-            <Package size={15} />
-            <span>My Branch Stock ({siteStockData.totalInStock})</span>
-          </button>
-          <button
-            className={`btn btn-sm ${activeTab === 'all_stocks' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleTabChange('all_stocks')}
-            style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-          >
-            <Boxes size={15} />
-            <span>All Stocks &amp; Multi-Site ({flattenedAllStocksRows.length})</span>
-          </button>
-          <button
-            className={`btn btn-sm ${activeTab === 'usage_history' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleTabChange('usage_history')}
-            style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-          >
-            <TrendingDown size={15} />
-            <span>Used Parts History ({siteUsageData.recordsCount})</span>
-          </button>
-        </div>
+      {/* 4. Sub-Navigation Tabs (Rendered strictly for Superadmin / non-PMG roles; PMG users navigate cleanly via sidebar) */}
+      {!isPmgUser && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-light)', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === 'requests_table' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleTabChange('requests_table')}
+              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
+            >
+              <Inbox size={15} />
+              <span>Parts Requests ({filteredRequests.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === 'stock_on_hand' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleTabChange('stock_on_hand')}
+              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
+            >
+              <Package size={15} />
+              <span>Branch Stock ({siteStockData.totalInStock})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === 'all_stocks' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleTabChange('all_stocks')}
+              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
+            >
+              <Boxes size={15} />
+              <span>All Stocks &amp; Multi-Site ({flattenedAllStocksRows.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === 'usage_history' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleTabChange('usage_history')}
+              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
+            >
+              <TrendingDown size={15} />
+              <span>Used Parts History ({siteUsageData.recordsCount})</span>
+            </button>
+          </div>
 
-        {activeTab === 'requests_table' && (
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={handleExportRequestsToXlsx}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
-          >
-            <FileSpreadsheet size={14} color="#059669" />
-            <span>Export to Excel</span>
-          </button>
-        )}
-      </div>
+          {activeTab === 'requests_table' && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleExportRequestsToXlsx}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
+            >
+              <FileSpreadsheet size={14} color="#059669" />
+              <span>Export to Excel</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 5. TAB 1: Parts Requests List */}
       {activeTab === 'requests_table' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
           
           {/* Filters Bar */}
           <div style={{ padding: '14px 18px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '240px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '320px' }}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
                 <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                 <input
                   type="text"
                   className="form-input"
-                  style={{ paddingLeft: '32px', fontSize: '12.5px' }}
+                  style={{ paddingLeft: '32px', fontSize: '12.5px', borderRadius: '8px' }}
                   placeholder="Filter requests by part #, requester, or ID..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               {/* Status Filter */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Status:</span>
                 <select
                   className="form-select"
-                  style={{ fontSize: '12px', padding: '4px 8px', width: 'auto' }}
+                  style={{ fontSize: '12px', padding: '5px 10px', width: 'auto', borderRadius: '6px' }}
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                 >
@@ -1687,11 +2023,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               </div>
 
               {/* Priority Filter */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Priority:</span>
                 <select
                   className="form-select"
-                  style={{ fontSize: '12px', padding: '4px 8px', width: 'auto' }}
+                  style={{ fontSize: '12px', padding: '5px 10px', width: 'auto', borderRadius: '6px' }}
                   value={priorityFilter}
                   onChange={(e) => setPriorityFilter(e.target.value)}
                 >
@@ -1701,22 +2037,60 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   <option value="critical">Critical</option>
                 </select>
               </div>
+
+              {/* Export to Excel Button */}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportRequestsToXlsx}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 12px', borderRadius: '6px' }}
+                title="Export filtered parts requests to Excel"
+              >
+                <FileSpreadsheet size={14} color="#059669" />
+                <span>Export to Excel</span>
+              </button>
             </div>
           </div>
 
           {/* Table Container */}
           <div className="table-container" style={{ overflowX: 'auto' }}>
             {filteredRequests.length === 0 ? (
-              <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
-                <Inbox size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
-                <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Parts Requests Found</h4>
-                <p style={{ margin: 0, fontSize: '12.5px' }}>
+              <div style={{ padding: '64px 24px', textAlign: 'center', background: '#fafbfc' }}>
+                <div style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '16px',
+                  background: '#f1f5f9',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#94a3b8',
+                  marginBottom: '14px',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)'
+                }}>
+                  <Inbox size={28} />
+                </div>
+                <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '16px', fontWeight: 700 }}>
+                  {partsRequests.length === 0 ? 'No Parts Requests Yet' : 'No Matching Requests Found'}
+                </h4>
+                <p style={{ margin: '0 auto 18px', fontSize: '13px', color: '#64748b', maxWidth: '420px', lineHeight: 1.5 }}>
                   {partsRequests.length === 0
                     ? (isSuperadmin
-                        ? 'No parts requests have been submitted yet. Awaiting branch replenishment requests.'
-                        : 'No parts requests have been submitted yet. Click "New Request" to create one.')
-                    : 'No requests match your selected filters.'}
+                        ? 'No parts replenishment requests have been submitted by branch locations yet.'
+                        : 'Your branch has not submitted any parts replenishment requests yet. Click below to submit your first requisition to Central DC.')
+                    : 'No requests match your current search query or filter selection. Try adjusting your filters above.'}
                 </p>
+                {!isSuperadmin && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setIsFormOpen(true)}
+                    style={{ background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700, padding: '8px 18px', borderRadius: '6px' }}
+                  >
+                    <Plus size={15} />
+                    <span>Create New Request</span>
+                  </button>
+                )}
               </div>
             ) : (
               <table className="data-table" style={{ width: '100%' }}>
@@ -1953,30 +2327,40 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       {/* 6. TAB 2: Branch Stock on Hand View */}
       {activeTab === 'stock_on_hand' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
           
           <div style={{ padding: '14px 18px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '240px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '320px' }}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
                 <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                 <input
                   type="text"
                   className="form-input"
-                  style={{ paddingLeft: '32px', fontSize: '12.5px' }}
+                  style={{ paddingLeft: '32px', fontSize: '12.5px', borderRadius: '8px' }}
                   placeholder="Filter stock by part number or model..."
                   value={stockSearchQuery}
                   onChange={(e) => setStockSearchQuery(e.target.value)}
                 />
+                {stockSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setStockSearchQuery('')}
+                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '12px', color: '#64748b' }}>
-                Showing stock for: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
+                Showing stock for: <strong style={{ color: '#0f172a' }}>{activeSiteObj.name} ({activeSiteObj.code})</strong>
               </span>
               <button
+                type="button"
                 className="btn btn-primary btn-sm"
-                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}
+                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, padding: '6px 12px', borderRadius: '6px' }}
                 onClick={() => openMarkUsedModal()}
                 title="Record part used/consumed in customer repair"
               >
@@ -2985,7 +3369,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       {/* 8. TAB 4: Used Parts Historical Usage & Live Consumed Units Log */}
       {activeTab === 'usage_history' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', background: '#f8fafc' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

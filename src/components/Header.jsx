@@ -23,7 +23,9 @@ export default function Header() {
     activePeriod,
     canAccess,
     isMobileNavOpen,
-    setIsMobileNavOpen
+    setIsMobileNavOpen,
+    currentUser,
+    pmgSubTab
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -51,7 +53,11 @@ export default function Header() {
     forecast: { title: 'Demand Forecasting & POs', section: 'Planning', showCategories: true },
     records: { title: 'Saved Period Records', section: 'Planning', showCategories: false },
     orders: { title: 'Purchase Orders', section: 'Planning', showCategories: false },
-    'scan-in': { title: 'Receive Scan-In', section: 'Warehouse Operations', showCategories: false },
+    'scan-in': { 
+      title: 'Receive Scan-In', 
+      section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Warehouse Operations', 
+      showCategories: false 
+    },
     'intake-records': { title: 'DC Parts Stock Records', section: 'Warehouse Operations', showCategories: false },
     allocation: { title: 'Inventory Allocation Matrix', section: 'Planning', showCategories: true },
     'scan-out': { title: 'Pack Scan-Out & Manifest', section: 'Warehouse Operations', showCategories: false },
@@ -60,7 +66,24 @@ export default function Header() {
     'forecast-reports': { title: 'Forecasting Reports & Analytics', section: 'Reports & Analytics', showCategories: true },
     audit: { title: 'Serialized Audit Trail', section: 'Traceability', showCategories: false },
     settings: { title: 'Parts Master Catalog', section: 'Admin', showCategories: true },
-    'user-access': { title: 'User Access Management', section: 'Admin', showCategories: false }
+    'user-access': { title: 'User Access Management', section: 'Admin', showCategories: false },
+    'request-parts': currentUser?.role === 'parts_management'
+      ? (pmgSubTab === 'stock_on_hand'
+          ? { title: 'Branch Stock On Hand', section: 'Branch Operations', showCategories: false }
+          : pmgSubTab === 'usage_history'
+            ? { title: 'Parts Consumption Log', section: 'Branch Operations', showCategories: false }
+            : { title: 'Parts Requests', section: 'Branch Operations', showCategories: false })
+      : { title: 'Parts Requests & Replenishment', section: 'Operations & Logistics', showCategories: false },
+    'all-stocks': { 
+      title: 'All Stocks & Multi-Site', 
+      section: 'Network Visibility', 
+      showCategories: false 
+    },
+    feedback: {
+      title: 'Developer Direct Support',
+      section: 'Support & Help',
+      showCategories: false
+    }
   };
 
   const currentMeta = tabConfig[activeTab] || { title: 'MobileCare DC System', section: 'Operations', showCategories: false };

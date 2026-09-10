@@ -22,6 +22,12 @@ CREATE POLICY "parts_catalog_select_authenticated"
   TO authenticated
   USING (true);
 
+CREATE POLICY "parts_catalog_select_anon"
+  ON public.parts
+  FOR SELECT
+  TO anon
+  USING (true);
+
 CREATE POLICY "parts_catalog_manage_admin"
   ON public.parts
   FOR ALL
@@ -30,5 +36,6 @@ CREATE POLICY "parts_catalog_manage_admin"
   WITH CHECK (public.current_user_role() IN ('superadmin', 'admin'));
 
 REVOKE ALL ON public.parts FROM anon;
+GRANT SELECT ON public.parts TO anon;
 GRANT SELECT ON public.parts TO authenticated;
 GRANT INSERT, UPDATE, DELETE ON public.parts TO authenticated;

@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../supabase/client';
-import dbStorage from '../utils/dbStorage';
-import { isUUID } from '../utils/appContextHelpers';
+import { supabase } from '../supabase/client.js';
+import dbStorage from '../utils/dbStorage.js';
+import { isUUID } from '../utils/appContextHelpers.js';
 import {
   DEFAULT_PART_CATEGORIES,
   resolvePartCategoryId,
   getPartCategory
-} from '../utils/categoryFilter';
+} from '../utils/categoryFilter.js';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
-  supervisor_name: '',
+  supervisor_name: 'Anjo Alcazar',
   supervisor_title: 'MDC Supervisor of DC',
   guard_on_duty: ''
 };
@@ -209,6 +209,49 @@ export function useCatalogAndSites({
       }
     }
   }, [categories, parts]);
+
+  // Authoritative Supervisor & Declaration Form Settings Cloud / Local Hydration
+  useEffect(() => {
+    // 1. Asynchronously check IndexedDB
+    dbStorage.getItem('mdc_supervisor_settings').then(savedDb => {
+      if (savedDb && typeof savedDb === 'object') {
+        setSupervisorSettings(prev => ({
+          ...DEFAULT_SUPERVISOR_SETTINGS,
+          ...prev,
+          ...savedDb
+        }));
+      }
+    }).catch(() => {});
+
+    // 2. Query Supabase saved_records for master_supervisor_settings_registry
+    if (supabase) {
+      supabase
+        .from('saved_records')
+        .select('snapshot_data, updated_at')
+        .eq('id', 'master_supervisor_settings_registry')
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (!error && data?.snapshot_data && typeof data.snapshot_data === 'object') {
+            const cloudSettings = data.snapshot_data;
+            setSupervisorSettings(prev => {
+              const merged = {
+                ...DEFAULT_SUPERVISOR_SETTINGS,
+                ...prev,
+                ...cloudSettings
+              };
+              try {
+                localStorage.setItem('mdc_supervisor_settings', JSON.stringify(merged));
+              } catch (e) {}
+              dbStorage.setItem('mdc_supervisor_settings', merged);
+              return merged;
+            });
+          }
+        })
+        .catch(err => {
+          console.warn('Initial supervisor settings fetch note:', err);
+        });
+    }
+  }, []);
 
   const savePart = async (partData) => {
     if (!['superadmin', 'admin'].includes(currentUser?.role)) {
@@ -598,23 +641,51 @@ export function useCatalogAndSites({
     return { success: true };
   };
 
-  const saveSupervisorSettings = (newSettings) => {
-    setSupervisorSettings(prev => {
-      const updated = {
-        ...prev,
-        ...newSettings,
-        updated_at: new Date().toISOString()
-      };
+  const saveSupervisorSettings = async (newSettings) => {
+    const updated = {
+      ...DEFAULT_SUPERVISOR_SETTINGS,
+      ...supervisorSettings,
+      ...newSettings,
+      updated_at: new Date().toISOString()
+    };
+
+    setSupervisorSettings(updated);
+
+    try {
+      localStorage.setItem('mdc_supervisor_settings', JSON.stringify(updated));
+    } catch (e) {}
+
+    try {
+      await dbStorage.setItem('mdc_supervisor_settings', updated);
+    } catch (e) {}
+
+    // Authoritative Cloud Persistence to Supabase saved_records
+    if (supabase) {
       try {
-        localStorage.setItem('mdc_supervisor_settings', JSON.stringify(updated));
-      } catch (e) {}
-      dbStorage.setItem('mdc_supervisor_settings', updated);
-      return updated;
-    });
+        await supabase.from('saved_records').upsert({
+          id: 'master_supervisor_settings_registry',
+          record_type: 'supervisor_settings',
+          period_label: 'Master Supervisor & Declaration Form Directive',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master MDC Supervisor & Declaration Directive',
+          snapshot_data: updated,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (err) {
+        console.warn('Sync master_supervisor_settings_registry note:', err);
+      }
+    }
 
     if (broadcastCloudEvent) {
-      broadcastCloudEvent('SUPERVISOR_SETTINGS_UPDATED', newSettings);
+      broadcastCloudEvent('SUPERVISOR_SETTINGS_UPDATED', updated);
     }
+
+    if (showToast) {
+      showToast('Supervisor & Declaration Form details saved successfully!', 'success');
+    }
+
+    return { success: true, settings: updated };
   };
 
   const applyPmgDirectoryToSites = refreshSitesFromCloud;

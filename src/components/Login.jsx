@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp } from 'lucide-react';
+import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import { loginRateLimiter } from '../utils/security';
@@ -19,6 +19,9 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [showForgotModal, setShowForgotModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [copyEmailSuccess, setCopyEmailSuccess] = useState(false);
+  const [copyViberSuccess, setCopyViberSuccess] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
 
   const handleCapsLockCheck = (e) => {
@@ -347,6 +350,30 @@ export default function Login() {
           <ShieldCheck size={14} color="#64748b" />
           <span>Authorized Employees Only • Encrypted Session</span>
         </div>
+
+        {/* Report an Issue / Contact Developer Button */}
+        <div style={{ marginTop: '12px', textAlign: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '12px' }}>
+          <button
+            type="button"
+            onClick={() => setShowReportModal(true)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#38bdf8',
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontWeight: 600,
+              padding: '6px 12px',
+              borderRadius: '6px'
+            }}
+          >
+            <Phone size={13} />
+            <span>Report / Contact Developer</span>
+          </button>
+        </div>
       </div>
 
       {/* Forgot Password Modal */}
@@ -383,6 +410,122 @@ export default function Login() {
                 Request IT Reset
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report an Issue / Developer Contact Modal */}
+      {showReportModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px'
+          }}
+        >
+          <div className="card" style={{ maxWidth: '440px', width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Phone size={17} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', margin: 0, fontSize: '16.5px', fontWeight: 800 }}>Developer Direct Support</h3>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>Technical Escalations &amp; Assistance</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowReportModal(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '12.5px', color: '#94a3b8', marginBottom: '18px', lineHeight: 1.5 }}>
+              If you cannot sign in, experience system glitches, or require direct technical assistance, reach out to the developer directly:
+            </p>
+
+            {/* Email item */}
+            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Developer Email
+                </div>
+                <a
+                  href="mailto:zhon.manaois@mobilecareph.com"
+                  style={{ fontSize: '13px', color: '#38bdf8', fontWeight: 600, textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title="Click to send email"
+                >
+                  zhon.manaois@mobilecareph.com
+                </a>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText('zhon.manaois@mobilecareph.com');
+                    setCopyEmailSuccess(true);
+                    setTimeout(() => setCopyEmailSuccess(false), 2000);
+                    showToast('Developer email copied to clipboard', 'success');
+                  }}
+                  style={{ fontSize: '11px', padding: '5px 9px' }}
+                >
+                  {copyEmailSuccess ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                  <span>{copyEmailSuccess ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Phone / Viber item */}
+            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '10px', padding: '12px 14px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+              <div>
+                <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <span>Viber / Mobile</span>
+                  <span style={{ background: '#7c3aed', color: '#fff', fontSize: '9px', padding: '0 4px', borderRadius: '3px', fontWeight: 800 }}>VIBER</span>
+                </div>
+                <a
+                  href="tel:09763543574"
+                  style={{ fontSize: '15px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}
+                >
+                  09763543574
+                </a>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText('09763543574');
+                    setCopyViberSuccess(true);
+                    setTimeout(() => setCopyViberSuccess(false), 2000);
+                    showToast('Developer Viber/Phone copied to clipboard', 'success');
+                  }}
+                  style={{ fontSize: '11px', padding: '5px 9px' }}
+                >
+                  {copyViberSuccess ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                  <span>{copyViberSuccess ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setShowReportModal(false)}
+              style={{ width: '100%', padding: '10px', fontWeight: 700, borderRadius: '8px' }}
+            >
+              Close
+            </button>
           </div>
         </div>
       )}

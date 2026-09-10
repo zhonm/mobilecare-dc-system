@@ -12,7 +12,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   Search,
-  X
+  X,
+  MessageSquare
 } from 'lucide-react';
 
 export default function PmgSidebar() {
@@ -122,6 +123,16 @@ export default function PmgSidebar() {
         if (setPmgSubTab) setPmgSubTab('all_stocks');
       },
       isActive: activeTab === 'all-stocks' || (activeTab === 'request-parts' && pmgSubTab === 'all_stocks')
+    },
+    {
+      id: 'feedback',
+      label: 'Developer Contact',
+      section: 'Support & Help',
+      icon: MessageSquare,
+      onClick: () => {
+        setActiveTab('feedback');
+      },
+      isActive: activeTab === 'feedback'
     }
   ];
 
@@ -131,7 +142,7 @@ export default function PmgSidebar() {
     return it.label.toLowerCase().includes(q) || it.section.toLowerCase().includes(q);
   });
 
-  const sections = ['Branch Operations', 'Network Visibility'];
+  const sections = ['Branch Operations', 'Network Visibility', 'Support & Help'];
 
   return (
     <>

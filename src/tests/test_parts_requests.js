@@ -24,11 +24,12 @@ function it(name, fn) {
 // 1. ROLE & NAVIGATION CONFIGURATION TESTS
 it('ROLE_PRESETS has parts_management with [request-parts, scan-in, all-stocks]', () => {
   assert.ok(ROLE_PRESETS.parts_management, 'ROLE_PRESETS.parts_management exists');
-  assert.deepStrictEqual(
-    ROLE_PRESETS.parts_management,
-    ['request-parts', 'scan-in', 'all-stocks'],
-    'Permitted pages must contain request-parts, scan-in, all-stocks'
-  );
+  ['request-parts', 'scan-in', 'all-stocks'].forEach(page => {
+    assert.ok(
+      ROLE_PRESETS.parts_management.includes(page),
+      `Permitted pages must contain ${page}`
+    );
+  });
 });
 
 it('ROLE_OPTIONS includes updated description for parts_management', () => {

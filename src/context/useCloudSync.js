@@ -50,6 +50,8 @@ export function useCloudSync({
   setSites,
   parts,
   setParts,
+  _supervisorSettings,
+  setSupervisorSettings,
   _forecastingModel,
   setForecastingModel,
   forecastItems,
@@ -334,7 +336,8 @@ export function useCloudSync({
             'master_purchase_orders_registry',
             'master_dc_intakes_registry',
             'deleted_intake_ids_registry',
-            'deleted_unit_serials_registry'
+            'deleted_unit_serials_registry',
+            'master_supervisor_settings_registry'
           ];
           const [resSystem, resPeriods, resStockHeader] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
@@ -936,8 +939,10 @@ export function useCloudSync({
           r.id !== 'master_deletion_audit_logs_registry' &&
           r.id !== 'master_stock_transfers_report_registry' &&
           r.id !== 'master_users_registry' &&
+          r.id !== 'master_supervisor_settings_registry' &&
           r.record_type !== 'live_master_state' &&
           r.record_type !== 'users_registry' &&
+          r.record_type !== 'supervisor_settings' &&
           r.record_type !== 'stock_transfer_report' &&
           r.record_type !== 'upload_audit_registry' &&
           r.record_type !== 'deletion_audit_registry' &&
@@ -1954,6 +1959,26 @@ export function useCloudSync({
         }
       }
 
+      // 8. Process Master Supervisor & Declaration Form Settings Registry
+      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && setSupervisorSettings) {
+        const cloudSupervisorDoc = dbSavedRecords.find(r => r.id === 'master_supervisor_settings_registry');
+        if (cloudSupervisorDoc?.snapshot_data && typeof cloudSupervisorDoc.snapshot_data === 'object') {
+          const cloudSupervisorSettings = cloudSupervisorDoc.snapshot_data;
+          setSupervisorSettings(prev => {
+            const merged = {
+              supervisor_name: 'Anjo Alcazar',
+              supervisor_title: 'MDC Supervisor of DC',
+              guard_on_duty: '',
+              ...prev,
+              ...cloudSupervisorSettings
+            };
+            try { localStorage.setItem('mdc_supervisor_settings', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_supervisor_settings', merged);
+            return merged;
+          });
+        }
+      }
+
       const syncNow = new Date();
       setLastSyncedAt(syncNow);
       setCloudSyncStatus({ isSaving: false, lastSaved: syncNow, isOnline: true });
@@ -2515,6 +2540,21 @@ export function useCloudSync({
                 }
                 showToast(`Your session was terminated: ${bPayload?.reason || 'Account deleted or modified by administrator.'}`, 'warning');
               }
+            } else if (bType === 'SUPERVISOR_SETTINGS_UPDATED' && bPayload) {
+              if (setSupervisorSettings) {
+                setSupervisorSettings(prev => {
+                  const merged = {
+                    supervisor_name: 'Anjo Alcazar',
+                    supervisor_title: 'MDC Supervisor of DC',
+                    guard_on_duty: '',
+                    ...prev,
+                    ...bPayload
+                  };
+                  try { localStorage.setItem('mdc_supervisor_settings', JSON.stringify(merged)); } catch (e) {}
+                  dbStorage.setItem('mdc_supervisor_settings', merged);
+                  return merged;
+                });
+              }
             }
 
             // Egress Defense: Only trigger full/selective HTTP hydration if an unhandled table was explicitly targeted.
@@ -2526,7 +2566,8 @@ export function useCloudSync({
               'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
-              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED'
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
+              'SUPERVISOR_SETTINGS_UPDATED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {

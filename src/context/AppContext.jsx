@@ -344,6 +344,8 @@ export function AppProvider({ children }) {
     setSites: catalogAndSites.setSites,
     parts: catalogAndSites.parts,
     setParts: catalogAndSites.setParts,
+    supervisorSettings: catalogAndSites.supervisorSettings,
+    setSupervisorSettings: catalogAndSites.setSupervisorSettings,
     forecastingModel: forecastingAndAllocation.forecastingModel,
     setForecastingModel: forecastingAndAllocation.setForecastingModel,
     forecastItems: forecastingAndAllocation.forecastItems,

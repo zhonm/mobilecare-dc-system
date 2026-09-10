@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
 import { getCategoryForPart } from '../utils/categoryFilter';
@@ -93,6 +93,54 @@ export default function SettingsCatalog() {
   const [supervisorName, setSupervisorName] = useState(supervisorSettings?.supervisor_name || 'Anjo Alcazar');
   const [supervisorTitle, setSupervisorTitle] = useState(supervisorSettings?.supervisor_title || 'MDC Supervisor of DC');
   const [guardOnDutyDefault, setGuardOnDutyDefault] = useState(supervisorSettings?.guard_on_duty || '');
+  const [isSavingSupervisor, setIsSavingSupervisor] = useState(false);
+  const [saveSupervisorSuccess, setSaveSupervisorSuccess] = useState(false);
+
+  // Synchronize local input state whenever supervisorSettings updates or loads from storage/cloud
+  useEffect(() => {
+    if (supervisorSettings) {
+      if (supervisorSettings.supervisor_name !== undefined) {
+        setSupervisorName(supervisorSettings.supervisor_name || 'Anjo Alcazar');
+      }
+      if (supervisorSettings.supervisor_title !== undefined) {
+        setSupervisorTitle(supervisorSettings.supervisor_title || 'MDC Supervisor of DC');
+      }
+      if (supervisorSettings.guard_on_duty !== undefined) {
+        setGuardOnDutyDefault(supervisorSettings.guard_on_duty || '');
+      }
+    }
+  }, [supervisorSettings]);
+
+  const handleSaveSupervisor = async () => {
+    const trimmedName = supervisorName.trim() || 'Anjo Alcazar';
+    const trimmedTitle = supervisorTitle.trim() || 'MDC Supervisor of DC';
+    const trimmedGuard = guardOnDutyDefault.trim();
+
+    setIsSavingSupervisor(true);
+    setSaveSupervisorSuccess(false);
+
+    try {
+      if (saveSupervisorSettings) {
+        await saveSupervisorSettings({
+          supervisor_name: trimmedName,
+          supervisor_title: trimmedTitle,
+          guard_on_duty: trimmedGuard
+        });
+      }
+      setSupervisorName(trimmedName);
+      setSupervisorTitle(trimmedTitle);
+      setGuardOnDutyDefault(trimmedGuard);
+      setSaveSupervisorSuccess(true);
+      setTimeout(() => setSaveSupervisorSuccess(false), 3500);
+    } catch (err) {
+      console.error('Error saving supervisor details:', err);
+      if (showToast) {
+        showToast('Failed to save supervisor details. Please try again.', 'error');
+      }
+    } finally {
+      setIsSavingSupervisor(false);
+    }
+  };
 
   // Search & Filter State
   const [partSearch, setPartSearch] = useState('');
@@ -1543,21 +1591,29 @@ export default function SettingsCatalog() {
                 </p>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  onClick={() => {
-                    saveSupervisorSettings({
-                      supervisor_name: supervisorName.trim() || 'Anjo Alcazar',
-                      supervisor_title: supervisorTitle.trim() || 'MDC Supervisor of DC',
-                      guard_on_duty: guardOnDutyDefault.trim()
-                    });
+                  disabled={isSavingSupervisor}
+                  onClick={handleSaveSupervisor}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: saveSupervisorSuccess ? '#16a34a' : undefined,
+                    borderColor: saveSupervisorSuccess ? '#16a34a' : undefined,
+                    transition: 'all 0.2s ease'
                   }}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  <Save size={13} />
-                  <span>Save Supervisor Details</span>
+                  {isSavingSupervisor ? (
+                    <RefreshCw size={13} className="spin" />
+                  ) : saveSupervisorSuccess ? (
+                    <CheckCircle2 size={13} />
+                  ) : (
+                    <Save size={13} />
+                  )}
+                  <span>{isSavingSupervisor ? 'Saving...' : saveSupervisorSuccess ? 'Saved Details!' : 'Save Supervisor Details'}</span>
                 </button>
               </div>
             </div>
@@ -1583,7 +1639,7 @@ export default function SettingsCatalog() {
                     style={{ fontSize: '13px' }}
                   />
                   <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
-                    Default supervisor for all packing lists and declaration forms (Fixed to Anjo Alcazar).
+                    Default supervisor for all packing lists and declaration forms (Default: Anjo Alcazar).
                   </span>
                 </div>
 

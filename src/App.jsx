@@ -22,6 +22,7 @@ import AuditTrail from './components/AuditTrail';
 import SettingsCatalog from './components/SettingsCatalog';
 import UserAccessManagement from './components/UserAccessManagement';
 import RequestParts from './components/RequestParts';
+import Feedback from './components/Feedback';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import './App.css';
@@ -92,6 +93,8 @@ function MainApp() {
         return <SettingsCatalog />;
       case 'user-access':
         return <UserAccessManagement />;
+      case 'feedback':
+        return <Feedback />;
       default:
         return <Dashboard />;
     }
