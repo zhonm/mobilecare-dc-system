@@ -30,7 +30,9 @@ import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpe
 import {
   isShipmentMetroManila,
   isShipmentProvince,
-  extractShipmentSerials
+  extractShipmentSerials,
+  buildSerialDictionary,
+  healShipmentItem
 } from '../utils/shipmentHelpers';
 
 export default function Shipments() {
@@ -47,8 +49,23 @@ export default function Shipments() {
     showToast,
     currentUser,
     canUserDeleteRecord,
-    supervisorSettings
+    supervisorSettings,
+    inventoryUnits,
+    dcIntakeRecords,
+    masterlistData,
+    savedRecords
   } = useApp();
+
+  const { serialDict, partsMapByPn } = useMemo(() => {
+    return buildSerialDictionary({
+      dcIntakeRecords,
+      inventoryUnits,
+      parts,
+      masterlistData,
+      savedRecords,
+      shipments
+    });
+  }, [dcIntakeRecords, inventoryUnits, parts, masterlistData, savedRecords, shipments]);
 
   // Regional Tab State: 'ALL' | 'METRO_MANILA' | 'PROVINCE'
   const [regionTab, setRegionTab] = useState('ALL');
@@ -91,7 +108,10 @@ export default function Shipments() {
       pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
     };
 
-    generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
+    const sourceItems = items && items.length > 0 ? items : (shipmentObj?.items || []);
+    const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+
+    generatePackingListPDF(shipmentObj, resolvedItems, siteObj || {}, pdfOptions);
     showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
   };
 
@@ -264,10 +284,11 @@ export default function Shipments() {
       textToCopy = serials.join(', ');
     } else if (format === 'tsv') {
       const rows = shipment.items.map((it, idx) => {
-        const pn = it.part_number || it.partNumber || 'N/A';
-        const desc = it.description || it.partDescription || '';
-        const sn = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-        const box = it.box_number ? `${it.box_number}/${shipment.total_boxes || 1}` : '1/1';
+        const healed = healShipmentItem(it, serialDict, partsMapByPn);
+        const pn = healed.part_number || healed.partNumber || 'N/A';
+        const desc = healed.description || healed.partDescription || '';
+        const sn = String(healed.serial_number || healed.serialNumber || healed.serial || '').trim().toUpperCase();
+        const box = healed.box_number ? `${healed.box_number}/${shipment.total_boxes || 1}` : '1/1';
         return `${idx + 1}\t${pn}\t${desc}\t${sn}\t${box}`;
       });
       textToCopy = `NO\tPART NUMBER\tDESCRIPTION\tSERIAL NUMBER\tBOX #\n${rows.join('\n')}`;
@@ -450,7 +471,10 @@ export default function Shipments() {
       pickupDate: updatedShipment.pickup_date
     };
 
-    generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
+    const sourceItems = trackingModalState.items && trackingModalState.items.length > 0 ? trackingModalState.items : (updatedShipment?.items || []);
+    const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+
+    generatePackingListPDF(updatedShipment, resolvedItems, trackingModalState.site, pdfOptions);
 
     setTrackingModalState(null);
   };
@@ -1906,7 +1930,7 @@ export default function Shipments() {
                       Included Parts to be Confirmed at Site ({receiveModalState.shipment.items.length}):
                     </div>
                     <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
-                      {receiveModalState.shipment.items.map((it, idx) => (
+                      {receiveModalState.shipment.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)).map((it, idx) => (
                         <div key={idx} style={{ padding: '2px 0', borderBottom: '1px dashed #e2e8f0' }}>
                           • {it.part_number || it.description} - <strong>{it.serial_number || it.serialNumber}</strong> (Box {it.box_number || 1})
                         </div>
@@ -2176,7 +2200,7 @@ export default function Shipments() {
                           ? extractShipmentSerials(serialsModalState.shipment).join('\n')
                           : serialsFormat === 'csv'
                           ? extractShipmentSerials(serialsModalState.shipment).join(', ')
-                          : (serialsModalState.shipment?.items || []).map((it, idx) => `${idx + 1}\t${it.part_number || ''}\t${it.description || ''}\t${it.serial_number || it.serialNumber || ''}\t${it.box_number || 1}`).join('\n')
+                          : (serialsModalState.shipment?.items || []).map(it => healShipmentItem(it, serialDict, partsMapByPn)).map((it, idx) => `${idx + 1}\t${it.part_number || ''}\t${it.description || ''}\t${it.serial_number || it.serialNumber || ''}\t${it.box_number || 1}`).join('\n')
                       }
                       onFocus={(e) => e.target.select()}
                       style={{
@@ -2230,6 +2254,7 @@ export default function Shipments() {
                   </thead>
                   <tbody>
                     {(serialsModalState.shipment?.items || [])
+                      .map(it => healShipmentItem(it, serialDict, partsMapByPn))
                       .filter(it => {
                         if (!serialsModalSearch.trim()) return true;
                         const q = serialsModalSearch.toLowerCase();

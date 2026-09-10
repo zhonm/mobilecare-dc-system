@@ -32,6 +32,7 @@ import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
+import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
 
 export function useCloudSync({
   currentUser,
@@ -1068,6 +1069,28 @@ export function useCloudSync({
           });
         };
 
+        // Build authoritative serial dictionary across all available intakes, units, parts, masterlist, and shipments
+        const parsedDbIntakes = Array.isArray(dbIntakes)
+          ? dbIntakes.map(r => parseDcIntakeRecordFromDb(r)).filter(Boolean)
+          : [];
+        let localIntakeRecords = [];
+        try {
+          const stored = localStorage.getItem('mdc_dc_intake_records');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) localIntakeRecords = parsed;
+          }
+        } catch (e) {}
+
+        const { serialDict, partsMapByPn } = buildSerialDictionary({
+          dcIntakeRecords: [...parsedDbIntakes, ...localIntakeRecords, ...(_dcIntakeRecords || [])],
+          inventoryUnits: [...(dbUnits || []), ...(inventoryUnits || [])],
+          parts: [...(dbParts || []), ...(parts || []), ...defaultPartsCatalog],
+          masterlistData: masterlistData || [],
+          savedRecords: dbSavedRecords || [],
+          shipments: [...(_shipments || [])]
+        });
+
         const cloudShipmentsRegistryDoc = dbSavedRecords.find(r => r.id === 'master_shipments_registry');
         const cloudShipmentsList = (cloudShipmentsRegistryDoc?.snapshot_data?.shipments && Array.isArray(cloudShipmentsRegistryDoc.snapshot_data.shipments))
           ? cloudShipmentsRegistryDoc.snapshot_data.shipments
@@ -1079,7 +1102,11 @@ export function useCloudSync({
         cloudShipmentsList.forEach(s => {
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
           if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
-            shipmentMap.set(canonicalRef, s);
+            const healedItems = Array.isArray(s.items) ? s.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)) : [];
+            shipmentMap.set(canonicalRef, {
+              ...s,
+              items: healedItems
+            });
           }
         });
 
@@ -1092,10 +1119,12 @@ export function useCloudSync({
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
           if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
             const existing = shipmentMap.get(canonicalRef);
+            const sourceItems = (s.items && s.items.length > 0) ? s.items : (existing?.items || []);
+            const healedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
             shipmentMap.set(canonicalRef, {
               ...(existing || {}),
               ...s,
-              items: (s.items && s.items.length > 0) ? s.items : (existing?.items || [])
+              items: healedItems
             });
           }
         });
@@ -1106,23 +1135,42 @@ export function useCloudSync({
             const canonicalRef = String(dbS.invoice_ref || dbS.shipment_number || dbS.id || '').trim().toUpperCase();
             if (canonicalRef && !isDeletedOrCorruptedShipment(dbS)) {
               const existing = shipmentMap.get(canonicalRef);
-              const formattedItems = Array.isArray(dbS.items) && dbS.items.length > 0
-                ? dbS.items
-                : (Array.isArray(dbS.shipment_items) && dbS.shipment_items.length > 0
-                    ? dbS.shipment_items.map(it => {
-                        const cleanSerial = String(it.serial_number || '').trim().toUpperCase();
-                        const matchingUnit = (dbUnits || []).find(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial);
-                        const matchingPart = (dbParts || []).find(p => (it.part_id && p.id === it.part_id) || (matchingUnit?.part_id && p.id === matchingUnit.part_id) || (matchingUnit?.part_number && p.part_number === matchingUnit.part_number));
-                        return {
-                          id: it.id,
-                          serial_number: it.serial_number,
-                          part_number: it.parts?.part_number || it.part_number || matchingUnit?.part_number || matchingPart?.part_number || 'UNKNOWN-PN',
-                          description: it.parts?.description || it.description || matchingUnit?.description || matchingPart?.description || 'Part Description',
-                          box_number: it.box_number || 1,
-                          cost: it.unit_cost || matchingPart?.stocking_price || 0
-                        };
-                      })
-                    : (existing?.items || []));
+              const existingItems = Array.isArray(existing?.items) ? existing.items : [];
+              const existingItemsMap = new Map();
+              existingItems.forEach(it => {
+                const sn = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+                if (sn) existingItemsMap.set(sn, it);
+                if (it.id) existingItemsMap.set(String(it.id), it);
+              });
+
+              let formattedItems = [];
+              if (Array.isArray(dbS.items) && dbS.items.length > 0) {
+                formattedItems = dbS.items.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+              } else if (Array.isArray(dbS.shipment_items) && dbS.shipment_items.length > 0) {
+                formattedItems = dbS.shipment_items.map(it => {
+                  const cleanSerial = String(it.serial_number || '').trim().toUpperCase();
+                  const existingItem = existingItemsMap.get(cleanSerial) || (it.id ? existingItemsMap.get(String(it.id)) : null);
+                  const matchingUnit = (dbUnits || []).find(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial);
+                  const matchingPart = (dbParts || []).find(p => (it.part_id && p.id === it.part_id) || (matchingUnit?.part_id && p.id === matchingUnit.part_id) || (matchingUnit?.part_number && p.part_number === matchingUnit.part_number));
+                  
+                  const candidatePn = it.parts?.part_number || it.part_number || existingItem?.part_number || matchingUnit?.part_number || matchingPart?.part_number;
+                  const candidateDesc = it.parts?.description || it.description || existingItem?.description || matchingUnit?.description || matchingPart?.description;
+                  const candidateCost = it.unit_cost || existingItem?.cost || matchingPart?.stocking_price || 0;
+
+                  const rawItem = {
+                    id: it.id || existingItem?.id,
+                    serial_number: it.serial_number,
+                    part_number: candidatePn,
+                    description: candidateDesc,
+                    box_number: it.box_number || existingItem?.box_number || 1,
+                    cost: candidateCost
+                  };
+
+                  return healShipmentItem(rawItem, serialDict, partsMapByPn);
+                });
+              } else {
+                formattedItems = existingItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+              }
 
               const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
               const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
@@ -1132,7 +1180,7 @@ export function useCloudSync({
                 ...dbS,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
-                items: formattedItems.length > 0 ? formattedItems : (existing?.items || [])
+                items: formattedItems.length > 0 ? formattedItems : existingItems
               });
             }
           });
@@ -1147,7 +1195,11 @@ export function useCloudSync({
               if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
                 const existing = shipmentMap.get(canonicalRef);
                 if (!existing) {
-                  shipmentMap.set(canonicalRef, s);
+                  const healedItems = Array.isArray(s.items) ? s.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)) : [];
+                  shipmentMap.set(canonicalRef, {
+                    ...s,
+                    items: healedItems
+                  });
                 }
               }
             });
@@ -1158,6 +1210,7 @@ export function useCloudSync({
           .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !isDeletedOrCorruptedShipment(s))
           .map(s => {
             if (!s) return s;
+            const healedItems = (s.items || []).map(it => healShipmentItem(it, serialDict, partsMapByPn));
             const cleanPrepBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff')
               ? s.prepared_by_name
               : (s.saved_by_name && s.saved_by_name !== 'Warehouse Staff' ? s.saved_by_name : (currentUser?.fullName || 'Zhon Manaois'));
@@ -1167,6 +1220,7 @@ export function useCloudSync({
             return {
               ...s,
               status: resolvedStatus,
+              items: healedItems,
               prepared_by_name: cleanPrepBy,
               saved_by_name: cleanPrepBy,
               shipment_date: s.shipment_date || s.pickup_date || ''

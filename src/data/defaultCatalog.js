@@ -20,10 +20,10 @@ export const defaultPartsCatalog = [
   },
   {
     "id": "part-661-22374",
-    "part_number": "661-22374",
-    "description": "Battery, iPhone 13 mini",
+    "part_number": "661-21991",
+    "description": "Battery, iPhone 13",
     "category_id": "cat-battery",
-    "iphone_model": "iPhone 13 mini",
+    "iphone_model": "iPhone 13",
     "stocking_price": 89,
     "is_active": true
   },
@@ -1181,10 +1181,10 @@ export const defaultPartsCatalog = [
   },
   {
     "id": "part-661-22311",
-    "part_number": "661-22311",
-    "description": "Display, iPhone 13 mini",
+    "part_number": "661-21988",
+    "description": "Display, iPhone 13",
     "category_id": "cat-display",
-    "iphone_model": "iPhone 13 mini",
+    "iphone_model": "iPhone 13",
     "stocking_price": 229,
     "is_active": true
   },
