@@ -4,6 +4,8 @@ import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
   Download,
   CheckCircle,
+  CheckCircle2,
+  RotateCcw,
   Search,
   FileSpreadsheet,
   UploadCloud,
@@ -41,6 +43,7 @@ export default function Shipments() {
     sites,
     parts,
     saveShipment,
+    updateShipmentStatus,
     deleteShipment,
     confirmSiteReceive,
     partsRequests,
@@ -143,7 +146,7 @@ export default function Shipments() {
       return 'shipped';
     }
     if (sh.status === 'draft' || sh.status === 'packing') {
-      return sh.status;
+      return 'draft';
     }
     return 'pending_pickup';
   };
@@ -172,6 +175,7 @@ export default function Shipments() {
     let pending = 0;
     let shipped = 0;
     let received = 0;
+    let draft = 0;
     let validTotal = 0;
 
     (shipments || []).forEach(sh => {
@@ -185,10 +189,11 @@ export default function Shipments() {
       const norm = getNormalizedStatus(sh);
       if (norm === 'received_confirmed') received++;
       else if (norm === 'shipped') shipped++;
+      else if (norm === 'draft') draft++;
       else pending++;
     });
 
-    return { total: validTotal, pending, shipped, received };
+    return { total: validTotal, pending, shipped, received, draft };
   }, [shipments, regionTab, sites]);
 
   // Filtered shipments list (regional tab + status pill + search query)
@@ -203,7 +208,7 @@ export default function Shipments() {
       // 2. Status Filter
       const norm = getNormalizedStatus(s);
       if (filterStatus !== 'ALL') {
-        if (filterStatus === 'pending_pickup' && norm !== 'pending_pickup' && norm !== 'draft' && norm !== 'packing') return false;
+        if (filterStatus === 'pending_pickup' && norm !== 'pending_pickup') return false;
         if (filterStatus === 'shipped' && norm !== 'shipped') return false;
         if (filterStatus === 'received_confirmed' && norm !== 'received_confirmed') return false;
         if (filterStatus === 'draft' && norm !== 'draft') return false;
@@ -733,6 +738,26 @@ export default function Shipments() {
 
           <button
             className="btn btn-sm"
+            onClick={() => setFilterStatus('draft')}
+            style={{
+              background: filterStatus === 'draft' ? '#475569' : '#f8fafc',
+              color: filterStatus === 'draft' ? '#fff' : '#475569',
+              borderColor: filterStatus === 'draft' ? '#475569' : '#e2e8f0',
+              fontWeight: 600,
+              fontSize: '12px',
+              borderRadius: '20px',
+              padding: '4px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <FileText size={12} />
+            <span>Drafts ({statusCounts.draft})</span>
+          </button>
+
+          <button
+            className="btn btn-sm"
             onClick={() => setFilterStatus('pending_pickup')}
             style={{
               background: filterStatus === 'pending_pickup' ? '#d97706' : '#fffbeb',
@@ -843,7 +868,9 @@ export default function Shipments() {
               ? { bg: '#ecfdf5', color: '#047857', border: '#a7f3d0', label: 'RECEIVED CONFIRMED', Icon: CheckCircle }
               : normStatus === 'shipped'
               ? { bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd', label: 'SHIPPED', Icon: Truck }
-              : { bg: '#fffbeb', color: '#b45309', border: '#fde68a', label: 'PENDING PICKUP', Icon: Clock };
+              : normStatus === 'draft'
+              ? { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', label: 'DRAFT', Icon: FileText }
+              : { bg: '#fffbeb', color: '#b45309', border: '#fde68a', label: 'READY FOR PICKUP', Icon: Clock };
 
             return (
               <div
@@ -1037,16 +1064,39 @@ export default function Shipments() {
                         <span>XLSX</span>
                       </button>
 
-                      {normStatus === 'pending_pickup' && (
+                      {normStatus === 'draft' && (
                         <button
                           className="btn btn-sm"
-                          onClick={() => handleOpenPickupModal(sh)}
-                          title="Handover to Courier"
-                          style={{ background: '#f59e0b', color: '#fff', border: '1px solid #d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          onClick={() => updateShipmentStatus(sh.id, 'pending_pickup')}
+                          title="Mark manifest as Ready for Pickup"
+                          style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                         >
-                          <Truck size={13} />
-                          <span>Pick Up</span>
+                          <CheckCircle2 size={13} />
+                          <span>Mark Ready</span>
                         </button>
+                      )}
+
+                      {normStatus === 'pending_pickup' && (
+                        <>
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => handleOpenPickupModal(sh)}
+                            title="Handover to Courier"
+                            style={{ background: '#f59e0b', color: '#fff', border: '1px solid #d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <Truck size={13} />
+                            <span>Pick Up</span>
+                          </button>
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => updateShipmentStatus(sh.id, 'draft')}
+                            title="Revert status to Draft for editing"
+                            style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <RotateCcw size={12} />
+                            <span>Set Draft</span>
+                          </button>
+                        </>
                       )}
 
                       {normStatus === 'shipped' && (
@@ -1179,27 +1229,27 @@ export default function Shipments() {
                         {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
                       </td>
                       <td style={{ textAlign: 'center' }}>
-                        {normStatus === 'pending_pickup' && (
-                          <span
-                            className="badge"
+                        {(normStatus === 'pending_pickup' || normStatus === 'draft') ? (
+                          <select
+                            value={normStatus === 'pending_pickup' ? 'pending_pickup' : 'draft'}
+                            onChange={(e) => updateShipmentStatus(sh.id, e.target.value)}
                             style={{
-                              background: '#fffbeb',
-                              color: '#b45309',
-                              border: '1px solid #fde68a',
-                              fontWeight: 600,
+                              padding: '3px 8px',
                               fontSize: '11px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '3px 8px'
+                              fontWeight: 700,
+                              borderRadius: '8px',
+                              cursor: 'pointer',
+                              background: normStatus === 'pending_pickup' ? '#fffbeb' : '#f1f5f9',
+                              color: normStatus === 'pending_pickup' ? '#b45309' : '#475569',
+                              border: normStatus === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #cbd5e1',
+                              outline: 'none'
                             }}
+                            title="Click to toggle status between Draft and Ready for Pickup"
                           >
-                            <Clock size={11} />
-                            <span>PENDING FOR PICKUP</span>
-                          </span>
-                        )}
-
-                        {normStatus === 'shipped' && (
+                            <option value="draft">📝 DRAFT</option>
+                            <option value="pending_pickup">📦 READY FOR PICKUP</option>
+                          </select>
+                        ) : normStatus === 'shipped' ? (
                           <span
                             className="badge"
                             style={{
@@ -1217,9 +1267,7 @@ export default function Shipments() {
                             <Truck size={11} />
                             <span>SHIPPED</span>
                           </span>
-                        )}
-
-                        {normStatus === 'received_confirmed' && (
+                        ) : (
                           <span
                             className="badge"
                             style={{
@@ -1236,12 +1284,6 @@ export default function Shipments() {
                           >
                             <CheckCircle size={11} />
                             <span>RECEIVED CONFIRMED</span>
-                          </span>
-                        )}
-
-                        {normStatus === 'draft' && (
-                          <span className="badge badge-neutral" style={{ fontSize: '11px', fontWeight: 600 }}>
-                            DRAFT
                           </span>
                         )}
                       </td>
@@ -1285,25 +1327,65 @@ export default function Shipments() {
                             <span>XLSX</span>
                           </button>
 
-                          {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
-                          {normStatus === 'pending_pickup' && (
+                          {/* ACTION: Mark Ready when Draft */}
+                          {normStatus === 'draft' && (
                             <button
                               className="btn btn-sm"
-                              onClick={() => handleOpenPickupModal(sh)}
-                              title="Handover package to Courier (Update status to Shipped)"
+                              onClick={() => updateShipmentStatus(sh.id, 'pending_pickup')}
+                              title="Mark manifest as Ready for Pickup"
                               style={{
-                                background: '#f59e0b',
-                                color: '#ffffff',
-                                border: '1px solid #d97706',
+                                background: '#fffbeb',
+                                color: '#b45309',
+                                border: '1px solid #fde68a',
                                 fontWeight: 600,
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '4px'
                               }}
                             >
-                              <Truck size={13} />
-                              <span>Pick Up</span>
+                              <CheckCircle2 size={13} />
+                              <span>Mark Ready</span>
                             </button>
+                          )}
+
+                          {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
+                          {normStatus === 'pending_pickup' && (
+                            <>
+                              <button
+                                className="btn btn-sm"
+                                onClick={() => handleOpenPickupModal(sh)}
+                                title="Handover package to Courier (Update status to Shipped)"
+                                style={{
+                                  background: '#f59e0b',
+                                  color: '#ffffff',
+                                  border: '1px solid #d97706',
+                                  fontWeight: 600,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                              >
+                                <Truck size={13} />
+                                <span>Pick Up</span>
+                              </button>
+                              <button
+                                className="btn btn-sm"
+                                onClick={() => updateShipmentStatus(sh.id, 'draft')}
+                                title="Revert status to Draft for editing"
+                                style={{
+                                  background: '#f1f5f9',
+                                  color: '#475569',
+                                  border: '1px solid #cbd5e1',
+                                  fontWeight: 600,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                              >
+                                <RotateCcw size={12} />
+                                <span>Set Draft</span>
+                              </button>
+                            </>
                           )}
 
                           {/* ACTION BUTTON 2: Site Receive (When Shipped / In Transit) */}

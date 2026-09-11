@@ -63,6 +63,7 @@ export default function ScanOutPacking() {
     categories,
     shipments,
     saveShipment,
+    updateShipmentStatus,
     deleteShipment,
     addScanOutUnit,
     removeScanOutUnit,
@@ -2383,6 +2384,34 @@ export default function ScanOutPacking() {
             {/* Right Meta Column */}
             <div className="packing-invoice-meta">
               <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>STATUS:</strong>
+                <select
+                  className="packing-inline-input"
+                  style={{
+                    width: '180px',
+                    fontWeight: 700,
+                    fontSize: '11.5px',
+                    padding: '3px 8px',
+                    borderRadius: '6px',
+                    background: currentShipment.status === 'pending_pickup' ? '#fffbeb' : '#f8fafc',
+                    color: currentShipment.status === 'pending_pickup' ? '#b45309' : '#475569',
+                    borderColor: currentShipment.status === 'pending_pickup' ? '#fde68a' : '#cbd5e1',
+                    cursor: 'pointer'
+                  }}
+                  value={currentShipment.status === 'pending_pickup' ? 'pending_pickup' : 'draft'}
+                  onChange={(e) => {
+                    const newSt = e.target.value;
+                    setCurrentShipment(prev => ({ ...prev, status: newSt }));
+                    markLocalDraftEdit();
+                    showToast(`Packing list status set to ${newSt === 'pending_pickup' ? 'Ready for Pickup' : 'Draft'}`, 'info');
+                  }}
+                  title="Packing list status: Draft while editing, Ready for Pickup when finalized"
+                >
+                  <option value="draft">📝 DRAFT (Editing)</option>
+                  <option value="pending_pickup">📦 READY FOR PICKUP</option>
+                </select>
+              </div>
+              <div className="packing-invoice-meta-row">
                 <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>INVOICE REF:</strong>
                 <input
                   type="text"
@@ -2642,10 +2671,44 @@ export default function ScanOutPacking() {
               </p>
             </div>
           </div>
-          <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-            <Database size={11} style={{ display: 'inline', marginRight: '4px' }} />
-            {draftShipments.length} Active Draft{draftShipments.length === 1 ? '' : 's'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {draftShipments.some(s => s.status !== 'pending_pickup') && (
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  const unreadyList = draftShipments.filter(s => s.status !== 'pending_pickup');
+                  if (unreadyList.length === 0) return;
+                  if (window.confirm(`Update status of all ${unreadyList.length} draft packing list(s) to "Ready for Pickup"?`)) {
+                    const unreadyIds = unreadyList.map(ds => ds.id);
+                    updateShipmentStatus(unreadyIds, 'pending_pickup');
+                    if (currentShipment?.id && unreadyIds.includes(currentShipment.id)) {
+                      setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
+                    }
+                  }
+                }}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11.5px',
+                  background: '#fffbeb',
+                  color: '#b45309',
+                  borderColor: '#fde68a',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+                title="Mark all active draft packing lists as Ready for Pickup"
+              >
+                <CheckCircle2 size={13} />
+                <span>Mark All Ready for Pickup</span>
+              </button>
+            )}
+            <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+              <Database size={11} style={{ display: 'inline', marginRight: '4px' }} />
+              {draftShipments.length} Active PL{draftShipments.length === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
 
         {draftShipments.length === 0 ? (
@@ -2710,22 +2773,65 @@ export default function ScanOutPacking() {
                       <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
                     </td>
                     <td>
-                      <span
-                        className="badge"
-                        style={{
-                          background: s.status === 'pending_pickup' ? '#fef3c7' : '#f1f5f9',
-                          color: s.status === 'pending_pickup' ? '#b45309' : '#475569',
-                          border: s.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #e2e8f0',
-                          textTransform: 'uppercase',
-                          fontSize: '10.5px',
-                          fontWeight: 700
+                      <select
+                        value={s.status === 'pending_pickup' ? 'pending_pickup' : 'draft'}
+                        onChange={(e) => {
+                          const newSt = e.target.value;
+                          updateShipmentStatus(s.id, newSt);
+                          if (currentShipment?.id === s.id) {
+                            setCurrentShipment(prev => ({ ...prev, status: newSt }));
+                          }
                         }}
+                        style={{
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          background: s.status === 'pending_pickup' ? '#fffbeb' : '#f1f5f9',
+                          color: s.status === 'pending_pickup' ? '#b45309' : '#475569',
+                          border: s.status === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #cbd5e1',
+                          outline: 'none'
+                        }}
+                        title="Change status between Draft and Ready for Pickup"
                       >
-                        {s.status === 'pending_pickup' ? 'Pending Pickup' : 'Draft'}
-                      </span>
+                        <option value="draft">📝 DRAFT</option>
+                        <option value="pending_pickup">📦 READY FOR PICKUP</option>
+                      </select>
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '6px' }}>
+                        {s.status === 'draft' ? (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => {
+                              updateShipmentStatus(s.id, 'pending_pickup');
+                              if (currentShipment?.id === s.id) {
+                                setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
+                              }
+                            }}
+                            title="Mark this packing list as Ready for Pickup"
+                            style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#fffbeb', color: '#b45309', borderColor: '#fde68a', fontWeight: 600 }}
+                          >
+                            <CheckCircle2 size={12} />
+                            <span>Mark Ready</span>
+                          </button>
+                        ) : (
+                          <button
+                            className="btn btn-sm"
+                            onClick={() => {
+                              updateShipmentStatus(s.id, 'draft');
+                              if (currentShipment?.id === s.id) {
+                                setCurrentShipment(prev => ({ ...prev, status: 'draft' }));
+                              }
+                            }}
+                            title="Revert status to Draft for further edits"
+                            style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#f1f5f9', color: '#475569', borderColor: '#cbd5e1', fontWeight: 600 }}
+                          >
+                            <RotateCcw size={12} />
+                            <span>Set Draft</span>
+                          </button>
+                        )}
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={() => {

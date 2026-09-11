@@ -573,6 +573,8 @@ export function formatShipmentForDb(s, sitesList = []) {
     validStatus = 'received_confirmed';
   } else if (rawStatus === 'shipped' || rawStatus === 'in_transit') {
     validStatus = 'shipped';
+  } else if (rawStatus === 'pending_pickup' || rawStatus === 'ready_for_pickup' || rawStatus === 'ready_for_dispatch' || rawStatus === 'ready') {
+    validStatus = 'pending_pickup';
   } else if (rawStatus === 'draft' || rawStatus === 'packing') {
     validStatus = rawStatus;
   } else {

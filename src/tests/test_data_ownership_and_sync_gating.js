@@ -177,8 +177,7 @@ async function runAllTests() {
     const formatted = formatShipmentForDb(rawPendingShipment, [{ id: '11111111-2222-3333-4444-555555555555', code: 'BGC' }]);
     assert.ok(isUUID(formatted.id), 'Shipment ID must be a valid UUID');
     assert.ok(isUUID(formatted.site_id), 'Site ID must be a valid UUID');
-    assert.notStrictEqual(formatted.status, 'ready_for_dispatch', 'Must not use ready_for_dispatch');
-    assert.strictEqual(formatted.status, 'draft', 'Pending status should safely map to draft for Postgres enum compatibility');
+    assert.strictEqual(formatted.status, 'pending_pickup', 'Pending status should safely map to pending_pickup for Postgres enum compatibility');
 
     const confirmedShipment = {
       id: '22222222-3333-4444-5555-666666666666',
