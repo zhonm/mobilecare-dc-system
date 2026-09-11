@@ -7,6 +7,7 @@ import {
   resolvePartCategoryId,
   getPartCategory
 } from '../utils/categoryFilter.js';
+import { resolveSafeRegion } from '../constants/config.js';
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
   supervisor_title: 'MDC Supervisor of DC',
@@ -68,11 +69,16 @@ export function useCatalogAndSites({
       const saved = localStorage.getItem('mdc_sites');
       const parsed = saved ? JSON.parse(saved) : [];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const clean = parsed.filter(s =>
-          !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-          !String(s.address || '').toUpperCase().includes('SM ILOILO')
-        );
-        if (clean.length !== parsed.length) {
+        const clean = parsed
+          .filter(s =>
+            !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+            !String(s.address || '').toUpperCase().includes('SM ILOILO')
+          )
+          .map(s => ({
+            ...s,
+            region: resolveSafeRegion(s.code, s.region)
+          }));
+        if (clean.length !== parsed.length || clean.some((s, idx) => s.region !== parsed[idx]?.region)) {
           try { localStorage.setItem('mdc_sites', JSON.stringify(clean)); } catch (e) {}
           dbStorage.setItem('mdc_sites', clean);
         }
@@ -97,7 +103,7 @@ export function useCatalogAndSites({
               id: s.id,
               code: normalizeSiteCode(s.code),
               name: s.name,
-              region: s.region || 'Metro Manila',
+              region: resolveSafeRegion(s.code, s.region),
               address: s.address || s.full_address || '',
               full_address: s.full_address || s.address || '',
               contact_person: s.contact_person || '',
@@ -473,19 +479,43 @@ export function useCatalogAndSites({
   const saveSite = async (siteData) => {
     let savedSite = null;
     const cleanCode = normalizeSiteCode(siteData.code);
+    const cleanRegion = resolveSafeRegion(cleanCode, siteData.region);
+    const cleanAddress = (siteData.address || siteData.full_address || '').trim();
+
     if (siteData.id) {
-      savedSite = { ...siteData, code: cleanCode };
+      savedSite = {
+        ...siteData,
+        code: cleanCode,
+        name: (siteData.name || '').trim(),
+        region: cleanRegion,
+        address: cleanAddress,
+        full_address: cleanAddress,
+        contact_person: (siteData.contact_person || '').trim(),
+        contact_phone: (siteData.contact_phone || '').trim(),
+        contact_email: (siteData.contact_email || '').trim(),
+        ship_to: (siteData.ship_to || '').trim() || null,
+        sold_to: (siteData.sold_to || '').trim() || null
+      };
       setSites(prev => {
-        const next = prev.map(s => s.id === siteData.id ? savedSite : s);
+        const next = prev.map(s => (s.id === siteData.id || normalizeSiteCode(s.code) === cleanCode) ? savedSite : s);
         try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
         dbStorage.setItem('mdc_sites', next);
         return next;
       });
-      showToast(`Updated site ${siteData.name}`, 'success');
+      showToast(`Updated site ${savedSite.name}`, 'success');
     } else {
       savedSite = {
         ...siteData,
         code: cleanCode,
+        name: (siteData.name || '').trim(),
+        region: cleanRegion,
+        address: cleanAddress,
+        full_address: cleanAddress,
+        contact_person: (siteData.contact_person || '').trim(),
+        contact_phone: (siteData.contact_phone || '').trim(),
+        contact_email: (siteData.contact_email || '').trim(),
+        ship_to: (siteData.ship_to || '').trim() || null,
+        sold_to: (siteData.sold_to || '').trim() || null,
         id: `site-${Date.now()}`,
         is_active: true
       };
@@ -506,13 +536,13 @@ export function useCatalogAndSites({
           code: savedSite.code,
           name: savedSite.name,
           region: savedSite.region || 'Metro Manila',
-          address: savedSite.address || savedSite.full_address || '',
+          address: savedSite.address || '',
           full_address: savedSite.full_address || savedSite.address || '',
           contact_person: savedSite.contact_person || '',
           contact_phone: savedSite.contact_phone || '',
           contact_email: savedSite.contact_email || '',
-          ship_to: savedSite.ship_to || '',
-          sold_to: savedSite.sold_to || '',
+          ship_to: savedSite.ship_to || null,
+          sold_to: savedSite.sold_to || null,
           invoice_prefix: savedSite.invoice_prefix || '',
           is_dc: savedSite.is_dc ?? false,
           is_active: savedSite.is_active ?? true,
@@ -531,6 +561,15 @@ export function useCatalogAndSites({
             name: savedSite.name,
             region: savedSite.region || 'Metro Manila',
             address: savedSite.address || '',
+            full_address: savedSite.full_address || savedSite.address || '',
+            contact_person: savedSite.contact_person || '',
+            contact_phone: savedSite.contact_phone || '',
+            contact_email: savedSite.contact_email || '',
+            ship_to: savedSite.ship_to || null,
+            sold_to: savedSite.sold_to || null,
+            invoice_prefix: savedSite.invoice_prefix || '',
+            is_dc: savedSite.is_dc ?? false,
+            is_active: savedSite.is_active ?? true,
             updated_at: new Date().toISOString()
           });
         }
@@ -559,7 +598,7 @@ export function useCatalogAndSites({
             id: s.id,
             code: normalizeSiteCode(s.code),
             name: s.name,
-            region: s.region || 'Metro Manila',
+            region: resolveSafeRegion(s.code, s.region),
             address: s.address || s.full_address || '',
             full_address: s.full_address || s.address || '',
             contact_person: s.contact_person || '',

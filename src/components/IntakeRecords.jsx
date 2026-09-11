@@ -36,7 +36,7 @@ import {
   Clock
 } from 'lucide-react';
 import { normalizeInventoryUnits } from '../utils/partResolver';
-import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst } from '../utils/appContextHelpers';
+import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
@@ -168,26 +168,10 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Enriched in-stock units with category, pricing, assignment, and normalized receipt date
   // Filters ONLY for live, available in-stock parts currently in DC warehouse (excluding packed/shipped/dispatched parts)
   const enrichedStockUnits = useMemo(() => {
-    const rawInStock = (inventoryUnits || []).filter(u => {
-      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      if (!cleanSerial) return false;
-      // Exclude items in active packing draft or shipments
-      if (packedSerialsSet.has(cleanSerial)) return false;
-      // Exclude items marked with deleted status
-      if (u.is_deleted || u.status === 'deleted') return false;
-      // Exclude items marked with status packed, shipped, dispatched, or allocated
-      if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
-      // Must be in_stock in DC warehouse (strictly exclude PMG retail branch stock)
-      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
-      if (!isDc) return false;
-
-      // Exclude outdated parts prior to September 2026 (delivered to sites prior to September period)
-      const recvDate = (u.received_at || '').substring(0, 10);
-      if (recvDate && recvDate < '2026-09-01') return false;
-      // Exclude virtual / PO items that belong strictly to PO history tracking, not active physical warehouse inventory
-      if (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number)) return false;
-
-      return (u.status === 'in_stock' || !u.status);
+    const rawInStock = filterAvailableDcInStockUnits({
+      inventoryUnits,
+      activePackDraft,
+      shipments
     });
 
     const normalizedUnits = normalizeInventoryUnits(rawInStock, parts || []);

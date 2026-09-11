@@ -1364,3 +1364,124 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     obsoleteIdsToPurge: Array.from(obsoleteIdsToPurge)
   };
 };
+
+/**
+ * Canonical helper to filter for live, available physical IN-STOCK inventory units in the Central DC warehouse.
+ * Standardizes filtering across System Dashboard, DC Stock Records, and Receive Scan-In Workstation.
+ * 
+ * Guarantees:
+ * 1. 100% synchronization and identical counts across all components.
+ * 2. Complete exclusion of packed, shipped, dispatched, or allocated serials (from drafts, active shipments, and past manifests).
+ * 3. Complete exclusion of deleted items (is_deleted || status === 'deleted').
+ * 4. Complete exclusion of outdated pre-September 2026 units that were previously delivered to sites.
+ * 5. Complete exclusion of virtual / PO placeholder items not representing physical DC shelf stock.
+ * 6. Strict site isolation ensuring only units located in Central DC (site-dc / DC-MDC) are counted.
+ */
+export function filterAvailableDcInStockUnits({
+  inventoryUnits = [],
+  activePackDraft = null,
+  shipments = [],
+  sessionScans = null,
+  sites = []
+} = {}) {
+  // 1. Serials that are currently in an active packing list draft or saved/dispatched shipments
+  const packedSerialsSet = new Set();
+
+  // 1a. Items in active packing draft state
+  if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+    activePackDraft.items.forEach(it => {
+      const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+      if (s) packedSerialsSet.add(s);
+    });
+  }
+
+  // 1b. Check localStorage fallback for active packing draft and user-scoped drafts
+  if (typeof window !== 'undefined') {
+    try {
+      const localDraft = JSON.parse(localStorage.getItem('mdc_active_pack_draft') || 'null');
+      if (localDraft?.items && Array.isArray(localDraft.items)) {
+        localDraft.items.forEach(it => {
+          const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+          if (s) packedSerialsSet.add(s);
+        });
+      }
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('mdc_pack_draft_')) {
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            const d = JSON.parse(saved);
+            if (d?.items && Array.isArray(d.items)) {
+              d.items.forEach(it => {
+                const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+                if (s) packedSerialsSet.add(s);
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 1c. Items in ALL finalized, pending, shipped, or received shipments
+  (shipments || []).forEach(sh => {
+    if (sh && Array.isArray(sh.items) && sh.status !== 'cancelled') {
+      sh.items.forEach(it => {
+        const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+        if (s) packedSerialsSet.add(s);
+      });
+    }
+  });
+
+  // 2. Unit pooling: overlay sessionScans if provided (for zero-latency scan-in updates)
+  let pool = inventoryUnits || [];
+  if (sessionScans && Array.isArray(sessionScans) && sessionScans.length > 0) {
+    const serialMap = new Map();
+    (inventoryUnits || []).forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) serialMap.set(s, u);
+    });
+    sessionScans.forEach(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) {
+        const existing = serialMap.get(s);
+        serialMap.set(s, { ...existing, ...u });
+      }
+    });
+    pool = Array.from(serialMap.values());
+  }
+
+  // 3. Filter strictly for available DC warehouse in-stock parts
+  return pool.filter(u => {
+    const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+    if (!cleanSerial) return false;
+
+    // Exclude items in active packing draft or shipments
+    if (packedSerialsSet.has(cleanSerial)) return false;
+
+    // Exclude items marked with deleted status
+    if (u.is_deleted || u.status === 'deleted') return false;
+
+    // Exclude items marked with status packed, shipped, dispatched, or allocated
+    if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
+    if (u.status !== 'in_stock' && u.status) return false;
+
+    // Must be physically in DC warehouse (strictly exclude branch stock)
+    const isDc = u.current_site_id === 'site-dc' || 
+                 u.site_code === 'DC-MDC' || 
+                 u.site_code === 'DC' || 
+                 (!u.current_site_id && !u.site_code) ||
+                 (Array.isArray(sites) && sites.find(s => (s.id === u.current_site_id || s.code === u.current_site_id) && s.is_dc));
+    if (!isDc) return false;
+
+    // Exclude outdated parts prior to September 2026 (delivered to sites prior to September period)
+    const recvDate = (u.received_at || u.created_at || u.intake_date || '').substring(0, 10);
+    if (recvDate && recvDate < '2026-09-01') return false;
+
+    // Exclude virtual / PO items that belong strictly to PO history tracking, not active physical warehouse inventory
+    if (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number)) return false;
+
+    return true;
+  });
+}
+

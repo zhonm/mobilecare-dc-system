@@ -61,6 +61,7 @@ import {
 import { parseUniversalExcel } from '../utils/excelParser';
 import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';
 import { filterActiveOutboundShipments, calculateActiveQueuePartsCount } from '../utils/shipmentHelpers';
+import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 
 const USD_TO_PHP_RATE = 57;
 
@@ -129,37 +130,15 @@ export default function Dashboard() {
     return calculateActiveQueuePartsCount(activePackDraft, activeShipments);
   }, [activePackDraft, activeShipments]);
 
-  const packedSerialsSet = useMemo(() => {
-    const set = new Set();
-    if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
-      activePackDraft.items.forEach(it => {
-        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-        if (s) set.add(s);
-      });
-    }
-    (activeShipments || []).forEach(sh => {
-      if (sh.items && Array.isArray(sh.items)) {
-        sh.items.forEach(it => {
-          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-          if (s) set.add(s);
-        });
-      }
-    });
-    return set;
-  }, [activePackDraft, activeShipments]);
-
+  // Available physical IN-STOCK units in DC Warehouse (fully synchronized with DC Stock Records & Scan-In Station)
   const availableInStockUnits = useMemo(() => {
-    return (inventoryUnits || []).filter(u => {
-      const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
-      const isDc = u.current_site_id === 'site-dc' || 
-                   u.site_code === 'DC-MDC' || 
-                   u.site_code === 'DC' || 
-                   (!u.current_site_id && !u.site_code) ||
-                   (sites.find(s => s.id === u.current_site_id || s.code === u.current_site_id)?.is_dc ?? false);
-      return isDc && (u.status === 'in_stock' || !u.status);
+    return filterAvailableDcInStockUnits({
+      inventoryUnits,
+      activePackDraft,
+      shipments,
+      sites
     });
-  }, [inventoryUnits, packedSerialsSet, sites]);
+  }, [inventoryUnits, activePackDraft, shipments, sites]);
 
   const { agingUnits, freshUnits } = useMemo(() => {
     const aging = [];

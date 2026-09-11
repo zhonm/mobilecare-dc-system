@@ -37,6 +37,33 @@ export const CANONICAL_SITE_LIST = [
   { code: 'APP LAN', name: 'MOBILECARE - APP SM LANANG' }
 ];
 
+export const CANONICAL_SITE_REGIONS = {
+  'ASP COT': 'Cotabato',
+  'ASP CDO': 'Cagayan de Oro',
+  'ASP ZAM': 'Zamboanga',
+  'ASP ABR': 'Davao',
+  'APP LAN': 'Davao',
+  'ASP LAU': 'La Union',
+  'ASP NAG': 'Camarines Sur',
+  'ASP ILO': 'Iloilo',
+  'APP ILO': 'Iloilo',
+  'ASP CEB': 'Cebu',
+  'ASP LIM': 'Batangas',
+  'ASP NPM': 'Pampanga'
+};
+
+export function resolveSafeRegion(code, region) {
+  const clean = (region || '').trim();
+  if (clean && clean.toLowerCase() !== 'other') {
+    return clean;
+  }
+  const cleanCode = (code || '').trim().toUpperCase();
+  if (CANONICAL_SITE_REGIONS[cleanCode]) {
+    return CANONICAL_SITE_REGIONS[cleanCode];
+  }
+  return 'Metro Manila';
+}
+
 export const CANONICAL_DISPLAY_DESCS = [
   'Display, iPhone 13',
   'Display, iPhone 13 Pro',

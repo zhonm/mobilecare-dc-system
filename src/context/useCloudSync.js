@@ -3,6 +3,7 @@ import seedData from '../data/seedData.json';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
+import { resolveSafeRegion } from '../constants/config';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import {
   reconcileUnitsWithPackedDrafts,
@@ -672,9 +673,7 @@ export function useCloudSync({
             id: s.id,
             code: s.code,
             name: s.name,
-            region: (s.code === 'ASP LAU' || s.code === 'LAU' || s.code === 'ASP NAG' || s.code === 'NAG')
-              ? 'Camarines Sur'
-              : (s.region || (isProvincialSite(s) ? 'Provincial' : 'Metro Manila')),
+            region: resolveSafeRegion(s.code, s.region || (isProvincialSite(s) ? 'Provincial' : 'Metro Manila')),
             address: s.address || s.full_address || '',
             full_address: s.full_address || s.address || '',
             contact_person: s.contact_person || '',
@@ -2922,10 +2921,15 @@ export function useCloudSync({
           const siteRows = currentSites.map(s => ({
             code: s.code,
             name: s.name,
-            region: s.region || 'Metro Manila',
-            address: s.address || '',
+            region: resolveSafeRegion(s.code, s.region),
+            address: s.address || s.full_address || '',
+            full_address: s.full_address || s.address || '',
             contact_person: s.contact_person || '',
             contact_phone: s.contact_phone || '',
+            contact_email: s.contact_email || '',
+            ship_to: s.ship_to || null,
+            sold_to: s.sold_to || null,
+            invoice_prefix: s.invoice_prefix || '',
             is_dc: s.is_dc || false,
             is_active: s.is_active ?? true
           })).filter(s => s.code);

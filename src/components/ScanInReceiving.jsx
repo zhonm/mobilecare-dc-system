@@ -41,6 +41,7 @@ import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, is
 import { formatTo12HourTime } from '../utils/dateUtils';
 import { exportPmgBranchInventoryToExcel, exportDcCompleteStockInventoryToExcel } from '../utils/stockExportUtils';
 import { barcodeAudio } from '../utils/barcodeAudio';
+import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import IntakeRecords from './IntakeRecords';
 
@@ -1065,7 +1066,19 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   // Filter for currently available IN-STOCK units in DC or Branch (normalized to ensure Apple P/N and exclude mislabeled/packed units)
   const availableInStockUnits = useMemo(() => {
-    // 1. Combine inventoryUnits with sessionScans (sessionScans takes precedence for real-time zero-latency reactivity)
+    // For Central DC Warehouse mode, use canonical shared filter for 100% system-wide parity
+    if (!isPmgUser && (!activeReceivingSite || activeReceivingSite?.code === 'DC-MDC' || activeReceivingSite?.id === 'site-dc')) {
+      const rawDc = filterAvailableDcInStockUnits({
+        inventoryUnits,
+        activePackDraft,
+        shipments,
+        sessionScans,
+        sites: [dcSiteObj, activeReceivingSite].filter(Boolean)
+      });
+      return normalizeInventoryUnits(rawDc, parts);
+    }
+
+    // 1. Combine inventoryUnits with sessionScans for branch receiving
     const serialMap = new Map();
     (inventoryUnits || []).forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
@@ -1130,7 +1143,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return (u.status === 'in_stock' || !u.status) && isDc;
     });
     return normalizeInventoryUnits(raw, parts);
-  }, [inventoryUnits, sessionScans, packedSerialsSet, parts, isPmgUser, activeReceivingSite, dcSiteObj, currentUser, isDcStockUnit, isUnitAddedByCurrentUser]);
+  }, [inventoryUnits, sessionScans, packedSerialsSet, parts, isPmgUser, activeReceivingSite, dcSiteObj, currentUser, isDcStockUnit, isUnitAddedByCurrentUser, activePackDraft, shipments]);
 
   // Enrich available stock units with part catalog info and accurate Apple category classification
   const enrichedReceivedUnits = useMemo(() => {

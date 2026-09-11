@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
 import { getCategoryForPart } from '../utils/categoryFilter';
 import { formatTo12HourTime } from '../utils/dateUtils';
+import { resolveSafeRegion } from '../constants/config';
 import {
   Settings,
   Plus,
@@ -165,6 +166,34 @@ export default function SettingsCatalog() {
   const [siteSearch, setSiteSearch] = useState('');
   const [showAddSiteModal, setShowAddSiteModal] = useState(false);
   const [editingSite, setEditingSite] = useState(null);
+  const [customRegionEditMode, setCustomRegionEditMode] = useState(false);
+  const [customRegionAddMode, setCustomRegionAddMode] = useState(false);
+
+  // Comprehensive Philippine regions list
+  const PHILIPPINE_REGIONS = [
+    'Metro Manila',
+    'Batangas',
+    'Bicol',
+    'Bulacan',
+    'Cagayan de Oro',
+    'Camarines Sur',
+    'Cavite',
+    'Cebu',
+    'Central Luzon',
+    'Cotabato',
+    'Davao',
+    'Iloilo',
+    'La Union',
+    'Laguna',
+    'Mindanao',
+    'North Luzon',
+    'Pampanga',
+    'Quezon City',
+    'Rizal',
+    'South Luzon',
+    'Visayas',
+    'Zamboanga'
+  ];
 
   const BLANK_SITE = {
     code: '', name: '', region: 'Metro Manila', address: '',
@@ -172,6 +201,26 @@ export default function SettingsCatalog() {
   };
   const [newSite, setNewSite] = useState(BLANK_SITE);
   const [deletingSite, setDeletingSite] = useState(null);
+
+  // Dynamically compute all unique region options (strictly excluding "Other")
+  const allRegionOptions = useMemo(() => {
+    const set = new Set(PHILIPPINE_REGIONS.filter(r => r.toLowerCase() !== 'other'));
+    (sites || []).forEach(s => {
+      const reg = resolveSafeRegion(s.code, s.region);
+      if (reg && reg.toLowerCase() !== 'other') {
+        set.add(reg);
+      }
+    });
+    const editReg = resolveSafeRegion(editingSite?.code, editingSite?.region);
+    if (editReg && editReg.toLowerCase() !== 'other') {
+      set.add(editReg);
+    }
+    const newReg = resolveSafeRegion(newSite?.code, newSite?.region);
+    if (newReg && newReg.toLowerCase() !== 'other') {
+      set.add(newReg);
+    }
+    return Array.from(set).filter(r => r.toLowerCase() !== 'other').sort((a, b) => a.localeCompare(b));
+  }, [sites, editingSite?.region, editingSite?.code, newSite?.region, newSite?.code]);
 
   const filteredSites = useMemo(() => {
     const valid = (sites || []).filter(s =>
@@ -183,7 +232,7 @@ export default function SettingsCatalog() {
     return valid.filter(s =>
       (s.code || '').toLowerCase().includes(q) ||
       (s.name || '').toLowerCase().includes(q) ||
-      (s.region || '').toLowerCase().includes(q) ||
+      (resolveSafeRegion(s.code, s.region) || '').toLowerCase().includes(q) ||
       (s.address || '').toLowerCase().includes(q) ||
       (s.ship_to || '').toLowerCase().includes(q) ||
       (s.contact_person || '').toLowerCase().includes(q) ||
@@ -204,8 +253,18 @@ export default function SettingsCatalog() {
       showToast(`Branch code "${cleanCode}" already exists`, 'error');
       return;
     }
-    saveSite({ ...newSite, code: cleanCode, name: newSite.name.trim() });
+    const cleanRegion = resolveSafeRegion(cleanCode, newSite.region);
+    const cleanAddress = (newSite.address || '').trim();
+    saveSite({
+      ...newSite,
+      code: cleanCode,
+      name: newSite.name.trim(),
+      region: cleanRegion,
+      address: cleanAddress,
+      full_address: cleanAddress
+    });
     setNewSite(BLANK_SITE);
+    setCustomRegionAddMode(false);
     setShowAddSiteModal(false);
   };
 
@@ -215,12 +274,18 @@ export default function SettingsCatalog() {
       showToast('Branch name is required', 'error');
       return;
     }
-    saveSite({ ...editingSite, name: editingSite.name.trim() });
+    const cleanRegion = resolveSafeRegion(editingSite.code, editingSite.region);
+    const cleanAddress = (editingSite.address || '').trim();
+    saveSite({
+      ...editingSite,
+      name: editingSite.name.trim(),
+      region: cleanRegion,
+      address: cleanAddress,
+      full_address: cleanAddress
+    });
     setEditingSite(null);
+    setCustomRegionEditMode(false);
   };
-
-  // Shared region options
-  const REGION_OPTIONS = ['Metro Manila', 'Cebu', 'Davao', 'Pampanga', 'Laguna', 'Batangas', 'Bulacan', 'Quezon City', 'Other'];
 
 
   const partNumberCounts = useMemo(() => {
@@ -1157,7 +1222,11 @@ export default function SettingsCatalog() {
                 </button>
                 <button
                   className="btn btn-primary btn-sm"
-                  onClick={() => { setNewSite(BLANK_SITE); setShowAddSiteModal(true); }}
+                  onClick={() => {
+                    setNewSite(BLANK_SITE);
+                    setCustomRegionAddMode(false);
+                    setShowAddSiteModal(true);
+                  }}
                 >
                   <Plus size={14} /><span>Add New Branch</span>
                 </button>
@@ -1203,8 +1272,8 @@ export default function SettingsCatalog() {
                           )}
                         </td>
                         <td>
-                          <span className={`badge ${s.region === 'Metro Manila' ? 'badge-primary' : 'badge-warning'}`}>
-                            {s.region}
+                          <span className={`badge ${resolveSafeRegion(s.code, s.region) === 'Metro Manila' ? 'badge-primary' : 'badge-warning'}`}>
+                            {resolveSafeRegion(s.code, s.region)}
                           </span>
                         </td>
                         <td style={{ fontSize: '12px', color: '#475569', maxWidth: '220px' }}>
@@ -1242,7 +1311,11 @@ export default function SettingsCatalog() {
                             <button
                               className="btn btn-secondary btn-sm"
                               title="Edit branch"
-                              onClick={() => setEditingSite({ ...s })}
+                              onClick={() => {
+                                const safeReg = resolveSafeRegion(s.code, s.region);
+                                setEditingSite({ ...s, region: safeReg });
+                                setCustomRegionEditMode(false);
+                              }}
                               style={{ padding: '4px 8px' }}
                             >
                               <Edit2 size={12} />
@@ -1354,12 +1427,52 @@ export default function SettingsCatalog() {
                     {/* Region + Type + GSX Ship-To */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label">Region</label>
-                        <select className="form-select"
-                          value={newSite.region}
-                          onChange={e => setNewSite({ ...newSite, region: e.target.value })}>
-                          {REGION_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <label className="form-label" style={{ marginBottom: 0 }}>Region</label>
+                          <button
+                            type="button"
+                            onClick={() => setCustomRegionAddMode(!customRegionAddMode)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#0284c7',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                              padding: 0,
+                              fontWeight: 500,
+                              textDecoration: 'underline'
+                            }}
+                          >
+                            {customRegionAddMode ? 'Select from list' : '+ Type custom'}
+                          </button>
+                        </div>
+                        {customRegionAddMode ? (
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="e.g. Camarines Sur, La Union"
+                            value={newSite.region || ''}
+                            onChange={e => setNewSite({ ...newSite, region: e.target.value })}
+                            autoFocus
+                          />
+                        ) : (
+                          <select
+                            className="form-select"
+                            value={resolveSafeRegion(newSite.code, newSite.region)}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setCustomRegionAddMode(true);
+                              } else {
+                                setNewSite({ ...newSite, region: e.target.value });
+                              }
+                            }}
+                          >
+                            {allRegionOptions.map(r => (
+                              <option key={r} value={r}>{r}</option>
+                            ))}
+                            <option value="__custom__">+ Enter custom region...</option>
+                          </select>
+                        )}
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Branch Type</label>
@@ -1471,12 +1584,52 @@ export default function SettingsCatalog() {
                     {/* Region + Type + GSX Ship-To */}
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label">Region</label>
-                        <select className="form-select"
-                          value={editingSite.region || 'Metro Manila'}
-                          onChange={e => setEditingSite({ ...editingSite, region: e.target.value })}>
-                          {REGION_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <label className="form-label" style={{ marginBottom: 0 }}>Region</label>
+                          <button
+                            type="button"
+                            onClick={() => setCustomRegionEditMode(!customRegionEditMode)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#0284c7',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                              padding: 0,
+                              fontWeight: 500,
+                              textDecoration: 'underline'
+                            }}
+                          >
+                            {customRegionEditMode ? 'Select from list' : '+ Type custom'}
+                          </button>
+                        </div>
+                        {customRegionEditMode ? (
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="e.g. Camarines Sur, La Union"
+                            value={editingSite.region || ''}
+                            onChange={e => setEditingSite({ ...editingSite, region: e.target.value })}
+                            autoFocus
+                          />
+                        ) : (
+                          <select
+                            className="form-select"
+                            value={resolveSafeRegion(editingSite.code, editingSite.region)}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setCustomRegionEditMode(true);
+                              } else {
+                                setEditingSite({ ...editingSite, region: e.target.value });
+                              }
+                            }}
+                          >
+                            {allRegionOptions.map(r => (
+                              <option key={r} value={r}>{r}</option>
+                            ))}
+                            <option value="__custom__">+ Enter custom region...</option>
+                          </select>
+                        )}
                       </div>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Branch Type</label>
