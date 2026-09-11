@@ -6,6 +6,7 @@ import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilt
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
+import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
   Inbox,
   Send,
@@ -253,6 +254,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   // Superadmin Site Receipt Confirmation Modal State
   const [receiveModalState, setReceiveModalState] = useState(null);
   const [isSubmittingReceive, setIsSubmittingReceive] = useState(false);
+  const [statusLoadingState, setStatusLoadingState] = useState(null);
 
   const handleOpenReceiveModal = (shipment) => {
     const destSite = sites.find(st => st.id === shipment.site_id || st.code === shipment.site_code) || activeSiteObj;
@@ -269,12 +271,27 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const handleConfirmSiteReceiveSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!receiveModalState) return;
-    setIsSubmittingReceive(true);
 
+    const targetShipment = receiveModalState.shipment;
+    const targetSite = receiveModalState.site;
+    const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
+    const siteName = targetSite?.name || targetShipment?.site_name || '';
+
+    setIsSubmittingReceive(true);
+    setStatusLoadingState({
+      isOpen: true,
+      title: 'Confirming Site Package Receipt...',
+      invoiceRef: invRef,
+      siteName: siteName,
+      targetStatus: 'Received Confirmed & Stock Added',
+      isConfirmReceive: true
+    });
+
+    const startTime = Date.now();
     try {
       if (typeof confirmSiteReceive === 'function') {
         await confirmSiteReceive(
-          receiveModalState.shipment.id,
+          targetShipment.id,
           {
             receivedByName: receiveModalState.receivedByName,
             receivedDate: receiveModalState.receivedDate,
@@ -284,11 +301,18 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           { partsRequests, updatePartsRequestStatus }
         );
       }
+
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+
       setReceiveModalState(null);
     } catch (err) {
       console.error('Error confirming site receipt:', err);
     } finally {
       setIsSubmittingReceive(false);
+      setStatusLoadingState(null);
     }
   };
 
@@ -4258,6 +4282,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
+      {/* Lightweight Status Transition / Confirm Package Loading Screen */}
+      <StatusChangeLoadingModal {...statusLoadingState} />
     </div>
   );
 }

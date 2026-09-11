@@ -182,7 +182,24 @@ async function runTests() {
     assert(p1Logo, 'Page 1 must have a logo');
     assert.strictEqual(p1Logo.w, 22, 'Page 1 logo width must be 22mm (balanced size)');
     assert.strictEqual(p1Logo.h, 10.65, 'Page 1 logo height must be 10.65mm');
-    console.log('  ✓ PASS: Small PL (<=50 parts) generates 2 pages with 22x10.65mm logo, "Page 1 of 1", and blank Declaration pagination');
+
+    // Check space below "Packing List" title on Page 1 (generous breathing room)
+    const p1Title = renderedTexts.find(t => t.page === 1 && t.text === 'Packing List');
+    assert(p1Title, 'Page 1 must render "Packing List" title');
+    const p1CompName = renderedTexts.find(t => t.page === 1 && t.text === 'MOBILE CARE SERVICES PHILS. INC.');
+    assert(p1CompName, 'Page 1 must render company name');
+    assert(p1CompName.y >= 23, `Space below title must be generous (p1CompName.y=${p1CompName.y} >= 23)`);
+
+    // Check Verified By and Pickup By alignment with table Totals Box (X = 124)
+    const verifiedByText = renderedTexts.find(t => t.page === 1 && t.text === 'Verified by:');
+    assert(verifiedByText, 'Page 1 must render "Verified by:"');
+    assert.strictEqual(verifiedByText.x, 124, 'Verified by: must align with table Totals Box at X=124');
+
+    const pickupByText = renderedTexts.find(t => t.page === 1 && t.text === 'Pickup By:');
+    assert(pickupByText, 'Page 1 must render "Pickup By:"');
+    assert.strictEqual(pickupByText.x, 124, 'Pickup By: must align with table Totals Box at X=124');
+
+    console.log('  ✓ PASS: Small PL (<=50 parts) generates 2 pages with 22x10.65mm logo, "Page 1 of 1", generous title spacing, and aligned signatures (X=124)');
 
     // Subtest 3B: 61 parts -> Exactly 3 Pages (Manifest Page 1 of 2, Page 2 of 2, and Declaration Form with NO page number)
     renderedTexts = [];

@@ -25,7 +25,8 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
-  Calendar
+  Calendar,
+  Loader2
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
@@ -452,37 +453,65 @@ export default function Shipments() {
     e.preventDefault();
     if (!receiveModalState) return;
 
-    if (typeof confirmSiteReceive === 'function') {
-      await confirmSiteReceive(
-        receiveModalState.shipment.id,
-        {
-          receivedByName: receiveModalState.receivedByName,
-          receivedDate: receiveModalState.receivedDate,
-          receivedCondition: receiveModalState.receivedCondition,
-          receivingNotes: receiveModalState.receivingNotes
-        },
-        { partsRequests, updatePartsRequestStatus }
-      );
-    } else {
-      const cleanReceiver = String(receiveModalState.receivedByName || '').trim() || currentUser?.fullName || 'Branch Staff';
-      const cleanDate = String(receiveModalState.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
+    const targetShipment = receiveModalState.shipment;
+    const targetSite = receiveModalState.site;
+    const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
+    const siteName = targetSite?.name || targetShipment?.site_name || '';
 
-      const updatedShipment = {
-        ...receiveModalState.shipment,
-        status: 'received_confirmed',
-        received_at: new Date().toISOString(),
-        received_date: cleanDate,
-        received_by_name: cleanReceiver,
-        receiving_signature: cleanReceiver,
-        receiving_condition: receiveModalState.receivedCondition,
-        receiving_notes: receiveModalState.receivingNotes,
-        updated_at: new Date().toISOString()
-      };
+    setStatusLoadingState({
+      isOpen: true,
+      title: 'Confirming Site Package Receipt...',
+      invoiceRef: invRef,
+      siteName: siteName,
+      targetStatus: 'Received Confirmed & Archived',
+      isConfirmReceive: true
+    });
 
-      await saveShipment(updatedShipment);
-      showToast(`Confirmed Receipt! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} is now marked RECEIVED CONFIRMED and archived.`, 'success');
+    const startTime = Date.now();
+    try {
+      if (typeof confirmSiteReceive === 'function') {
+        await confirmSiteReceive(
+          targetShipment.id,
+          {
+            receivedByName: receiveModalState.receivedByName,
+            receivedDate: receiveModalState.receivedDate,
+            receivedCondition: receiveModalState.receivedCondition,
+            receivingNotes: receiveModalState.receivingNotes
+          },
+          { partsRequests, updatePartsRequestStatus }
+        );
+      } else {
+        const cleanReceiver = String(receiveModalState.receivedByName || '').trim() || currentUser?.fullName || 'Branch Staff';
+        const cleanDate = String(receiveModalState.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
+
+        const updatedShipment = {
+          ...targetShipment,
+          status: 'received_confirmed',
+          received_at: new Date().toISOString(),
+          received_date: cleanDate,
+          received_by_name: cleanReceiver,
+          receiving_signature: cleanReceiver,
+          receiving_condition: receiveModalState.receivedCondition,
+          receiving_notes: receiveModalState.receivingNotes,
+          updated_at: new Date().toISOString()
+        };
+
+        await saveShipment(updatedShipment);
+        showToast(`Confirmed Receipt! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} is now marked RECEIVED CONFIRMED and archived.`, 'success');
+      }
+
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+
+      setReceiveModalState(null);
+    } catch (err) {
+      console.error('Error confirming site receipt:', err);
+      showToast(`Error confirming receipt: ${err?.message || 'Failed to update'}`, 'error');
+    } finally {
+      setStatusLoadingState(null);
     }
-    setReceiveModalState(null);
   };
 
   // Tracking modal submit for PDF / Print
@@ -2090,22 +2119,39 @@ export default function Shipments() {
               </div>
 
               <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setReceiveModalState(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setReceiveModalState(null)}
+                  disabled={Boolean(statusLoadingState?.isOpen)}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="btn btn-primary"
+                  disabled={Boolean(statusLoadingState?.isOpen)}
                   style={{
                     background: '#059669',
                     borderColor: '#059669',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    opacity: statusLoadingState?.isOpen ? 0.75 : 1,
+                    cursor: statusLoadingState?.isOpen ? 'not-allowed' : 'pointer'
                   }}
                 >
-                  <CheckCircle size={14} />
-                  <span>Confirm Receipt & Archive Manifest</span>
+                  {statusLoadingState?.isOpen ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Confirming Receipt...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle size={14} />
+                      <span>Confirm Receipt & Archive Manifest</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

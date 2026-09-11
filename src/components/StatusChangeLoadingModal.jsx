@@ -9,11 +9,34 @@ export default function StatusChangeLoadingModal({
   isOpen,
   invoiceRef,
   siteName,
-  targetStatus
+  targetStatus,
+  title,
+  subtitle,
+  isConfirmReceive
 }) {
   if (!isOpen) return null;
 
-  const isTargetReady = targetStatus?.toLowerCase().includes('ready') || targetStatus?.toLowerCase().includes('pending');
+  const isReceive = Boolean(
+    isConfirmReceive ||
+    targetStatus?.toLowerCase().includes('received') ||
+    targetStatus?.toLowerCase().includes('confirm') ||
+    targetStatus?.toLowerCase().includes('package')
+  );
+
+  const isTargetReady = !isReceive && (
+    targetStatus?.toLowerCase().includes('ready') ||
+    targetStatus?.toLowerCase().includes('pending')
+  );
+
+  const themeColor = isReceive ? '#059669' : (isTargetReady ? '#d97706' : '#475569');
+  const themeBg = isReceive ? '#ecfdf5' : (isTargetReady ? '#fffbeb' : '#f1f5f9');
+  const themeBorder = isReceive ? '#a7f3d0' : (isTargetReady ? '#fde68a' : '#e2e8f0');
+  const themeBadgeBg = isReceive ? '#ecfdf5' : (isTargetReady ? '#fffbeb' : '#f8fafc');
+  const themeBadgeBorder = isReceive ? '#a7f3d0' : (isTargetReady ? '#fde68a' : '#cbd5e1');
+  const themeBadgeText = isReceive ? '#065f46' : (isTargetReady ? '#b45309' : '#475569');
+
+  const modalTitle = title || (isReceive ? 'Confirming Package Receipt...' : 'Updating Shipment Status...');
+  const modalSubtitle = subtitle || (isReceive ? 'Verifying inventory & archiving shipment manifest...' : 'Synchronizing changes across database & storage...');
 
   return (
     <div
@@ -39,7 +62,7 @@ export default function StatusChangeLoadingModal({
           background: '#ffffff',
           borderRadius: '16px',
           padding: '28px 32px',
-          maxWidth: '380px',
+          maxWidth: '400px',
           width: '90%',
           boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
           border: '1px solid #e2e8f0',
@@ -52,8 +75,8 @@ export default function StatusChangeLoadingModal({
             width: '52px',
             height: '52px',
             borderRadius: '50%',
-            background: isTargetReady ? '#fffbeb' : '#f1f5f9',
-            border: isTargetReady ? '2px solid #fde68a' : '2px solid #e2e8f0',
+            background: themeBg,
+            border: `2px solid ${themeBorder}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -63,7 +86,7 @@ export default function StatusChangeLoadingModal({
           <Loader2
             size={26}
             className="spin"
-            color={isTargetReady ? '#d97706' : '#475569'}
+            color={themeColor}
           />
         </div>
 
@@ -75,7 +98,7 @@ export default function StatusChangeLoadingModal({
             margin: '0 0 6px 0'
           }}
         >
-          Updating Shipment Status...
+          {modalTitle}
         </h3>
 
         {invoiceRef && (
@@ -112,15 +135,15 @@ export default function StatusChangeLoadingModal({
               gap: '6px',
               padding: '6px 14px',
               borderRadius: '20px',
-              background: isTargetReady ? '#fffbeb' : '#f8fafc',
-              border: isTargetReady ? '1px solid #fde68a' : '1px solid #cbd5e1',
+              background: themeBadgeBg,
+              border: `1px solid ${themeBadgeBorder}`,
               fontSize: '11.5px',
               fontWeight: 600,
-              color: isTargetReady ? '#b45309' : '#475569',
+              color: themeBadgeText,
               margin: '6px 0 10px'
             }}
           >
-            <span>Transitioning to:</span>
+            <span>{isReceive ? 'Action:' : 'Transitioning to:'}</span>
             <strong style={{ textTransform: 'uppercase' }}>{targetStatus}</strong>
           </div>
         )}
@@ -132,7 +155,7 @@ export default function StatusChangeLoadingModal({
             marginTop: '12px'
           }}
         >
-          Synchronizing changes across database &amp; storage...
+          {modalSubtitle}
         </div>
       </div>
     </div>

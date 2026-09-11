@@ -2666,18 +2666,6 @@ export default function ScanOutPacking() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <strong style={{ color: '#0f172a' }}>Pickup By:</strong>
-              <input
-                type="text"
-                className="packing-inline-input packing-inline-input-left"
-                style={{ width: '170px', fontWeight: 600 }}
-                value={currentShipment.pickup_by_name || (currentShipment.carrier === 'Utility' ? 'Utility' : '')}
-                placeholder={currentShipment.carrier === 'Utility' ? 'Utility' : 'e.g. Lalamove Driver'}
-                title="Click to edit Pickup By"
-                onChange={(e) => setCurrentShipment(prev => ({ ...prev, pickup_by_name: e.target.value }))}
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <strong style={{ color: '#0f172a' }}>Receiving Branch Signature:</strong>
               <input
                 type="text"
@@ -2687,6 +2675,18 @@ export default function ScanOutPacking() {
                 placeholder={selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'}
                 title="Click to edit Receiving Branch Signature"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, receiving_signature: e.target.value }))}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong style={{ color: '#0f172a' }}>Pickup By:</strong>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '170px', fontWeight: 600 }}
+                value={currentShipment.pickup_by_name || (currentShipment.carrier === 'Utility' ? 'Utility' : '')}
+                placeholder={currentShipment.carrier === 'Utility' ? 'Utility' : 'e.g. Lalamove Driver'}
+                title="Click to edit Pickup By"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, pickup_by_name: e.target.value }))}
               />
             </div>
           </div>

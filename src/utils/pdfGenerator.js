@@ -59,14 +59,15 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
     let tableStartY = 0;
 
     if (isFirstManifestPage) {
-      // Title: "Packing List" Centered
+      // Title: "Packing List" Centered with generous vertical breathing room
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(15);
+      doc.setTextColor(15, 23, 42);
       doc.text('Packing List', pageWidth / 2, 12, { align: 'center' });
 
       // Top Left: Mobile Care Logo (Crisp mobilecareNoBGLogo) + Company Info
-      const headerTopY = 16;
+      // Positioned with ample breathing room below the title
+      const headerTopY = 21;
       try {
         if (logoToUse) {
           doc.addImage(logoToUse, 'PNG', margin, headerTopY - 0.5, logoWidth, logoHeight);
@@ -143,10 +144,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       // Continuation Header for Subsequent Pages (clean, balanced & consistent with Page 1)
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(13);
-      doc.setTextColor(0, 0, 0);
+      doc.setTextColor(15, 23, 42);
       doc.text('Packing List (Continuation)', pageWidth / 2, 12, { align: 'center' });
 
-      const contHeaderTopY = 16;
+      const contHeaderTopY = 21;
       const contLogoW = 16;
       const contLogoH = 7.74; // exact 1442:698 aspect ratio
 
@@ -256,6 +257,11 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
         textColor: [15, 23, 42],
         cellPadding: cellPaddingY
       },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252] // Crisp subtle alternate row tint for effortless line scanning
+      },
+      tableLineColor: [203, 213, 225],
+      tableLineWidth: 0.15,
       columnStyles: {
         0: { halign: 'center', cellWidth: col0 },
         1: { halign: 'center', cellWidth: col1, fontStyle: 'bold' },
@@ -278,7 +284,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       // Last Manifest Page: Remarks & Totals Block + Signatures
       const totalsY = finalY + 4;
       const totalBoxWidth = 74;
-      const totalBoxX = pageWidth - margin - totalBoxWidth;
+      const totalBoxX = Math.round(pageWidth - margin - totalBoxWidth);
       const totalValX = pageWidth - margin - 3;
       const boxRowHeight = 4.2;
 
@@ -325,45 +331,52 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setFontSize(7);
       doc.text(`PHP ${totalDeclaredValuePHP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, totalValX, totalsY + boxRowHeight * 2 + (boxRowHeight * 0.7), { align: 'right' });
 
-      // Signatures Section (Clean divider and crisp 2-column layout with generous label spacing)
-      const sigLineY = totalsY + (boxRowHeight * 3) + 5;
+      // Signatures Section (Clean divider and crisp 2-column layout aligned with table)
+      const sigLineY = totalsY + (boxRowHeight * 3) + 6;
 
       doc.setDrawColor(203, 213, 225);
-      doc.setLineWidth(0.3);
+      doc.setLineWidth(0.35);
       doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
 
-      const sigRow1Y = sigLineY + 5;
-      const sigRow2Y = sigRow1Y + 5;
+      const sigRow1Y = sigLineY + 6;
+      const sigRow2Y = sigRow1Y + 5.5;
       doc.setFontSize(7.5);
-      doc.setTextColor(15, 23, 42);
 
-      const colRightX = margin + 92;
+      // Right column aligned with the right section / Totals Box (totalBoxX = 124)
+      const colRightX = totalBoxX;
 
       // Row 1 - Left: Prepared and Counted by
       doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
       doc.text('Prepared and Counted by:', margin, sigRow1Y);
       doc.setFont('helvetica', 'normal');
-      doc.text(shipment.prepared_by_name || 'Zhon Manaois', margin + 42, sigRow1Y);
+      doc.setTextColor(51, 65, 85);
+      doc.text(shipment.prepared_by_name || 'Zhon Manaois', margin + 44, sigRow1Y);
 
-      // Row 1 - Right: Verified by
+      // Row 1 - Right: Verified by (aligned with Totals Box & visually centered in right half)
       doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
       doc.text('Verified by:', colRightX, sigRow1Y);
       doc.setFont('helvetica', 'normal');
-      doc.text(supervisorName, colRightX + 20, sigRow1Y);
+      doc.setTextColor(51, 65, 85);
+      doc.text(supervisorName, colRightX + 22, sigRow1Y);
 
       // Row 2 - Left: Receiving Branch Signature
       doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
       doc.text('Receiving Branch Signature:', margin, sigRow2Y);
       doc.setFont('helvetica', 'normal');
-      doc.text(shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'), margin + 42, sigRow2Y);
+      doc.setTextColor(51, 65, 85);
+      const receivingSig = shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM');
+      doc.text(receivingSig, margin + 44, sigRow2Y);
 
-      // Row 2 - Right: Pickup By (Always aligned on the right under Verified By)
-      if (pickupByName) {
-        doc.setFont('helvetica', 'bold');
-        doc.text('Pickup By:', colRightX, sigRow2Y);
-        doc.setFont('helvetica', 'normal');
-        doc.text(pickupByName, colRightX + 20, sigRow2Y);
-      }
+      // Row 2 - Right: Pickup By (always rendered & aligned under Verified By)
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      doc.text('Pickup By:', colRightX, sigRow2Y);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(51, 65, 85);
+      doc.text(pickupByName || '___________________', colRightX + 22, sigRow2Y);
     }
   }
 
