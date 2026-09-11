@@ -33,7 +33,7 @@ import {
   Clock
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
-import { generateNextInvoiceRef } from '../utils/appContextHelpers';
+import { generateNextInvoiceRef, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber, parseBarcodeData } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
@@ -485,17 +485,23 @@ export default function ScanOutPacking() {
     return map;
   }, [activePackingStations, currentUser?.id]);
 
-  // Reliable Available Stock Calculation (excluding items in local draft AND items reserved by other active stations)
+  // Reliable Available Stock Calculation (synchronized with DC Stock Records & System Dashboard)
   const availableStockUnits = useMemo(() => {
-    return (inventoryUnits || []).filter(u => {
+    const canonicalDcUnits = filterAvailableDcInStockUnits({
+      inventoryUnits,
+      activePackDraft: currentShipment,
+      shipments,
+      sites
+    });
+
+    return canonicalDcUnits.filter(u => {
       const cleanSerial = cleanSerialNumberInput(u.serial_number);
       if (!cleanSerial) return false;
       if (packedSerialsSet.has(cleanSerial) || sessionPackedSerialsRef.current?.has(cleanSerial)) return false;
       if (otherUsersReservedSerialsMap.has(cleanSerial)) return false;
-      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code);
-      return (u.status === 'in_stock' || !u.status) && isDc;
+      return true;
     });
-  }, [inventoryUnits, packedSerialsSet, otherUsersReservedSerialsMap]);
+  }, [inventoryUnits, currentShipment, shipments, sites, packedSerialsSet, otherUsersReservedSerialsMap]);
 
   // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
   const packUnitBySerial = (targetSerialInput) => {
@@ -564,8 +570,29 @@ export default function ScanOutPacking() {
       return { success: false, error: conflictMsg };
     }
 
-    // 2. Lookup matching unit in DC stock
-    const matchingUnit = (inventoryUnits || []).find(u => {
+    // 1.8 Conflict check against other saved/finalized shipments
+    const conflictingShipment = (shipments || []).find(sh => {
+      if (!sh || sh.status === 'cancelled' || !Array.isArray(sh.items)) return false;
+      if (sh.id === currentShipment?.id) return false;
+      return sh.items.some(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
+    });
+    if (conflictingShipment) {
+      barcodeAudio?.playError?.();
+      const ref = conflictingShipment.invoice_ref || conflictingShipment.shipment_number || 'another manifest';
+      const isShipped = conflictingShipment.status === 'shipped' || conflictingShipment.status === 'received_confirmed';
+      const statusLabel = isShipped ? 'already shipped/delivered' : 'already packed in manifest';
+      const msg = `Manifest Conflict: Unit #${cleanSerial} is ${statusLabel} (${ref}).`;
+      setScanResult({
+        type: 'error',
+        message: msg
+      });
+      showToast(msg, 'warning');
+      highlightSerialInput(cleanSerial);
+      return { success: false, error: msg };
+    }
+
+    // 2. Lookup matching unit in Available DC Stock
+    const matchingUnit = (availableStockUnits || []).find(u => {
       const uClean = cleanSerialNumberInput(u.serial_number);
       const uRaw = String(u.serial_number || '').trim().toUpperCase();
       return uClean === cleanSerial || uRaw === cleanSerial;
@@ -573,25 +600,31 @@ export default function ScanOutPacking() {
 
     if (!matchingUnit) {
       barcodeAudio?.playError?.();
-      setScanResult({
-        type: 'error',
-        message: `Stock Error: Serial #${cleanSerial} not found in DC inventory records.`
+      const anyUnit = (inventoryUnits || []).find(u => {
+        const uClean = cleanSerialNumberInput(u.serial_number);
+        const uRaw = String(u.serial_number || '').trim().toUpperCase();
+        return uClean === cleanSerial || uRaw === cleanSerial;
       });
-      showToast(`Serial #${cleanSerial} not found in DC inventory`, 'error');
-      highlightSerialInput(cleanSerial);
-      return { success: false, error: 'Unit not found' };
-    }
 
-    const isDc = matchingUnit.current_site_id === 'site-dc' || matchingUnit.site_code === 'DC-MDC' || matchingUnit.site_code === 'DC' || (!matchingUnit.current_site_id && !matchingUnit.site_code);
-    if (!isDc || (matchingUnit.status && matchingUnit.status !== 'in_stock' && matchingUnit.status !== 'allocated')) {
-      barcodeAudio?.playError?.();
+      let errMsg = `Stock Error: Serial #${cleanSerial} not found in DC inventory records.`;
+      if (anyUnit) {
+        const isDc = anyUnit.current_site_id === 'site-dc' || anyUnit.site_code === 'DC-MDC' || anyUnit.site_code === 'DC' || (!anyUnit.current_site_id && !anyUnit.site_code);
+        if (!isDc) {
+          errMsg = `Unavailable: Unit #${cleanSerial} is assigned to branch ${anyUnit.site_code || anyUnit.site_name || 'non-DC location'}.`;
+        } else if (anyUnit.status && anyUnit.status !== 'in_stock' && anyUnit.status !== 'allocated') {
+          errMsg = `Unavailable: Unit #${cleanSerial} is currently marked "${anyUnit.status}".`;
+        } else {
+          errMsg = `Unavailable: Unit #${cleanSerial} is not currently available for packing in DC.`;
+        }
+      }
+
       setScanResult({
         type: 'error',
-        message: `Unavailable: Unit #${cleanSerial} is currently "${matchingUnit.status || 'not in DC stock'}".`
+        message: errMsg
       });
-      showToast(`Unit #${cleanSerial} is not available in DC (Status: ${matchingUnit.status || 'Other Site'})`, 'error');
+      showToast(errMsg, 'error');
       highlightSerialInput(cleanSerial);
-      return { success: false, error: 'Unit not available' };
+      return { success: false, error: errMsg };
     }
 
     // 3. Execute Pack

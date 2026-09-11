@@ -1398,12 +1398,14 @@ export function filterAvailableDcInStockUnits({
   // 1b. Check localStorage fallback for active packing draft and user-scoped drafts
   if (typeof window !== 'undefined') {
     try {
-      const localDraft = JSON.parse(localStorage.getItem('mdc_active_pack_draft') || 'null');
-      if (localDraft?.items && Array.isArray(localDraft.items)) {
-        localDraft.items.forEach(it => {
-          const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-          if (s) packedSerialsSet.add(s);
-        });
+      if (!activePackDraft) {
+        const localDraft = JSON.parse(localStorage.getItem('mdc_active_pack_draft') || 'null');
+        if (localDraft?.items && Array.isArray(localDraft.items)) {
+          localDraft.items.forEach(it => {
+            const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+            if (s) packedSerialsSet.add(s);
+          });
+        }
       }
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -1411,6 +1413,10 @@ export function filterAvailableDcInStockUnits({
           const saved = localStorage.getItem(key);
           if (saved) {
             const d = JSON.parse(saved);
+            // If activePackDraft is explicitly provided and matches this draft ID, skip localStorage entry to use active in-memory state
+            if (activePackDraft && d?.id === activePackDraft.id) {
+              continue;
+            }
             if (d?.items && Array.isArray(d.items)) {
               d.items.forEach(it => {
                 const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
@@ -1426,6 +1432,9 @@ export function filterAvailableDcInStockUnits({
   // 1c. Items in ALL finalized, pending, shipped, or received shipments
   (shipments || []).forEach(sh => {
     if (sh && Array.isArray(sh.items) && sh.status !== 'cancelled') {
+      if (activePackDraft && sh.id === activePackDraft.id) {
+        return;
+      }
       sh.items.forEach(it => {
         const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
         if (s) packedSerialsSet.add(s);
