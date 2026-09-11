@@ -105,16 +105,12 @@ simulateUpdateStatus('s3', 'draft');
 assert.strictEqual(simulatedShipments.find(s => s.id === 's3').status, 'draft');
 console.log('  ✓ PASS: Reverted s3 from "pending_pickup" back to "draft"');
 
-// Bulk update multiple drafts via array of IDs synchronously in a single tick
-const batchIds = ['s2', 's3'];
-const simulateBatchUpdate = (ids, newStatus) => {
-  const set = new Set(ids);
-  simulatedShipments = simulatedShipments.map(s => set.has(s.id) ? { ...s, status: newStatus } : s);
-};
-simulateBatchUpdate(batchIds, 'pending_pickup');
-assert.strictEqual(simulatedShipments.find(s => s.id === 's2').status, 'pending_pickup');
-assert.strictEqual(simulatedShipments.find(s => s.id === 's3').status, 'pending_pickup');
-console.log('  ✓ PASS: Instant synchronous batch update for array of IDs');
+// Bulk update all remaining drafts to Ready for Pickup
+simulatedShipments.forEach(s => {
+  if (s.status === 'draft') simulateUpdateStatus(s.id, 'pending_pickup');
+});
+assert.ok(simulatedShipments.every(s => s.status === 'pending_pickup'));
+console.log('  ✓ PASS: Bulk update marked all drafts as "pending_pickup"');
 
 // --- Test 4: Shipments Tab Counts & Filtering Isolation ---
 console.log('\n--- 4. Testing Shipments Tab Counts & Filtering Isolation ---');

@@ -37,6 +37,7 @@ import { generateNextInvoiceRef } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber, parseBarcodeData } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
+import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 
 // Pure category & assignment classification helpers
 function isUnitSvnr(u) {
@@ -172,6 +173,37 @@ export default function ScanOutPacking() {
   // Tracking Number Required Prompt Modal State
   const [trackingModalState, setTrackingModalState] = useState(null);
   // trackingModalState: { shipment, items, site, action: 'print' | 'pdf', isDraft, trackingInput, carrierInput }
+
+  // Status Change Loading Screen State
+  const [statusLoadingState, setStatusLoadingState] = useState(null);
+
+  const handleStatusChange = async (shipmentId, newStatus) => {
+    const target = (shipments || []).find(s => s.id === shipmentId || s.invoice_ref === shipmentId || s.shipment_number === shipmentId);
+    const targetLabel = (newStatus === 'pending_pickup' || newStatus === 'ready_for_pickup')
+      ? 'Ready for Pickup'
+      : (newStatus === 'draft' ? 'Draft' : newStatus);
+
+    setStatusLoadingState({
+      isOpen: true,
+      invoiceRef: target?.invoice_ref || target?.shipment_number || 'Packing List',
+      siteName: target?.site_name || target?.destination_site_name || '',
+      targetStatus: targetLabel
+    });
+
+    const startTime = Date.now();
+    try {
+      await updateShipmentStatus(shipmentId, newStatus);
+      if (currentShipment?.id === shipmentId) {
+        setCurrentShipment(prev => ({ ...prev, status: newStatus }));
+      }
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+    } finally {
+      setStatusLoadingState(null);
+    }
+  };
 
   // Automatically synchronize Prepared By with currently logged-in user's full name
   useEffect(() => {
@@ -2399,11 +2431,15 @@ export default function ScanOutPacking() {
                     cursor: 'pointer'
                   }}
                   value={currentShipment.status === 'pending_pickup' ? 'pending_pickup' : 'draft'}
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const newSt = e.target.value;
-                    setCurrentShipment(prev => ({ ...prev, status: newSt }));
                     markLocalDraftEdit();
-                    showToast(`Packing list status set to ${newSt === 'pending_pickup' ? 'Ready for Pickup' : 'Draft'}`, 'info');
+                    if (currentShipment?.id && shipments.some(s => s.id === currentShipment.id)) {
+                      await handleStatusChange(currentShipment.id, newSt);
+                    } else {
+                      setCurrentShipment(prev => ({ ...prev, status: newSt }));
+                      showToast(`Packing list status set to ${newSt === 'pending_pickup' ? 'Ready for Pickup' : 'Draft'}`, 'info');
+                    }
                   }}
                   title="Packing list status: Draft while editing, Ready for Pickup when finalized"
                 >
@@ -2675,14 +2711,31 @@ export default function ScanOutPacking() {
             {draftShipments.some(s => s.status !== 'pending_pickup') && (
               <button
                 className="btn btn-sm"
-                onClick={() => {
-                  const unreadyList = draftShipments.filter(s => s.status !== 'pending_pickup');
-                  if (unreadyList.length === 0) return;
-                  if (window.confirm(`Update status of all ${unreadyList.length} draft packing list(s) to "Ready for Pickup"?`)) {
-                    const unreadyIds = unreadyList.map(ds => ds.id);
-                    updateShipmentStatus(unreadyIds, 'pending_pickup');
-                    if (currentShipment?.id && unreadyIds.includes(currentShipment.id)) {
-                      setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
+                onClick={async () => {
+                  const unreadyDrafts = draftShipments.filter(s => s.status !== 'pending_pickup');
+                  if (unreadyDrafts.length === 0) return;
+                  if (window.confirm(`Update status of all ${unreadyDrafts.length} draft packing list(s) to "Ready for Pickup"?`)) {
+                    setStatusLoadingState({
+                      isOpen: true,
+                      invoiceRef: `${unreadyDrafts.length} Packing Lists`,
+                      siteName: 'All Draft Sites',
+                      targetStatus: 'Ready for Pickup'
+                    });
+                    const startTime = Date.now();
+                    try {
+                      for (const ds of unreadyDrafts) {
+                        await updateShipmentStatus(ds.id, 'pending_pickup');
+                        if (currentShipment?.id === ds.id) {
+                          setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
+                        }
+                      }
+                      const elapsed = Date.now() - startTime;
+                      if (elapsed < 350) {
+                        await new Promise(r => setTimeout(r, 350 - elapsed));
+                      }
+                      showToast(`Updated ${unreadyDrafts.length} packing list(s) to Ready for Pickup!`, 'success');
+                    } finally {
+                      setStatusLoadingState(null);
                     }
                   }
                 }}
@@ -2775,13 +2828,7 @@ export default function ScanOutPacking() {
                     <td>
                       <select
                         value={s.status === 'pending_pickup' ? 'pending_pickup' : 'draft'}
-                        onChange={(e) => {
-                          const newSt = e.target.value;
-                          updateShipmentStatus(s.id, newSt);
-                          if (currentShipment?.id === s.id) {
-                            setCurrentShipment(prev => ({ ...prev, status: newSt }));
-                          }
-                        }}
+                        onChange={(e) => handleStatusChange(s.id, e.target.value)}
                         style={{
                           padding: '3px 8px',
                           fontSize: '11px',
@@ -2804,12 +2851,7 @@ export default function ScanOutPacking() {
                         {s.status === 'draft' ? (
                           <button
                             className="btn btn-sm"
-                            onClick={() => {
-                              updateShipmentStatus(s.id, 'pending_pickup');
-                              if (currentShipment?.id === s.id) {
-                                setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
-                              }
-                            }}
+                            onClick={() => handleStatusChange(s.id, 'pending_pickup')}
                             title="Mark this packing list as Ready for Pickup"
                             style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#fffbeb', color: '#b45309', borderColor: '#fde68a', fontWeight: 600 }}
                           >
@@ -2819,12 +2861,7 @@ export default function ScanOutPacking() {
                         ) : (
                           <button
                             className="btn btn-sm"
-                            onClick={() => {
-                              updateShipmentStatus(s.id, 'draft');
-                              if (currentShipment?.id === s.id) {
-                                setCurrentShipment(prev => ({ ...prev, status: 'draft' }));
-                              }
-                            }}
+                            onClick={() => handleStatusChange(s.id, 'draft')}
                             title="Revert status to Draft for further edits"
                             style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#f1f5f9', color: '#475569', borderColor: '#cbd5e1', fontWeight: 600 }}
                           >
@@ -3773,6 +3810,9 @@ export default function ScanOutPacking() {
           </div>
         </div>
       )}
+
+      {/* Lightweight Status Transition Loading Screen */}
+      <StatusChangeLoadingModal {...statusLoadingState} />
     </div>
   );
 }

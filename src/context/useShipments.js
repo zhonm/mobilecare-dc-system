@@ -1028,10 +1028,13 @@ export function useShipments({
     return { success: true, shipment: updatedShipment };
   };
 
-  const updateShipmentStatus = (shipmentIdOrIds, newStatus, extraData = {}) => {
-    if (!shipmentIdOrIds) return null;
-    const targetIds = Array.isArray(shipmentIdOrIds) ? shipmentIdOrIds : [shipmentIdOrIds];
-    const targetIdsSet = new Set(targetIds.map(id => String(id || '').trim().toUpperCase()).filter(Boolean));
+  const updateShipmentStatus = async (shipmentId, newStatus, extraData = {}) => {
+    if (!shipmentId) return null;
+    const target = (shipments || []).find(s => s.id === shipmentId || s.invoice_ref === shipmentId || s.shipment_number === shipmentId);
+    if (!target) {
+      console.warn(`[useShipments] Could not find shipment with id/ref: ${shipmentId}`);
+      return null;
+    }
 
     // Normalize newStatus
     let resolvedStatus = newStatus;
@@ -1042,116 +1045,27 @@ export function useShipments({
       resolvedStatus = 'draft';
     }
 
-    const nowIso = new Date().toISOString();
-    let updatedItemsList = [];
-    let computedNextList = [];
+    const updatedShipment = {
+      ...target,
+      ...extraData,
+      status: resolvedStatus,
+      updated_at: new Date().toISOString()
+    };
 
-    // 1. INSTANT SYNCHRONOUS STATE UPDATE (Zero UI latency!)
-    setShipments(prev => {
-      const currentList = Array.isArray(prev) ? prev : [];
-      computedNextList = currentList.map(s => {
-        const matches = s && (
-          targetIdsSet.has(String(s.id || '').toUpperCase()) ||
-          targetIdsSet.has(String(s.invoice_ref || '').toUpperCase()) ||
-          targetIdsSet.has(String(s.shipment_number || '').toUpperCase())
-        );
-        if (matches) {
-          const upd = {
-            ...s,
-            ...extraData,
-            status: resolvedStatus,
-            updated_at: nowIso
-          };
-          updatedItemsList.push(upd);
-          return upd;
-        }
-        return s;
+    await saveShipment(updatedShipment);
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('SHIPMENT_STATUS_UPDATED', {
+        id: updatedShipment.id,
+        invoice_ref: updatedShipment.invoice_ref,
+        status: resolvedStatus
       });
+    }
 
-      // Synchronous LocalStorage & IndexedDB write for instant persistence
-      try {
-        localStorage.setItem('mdc_shipments', JSON.stringify(computedNextList));
-      } catch (e) {}
-      dbStorage.setItem('mdc_shipments', computedNextList);
-
-      return computedNextList;
-    });
-
-    // 2. INSTANT USER TOAST & FEEDBACK
     const readableLabel = resolvedStatus === 'pending_pickup' ? 'Ready for Pickup' : (resolvedStatus === 'draft' ? 'Draft' : resolvedStatus);
-    if (updatedItemsList.length > 1) {
-      showToast?.(`Updated status of ${updatedItemsList.length} shipments to "${readableLabel}".`, 'success');
-    } else if (updatedItemsList.length === 1) {
-      showToast?.(`Updated status of ${updatedItemsList[0].invoice_ref || updatedItemsList[0].shipment_number} to "${readableLabel}".`, 'success');
-    }
+    showToast?.(`Updated status of ${updatedShipment.invoice_ref || updatedShipment.shipment_number} to "${readableLabel}".`, 'success');
 
-    // 3. BROADCAST TO PEERS (Zero delay)
-    if (broadcastCloudEvent && updatedItemsList.length > 0) {
-      try {
-        updatedItemsList.forEach(item => {
-          broadcastCloudEvent('SHIPMENT_STATUS_UPDATED', {
-            id: item.id,
-            invoice_ref: item.invoice_ref,
-            status: resolvedStatus
-          });
-        });
-      } catch (e) {}
-    }
-
-    // 4. NON-BLOCKING ASYNC CLOUD SYNC (Runs in background, never delays the UI)
-    if (supabase && updatedItemsList.length > 0) {
-      (async () => {
-        try {
-          for (const item of updatedItemsList) {
-            const directRow = formatShipmentForDb(item, sites);
-            if (directRow) {
-              if (isUUID(item.id)) {
-                await supabase
-                  .from('shipments')
-                  .update({ status: resolvedStatus, updated_at: nowIso })
-                  .eq('id', item.id);
-              } else {
-                await supabase
-                  .from('shipments')
-                  .update({ status: resolvedStatus, updated_at: nowIso })
-                  .eq('shipment_number', item.shipment_number);
-              }
-            }
-
-            await supabase.from('saved_records').upsert({
-              id: item.id,
-              record_type: 'shipment',
-              period_label: item.invoice_ref || item.shipment_number,
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              period_week: item.week_number || 1,
-              notes: item.remarks || '',
-              snapshot_data: item,
-              updated_at: nowIso
-            }, { onConflict: 'id' });
-          }
-
-          // Debounced registry update across active workstations
-          await queuedSavedRecordsUpsert(supabase, {
-            id: 'master_shipments_registry',
-            record_type: 'shipments_registry',
-            period_label: 'Master Shipments Registry',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            notes: 'Master DC Outbound Shipments & Packing Lists',
-            snapshot_data: {
-              shipments: computedNextList,
-              updatedAt: nowIso
-            },
-            updated_at: nowIso
-          }, { debounceMs: 1000 });
-        } catch (cloudErr) {
-          console.warn('[updateShipmentStatus] Background cloud sync note:', cloudErr?.message);
-        }
-      })();
-    }
-
-    return updatedItemsList.length === 1 ? updatedItemsList[0] : updatedItemsList;
+    return updatedShipment;
   };
 
   return {

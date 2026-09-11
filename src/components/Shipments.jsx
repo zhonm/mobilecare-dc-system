@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
+import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
   isShipmentMetroManila,
   isShipmentProvince,
@@ -101,6 +102,34 @@ export default function Shipments() {
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Status Change Loading Screen State
+  const [statusLoadingState, setStatusLoadingState] = useState(null);
+
+  const handleStatusChange = async (shipmentId, newStatus) => {
+    const target = (shipments || []).find(s => s.id === shipmentId || s.invoice_ref === shipmentId || s.shipment_number === shipmentId);
+    const targetLabel = (newStatus === 'pending_pickup' || newStatus === 'ready_for_pickup')
+      ? 'Ready for Pickup'
+      : (newStatus === 'draft' ? 'Draft' : newStatus);
+
+    setStatusLoadingState({
+      isOpen: true,
+      invoiceRef: target?.invoice_ref || target?.shipment_number || 'Shipment',
+      siteName: target?.site_name || target?.destination_site_name || '',
+      targetStatus: targetLabel
+    });
+
+    const startTime = Date.now();
+    try {
+      await updateShipmentStatus(shipmentId, newStatus);
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+    } finally {
+      setStatusLoadingState(null);
+    }
+  };
 
   // Direct Corporate PDF Request Handler
   const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf') => {
@@ -1067,7 +1096,7 @@ export default function Shipments() {
                       {normStatus === 'draft' && (
                         <button
                           className="btn btn-sm"
-                          onClick={() => updateShipmentStatus(sh.id, 'pending_pickup')}
+                          onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
                           title="Mark manifest as Ready for Pickup"
                           style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                         >
@@ -1089,7 +1118,7 @@ export default function Shipments() {
                           </button>
                           <button
                             className="btn btn-sm"
-                            onClick={() => updateShipmentStatus(sh.id, 'draft')}
+                            onClick={() => handleStatusChange(sh.id, 'draft')}
                             title="Revert status to Draft for editing"
                             style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                           >
@@ -1232,7 +1261,7 @@ export default function Shipments() {
                         {(normStatus === 'pending_pickup' || normStatus === 'draft') ? (
                           <select
                             value={normStatus === 'pending_pickup' ? 'pending_pickup' : 'draft'}
-                            onChange={(e) => updateShipmentStatus(sh.id, e.target.value)}
+                            onChange={(e) => handleStatusChange(sh.id, e.target.value)}
                             style={{
                               padding: '3px 8px',
                               fontSize: '11px',
@@ -1331,7 +1360,7 @@ export default function Shipments() {
                           {normStatus === 'draft' && (
                             <button
                               className="btn btn-sm"
-                              onClick={() => updateShipmentStatus(sh.id, 'pending_pickup')}
+                              onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
                               title="Mark manifest as Ready for Pickup"
                               style={{
                                 background: '#fffbeb',
@@ -1370,7 +1399,7 @@ export default function Shipments() {
                               </button>
                               <button
                                 className="btn btn-sm"
-                                onClick={() => updateShipmentStatus(sh.id, 'draft')}
+                                onClick={() => handleStatusChange(sh.id, 'draft')}
                                 title="Revert status to Draft for editing"
                                 style={{
                                   background: '#f1f5f9',
@@ -2677,6 +2706,9 @@ export default function Shipments() {
           </div>
         </div>
       )}
+
+      {/* Lightweight Status Transition Loading Screen */}
+      <StatusChangeLoadingModal {...statusLoadingState} />
     </div>
   );
 }
