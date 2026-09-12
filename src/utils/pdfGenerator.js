@@ -65,30 +65,39 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.text('Packing List', pageWidth / 2, 12, { align: 'center' });
 
       // Top Left: Mobile Care Logo (Crisp mobilecareNoBGLogo) + Company Info
-      // Positioned with ample breathing room below the title
+      // Vertically centered relative to the 5-line company text block beside it
       const headerTopY = 21;
+      const compX = margin + logoWidth + 4; // margin + 22 + 4 = 38
+      const compTitleY = headerTopY + 2;
+      const lineGap = 3.0;
+      const compLastLineY = compTitleY + (lineGap * 4);
+
+      // Exact vertical bounds of the 5-line text block (title cap-height to last line descender)
+      const textBlockTop = compTitleY - 2.2;
+      const textBlockBottom = compLastLineY + 0.6;
+      const textBlockCenterY = (textBlockTop + textBlockBottom) / 2;
+      const logoY = textBlockCenterY - (logoHeight / 2);
+
       try {
         if (logoToUse) {
-          doc.addImage(logoToUse, 'PNG', margin, headerTopY - 0.5, logoWidth, logoHeight);
+          doc.addImage(logoToUse, 'PNG', margin, logoY, logoWidth, logoHeight);
         }
       } catch (e) {
         console.warn('Could not render logo in PDF:', e);
       }
 
-      const compX = margin + logoWidth + 4; // margin + 26 = 38
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, headerTopY + 2);
+      doc.text('MOBILE CARE SERVICES PHILS. INC.', compX, compTitleY);
       
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.2);
       doc.setTextColor(51, 65, 85);
-      const lineGap = 3.0;
-      doc.text('Business and Distribution Center', compX, headerTopY + 2 + lineGap);
-      doc.text('2/L Northeast Square, #47', compX, headerTopY + 2 + lineGap * 2);
-      doc.text('Connecticut St. Northeast Greenhills', compX, headerTopY + 2 + lineGap * 3);
-      doc.text('San Juan City, Metro Manila', compX, headerTopY + 2 + lineGap * 4);
+      doc.text('Business and Distribution Center', compX, compTitleY + lineGap);
+      doc.text('2/L Northeast Square, #47', compX, compTitleY + lineGap * 2);
+      doc.text('Connecticut St. Northeast Greenhills', compX, compTitleY + lineGap * 3);
+      doc.text('San Juan City, Metro Manila', compX, compTitleY + lineGap * 4);
 
       // Top Right: Invoice / Shipment Metadata Box
       const rightBoxWidth = 84;
@@ -121,9 +130,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       });
 
       // Ship To Section
-      const companyBottomY = headerTopY + 2 + lineGap * 4;
+      const companyBottomY = compLastLineY;
       const metaBottomY = headerTopY + 1 + (metaRows.length * metaGap);
-      const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY);
+      const logoBottomY = logoY + logoHeight;
+      const maxHeaderBottomY = Math.max(companyBottomY, metaBottomY, logoBottomY);
       const shipToY = maxHeaderBottomY + 4;
 
       doc.setFont('helvetica', 'bold');

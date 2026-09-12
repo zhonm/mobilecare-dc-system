@@ -1797,7 +1797,7 @@ export default function Dashboard() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '230px' }}>
-            <div style={{ width: '50%', height: '100%' }}>
+            <div style={{ width: '50%', height: '100%', minWidth: 0, position: 'relative' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -1808,6 +1808,7 @@ export default function Dashboard() {
                     outerRadius={80}
                     paddingAngle={3}
                     dataKey="count"
+                    isAnimationActive={false}
                   >
                     {categoryChartData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
@@ -1857,7 +1858,7 @@ export default function Dashboard() {
             </button>
           </div>
 
-          <div style={{ height: '230px', width: '100%' }}>
+          <div style={{ height: '230px', width: '100%', minWidth: 0 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={topSitesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -1868,8 +1869,8 @@ export default function Dashboard() {
                   contentStyle={{ background: '#0f172a', color: '#fff', borderRadius: '8px', border: 'none', fontSize: '12px' }}
                 />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: '11.5px', paddingTop: '6px' }} />
-                <Bar dataKey="iPhone Units" fill="#0284c7" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Valuation ($k)" fill="#10b981" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="iPhone Units" fill="#0284c7" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="Valuation ($k)" fill="#10b981" radius={[4, 4, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>

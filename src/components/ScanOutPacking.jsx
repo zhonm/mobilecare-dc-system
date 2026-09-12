@@ -2464,7 +2464,7 @@ export default function ScanOutPacking() {
 
           {/* Company Branding & Metadata Block */}
           <div className="packing-company-meta">
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <img
                 src={mobileCareLogo}
                 alt="Mobile Care Logo"

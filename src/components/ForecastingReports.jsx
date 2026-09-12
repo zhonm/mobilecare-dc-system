@@ -1442,6 +1442,7 @@ export default function ForecastingReports() {
                       innerRadius={55}
                       outerRadius={85}
                       paddingAngle={3}
+                      isAnimationActive={false}
                     >
                       {analytics.commodityPie.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
@@ -2454,6 +2455,7 @@ export default function ForecastingReports() {
                       outerRadius={85}
                       paddingAngle={3}
                       dataKey="value"
+                      isAnimationActive={false}
                     >
                       {analytics.regionalSummary.pieData.map((entry, index) => (
                         <Cell key={`regional-pie-${index}`} fill={entry.color} />
