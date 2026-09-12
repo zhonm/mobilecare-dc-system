@@ -752,7 +752,6 @@ export function usePartsRequests({
 
     let trackerModified = false;
     const nowMs = Date.now();
-    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 
     Object.keys(partsSummary).forEach(pn => {
       const item = partsSummary[pn];

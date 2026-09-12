@@ -88,7 +88,9 @@ export function useCloudSync({
   setUploadAuditLogs,
   deletionAuditLogs,
   setDeletionAuditLogs,
-  logDeletionAudit
+  logDeletionAudit,
+  setAutoLogoutConfig,
+  setSessionAuditLogs
 }) {
   const [cloudSyncStatus, setCloudSyncStatus] = useState({
     isSaving: false,
@@ -339,7 +341,9 @@ export function useCloudSync({
             'master_dc_intakes_registry',
             'deleted_intake_ids_registry',
             'deleted_unit_serials_registry',
-            'master_supervisor_settings_registry'
+            'master_supervisor_settings_registry',
+            'master_auto_logout_settings_registry',
+            'master_session_audit_logs_registry'
           ];
           const [resSystem, resPeriods, resStockHeader] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
@@ -940,9 +944,13 @@ export function useCloudSync({
           r.id !== 'master_stock_transfers_report_registry' &&
           r.id !== 'master_users_registry' &&
           r.id !== 'master_supervisor_settings_registry' &&
+          r.id !== 'master_auto_logout_settings_registry' &&
+          r.id !== 'master_session_audit_logs_registry' &&
           r.record_type !== 'live_master_state' &&
           r.record_type !== 'users_registry' &&
           r.record_type !== 'supervisor_settings' &&
+          r.record_type !== 'auto_logout_settings' &&
+          r.record_type !== 'session_audit_registry' &&
           r.record_type !== 'stock_transfer_report' &&
           r.record_type !== 'upload_audit_registry' &&
           r.record_type !== 'deletion_audit_registry' &&
@@ -1142,7 +1150,7 @@ export function useCloudSync({
                 if (it.id) existingItemsMap.set(String(it.id), it);
               });
 
-              let formattedItems = [];
+              let formattedItems;
               if (Array.isArray(dbS.items) && dbS.items.length > 0) {
                 formattedItems = dbS.items.map(it => healShipmentItem(it, serialDict, partsMapByPn));
               } else if (Array.isArray(dbS.shipment_items) && dbS.shipment_items.length > 0) {
@@ -2032,6 +2040,53 @@ export function useCloudSync({
         }
       }
 
+      // 8b. Process Master Auto-Logout & Session Policy Settings Registry
+      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && typeof setAutoLogoutConfig === 'function') {
+        const cloudAutoLogoutDoc = dbSavedRecords.find(r => r.id === 'master_auto_logout_settings_registry');
+        if (cloudAutoLogoutDoc?.snapshot_data && typeof cloudAutoLogoutDoc.snapshot_data === 'object') {
+          const cloudConfig = cloudAutoLogoutDoc.snapshot_data;
+          setAutoLogoutConfig(prev => {
+            if (prev && JSON.stringify(prev) === JSON.stringify({ ...prev, ...cloudConfig })) {
+              return prev;
+            }
+            const merged = {
+              ...prev,
+              ...cloudConfig
+            };
+            try { localStorage.setItem('mdc_auto_logout_settings', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_auto_logout_settings', merged);
+            return merged;
+          });
+        }
+      }
+
+      // 8c. Process Master Session & Auto-Logout Audit Activity Registry
+      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && typeof setSessionAuditLogs === 'function') {
+        const cloudSessionAuditDoc = dbSavedRecords.find(r => r.id === 'master_session_audit_logs_registry');
+        if (cloudSessionAuditDoc?.snapshot_data?.logs && Array.isArray(cloudSessionAuditDoc.snapshot_data.logs)) {
+          const cloudLogs = cloudSessionAuditDoc.snapshot_data.logs;
+          setSessionAuditLogs(prev => {
+            const existingMap = new Map((prev || []).map(l => [l.id, l]));
+            let hasNew = false;
+            cloudLogs.forEach(l => {
+              if (l && l.id && !existingMap.has(l.id)) {
+                existingMap.set(l.id, l);
+                hasNew = true;
+              }
+            });
+            if (!hasNew && prev && prev.length > 0) {
+              return prev;
+            }
+            const merged = Array.from(existingMap.values())
+              .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
+              .slice(0, 300);
+            try { localStorage.setItem('mdc_session_audit_logs', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_session_audit_logs', merged);
+            return merged;
+          });
+        }
+      }
+
       const syncNow = new Date();
       setLastSyncedAt(syncNow);
       setCloudSyncStatus({ isSaving: false, lastSaved: syncNow, isOnline: true });
@@ -2057,7 +2112,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, activePeriod, categories, currentUser, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites]);
+  }, [_shipments, activePeriod, categories, currentUser, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites, _dcIntakeRecords, activePackingStations, masterlistData, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -2335,7 +2390,7 @@ export function useCloudSync({
         }
       }
     }
-  }, [setInventoryUnits, currentUser?.id, broadcastCloudEvent]);
+  }, [setInventoryUnits, currentUser, broadcastCloudEvent]);
 
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {

@@ -800,7 +800,7 @@ export async function exportPmgBranchInventoryToExcel({
   sampleTemplateRows.forEach((r, idx) => {
     const row = ws3.addRow(r);
     row.height = 20;
-    row.eachCell((cell, cNum) => {
+    row.eachCell((cell, _cNum) => {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: idx % 2 === 0 ? 'FFF8FAFC' : 'FFFFFFFF' } };
       cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
       cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0F172A' } };

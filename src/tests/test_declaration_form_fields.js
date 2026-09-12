@@ -62,7 +62,6 @@ try {
   assert(datePickedUpIndex !== -1, 'Must render DATE PICKED UP: header');
 
   // Verify that neither 9/10/2026 nor any date format is printed after DATE PICKED UP
-  const dateMatches = texts.filter(t => /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(t));
   // Page 1 header has Invoice Date/Shipment Date, but Page 2 DATE PICKED UP must NOT have a date
   const page2Texts = capturedTexts.filter(t => t.y >= 198); // bottom section of Page 2
   const page2Date = page2Texts.find(t => /\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(t.text));

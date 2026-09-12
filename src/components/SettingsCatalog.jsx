@@ -36,7 +36,16 @@ import {
   Layers,
   Globe,
   Activity,
+  Clock
 } from 'lucide-react';
+
+const PHILIPPINE_REGIONS = [
+  'Metro Manila', 'Batangas', 'Bicol', 'Bulacan', 'Cagayan de Oro',
+  'Camarines Sur', 'Cavite', 'Cebu', 'Central Luzon', 'Cotabato', 'Davao',
+  'Iloilo', 'La Union', 'Laguna', 'Mindanao', 'North Luzon', 'Pampanga',
+  'Quezon City', 'Rizal', 'South Luzon', 'Visayas', 'Zamboanga'
+];
+import AutoLogoutSettings from './AutoLogoutSettings';
 
 const getCategoryBadgeStyle = (catName = '') => {
   const name = String(catName || '').toUpperCase();
@@ -76,9 +85,14 @@ export default function SettingsCatalog() {
     currentUser,
     showToast,
     supervisorSettings,
-    saveSupervisorSettings
+    saveSupervisorSettings,
+    autoLogoutConfig,
+    updateAutoLogoutConfig,
+    timeRemainingMs,
+    triggerTestWarning,
+    triggerTestAutoLogout
   } = useApp();
-  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'sql'
+  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'sql'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
 
@@ -169,32 +183,6 @@ export default function SettingsCatalog() {
   const [customRegionEditMode, setCustomRegionEditMode] = useState(false);
   const [customRegionAddMode, setCustomRegionAddMode] = useState(false);
 
-  // Comprehensive Philippine regions list
-  const PHILIPPINE_REGIONS = [
-    'Metro Manila',
-    'Batangas',
-    'Bicol',
-    'Bulacan',
-    'Cagayan de Oro',
-    'Camarines Sur',
-    'Cavite',
-    'Cebu',
-    'Central Luzon',
-    'Cotabato',
-    'Davao',
-    'Iloilo',
-    'La Union',
-    'Laguna',
-    'Mindanao',
-    'North Luzon',
-    'Pampanga',
-    'Quezon City',
-    'Rizal',
-    'South Luzon',
-    'Visayas',
-    'Zamboanga'
-  ];
-
   const BLANK_SITE = {
     code: '', name: '', region: 'Metro Manila', address: '',
     contact_person: '', contact_phone: '', contact_email: '', is_dc: false, ship_to: ''
@@ -220,7 +208,7 @@ export default function SettingsCatalog() {
       set.add(newReg);
     }
     return Array.from(set).filter(r => r.toLowerCase() !== 'other').sort((a, b) => a.localeCompare(b));
-  }, [sites, editingSite?.region, editingSite?.code, newSite?.region, newSite?.code]);
+  }, [sites, editingSite?.region, editingSite?.code, newSite.region, newSite.code]);
 
   const filteredSites = useMemo(() => {
     const valid = (sites || []).filter(s =>
@@ -610,6 +598,42 @@ export default function SettingsCatalog() {
         >
           <FileText size={15} />
           <span>Supervisor &amp; Declaration Form</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('security')}
+          style={{
+            background: activeTab === 'security' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+            color: activeTab === 'security' ? '#ffffff' : '#475569',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '8px 14px',
+            fontSize: '12.5px',
+            fontWeight: activeTab === 'security' ? 700 : 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+            boxShadow: activeTab === 'security' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+          }}
+        >
+          <Clock size={15} />
+          <span>Session &amp; Auto-Logout</span>
+          <span
+            style={{
+              background: autoLogoutConfig?.enabled ? '#dcfce7' : '#fee2e2',
+              color: autoLogoutConfig?.enabled ? '#15803d' : '#b91c1c',
+              padding: '1px 6px',
+              borderRadius: '10px',
+              fontSize: '10px',
+              fontWeight: 700
+            }}
+          >
+            {autoLogoutConfig?.enabled ? '12:00 AM' : 'Off'}
+          </span>
         </button>
 
         <button
@@ -2410,6 +2434,19 @@ CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', '
           )}
 
         </div>
+      )}
+
+      {/* 5. Session & Auto-Logout Security Tab */}
+      {activeTab === 'security' && (
+        <AutoLogoutSettings
+          autoLogoutConfig={autoLogoutConfig}
+          updateAutoLogoutConfig={updateAutoLogoutConfig}
+          timeRemainingMs={timeRemainingMs}
+          triggerTestWarning={triggerTestWarning}
+          triggerTestAutoLogout={triggerTestAutoLogout}
+          showToast={showToast}
+          currentUser={currentUser}
+        />
       )}
     </div>
   );

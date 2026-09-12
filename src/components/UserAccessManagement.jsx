@@ -28,7 +28,8 @@ import {
   Check,
   AlertCircle,
   Search,
-  Package
+  Package,
+  Clock
 } from 'lucide-react';
 
 const SUGGESTED_POSITIONS = [
@@ -67,7 +68,10 @@ export default function UserAccessManagement() {
     currentUser,
     showToast,
     isAutoRefreshing,
-    autoRefreshData
+    autoRefreshData,
+    autoLogoutConfig,
+    setActiveTab,
+    canAccess
   } = useApp();
 
   // Search & Filter State
@@ -453,6 +457,28 @@ export default function UserAccessManagement() {
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin-anim' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Sync DB'}</span>
             </button>
+
+            {canAccess?.('settings') && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setActiveTab?.('settings')}
+                title="Configure daily auto-logout schedule and session policies"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  color: '#fff',
+                  borderColor: 'rgba(255, 255, 255, 0.2)',
+                  padding: '7px 12px',
+                  fontSize: '12.5px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <Clock size={13} color="#38bdf8" />
+                <span>Auto-Logout: {autoLogoutConfig?.enabled ? '12:00 AM' : 'Off'}</span>
+              </button>
+            )}
 
             {currentUser && (
               <button

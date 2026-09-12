@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { formatShipmentForDb, isUUID } from '../utils/appContextHelpers.js';
+import { formatShipmentForDb } from '../utils/appContextHelpers.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Packing List (PL) Status Change Functionality');

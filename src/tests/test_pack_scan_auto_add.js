@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { extractSerialNumber, cleanSerialNumberInput, parseBarcodeData } from '../utils/serialTracker.js';
+import { extractSerialNumber, cleanSerialNumberInput } from '../utils/serialTracker.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Pack Scan-Out Station Auto-Add & Scanning');
@@ -204,7 +204,7 @@ it('When autoAdd is OFF, typing does not auto-pack; Enter or Pack Unit packs suc
   let autoPackTriggered = false;
 
   // Simulate onChange with autoAdd = false
-  function onInputChange(val) {
+  function onInputChange(_val) {
     if (!autoAdd) {
       // Does not trigger autoPack
       return false;

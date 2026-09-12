@@ -1,6 +1,5 @@
 import assert from 'assert';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers.js';
-import { normalizeInventoryUnits } from '../utils/partResolver.js';
 
 console.log('====================================================================');
 console.log('TEST SUITE: DC Stock Records & System Dashboard Parity Verification');

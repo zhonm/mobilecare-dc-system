@@ -2,7 +2,6 @@ import assert from 'assert';
 import * as jspdfModule from 'jspdf';
 import { exportPackingListXLSX, parseScanOutPartsFile } from '../utils/excelParser.js';
 import { generatePackingListPDF } from '../utils/pdfGenerator.js';
-import { MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
 
 console.log('====================================================');
 console.log('TEST SUITE: Packing List XLSX Backup & PDF Enhancements');
@@ -130,7 +129,6 @@ async function runTests() {
       super(...args);
       const origAddImage = this.addImage;
       const origText = this.text;
-      const origSave = this.save;
 
       this.addImage = (...imgArgs) => {
         addedImages.push({
@@ -154,7 +152,7 @@ async function runTests() {
         return origText.call(this, text, ...rest);
       };
 
-      this.save = (filename) => {
+      this.save = (_filename) => {
         interceptedPages = this.internal.pages.length - 1;
       };
     }

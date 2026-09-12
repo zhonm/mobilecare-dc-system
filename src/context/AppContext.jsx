@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { ALL_PAGES, PAGE_TITLES } from '../constants/navigation';
 import {
   ROLE_PRESETS,
@@ -26,6 +26,8 @@ import { useShipments } from './useShipments';
 import { usePartsRequests } from './usePartsRequests';
 import { usePeriodRecordsAndReports } from './usePeriodRecordsAndReports';
 import { useCloudSync } from './useCloudSync';
+import { useAutoLogout } from '../hooks/useAutoLogout';
+import AutoLogoutWarningModal from '../components/AutoLogoutWarningModal';
 
 // Re-export constants and helpers for backward compatibility
 export {
@@ -326,6 +328,8 @@ export function AppProvider({ children }) {
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
 
+  const autoLogoutRef = useRef(null);
+
   // 11. Central Cloud Sync & Realtime Engine
   const cloudSync = useCloudSync({
     currentUser: auth.currentUser,
@@ -380,7 +384,23 @@ export function AppProvider({ children }) {
     setUploadAuditLogs: auditLogs.setUploadAuditLogs,
     deletionAuditLogs: auditLogs.deletionAuditLogs,
     setDeletionAuditLogs: auditLogs.setDeletionAuditLogs,
-    logDeletionAudit: auditLogs.logDeletionAudit
+    logDeletionAudit: auditLogs.logDeletionAudit,
+    setAutoLogoutConfig: (...args) => autoLogoutRef.current?.setAutoLogoutConfig?.(...args),
+    setSessionAuditLogs: auditLogs.setSessionAuditLogs
+  });
+
+  // 12. Automated Daily Session & Auto-Logout Engine (12:00 AM Default)
+  const autoLogout = useAutoLogout({
+    currentUser: auth.currentUser,
+    signOut: auth.signOut,
+    autoRefreshData: cloudSync.autoRefreshData,
+    broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
+    logSessionAudit: auditLogs.logSessionAudit,
+    showToast
+  });
+
+  useEffect(() => {
+    autoLogoutRef.current = autoLogout;
   });
 
   const offlineQueue = [];
@@ -549,10 +569,35 @@ export function AppProvider({ children }) {
         isMobileNavOpen,
         setIsMobileNavOpen,
         pmgSubTab,
-        setPmgSubTab
+        setPmgSubTab,
+
+        // Automated Daily Session & Auto-Logout Management
+        autoLogoutConfig: autoLogout.autoLogoutConfig,
+        setAutoLogoutConfig: autoLogout.setAutoLogoutConfig,
+        updateAutoLogoutConfig: autoLogout.updateAutoLogoutConfig,
+        timeRemainingMs: autoLogout.timeRemainingMs,
+        isWarningOpen: autoLogout.isWarningOpen,
+        isRefreshingSession: autoLogout.isRefreshingSession,
+        refreshSession: autoLogout.refreshSession,
+        dismissWarning: autoLogout.dismissWarning,
+        executeAutoLogout: autoLogout.executeAutoLogout,
+        triggerTestWarning: autoLogout.triggerTestWarning,
+        triggerTestAutoLogout: autoLogout.triggerTestAutoLogout,
+        sessionAuditLogs: auditLogs.sessionAuditLogs,
+        setSessionAuditLogs: auditLogs.setSessionAuditLogs,
+        logSessionAudit: auditLogs.logSessionAudit
       }}
     >
       {children}
+      <AutoLogoutWarningModal
+        isOpen={autoLogout.isWarningOpen}
+        timeRemainingMs={autoLogout.timeRemainingMs}
+        autoLogoutConfig={autoLogout.autoLogoutConfig}
+        isRefreshingSession={autoLogout.isRefreshingSession}
+        onRefreshSession={autoLogout.refreshSession}
+        onLogoutNow={() => autoLogout.executeAutoLogout('USER_MANUAL_LOGOUT_FROM_WARNING')}
+        onDismiss={autoLogout.dismissWarning}
+      />
     </AppContext.Provider>
   );
 }

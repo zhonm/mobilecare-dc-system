@@ -13,6 +13,11 @@ import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { isUUID } from '../utils/appContextHelpers';
+import {
+  getSessionAuthTimestamp,
+  setSessionAuthTimestamp,
+  clearSessionAuthTimestamp
+} from '../utils/autoLogoutManager';
 
 export function useAuth({
   usersList,
@@ -61,6 +66,7 @@ export function useAuth({
         }
         persistUserSession(currentUser);
         dbStorage.setItem('mdc_current_user', currentUser);
+        if (!getSessionAuthTimestamp()) setSessionAuthTimestamp(Date.now());
         return;
       }
 
@@ -744,6 +750,7 @@ export function useAuth({
     // Persist immediately across all tiers (LocalStorage, SessionStorage, Cookies, and IndexedDB)
     persistUserSession(user);
     dbStorage.setItem('mdc_current_user', user);
+    setSessionAuthTimestamp(Date.now());
 
     // Check data ownership marker against the logging-in user
     const localDataOwner = localStorage.getItem('mdc_local_data_owner');
@@ -907,6 +914,7 @@ export function useAuth({
     setPendingFirstTimeUser(null);
     persistUserSession(updatedUser);
     dbStorage.setItem('mdc_current_user', updatedUser);
+    setSessionAuthTimestamp(Date.now());
 
     // Check data ownership marker against the newly activated user
     const localDataOwner = localStorage.getItem('mdc_local_data_owner');
@@ -997,6 +1005,7 @@ export function useAuth({
     } catch (e) {}
     try {
       clearStoredUserSession();
+      clearSessionAuthTimestamp();
       await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
     try {

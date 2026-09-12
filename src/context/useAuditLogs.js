@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { getDefaultRolePosition } from '../constants/roles';
@@ -65,6 +65,38 @@ export function useAuditLogs({
             itemsCount: 15,
             intakeDate: '2026-08-20',
             notes: 'Test intake batch'
+          }
+        }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  const [sessionAuditLogs, setSessionAuditLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_session_audit_logs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return [
+        {
+          id: 'sess-audit-init-01',
+          timestamp: new Date().toISOString(),
+          action: 'AUTO_LOGOUT_POLICY_INITIALIZED',
+          user_id: 'usr-system',
+          user_name: 'System Engine',
+          user_email: 'security@mobilecareph.com',
+          user_role: 'system',
+          user_position: 'Security Infrastructure Lead',
+          reason: 'Daily 12:00 AM Automated Session Policy Activated',
+          details: {
+            scheduledTime: '12:00 AM',
+            deviceLocalTime: '12:00:00 AM',
+            policyLogoutTime: '00:00',
+            warningLeadMinutes: 5,
+            clearedCache: true
           }
         }
       ];
@@ -154,6 +186,90 @@ export function useAuditLogs({
     return newLog;
   };
 
+  const currentUserRef = useRef(currentUser);
+  const broadcastCloudEventRef = useRef(broadcastCloudEvent);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+    broadcastCloudEventRef.current = broadcastCloudEvent;
+  });
+
+  const logSessionAudit = useCallback(async ({
+    action = 'AUTO_LOGOUT',
+    details = {},
+    reason = 'Scheduled daily session refresh'
+  }) => {
+    const user = currentUserRef.current;
+    const newLog = {
+      id: `sess-audit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      action,
+      user_id: user?.id || 'usr-system',
+      user_name: user?.fullName || 'System User',
+      user_email: user?.email || '',
+      user_role: user?.role || 'user',
+      user_position: user?.rolePosition || getDefaultRolePosition(user?.role) || 'Specialist',
+      reason,
+      details
+    };
+
+    setSessionAuditLogs(prev => {
+      const updated = [newLog, ...(prev || [])];
+      try {
+        localStorage.setItem('mdc_session_audit_logs', JSON.stringify(updated.slice(0, 250)));
+      } catch (e) {}
+      return updated;
+    });
+
+    try {
+      await dbStorage.setItem('mdc_session_audit_logs', [newLog, ...(sessionAuditLogs || [])]);
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        await supabase.from('audit_logs').insert([{
+          action: action === 'AUTO_LOGOUT' ? 'AUTO_LOGOUT' : action,
+          entity_type: 'User Session',
+          entity_id: user?.id || 'usr-system',
+          user_id: user?.id || 'usr-system',
+          user_name: user?.fullName || 'System User',
+          user_email: user?.email || '',
+          metadata: newLog,
+          created_at: newLog.timestamp
+        }]);
+
+        try {
+          const { data: regDoc } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'master_session_audit_logs_registry').maybeSingle();
+          const existingCloudLogs = Array.isArray(regDoc?.snapshot_data?.logs) ? regDoc.snapshot_data.logs : [];
+          const mergedLogs = [newLog, ...existingCloudLogs.filter(l => l.id !== newLog.id)].slice(0, 300);
+
+          await supabase.from('saved_records').upsert({
+            id: 'master_session_audit_logs_registry',
+            record_type: 'session_audit_registry',
+            period_label: 'Master Session & Auto-Logout Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: `Master session activity audit records (${mergedLogs.length} entries)`,
+            saved_by_name: user?.fullName || 'System',
+            snapshot_data: {
+              logs: mergedLogs,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (regErr) {
+          console.warn('Could not upsert master_session_audit_logs_registry:', regErr);
+        }
+      } catch (err) {}
+    }
+
+    if (typeof broadcastCloudEventRef.current === 'function') {
+      broadcastCloudEventRef.current('SESSION_AUDIT_LOGGED', { log: newLog });
+      broadcastCloudEventRef.current('MASTER_DATA_UPDATED', { table: 'saved_records' });
+    }
+    return newLog;
+  }, [sessionAuditLogs]);
+
   /**
    * Superadmin Authority: Permanently delete all audit trail records
    * across local storage, IndexedDB, and Supabase cloud tables (audit_logs, scan_logs, saved_records registries).
@@ -162,6 +278,7 @@ export function useAuditLogs({
     // 1. Clear Local State
     setUploadAuditLogs([]);
     setDeletionAuditLogs([]);
+    setSessionAuditLogs([]);
     if (typeof setScanLogs === 'function') {
       setScanLogs([]);
     }
@@ -171,6 +288,7 @@ export function useAuditLogs({
       localStorage.setItem('mdc_upload_audit_logs', '[]');
       localStorage.setItem('mdc_deletion_audit_logs', '[]');
       localStorage.setItem('mdc_scan_logs', '[]');
+      localStorage.setItem('mdc_session_audit_logs', '[]');
     } catch (e) {
       console.warn('Could not clear local storage audit logs:', e);
     }
@@ -180,6 +298,7 @@ export function useAuditLogs({
       await dbStorage.setItem('mdc_upload_audit_logs', []);
       await dbStorage.setItem('mdc_deletion_audit_logs', []);
       await dbStorage.setItem('mdc_scan_logs', []);
+      await dbStorage.setItem('mdc_session_audit_logs', []);
     } catch (e) {
       console.warn('Could not clear dbStorage audit logs:', e);
     }
@@ -224,6 +343,17 @@ export function useAuditLogs({
             saved_by_name: currentUser?.fullName || 'Superadmin',
             snapshot_data: { logs: [], lastUpdated: new Date().toISOString() },
             updated_at: new Date().toISOString()
+          },
+          {
+            id: 'master_session_audit_logs_registry',
+            record_type: 'session_audit_registry',
+            period_label: 'Master Session & Auto-Logout Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master session activity audit records (0 entries)',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: { logs: [], lastUpdated: new Date().toISOString() },
+            updated_at: new Date().toISOString()
           }
         ], { onConflict: 'id' });
       } catch (err) {
@@ -251,7 +381,10 @@ export function useAuditLogs({
     setUploadAuditLogs,
     deletionAuditLogs,
     setDeletionAuditLogs,
+    sessionAuditLogs,
+    setSessionAuditLogs,
     logDeletionAudit,
+    logSessionAudit,
     deleteAllAuditLogs
   };
 }

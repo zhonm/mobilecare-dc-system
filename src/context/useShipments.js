@@ -837,7 +837,9 @@ export function useShipments({
                   inventory_unit_id: null,
                   scanned_by: null
                 }));
-                const { error: itInsErr } = await supabase.from('shipment_items').insert(safeRows);
+                const { error: itInsErr } = await supabase
+                  .from('shipment_items')
+                  .upsert(safeRows, { onConflict: 'id' });
                 if (itInsErr) {
                   console.warn('Direct shipment_items insert notice (attempting stripped retry):', itInsErr.message);
                   const strippedRows = safeRows.map(r => ({
@@ -847,7 +849,9 @@ export function useShipments({
                     box_number: r.box_number || 1,
                     scanned_at: r.scanned_at || new Date().toISOString()
                   }));
-                  const { error: retryErr } = await supabase.from('shipment_items').insert(strippedRows);
+                  const { error: retryErr } = await supabase
+                    .from('shipment_items')
+                    .upsert(strippedRows, { onConflict: 'id' });
                   if (retryErr) {
                     console.warn('Direct shipment_items stripped insert notice:', retryErr.message);
                   }

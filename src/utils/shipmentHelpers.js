@@ -342,8 +342,8 @@ export const healShipmentItem = (item, serialDict, partsMapByPn) => {
   const hasValidPn = !isUnknownPn(currentPn);
   const hasValidDesc = !isUnknownDesc(currentDesc);
 
-  let healedPn = currentPn;
-  let healedDesc = currentDesc;
+  let healedPn;
+  let healedDesc;
   let healedCost = item.cost || 0;
 
   if (hasValidPn && hasValidDesc) {

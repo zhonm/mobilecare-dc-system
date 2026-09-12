@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X } from 'lucide-react';
+import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X, Clock } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import { loginRateLimiter } from '../utils/security';
+import { getStoredLogoutNotice, clearStoredLogoutNotice } from '../utils/autoLogoutManager';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '';
 
@@ -23,6 +24,7 @@ export default function Login() {
   const [copyEmailSuccess, setCopyEmailSuccess] = useState(false);
   const [copyViberSuccess, setCopyViberSuccess] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
+  const [logoutNotice, setLogoutNotice] = useState(() => getStoredLogoutNotice());
 
   const handleCapsLockCheck = (e) => {
     if (e?.getModifierState) {
@@ -141,6 +143,49 @@ export default function Login() {
             Distribution Center System
           </p>
         </div>
+
+        {/* Auto-Logout Notice Banner */}
+        {logoutNotice && (
+          <div
+            style={{
+              background: 'rgba(2, 132, 199, 0.12)',
+              border: '1px solid rgba(2, 132, 199, 0.4)',
+              borderRadius: '10px',
+              padding: '12px 14px',
+              marginBottom: '20px',
+              textAlign: 'left'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '13px', color: '#38bdf8' }}>
+                <Clock size={16} />
+                <span>Daily Session Reset ({logoutNotice.scheduledTime || '12:00 AM'})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  clearStoredLogoutNotice();
+                  setLogoutNotice(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+                title="Dismiss notice"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p style={{ fontSize: '12px', color: '#cbd5e1', margin: 0, lineHeight: 1.45 }}>
+              {logoutNotice.message || 'You were automatically logged out pursuant to the daily scheduled session policy. Please sign in again to refresh your session and load live system data.'}
+            </p>
+          </div>
+        )}
 
         {/* Form Section */}
         {step === 'email' ? (

@@ -375,8 +375,8 @@ export function usePeriodRecordsAndReports({
         saved_by_user_id: null,
         notes: `Restored from saved period record: "${record.period_label}"`,
         snapshot_data: {
-          forecastItems: restoredForecasts,
-          allocations: restoredAllocations,
+          forecastItems: activeRestoredForecasts,
+          allocations: snap.allocations || [],
           parts: snap.parts || parts,
           sites: snap.sites || sites,
           masterlistData: restoredMasterlist,

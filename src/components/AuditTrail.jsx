@@ -45,6 +45,7 @@ export default function AuditTrail() {
     parts = [],
     uploadAuditLogs = [],
     deletionAuditLogs = [],
+    sessionAuditLogs = [],
     deleteAllAuditLogs,
     currentUser,
     showToast,
@@ -174,7 +175,22 @@ export default function AuditTrail() {
     );
   }, [scanLogs, localSearch]);
 
-  // 4. Serial Tracer Matched Unit
+  // 4. Session Activity Logs Filter
+  const filteredSessionLogs = useMemo(() => {
+    const list = (sessionAuditLogs || [])
+      .slice()
+      .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+    if (!localSearch.trim()) return list;
+    const q = localSearch.toLowerCase();
+    return list.filter(l =>
+      (l.user_name || '').toLowerCase().includes(q) ||
+      (l.user_email || '').toLowerCase().includes(q) ||
+      (l.action || '').toLowerCase().includes(q) ||
+      (l.reason || '').toLowerCase().includes(q)
+    );
+  }, [sessionAuditLogs, localSearch]);
+
+  // 5. Serial Tracer Matched Unit
   const matchedUnit = useMemo(() => {
     if (!selectedSerial.trim()) return null;
     return resolveSerialFullDetails(selectedSerial, {
@@ -270,6 +286,29 @@ export default function AuditTrail() {
     showToast?.('Scanner logs exported to Excel (.xlsx)', 'success');
   };
 
+  const handleExportSessionLogsXLSX = () => {
+    if (filteredSessionLogs.length === 0) {
+      showToast?.('No session activity records to export', 'warning');
+      return;
+    }
+    const rows = filteredSessionLogs.map((l, idx) => ({
+      '#': idx + 1,
+      'Date & Time': formatTo12HourDateTime(l.timestamp),
+      'Action / Event': l.action,
+      'User Name': l.user_name || 'System User',
+      'User Email': l.user_email || '',
+      'Role': (l.user_role || 'user').toUpperCase(),
+      'Position': l.user_position || '',
+      'Reason / Trigger': l.reason || '',
+      'Details': JSON.stringify(l.details || {})
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Session_Audits');
+    XLSX.writeFile(wb, `MDC_Session_Audit_Logs_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast?.('Session audit records exported to Excel (.xlsx)', 'success');
+  };
+
   const handleExportSerialTracerXLSX = () => {
     if (!matchedUnit) {
       showToast?.('Search and select a serial number first', 'warning');
@@ -348,6 +387,21 @@ export default function AuditTrail() {
     }));
     const wsScans = XLSX.utils.json_to_sheet(scanRows.length > 0 ? scanRows : [{ Notice: 'No barcode scan logs' }]);
     XLSX.utils.book_append_sheet(wb, wsScans, 'Scanner_Event_Logs');
+
+    // Sheet 4: Session Activity & Auto-Logout Audits
+    const sessionRows = (sessionAuditLogs || []).map((s, idx) => ({
+      '#': idx + 1,
+      'Timestamp': formatTo12HourDateTime(s.timestamp),
+      'Action': s.action,
+      'User Name': s.user_name || '',
+      'User Email': s.user_email || '',
+      'Role': (s.user_role || 'user').toUpperCase(),
+      'Position': s.user_position || '',
+      'Reason': s.reason || '',
+      'Details': JSON.stringify(s.details || {})
+    }));
+    const wsSessions = XLSX.utils.json_to_sheet(sessionRows.length > 0 ? sessionRows : [{ Notice: 'No session activity logs' }]);
+    XLSX.utils.book_append_sheet(wb, wsSessions, 'Session_Activity_Audits');
 
     XLSX.writeFile(wb, `MDC_Full_Master_Audit_Package_${new Date().toISOString().split('T')[0]}.xlsx`);
     showToast?.('Complete Multi-Sheet Audit Package exported (.xlsx)', 'success');
@@ -756,6 +810,43 @@ export default function AuditTrail() {
               }}
             >
               {scanLogs?.length || 0}
+            </span>
+          </button>
+
+          {/* Tab: Session & Auto-Logout Activity */}
+          <button
+            type="button"
+            onClick={() => setAuditTab('session_activity')}
+            style={{
+              background: auditTab === 'session_activity' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
+              color: auditTab === 'session_activity' ? '#ffffff' : '#475569',
+              border: 'none',
+              borderRadius: '7px',
+              padding: '7px 14px',
+              fontSize: '12px',
+              fontWeight: auditTab === 'session_activity' ? 700 : 500,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '7px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap',
+              boxShadow: auditTab === 'session_activity' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+            }}
+          >
+            <Clock size={14} />
+            <span>Session &amp; Auto-Logout</span>
+            <span
+              style={{
+                background: auditTab === 'session_activity' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+                color: auditTab === 'session_activity' ? '#ffffff' : '#475569',
+                padding: '2px 7px',
+                borderRadius: '12px',
+                fontSize: '10.5px',
+                fontWeight: 700
+              }}
+            >
+              {sessionAuditLogs?.length || 0}
             </span>
           </button>
         </div>
@@ -1881,6 +1972,147 @@ export default function AuditTrail() {
                       </td>
                     </tr>
                   ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sub-Tab 6: Session & Auto-Logout Activity Table ─────────────────────── */}
+      {auditTab === 'session_activity' && (
+        <div className="card" style={{ padding: '0', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden', background: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          {/* Table Toolbar Header */}
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <h3 style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a', margin: '0 0 3px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={18} color="#0284c7" />
+                <span>User Session Lifecycle &amp; Auto-Logout Audit Log</span>
+              </h3>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>
+                Authoritative compliance log of automated scheduled logouts, advance grace-period session refreshes, and security policy modifications.
+              </p>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportSessionLogsXLSX}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: '#047857' }}
+              >
+                <FileSpreadsheet size={13} color="#059669" />
+                <span>Export Session Log (.xlsx)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Table Content */}
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569', textAlign: 'left' }}>
+                  <th style={{ padding: '10px 14px', width: '45px', textAlign: 'center' }}>#</th>
+                  <th style={{ padding: '10px 14px', width: '155px' }}>Date &amp; Time</th>
+                  <th style={{ padding: '10px 14px', width: '170px' }}>Action / Event</th>
+                  <th style={{ padding: '10px 14px' }}>User Account</th>
+                  <th style={{ padding: '10px 14px', width: '160px' }}>Role / Position</th>
+                  <th style={{ padding: '10px 14px' }}>Reason / Trigger</th>
+                  <th style={{ padding: '10px 14px' }}>Technical Audit Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSessionLogs.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8' }}>
+                      <Clock size={36} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
+                      <p style={{ margin: '0 0 6px', fontSize: '14px', fontWeight: 600, color: '#64748b' }}>No session audit events found</p>
+                      <p style={{ margin: 0, fontSize: '12px' }}>Automated logouts and session activity will be recorded here.</p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSessionLogs.map((log, index) => {
+                    const isAutoLogout = log.action === 'AUTO_LOGOUT';
+                    const isRefresh = log.action === 'SESSION_REFRESH';
+                    const isPolicy = log.action?.includes('POLICY');
+
+                    const badgeStyle = isAutoLogout
+                      ? { bg: '#fee2e2', text: '#b91c1c', border: '#fecaca' }
+                      : isRefresh
+                      ? { bg: '#ecfdf5', text: '#059669', border: '#a7f3d0' }
+                      : isPolicy
+                      ? { bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd' }
+                      : { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
+
+                    return (
+                      <tr
+                        key={log.id || `sess-log-${index}`}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          background: index % 2 === 0 ? '#ffffff' : '#fafafa'
+                        }}
+                      >
+                        <td className="font-mono" style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>
+                          {index + 1}
+                        </td>
+                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '11.5px' }}>
+                            {new Date(log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </div>
+                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '1px' }}>
+                            {formatTo12HourTime(log.timestamp, false)}
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <span
+                            style={{
+                              fontSize: '10.5px',
+                              fontWeight: 700,
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              background: badgeStyle.bg,
+                              color: badgeStyle.text,
+                              border: `1px solid ${badgeStyle.border}`,
+                              fontFamily: 'var(--font-mono, monospace)',
+                              display: 'inline-block'
+                            }}
+                          >
+                            {log.action}
+                          </span>
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
+                            {log.user_name || 'System User'}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#64748b' }}>
+                            {log.user_email || 'N/A'}
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px 14px' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: '#334155' }}>
+                            {log.user_position || 'Staff'}
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>
+                            {log.user_role || 'User'}
+                          </div>
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: '12px', color: '#334155' }}>
+                          {log.reason || 'Automated policy enforcement'}
+                        </td>
+                        <td style={{ padding: '10px 14px', fontSize: '11px', color: '#64748b' }}>
+                          {log.details && typeof log.details === 'object' ? (
+                            <div style={{ background: '#f8fafc', padding: '4px 8px', borderRadius: '4px', border: '1px solid #e2e8f0', fontFamily: 'var(--font-mono, monospace)', fontSize: '10.5px' }}>
+                              {Object.entries(log.details)
+                                .slice(0, 3)
+                                .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                                .join(' | ')}
+                            </div>
+                          ) : (
+                            <span>None</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

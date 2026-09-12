@@ -66,13 +66,6 @@ const partsSummary = {
 };
 
 // Simulate stock on hand check
-const nowMs = Date.now();
-const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-const tracker = {
-  'site-zam_661-21991': {
-    zeroStockSince: new Date(nowMs - (10 * 24 * 60 * 60 * 1000)).toISOString() // 10 days of zero stock
-  }
-};
 
 // Apply stock check policy
 Object.keys(partsSummary).forEach(pn => {

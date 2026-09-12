@@ -60,7 +60,7 @@ const mockInventoryUnits = [
 
 // 1. Test buildSerialDictionary creation
 test('buildSerialDictionary correctly indexes all serials from intake and inventory', () => {
-  const { serialDict, partsMapByPn } = buildSerialDictionary({
+  const { serialDict } = buildSerialDictionary({
     dcIntakeRecords: mockDcIntakeRecords,
     inventoryUnits: mockInventoryUnits,
     parts: mockParts

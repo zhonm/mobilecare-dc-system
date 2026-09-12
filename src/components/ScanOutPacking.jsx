@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { generateNextInvoiceRef, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
-import { cleanSerialNumberInput, extractSerialNumber, parseBarcodeData } from '../utils/serialTracker';
+import { cleanSerialNumberInput, extractSerialNumber } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
@@ -245,7 +245,7 @@ export default function ScanOutPacking() {
   }, [currentShipment, shipments, userDraftStorageKey]);
 
   // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
-  const currentItems = currentShipment?.items || [];
+  const currentItems = useMemo(() => currentShipment?.items || [], [currentShipment]);
   const currentItemsRef = useRef(currentItems);
   useEffect(() => {
     currentItemsRef.current = currentItems;
@@ -449,7 +449,7 @@ export default function ScanOutPacking() {
   // Packed serial numbers in active draft set for O(1) deduplication
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
-    const items = currentShipment?.items || currentShipmentRef.current?.items || [];
+    const items = currentShipment?.items || [];
     items.forEach(it => {
       const s = cleanSerialNumberInput(it.serial_number || it.serialNumber);
       if (s) set.add(s);
@@ -497,13 +497,15 @@ export default function ScanOutPacking() {
     return canonicalDcUnits.filter(u => {
       const cleanSerial = cleanSerialNumberInput(u.serial_number);
       if (!cleanSerial) return false;
-      if (packedSerialsSet.has(cleanSerial) || sessionPackedSerialsRef.current?.has(cleanSerial)) return false;
+      if (packedSerialsSet.has(cleanSerial)) return false;
       if (otherUsersReservedSerialsMap.has(cleanSerial)) return false;
       return true;
     });
   }, [inventoryUnits, currentShipment, shipments, sites, packedSerialsSet, otherUsersReservedSerialsMap]);
 
   // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
+  // This command reads mutable scanner/draft refs so it always uses live state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const packUnitBySerial = (targetSerialInput) => {
     const rawInput = String(targetSerialInput !== undefined ? targetSerialInput : (serialInputRef.current?.value || serialInput || '')).trim();
     const cleanSerial = extractSerialNumber(rawInput);

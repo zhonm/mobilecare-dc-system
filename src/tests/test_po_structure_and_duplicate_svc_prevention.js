@@ -1,8 +1,6 @@
 import assert from 'assert';
 import {
-  consolidateDcIntakeRecordsList,
-  getBasePoNumber,
-  generateAppleSerialNumber
+  consolidateDcIntakeRecordsList
 } from '../utils/appContextHelpers.js';
 
 console.log('====================================================================');

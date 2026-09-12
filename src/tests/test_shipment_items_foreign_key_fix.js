@@ -164,6 +164,25 @@ test('Safe direct insert payload nullifies part_id, inventory_unit_id, and scann
   });
 });
 
+// 9. Shipment item IDs must not reuse inventory unit IDs
+test('formatShipmentItemsForDb derives stable shipment-scoped primary keys', () => {
+  const inventoryUnitId = '22222222-2222-4222-8222-222222222222';
+  const shipment = {
+    id: '11111111-1111-4111-8111-111111111111',
+    shipment_number: 'SHP-2026-001',
+    items: [
+      { id: inventoryUnitId, serial_number: 'G9PQ1001', box_number: 1 }
+    ]
+  };
+
+  const first = formatShipmentItemsForDb(shipment)[0];
+  const second = formatShipmentItemsForDb(shipment)[0];
+
+  assert.notStrictEqual(first.id, inventoryUnitId, 'shipment_items.id must not reuse inventory_units.id');
+  assert.strictEqual(first.id, second.id, 'the generated key must remain stable across retries');
+  assert.ok(isUUID(first.id), 'shipment item key must be a valid UUID');
+});
+
 console.log('\n====================================================');
 console.log(`RESULTS: ${passed}/${passed + failed} PASSED (${failed} FAILED)`);
 console.log('====================================================\n');

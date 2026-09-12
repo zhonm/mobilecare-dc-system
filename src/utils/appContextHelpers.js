@@ -668,7 +668,9 @@ export function formatShipmentItemsForDb(s, inventoryUnits = [], partsList = [],
       validUnitId = it.id;
     }
 
-    const itemId = isUUID(it.id) ? it.id : toValidUUID(`shp-item-${shipmentId}-${cleanSerial}-${idx}`);
+    // Draft item IDs may be inventory unit IDs. Shipment item IDs are table-wide
+    // keys, so derive a stable key from the owning shipment instead.
+    const itemId = toValidUUID(`shipment-item-${shipmentId}-${cleanSerial}-${idx}`);
 
     return {
       id: itemId,

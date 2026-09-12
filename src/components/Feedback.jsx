@@ -9,8 +9,6 @@ import {
   ExternalLink,
   ShieldCheck,
   Building2,
-  HelpCircle,
-  Clock,
   Sparkles,
   MessageCircle
 } from 'lucide-react';

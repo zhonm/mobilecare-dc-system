@@ -56,8 +56,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
     const isFirstManifestPage = (pageIdx === 0);
     const isLastManifestPage = (pageIdx === manifestPagesCount - 1);
-    let tableStartY = 0;
-
+    let tableStartY;
     if (isFirstManifestPage) {
       // Title: "Packing List" Centered with generous vertical breathing room
       doc.setFont('helvetica', 'bold');
@@ -421,9 +420,6 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const rawBookingId = String(shipment.booking_id || shipment.tracking_number || shipment.airway_bill || '').trim();
   const bookingId = (rawBookingId === 'N/A' || rawBookingId === 'n/a' || rawBookingId === 'NA' || !rawBookingId) ? '' : rawBookingId.toUpperCase();
   const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
-  // Pickup Date field remains completely blank per warehouse requirement (no text or placeholder values displayed)
-  const pickupDate = '';
-
   // Left Column Fields
   const decRowGap = 31;
 

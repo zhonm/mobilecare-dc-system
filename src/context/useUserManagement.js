@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { hashPassword, getStoredUserSession } from '../utils/security';
@@ -22,14 +22,14 @@ export function useUserManagement({
   enqueueOfflineAction,
   setCloudSyncStatus
 }) {
-  const getActiveUser = () => {
+  const getActiveUser = useCallback(() => {
     if (currentUser) return currentUser;
     if (typeof getCurrentUser === 'function') {
       const u = getCurrentUser();
       if (u) return u;
     }
     return getStoredUserSession();
-  };
+  }, [currentUser, getCurrentUser]);
 
   const [usersList, setUsersList] = useState(() => {
     try {
@@ -190,7 +190,7 @@ export function useUserManagement({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [getActiveUser]);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {

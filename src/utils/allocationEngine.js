@@ -621,7 +621,7 @@ export function deriveForecastItemsFromAllocations(allocations = [], existingPar
  * Autonomous Masterlist Recovery: Derive forecastItems array from masterlist data.
  * Guarantees that if an active cycle or masterlist exists, forecasting items are fully reconstituted.
  */
-export function deriveForecastItemsFromMasterlist(masterlistData, options = {}) {
+export function deriveForecastItemsFromMasterlist(masterlistData, _options = {}) {
   if (!masterlistData) return [];
   const partsSummary = Array.isArray(masterlistData.partsSummary)
     ? masterlistData.partsSummary

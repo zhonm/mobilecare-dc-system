@@ -229,7 +229,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         received_at: u.received_at || new Date().toISOString()
       };
     });
-  }, [inventoryUnits, packedSerialsSet, partPriceMap, todayDateStr, parts]);
+  }, [inventoryUnits, activePackDraft, shipments, partPriceMap, todayDateStr, parts]);
 
   // Overall metric calculations
   const totalStockUnitsCount = enrichedStockUnits.length;
