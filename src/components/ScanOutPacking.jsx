@@ -30,7 +30,8 @@ import {
   Users,
   ShieldAlert,
   SlidersHorizontal,
-  Clock
+  Clock,
+  Loader2
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
@@ -176,6 +177,8 @@ export default function ScanOutPacking() {
 
   // Status Change Loading Screen State
   const [statusLoadingState, setStatusLoadingState] = useState(null);
+  const [isSubmittingTracking, setIsSubmittingTracking] = useState(false);
+  const isSubmittingTrackingRef = useRef(false);
 
   const handleStatusChange = async (shipmentId, newStatus) => {
     const target = (shipments || []).find(s => s.id === shipmentId || s.invoice_ref === shipmentId || s.shipment_number === shipmentId);
@@ -1250,11 +1253,16 @@ export default function ScanOutPacking() {
 
   const handleConfirmTrackingModal = async () => {
     if (!trackingModalState) return;
+    if (isSubmittingTrackingRef.current) return;
+
     const cleanTrk = String(trackingModalState.trackingInput || '').trim();
     if (!cleanTrk) {
       showToast('Booking ID / Tracking Number is required.', 'warning');
       return;
     }
+
+    isSubmittingTrackingRef.current = true;
+    setIsSubmittingTracking(true);
 
     const cleanCarrier = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
     const cleanCourierName = String(trackingModalState.courierNameInput || '').trim();
@@ -1275,36 +1283,65 @@ export default function ScanOutPacking() {
       vehicle_plate: String(trackingModalState.vehiclePlateInput || '').trim()
     };
 
-    if (trackingModalState.isDraft) {
-      setCurrentShipment(prev => ({
-        ...prev,
-        tracking_number: cleanTrk,
-        booking_id: cleanTrk,
-        carrier: updatedShipment.carrier,
-        courier: updatedShipment.carrier,
-        pickup_by_name: cleanCourierName,
-        courier_name: cleanCourierName,
-        pickup_date: cleanPickupDate,
-        guard_on_duty: updatedShipment.guard_on_duty,
-        rider_phone: updatedShipment.rider_phone,
-        vehicle_plate: updatedShipment.vehicle_plate
-      }));
-    } else {
-      await saveShipment(updatedShipment);
+    const startTime = Date.now();
+    if (!trackingModalState.isDraft) {
+      const invRef = updatedShipment.invoice_ref || updatedShipment.shipment_number || 'Packing List';
+      const siteName = trackingModalState.site?.name || updatedShipment.site_name || '';
+      setStatusLoadingState({
+        isOpen: true,
+        title: 'Saving Dispatch Details...',
+        subtitle: 'Recording tracking details & generating Packing List PDF...',
+        invoiceRef: invRef,
+        siteName: siteName,
+        targetStatus: 'DISPATCH RECORD'
+      });
     }
 
-    showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
+    try {
+      if (trackingModalState.isDraft) {
+        setCurrentShipment(prev => ({
+          ...prev,
+          tracking_number: cleanTrk,
+          booking_id: cleanTrk,
+          carrier: updatedShipment.carrier,
+          courier: updatedShipment.carrier,
+          pickup_by_name: cleanCourierName,
+          courier_name: cleanCourierName,
+          pickup_date: cleanPickupDate,
+          guard_on_duty: updatedShipment.guard_on_duty,
+          rider_phone: updatedShipment.rider_phone,
+          vehicle_plate: updatedShipment.vehicle_plate
+        }));
+      } else {
+        await saveShipment(updatedShipment);
+      }
 
-    const pdfOptions = {
-      supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
-      supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: updatedShipment.pickup_date
-    };
+      if (!trackingModalState.isDraft) {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 350) {
+          await new Promise(r => setTimeout(r, 350 - elapsed));
+        }
+      }
 
-    generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
+      showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
 
-    setTrackingModalState(null);
+      const pdfOptions = {
+        supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+        supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+        guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
+        pickupDate: updatedShipment.pickup_date
+      };
+
+      generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
+      setTrackingModalState(null);
+    } catch (err) {
+      console.error('Failed to save tracking details:', err);
+      showToast('Failed to save dispatch details: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setStatusLoadingState(null);
+      isSubmittingTrackingRef.current = false;
+      setIsSubmittingTracking(false);
+    }
   };
 
   const filteredManifestItems = useMemo(() => {
@@ -3598,16 +3635,37 @@ export default function ScanOutPacking() {
               </div>
 
               <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setTrackingModalState(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmittingTracking}
+                  onClick={() => setTrackingModalState(null)}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
+                  disabled={isSubmittingTracking}
                   className="btn btn-primary"
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    opacity: isSubmittingTracking ? 0.75 : 1,
+                    cursor: isSubmittingTracking ? 'not-allowed' : 'pointer'
+                  }}
                 >
-                  <Download size={14} />
-                  <span>Save &amp; Download PDF (2 Pages)</span>
+                  {isSubmittingTracking ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Saving Dispatch Details...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download size={14} />
+                      <span>Save &amp; Download PDF (2 Pages)</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

@@ -106,6 +106,10 @@ export default function Shipments() {
 
   // Status Change Loading Screen State
   const [statusLoadingState, setStatusLoadingState] = useState(null);
+  const [isSubmittingPickup, setIsSubmittingPickup] = useState(false);
+  const isSubmittingPickupRef = useRef(false);
+  const [isSubmittingTracking, setIsSubmittingTracking] = useState(false);
+  const isSubmittingTrackingRef = useRef(false);
 
   const handleStatusChange = async (shipmentId, newStatus) => {
     const target = (shipments || []).find(s => s.id === shipmentId || s.invoice_ref === shipmentId || s.shipment_number === shipmentId);
@@ -388,6 +392,7 @@ export default function Shipments() {
       shipment,
       carrier: shipment.carrier || shipment.courier || (isMM ? 'Lalamove' : 'Lite Express'),
       trackingNumber: shipment.tracking_number || '',
+      transferSlip: shipment.transfer_slip_number || shipment.transfer_slip || '',
       riderName: shipment.pickup_by_name || '',
       riderPhone: shipment.rider_phone || '',
       vehiclePlate: shipment.vehicle_plate || '',
@@ -398,8 +403,9 @@ export default function Shipments() {
 
   // --- Courier Handover: Submit Pickup Action ---
   const handleConfirmCourierPickup = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     if (!pickupModalState) return;
+    if (isSubmittingPickupRef.current) return;
 
     const cleanTrk = String(pickupModalState.trackingNumber || '').trim();
     if (!cleanTrk) {
@@ -410,29 +416,66 @@ export default function Shipments() {
     const cleanCarrier = String(pickupModalState.carrier || '').trim() || 'Lite Express';
     const cleanRider = String(pickupModalState.riderName || '').trim();
     const cleanPickupDate = String(pickupModalState.pickupDate || '').trim() || new Date().toISOString().split('T')[0];
+    const cleanTS = String(pickupModalState.transferSlip || '').trim();
 
-    const updatedShipment = {
-      ...pickupModalState.shipment,
-      status: 'shipped',
-      carrier: cleanCarrier,
-      courier: cleanCarrier,
-      tracking_number: cleanTrk,
-      booking_id: cleanTrk,
-      pickup_by_name: cleanRider,
-      courier_name: cleanRider,
-      pickup_date: cleanPickupDate,
-      shipment_date: cleanPickupDate,
-      rider_phone: String(pickupModalState.riderPhone || '').trim(),
-      vehicle_plate: String(pickupModalState.vehiclePlate || '').trim(),
-      guard_on_duty: String(pickupModalState.guardOnDuty || '').trim(),
-      dispatched_at: new Date().toISOString(),
-      dispatched_by: currentUser?.fullName || 'Warehouse Staff',
-      updated_at: new Date().toISOString()
-    };
+    isSubmittingPickupRef.current = true;
+    setIsSubmittingPickup(true);
 
-    await saveShipment(updatedShipment);
-    showToast(`Dispatched! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} status set to SHIPPED (${cleanCarrier} #${cleanTrk}).`, 'success');
-    setPickupModalState(null);
+    const targetShipment = pickupModalState.shipment;
+    const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
+    const siteName = targetShipment?.site_name || targetShipment?.destination_site_name || '';
+
+    // Immediately show responsive loading screen
+    setStatusLoadingState({
+      isOpen: true,
+      title: 'Confirming Courier Dispatch & Handover...',
+      subtitle: `Recording ${cleanCarrier} #${cleanTrk} & setting status to SHIPPED...`,
+      invoiceRef: invRef,
+      siteName: siteName,
+      targetStatus: 'SHIPPED'
+    });
+
+    const startTime = Date.now();
+
+    try {
+      const updatedShipment = {
+        ...targetShipment,
+        status: 'shipped',
+        carrier: cleanCarrier,
+        courier: cleanCarrier,
+        tracking_number: cleanTrk,
+        booking_id: cleanTrk,
+        pickup_by_name: cleanRider,
+        courier_name: cleanRider,
+        pickup_date: cleanPickupDate,
+        shipment_date: cleanPickupDate,
+        rider_phone: String(pickupModalState.riderPhone || '').trim(),
+        vehicle_plate: String(pickupModalState.vehiclePlate || '').trim(),
+        guard_on_duty: String(pickupModalState.guardOnDuty || '').trim(),
+        ...(cleanTS ? { transfer_slip: cleanTS, transfer_slip_number: cleanTS } : {}),
+        dispatched_at: new Date().toISOString(),
+        dispatched_by: currentUser?.fullName || 'Warehouse Staff',
+        updated_at: new Date().toISOString()
+      };
+
+      await saveShipment(updatedShipment);
+
+      // Guarantee minimum 400ms duration for reassuring visual feedback
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 400) {
+        await new Promise(r => setTimeout(r, 400 - elapsed));
+      }
+
+      showToast(`Dispatched! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} status set to SHIPPED (${cleanCarrier} #${cleanTrk}).`, 'success');
+      setPickupModalState(null);
+    } catch (err) {
+      console.error('Failed to confirm courier pickup:', err);
+      showToast('Failed to confirm courier pickup: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setStatusLoadingState(null);
+      isSubmittingPickupRef.current = false;
+      setIsSubmittingPickup(false);
+    }
   };
 
   // --- Site Receipt: Open Modal ---
@@ -517,47 +560,80 @@ export default function Shipments() {
   // Tracking modal submit for PDF / Print
   const handleConfirmTrackingModal = async () => {
     if (!trackingModalState) return;
+    if (isSubmittingTrackingRef.current) return;
+
     const cleanTrk = String(trackingModalState.trackingInput || '').trim();
     if (!cleanTrk) {
       showToast('Booking ID / Tracking Number is required.', 'warning');
       return;
     }
 
-    const cleanCarrier = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
-    const cleanCourierName = String(trackingModalState.courierNameInput || '').trim();
-    const cleanGuardOnDuty = String(trackingModalState.guardOnDutyInput || '').trim();
-    const cleanPickupDate = String(trackingModalState.pickupDateInput || '').trim() || new Date().toLocaleDateString('en-US');
+    isSubmittingTrackingRef.current = true;
+    setIsSubmittingTracking(true);
 
-    const updatedShipment = {
-      ...trackingModalState.shipment,
-      tracking_number: cleanTrk,
-      booking_id: cleanTrk,
-      carrier: cleanCarrier,
-      courier: cleanCarrier,
-      pickup_by_name: cleanCourierName,
-      courier_name: cleanCourierName,
-      pickup_date: cleanPickupDate,
-      guard_on_duty: cleanGuardOnDuty,
-      rider_phone: String(trackingModalState.riderPhoneInput || '').trim(),
-      vehicle_plate: String(trackingModalState.vehiclePlateInput || '').trim()
-    };
+    const targetShipment = trackingModalState.shipment;
+    const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
+    const siteName = trackingModalState.site?.name || targetShipment?.site_name || '';
 
-    await saveShipment(updatedShipment);
-    showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
+    setStatusLoadingState({
+      isOpen: true,
+      title: 'Saving Dispatch Details...',
+      subtitle: `Saving tracking details & preparing Packing List PDF...`,
+      invoiceRef: invRef,
+      siteName: siteName,
+      targetStatus: 'DISPATCH RECORD'
+    });
 
-    const pdfOptions = {
-      supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
-      supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: updatedShipment.pickup_date
-    };
+    const startTime = Date.now();
+    try {
+      const cleanCarrier = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
+      const cleanCourierName = String(trackingModalState.courierNameInput || '').trim();
+      const cleanGuardOnDuty = String(trackingModalState.guardOnDutyInput || '').trim();
+      const cleanPickupDate = String(trackingModalState.pickupDateInput || '').trim() || new Date().toLocaleDateString('en-US');
 
-    const sourceItems = trackingModalState.items && trackingModalState.items.length > 0 ? trackingModalState.items : (updatedShipment?.items || []);
-    const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+      const updatedShipment = {
+        ...trackingModalState.shipment,
+        tracking_number: cleanTrk,
+        booking_id: cleanTrk,
+        carrier: cleanCarrier,
+        courier: cleanCarrier,
+        pickup_by_name: cleanCourierName,
+        courier_name: cleanCourierName,
+        pickup_date: cleanPickupDate,
+        guard_on_duty: cleanGuardOnDuty,
+        rider_phone: String(trackingModalState.riderPhoneInput || '').trim(),
+        vehicle_plate: String(trackingModalState.vehiclePlateInput || '').trim()
+      };
 
-    generatePackingListPDF(updatedShipment, resolvedItems, trackingModalState.site, pdfOptions);
+      await saveShipment(updatedShipment);
 
-    setTrackingModalState(null);
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+
+      showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
+
+      const pdfOptions = {
+        supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+        supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+        guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
+        pickupDate: updatedShipment.pickup_date
+      };
+
+      const sourceItems = trackingModalState.items && trackingModalState.items.length > 0 ? trackingModalState.items : (updatedShipment?.items || []);
+      const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+
+      generatePackingListPDF(updatedShipment, resolvedItems, trackingModalState.site, pdfOptions);
+      setTrackingModalState(null);
+    } catch (err) {
+      console.error('Failed to save tracking details:', err);
+      showToast('Failed to save dispatch details: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setStatusLoadingState(null);
+      isSubmittingTrackingRef.current = false;
+      setIsSubmittingTracking(false);
+    }
   };
 
   // --- XLSX / CSV Import Handling ---
@@ -1815,16 +1891,37 @@ export default function Shipments() {
               </div>
 
               <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setTrackingModalState(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmittingTracking}
+                  onClick={() => setTrackingModalState(null)}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
+                  disabled={isSubmittingTracking}
                   className="btn btn-primary"
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    opacity: isSubmittingTracking ? 0.75 : 1,
+                    cursor: isSubmittingTracking ? 'not-allowed' : 'pointer'
+                  }}
                 >
-                  <Download size={14} />
-                  <span>Save &amp; Download PDF (2 Pages)</span>
+                  {isSubmittingTracking ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Saving Dispatch Details...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download size={14} />
+                      <span>Save &amp; Download PDF (2 Pages)</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -1960,38 +2057,71 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label" style={{ fontSize: '12px' }}>
-                    DC Guard on Duty / Security Verifier
-                  </label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. SG. Roberto Cruz"
-                    value={pickupModalState.guardOnDuty}
-                    onChange={(e) => setPickupModalState(prev => ({ ...prev, guardOnDuty: e.target.value }))}
-                    style={{ fontSize: '12.5px', height: '36px' }}
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                      Transfer Slip # (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input font-mono"
+                      placeholder="e.g. 20227468"
+                      value={pickupModalState.transferSlip || ''}
+                      onChange={(e) => setPickupModalState(prev => ({ ...prev, transferSlip: e.target.value }))}
+                      style={{ fontSize: '12.5px', height: '36px' }}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '12px' }}>
+                      DC Guard on Duty / Verifier
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. SG. Roberto Cruz"
+                      value={pickupModalState.guardOnDuty}
+                      onChange={(e) => setPickupModalState(prev => ({ ...prev, guardOnDuty: e.target.value }))}
+                      style={{ fontSize: '12.5px', height: '36px' }}
+                    />
+                  </div>
                 </div>
               </div>
 
               <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setPickupModalState(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isSubmittingPickup}
+                  onClick={() => setPickupModalState(null)}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
+                  disabled={isSubmittingPickup}
                   className="btn btn-primary"
                   style={{
                     background: '#0284c7',
                     borderColor: '#0284c7',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    opacity: isSubmittingPickup ? 0.75 : 1,
+                    cursor: isSubmittingPickup ? 'not-allowed' : 'pointer'
                   }}
                 >
-                  <Truck size={14} />
-                  <span>Confirm Courier Pickup & Mark Shipped</span>
+                  {isSubmittingPickup ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      <span>Confirming Shipped Details...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Truck size={14} />
+                      <span>Confirm Courier Pickup &amp; Mark Shipped</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

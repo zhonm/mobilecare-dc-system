@@ -22,20 +22,26 @@ export default function StatusChangeLoadingModal({
     targetStatus?.toLowerCase().includes('package')
   );
 
-  const isTargetReady = !isReceive && (
+  const isDispatch = !isReceive && Boolean(
+    targetStatus?.toLowerCase().includes('shipped') ||
+    targetStatus?.toLowerCase().includes('dispatch') ||
+    targetStatus?.toLowerCase().includes('pickup')
+  );
+
+  const isTargetReady = !isReceive && !isDispatch && (
     targetStatus?.toLowerCase().includes('ready') ||
     targetStatus?.toLowerCase().includes('pending')
   );
 
-  const themeColor = isReceive ? '#059669' : (isTargetReady ? '#d97706' : '#475569');
-  const themeBg = isReceive ? '#ecfdf5' : (isTargetReady ? '#fffbeb' : '#f1f5f9');
-  const themeBorder = isReceive ? '#a7f3d0' : (isTargetReady ? '#fde68a' : '#e2e8f0');
-  const themeBadgeBg = isReceive ? '#ecfdf5' : (isTargetReady ? '#fffbeb' : '#f8fafc');
-  const themeBadgeBorder = isReceive ? '#a7f3d0' : (isTargetReady ? '#fde68a' : '#cbd5e1');
-  const themeBadgeText = isReceive ? '#065f46' : (isTargetReady ? '#b45309' : '#475569');
+  const themeColor = isReceive ? '#059669' : (isDispatch ? '#0284c7' : (isTargetReady ? '#d97706' : '#475569'));
+  const themeBg = isReceive ? '#ecfdf5' : (isDispatch ? '#f0f9ff' : (isTargetReady ? '#fffbeb' : '#f1f5f9'));
+  const themeBorder = isReceive ? '#a7f3d0' : (isDispatch ? '#bae6fd' : (isTargetReady ? '#fde68a' : '#e2e8f0'));
+  const themeBadgeBg = isReceive ? '#ecfdf5' : (isDispatch ? '#f0f9ff' : (isTargetReady ? '#fffbeb' : '#f8fafc'));
+  const themeBadgeBorder = isReceive ? '#a7f3d0' : (isDispatch ? '#bae6fd' : (isTargetReady ? '#fde68a' : '#cbd5e1'));
+  const themeBadgeText = isReceive ? '#065f46' : (isDispatch ? '#0369a1' : (isTargetReady ? '#b45309' : '#475569'));
 
-  const modalTitle = title || (isReceive ? 'Confirming Package Receipt...' : 'Updating Shipment Status...');
-  const modalSubtitle = subtitle || (isReceive ? 'Verifying inventory & archiving shipment manifest...' : 'Synchronizing changes across database & storage...');
+  const modalTitle = title || (isReceive ? 'Confirming Package Receipt...' : (isDispatch ? 'Confirming Courier Dispatch...' : (isTargetReady ? 'Updating Shipment Status...' : 'Updating Shipment Status...')));
+  const modalSubtitle = subtitle || (isReceive ? 'Verifying inventory & archiving shipment manifest...' : (isDispatch ? 'Recording courier tracking & updating status to SHIPPED...' : 'Synchronizing changes across database & storage...'));
 
   return (
     <div

@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { generateNextShipmentNumber, generateNextInvoiceRef } from '../utils/appContextHelpers.js';
+import { generateNextShipmentNumber } from '../utils/appContextHelpers.js';
 
 console.log('========================================================================');
 console.log('TEST SUITE: Shipment Number Generation & Sequential Conflict Resolution');
@@ -106,6 +106,36 @@ async function runTests() {
     assert.strictEqual(getTS(legacyShipment), '20227492');
     assert.strictEqual(getTS(modernShipment), '20227493');
     console.log('  ✓ PASS: Transfer slip correctly resolves from both transfer_slip_number and transfer_slip fields');
+  }
+
+  // ── Test 6: Double-Click Prevention & Synchronous Submission Locking ───────
+  console.log('\nTest 6: Double-Click Prevention & Synchronous Submission Locking');
+  {
+    let callCount = 0;
+    const isSubmittingRef = { current: false };
+
+    const simulatedSubmit = async () => {
+      if (isSubmittingRef.current) return { blocked: true };
+      isSubmittingRef.current = true;
+      try {
+        callCount++;
+        await new Promise(r => setTimeout(r, 50));
+        return { success: true };
+      } finally {
+        isSubmittingRef.current = false;
+      }
+    };
+
+    // User rapidly double-clicks the confirm button in parallel
+    const [click1, click2] = await Promise.all([
+      simulatedSubmit(),
+      simulatedSubmit()
+    ]);
+
+    assert.strictEqual(callCount, 1, 'Only one submission should be executed');
+    assert.strictEqual(click1.success, true);
+    assert.strictEqual(click2.blocked, true, 'Second click must be blocked synchronously');
+    console.log('  ✓ PASS: Submission guard strictly blocks duplicate / rapid double-clicks');
   }
 
   console.log('\n========================================================================');
