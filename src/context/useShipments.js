@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber } from '../utils/appContextHelpers';
 import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
@@ -629,7 +629,7 @@ export function useShipments({
     const newShipment = {
       ...shipmentData,
       id: shipmentData.id || `ship-${Date.now()}`,
-      shipment_number: shipmentData.shipment_number || `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String((shipments || []).length + 1).padStart(3, '0')}`,
+      shipment_number: shipmentData.shipment_number || generateNextShipmentNumber(shipments),
       invoice_ref: shipmentData.invoice_ref || generateNextInvoiceRef(shipments),
       status: shipmentData.status || 'pending_pickup',
       prepared_by_name: resolvedPreparedBy,
@@ -767,12 +767,44 @@ export function useShipments({
 
         if (directShipmentRow && isUUID(directShipmentRow.site_id)) {
           try {
-            // First check if matching row exists by exact shipment_number
-            const { data: existingShp } = await supabase
-              .from('shipments')
-              .select('id')
-              .eq('shipment_number', directShipmentRow.shipment_number)
-              .maybeSingle();
+            // First check if matching row exists by exact invoice_ref (canonical business identifier)
+            let existingShp = null;
+            if (directShipmentRow.invoice_ref) {
+              const { data: shpByRef } = await supabase
+                .from('shipments')
+                .select('id, shipment_number, invoice_ref')
+                .eq('invoice_ref', directShipmentRow.invoice_ref)
+                .maybeSingle();
+              if (shpByRef) existingShp = shpByRef;
+            }
+
+            // If not found by invoice_ref and we have a valid direct UUID id, check by ID
+            if (!existingShp && isUUID(directShipmentRow.id)) {
+              const { data: shpById } = await supabase
+                .from('shipments')
+                .select('id, shipment_number, invoice_ref')
+                .eq('id', directShipmentRow.id)
+                .maybeSingle();
+              if (shpById) existingShp = shpById;
+            }
+
+            // Check if there is a collision on shipment_number with a DIFFERENT invoice_ref
+            if (directShipmentRow.shipment_number) {
+              const { data: shpByNum } = await supabase
+                .from('shipments')
+                .select('id, shipment_number, invoice_ref')
+                .eq('shipment_number', directShipmentRow.shipment_number)
+                .maybeSingle();
+
+              if (shpByNum && shpByNum.invoice_ref && directShipmentRow.invoice_ref &&
+                  String(shpByNum.invoice_ref).trim().toUpperCase() !== String(directShipmentRow.invoice_ref).trim().toUpperCase()) {
+                // Collision detected! Another shipment already uses this shipment_number!
+                // Dynamically reassign next available shipment number to guarantee uniqueness
+                const safeNewNum = generateNextShipmentNumber(nextList);
+                directShipmentRow.shipment_number = safeNewNum;
+                newShipment.shipment_number = safeNewNum;
+              }
+            }
 
             const targetDbId = existingShp?.id || directShipmentRow.id;
             effectiveDbShipmentId = targetDbId;

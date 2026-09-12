@@ -345,7 +345,7 @@ export function useCloudSync({
             'master_auto_logout_settings_registry',
             'master_session_audit_logs_registry'
           ];
-          const [resSystem, resPeriods, resStockHeader] = await Promise.all([
+          const [resSystem, resPeriods, resStockHeader, resShipments] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
@@ -355,10 +355,18 @@ export function useCloudSync({
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .eq('id', 'master_stock_transfers_report_registry')
-              .maybeSingle()
+              .maybeSingle(),
+            // Self-healing: load recent individual shipment documents with full snapshot_data
+            supabase.from('saved_records')
+              .select('*')
+              .eq('record_type', 'shipment')
+              .order('created_at', { ascending: false })
+              .limit(50)
           ]);
           const systemRows = resSystem.data || [];
-          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry');
+          const shipmentRows = resShipments?.data || [];
+          const shipmentIds = new Set(shipmentRows.map(r => r.id));
+          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry' && !shipmentIds.has(r.id));
 
           // Supabase Egress & Quota Defense for Stock Transfer Reports:
           // Stock transfer files contain thousands of rows (~500 KB - 1 MB in JSON).
@@ -408,7 +416,7 @@ export function useCloudSync({
             systemRows.push(stockTransferRow);
           }
 
-          return { data: [...systemRows, ...periodRows] };
+          return { data: [...systemRows, ...shipmentRows, ...periodRows] };
         })() : Promise.resolve({ data: null }),
         shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
         // Egress optimization: fetch unit attributes directly; local cache joins parts and sites in memory

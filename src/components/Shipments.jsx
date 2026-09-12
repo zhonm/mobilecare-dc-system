@@ -248,7 +248,7 @@ export default function Shipments() {
       if (search.trim()) {
         const q = search.toLowerCase();
         const refMatch = s.invoice_ref?.toLowerCase().includes(q) || s.shipment_number?.toLowerCase().includes(q);
-        const tsMatch = s.transfer_slip_number?.toLowerCase().includes(q);
+        const tsMatch = (s.transfer_slip_number || s.transfer_slip)?.toLowerCase().includes(q);
         const trackMatch = s.tracking_number?.toLowerCase().includes(q);
         const siteMatch = s.site_name?.toLowerCase().includes(q);
         const carrierMatch = (s.carrier || s.courier)?.toLowerCase().includes(q);
@@ -1068,13 +1068,13 @@ export default function Shipments() {
                       </div>
 
                       {/* TS Number */}
-                      {sh.transfer_slip_number && (
+                      {(sh.transfer_slip_number || sh.transfer_slip) && (
                         <div>
                           <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
                             Transfer Slip
                           </div>
                           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0284c7' }}>
-                            {sh.transfer_slip_number}
+                            {sh.transfer_slip_number || sh.transfer_slip}
                           </div>
                         </div>
                       )}
@@ -1220,9 +1220,9 @@ export default function Shipments() {
                     <tr key={sh.id}>
                       <td className="font-mono">
                         <strong>{sh.invoice_ref || sh.shipment_number}</strong>
-                        {sh.transfer_slip_number && (
+                        {(sh.transfer_slip_number || sh.transfer_slip) && (
                           <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '2px' }}>
-                            TS: {sh.transfer_slip_number}
+                            TS: {sh.transfer_slip_number || sh.transfer_slip}
                           </div>
                         )}
                       </td>
@@ -2172,8 +2172,8 @@ export default function Shipments() {
                   <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Packing List Serial Numbers</h3>
                   <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
                     Manifest: <strong style={{ color: '#f8fafc' }}>{serialsModalState.shipment?.invoice_ref || serialsModalState.shipment?.shipment_number}</strong>
-                    {serialsModalState.shipment?.transfer_slip_number && (
-                      <span> • TS: <strong style={{ color: '#38bdf8' }}>{serialsModalState.shipment?.transfer_slip_number}</strong></span>
+                    {(serialsModalState.shipment?.transfer_slip_number || serialsModalState.shipment?.transfer_slip) && (
+                      <span> • TS: <strong style={{ color: '#38bdf8' }}>{serialsModalState.shipment?.transfer_slip_number || serialsModalState.shipment?.transfer_slip}</strong></span>
                     )}
                   </p>
                 </div>
@@ -2689,8 +2689,8 @@ export default function Shipments() {
                                 <span className="font-mono" style={{ fontWeight: 700, fontSize: '12.5px', color: '#0f172a' }}>
                                   {s.invoice_ref || s.shipment_number}
                                 </span>
-                                {s.transfer_slip_number && (
-                                  <span style={{ fontSize: '11px', color: '#0284c7', marginLeft: '8px' }}>TS: {s.transfer_slip_number}</span>
+                                {(s.transfer_slip_number || s.transfer_slip) && (
+                                  <span style={{ fontSize: '11px', color: '#0284c7', marginLeft: '8px' }}>TS: {s.transfer_slip_number || s.transfer_slip}</span>
                                 )}
                                 <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                                   Date: {s.shipment_date || s.pickup_date || 'N/A'} • {s.carrier || 'Lite Express'} {s.tracking_number ? `#${s.tracking_number}` : ''} • <strong>{sSerials.length} serials</strong>

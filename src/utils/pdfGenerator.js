@@ -102,7 +102,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
         { label: 'TRACKING NUMBER:', val: trackingNumberStr },
         { label: 'BOX/S #:', val: boxDisplay },
         { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
-        ...(shipment.transfer_slip_number ? [{ label: 'TRANSFER SLIP #:', val: shipment.transfer_slip_number }] : [])
+        ...((shipment.transfer_slip_number || shipment.transfer_slip) ? [{ label: 'TRANSFER SLIP #:', val: (shipment.transfer_slip_number || shipment.transfer_slip) }] : [])
       ];
 
       let metaY = headerTopY + 1;

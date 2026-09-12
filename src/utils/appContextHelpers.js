@@ -799,6 +799,66 @@ export function generateNextInvoiceRef(shipmentsList = [], date = new Date()) {
   return `DCOWNED#${dateCode}${nextSeqLetters}`;
 }
 
+// Generate auto-sequenced Shipment Number: SHIP-YYYYMM-XXX (e.g. SHIP-202609-001, SHIP-202609-035)
+export function generateNextShipmentNumber(shipmentsList = [], date = new Date()) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const targetMonthPrefix = `SHIP-${yyyy}${mm}-`; // e.g. "SHIP-202609-"
+
+  const usedNumbers = new Set();
+  const list = Array.isArray(shipmentsList) ? shipmentsList : [];
+
+  const checkAndRecordNumber = (rawNum) => {
+    if (!rawNum) return;
+    const str = String(rawNum).trim().toUpperCase();
+    if (str.startsWith(targetMonthPrefix)) {
+      const suffix = str.slice(targetMonthPrefix.length);
+      const match = suffix.match(/^(\d+)/);
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > 0) {
+          usedNumbers.add(num);
+        }
+      }
+    }
+  };
+
+  list.forEach(s => {
+    checkAndRecordNumber(s.shipment_number);
+    checkAndRecordNumber(s.shipmentNumber);
+    checkAndRecordNumber(s.id);
+  });
+
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('mdc_pack_draft_') || key === 'mdc_active_pack_draft')) {
+          const d = JSON.parse(localStorage.getItem(key) || '{}');
+          checkAndRecordNumber(d.shipment_number);
+          checkAndRecordNumber(d.shipmentNumber);
+        }
+      }
+      const localShipments = JSON.parse(localStorage.getItem('mdc_shipments') || '[]');
+      if (Array.isArray(localShipments)) {
+        localShipments.forEach(s => checkAndRecordNumber(s.shipment_number));
+      }
+    } catch (e) {}
+  }
+
+  let maxNum = 0;
+  usedNumbers.forEach(n => {
+    if (n > maxNum) maxNum = n;
+  });
+
+  let nextNum = maxNum + 1;
+  while (usedNumbers.has(nextNum)) {
+    nextNum++;
+  }
+
+  return `${targetMonthPrefix}${String(nextNum).padStart(3, '0')}`;
+}
+
 // Detect if a string represents a direct intake or non-PO placeholder (e.g. 'Direct Receiving', 'Direct Intake', 'None', etc.)
 export const isDirectOrNonPo = (str) => {
   if (!str) return true;

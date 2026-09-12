@@ -33,7 +33,7 @@ import {
   Clock
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
-import { generateNextInvoiceRef, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
+import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
@@ -149,7 +149,7 @@ export default function ScanOutPacking() {
     }
     return {
       id: `ship-${Date.now()}`,
-      shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
+      shipment_number: generateNextShipmentNumber(shipments),
       invoice_ref: generateNextInvoiceRef(shipments),
       site_id: '',
       week_number: 1,
@@ -1096,7 +1096,7 @@ export default function ScanOutPacking() {
     setSelectedSiteId('');
     setCurrentShipment({
       id: newDraftId,
-      shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
+      shipment_number: generateNextShipmentNumber(shipments),
       invoice_ref: newInvoiceRef,
       site_id: '',
       week_number: 1,
@@ -1188,7 +1188,7 @@ export default function ScanOutPacking() {
         localStorage.removeItem('mdc_active_pack_draft');
       } catch (e) {}
 
-      const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
+      const nextShipmentNumber = generateNextShipmentNumber([finalized, ...shipments]);
       const nextInvoiceRef = generateNextInvoiceRef([finalized, ...shipments]);
 
       setSelectedSiteId('');
@@ -2850,9 +2850,9 @@ export default function ScanOutPacking() {
                       <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
                         {s.tracking_number ? `#${s.tracking_number}` : 'Pending Tracking'}
                       </span>
-                      {s.transfer_slip_number && (
+                      {(s.transfer_slip_number || s.transfer_slip) && (
                         <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
-                          TS: {s.transfer_slip_number}
+                          TS: {s.transfer_slip_number || s.transfer_slip}
                         </div>
                       )}
                     </td>
