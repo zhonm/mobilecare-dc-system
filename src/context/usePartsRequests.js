@@ -687,6 +687,13 @@ export function usePartsRequests({
     const siteId = targetSite?.id || siteIdOrCode;
     const siteCode = targetSite?.code || siteIdOrCode;
 
+    // Central DC stock is strictly restricted to Superadmin; other users cannot query DC stock
+    const isSuper = currentUser?.role === 'superadmin';
+    const isDcTarget = siteId === 'site-dc' || siteCode === 'DC-MDC' || siteCode === 'DC' || Boolean(targetSite?.is_dc);
+    if (!isSuper && isDcTarget) {
+      return { siteId, siteCode, partsSummary: {}, totalInStock: 0, totalAllocated: 0, totalPacked: 0, totalUnits: 0, units: [] };
+    }
+
     // Filter matching units
     const matchingUnits = (inventoryUnits || []).filter(u => {
       const uSiteId = u.current_site_id || u.siteId;
@@ -821,9 +828,9 @@ export function usePartsRequests({
       ? sites
       : sites.filter(s => s.id === targetSiteFilter || s.code === targetSiteFilter);
 
-    // PMG users cannot view or access DC stocks!
-    if (isPmg) {
-      siteList = siteList.filter(s => !s.is_dc && s.code !== 'DC-MDC' && s.code !== 'DC');
+    // Central DC stocks are strictly restricted to Superadmin; other users cannot view DC stocks
+    if (!isSuper) {
+      siteList = siteList.filter(s => !s.is_dc && s.code !== 'DC-MDC' && s.code !== 'DC' && s.id !== 'site-dc');
     }
 
     return siteList.map(site => {

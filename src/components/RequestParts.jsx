@@ -385,10 +385,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return getStockOnHandForSite(selectedSiteId);
   }, [getStockOnHandForSite, selectedSiteId]);
 
-  // Derive Multi-Site Stocks with Granular Serial Privacy
+  // Derive Multi-Site Stocks with Granular Serial Privacy (Excluding Central DC stocks)
   const multiSiteStockData = useMemo(() => {
     if (typeof getAllSitesStockSummary === 'function') {
-      return getAllSitesStockSummary(allStocksSiteFilter);
+      const all = getAllSitesStockSummary(allStocksSiteFilter) || [];
+      return all.filter(s => s.siteId !== 'site-dc' && s.siteCode !== 'DC-MDC' && s.siteCode !== 'DC');
     }
     return [];
   }, [getAllSitesStockSummary, allStocksSiteFilter]);
@@ -807,34 +808,32 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return { metroManilaSites: mm, provincialSites: prov, dcSite: dc };
   }, [sites]);
 
-  // Calculate Region Stock Totals
+  // Calculate Region Stock Totals (Branch ASPs only)
   const regionStockTotals = useMemo(() => {
     let mmUnits = 0;
     let provUnits = 0;
-    let dcUnits = 0;
     (multiSiteStockData || []).forEach(summary => {
       const s = sites.find(x => x.id === summary.siteId || x.code === summary.siteCode);
       if (s?.is_dc || s?.code === 'DC-MDC' || s?.code === 'DC' || summary.siteId === 'site-dc') {
-        dcUnits += (summary.totalInStock || 0);
+        return;
       } else if (isProvincialSite(s)) {
         provUnits += (summary.totalInStock || 0);
       } else {
         mmUnits += (summary.totalInStock || 0);
       }
     });
-    return { mmUnits, provUnits, dcUnits };
+    return { mmUnits, provUnits, dcUnits: 0 };
   }, [multiSiteStockData, sites]);
 
-  // Current sites list for the active region tab
+  // Current sites list for the active region tab (Branch ASPs only)
   const currentRegionSites = useMemo(() => {
     if (allStocksRegionTab === 'provincial') return provincialSites;
-    if (allStocksRegionTab === 'dc') return dcSite ? [dcSite] : [];
     return metroManilaSites;
-  }, [allStocksRegionTab, metroManilaSites, provincialSites, dcSite]);
+  }, [allStocksRegionTab, metroManilaSites, provincialSites]);
 
-  // Effective selected site in All Stocks view
+  // Effective selected site in All Stocks view (Branch ASPs only, never Central DC)
   const currentActiveMultiSite = useMemo(() => {
-    if (allStocksSelectedSiteId) {
+    if (allStocksSelectedSiteId && allStocksSelectedSiteId !== 'site-dc' && allStocksSelectedSiteId !== 'DC-MDC') {
       const match = currentRegionSites.find(s => s.id === allStocksSelectedSiteId || s.code === allStocksSelectedSiteId);
       if (match) return match;
     }
@@ -882,10 +881,10 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       const siteObj = sites.find(s => s.id === summary.siteId || s.code === summary.siteCode) || {};
       const isProv = isProvincialSite(siteObj);
       const isDc = siteObj.is_dc || siteObj.code === 'DC-MDC' || siteObj.code === 'DC' || summary.siteId === 'site-dc' || summary.siteCode === 'DC-MDC' || summary.siteCode === 'DC';
-      // PMG users cannot view or access DC stocks under any circumstances
-      if (isPmgUser && isDc) return;
-      const regionLabel = isDc ? 'Central DC' : (isProv ? 'Provincial' : 'Metro Manila');
-      const regionKey = isDc ? 'dc' : (isProv ? 'provincial' : 'metro_manila');
+      // Central DC stocks are strictly excluded from All Stocks network search
+      if (isDc) return;
+      const regionLabel = isProv ? 'Provincial' : 'Metro Manila';
+      const regionKey = isProv ? 'provincial' : 'metro_manila';
 
       (summary.parts || []).forEach(partItem => {
         const isMatch = partItem.partNumber?.toLowerCase().includes(q) ||
@@ -899,7 +898,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             regionKey,
             regionLabel,
             isProv,
-            isDc,
+            isDc: false,
             isOwnSite: summary.isOwnSite,
             partNumber: partItem.partNumber,
             description: partItem.description,
@@ -911,15 +910,15 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     });
 
     return matches.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [allStocksSearchQuery, multiSiteStockData, sites, isPmgUser]);
+  }, [allStocksSearchQuery, multiSiteStockData, sites]);
 
   // Flattened Multi-Site Parts Rows for All Stocks Tab fallback/count
   const flattenedAllStocksRows = useMemo(() => {
     const all = [];
     (multiSiteStockData || []).forEach(siteSummary => {
       const isDcSite = siteSummary.siteId === 'site-dc' || siteSummary.siteCode === 'DC-MDC' || siteSummary.siteCode === 'DC';
-      // PMG users cannot view or access DC stocks under any circumstances
-      if (isPmgUser && isDcSite) return;
+      // Central DC stocks are strictly excluded from All Stocks multi-site rows
+      if (isDcSite) return;
 
       (siteSummary.parts || []).forEach(partItem => {
         if (allStocksSearchQuery.trim()) {
@@ -973,7 +972,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           iconBg: 'rgba(129, 140, 248, 0.2)',
           iconColor: '#818cf8',
           title: 'All Stocks & Multi-Site Inventory',
-          subtitle: 'Directory-wide stock visibility across all MobileCare Authorized Service Points and Central DC',
+          subtitle: 'Directory-wide stock visibility across all MobileCare Authorized Service Points',
           badgeText: 'Network Directory',
           badgeIcon: Globe
         };
@@ -1087,17 +1086,6 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             accent: '#f59e0b',
             iconBg: '#fef3c7',
             iconColor: '#d97706'
-          },
-          {
-            id: 'all-dc',
-            label: 'Central DC Stock',
-            value: Object.values(dcStockSummary || {}).reduce((acc, p) => acc + (p.inStock || 0), 0),
-            unit: 'units available',
-            subtext: 'Master replenishment hub',
-            icon: ShieldCheck,
-            accent: '#8b5cf6',
-            iconBg: '#ede9fe',
-            iconColor: '#7c3aed'
           }
         ];
       case 'usage_history': {
@@ -2973,38 +2961,6 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   {regionStockTotals.provUnits} units
                 </span>
               </button>
-
-              {/* Central DC Tab (Superadmin Only) */}
-              {isSuperadmin && dcSite && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAllStocksRegionTab('dc');
-                    setAllStocksSelectedSiteId(dcSite.id);
-                  }}
-                  style={{
-                    padding: '12px 18px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: allStocksRegionTab === 'dc'
-                      ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)'
-                      : '#f8fafc',
-                    color: allStocksRegionTab === 'dc' ? '#ffffff' : '#334155',
-                    boxShadow: allStocksRegionTab === 'dc' ? '0 4px 12px rgba(124, 58, 237, 0.25)' : 'none',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <Package size={18} color={allStocksRegionTab === 'dc' ? '#ffffff' : '#7c3aed'} />
-                  <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 800, fontSize: '13px' }}>Central DC</div>
-                    <div style={{ fontSize: '10.5px', opacity: 0.85 }}>{regionStockTotals.dcUnits} units</div>
-                  </div>
-                </button>
-              )}
             </div>
 
             {/* Individual Site Selector Chips under the Active Region */}

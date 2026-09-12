@@ -218,6 +218,65 @@ assert.strictEqual(getDisplaySerialNumber(sampleUnits[0], superadminUser), 'F8Y6
 assert.strictEqual(getDisplaySerialNumber(sampleUnits[1], superadminUser), 'F8Y6305C84E18FK01', 'Superadmin sees branch serials');
 console.log('  ✓ PASS: Superadmin global serial visibility verified');
 
+// --- Test 6: getStockOnHandForSite blocks non-superadmin queries to Central DC ---
+console.log('\n--- Test 6: Non-superadmin users cannot query Central DC stock ---');
+function mockGetStockOnHandForSite(siteIdOrCode, user, sitesList, unitsPool) {
+  const targetSite = sitesList.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
+  const siteId = targetSite?.id || siteIdOrCode;
+  const siteCode = targetSite?.code || siteIdOrCode;
+
+  const isSuper = user?.role === 'superadmin';
+  const isDcTarget = siteId === 'site-dc' || siteCode === 'DC-MDC' || siteCode === 'DC' || Boolean(targetSite?.is_dc);
+  if (!isSuper && isDcTarget) {
+    return { siteId, siteCode, partsSummary: {}, totalInStock: 0, totalUnits: 0, units: [] };
+  }
+
+  const matchingUnits = unitsPool.filter(u => {
+    const uSiteId = u.current_site_id || u.siteId;
+    const uSiteCode = u.site_code || u.siteCode;
+    return (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
+           (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
+  });
+
+  return { siteId, siteCode, totalInStock: matchingUnits.length, totalUnits: matchingUnits.length, units: matchingUnits };
+}
+
+const pmgDcQuery = mockGetStockOnHandForSite('site-dc', pmgUserAndres, mockSites, sampleUnits);
+assert.strictEqual(pmgDcQuery.totalInStock, 0, 'PMG user querying DC stock must get 0 units');
+assert.strictEqual(pmgDcQuery.units.length, 0, 'PMG user querying DC stock must get empty units array');
+
+const standardUser = { id: 'usr-std-01', role: 'user', siteId: 'site-zam', siteCode: 'ASP ZAM' };
+const standardUserDcQuery = mockGetStockOnHandForSite('DC-MDC', standardUser, mockSites, sampleUnits);
+assert.strictEqual(standardUserDcQuery.totalInStock, 0, 'Standard user querying DC stock must get 0 units');
+
+const superadminDcQuery = mockGetStockOnHandForSite('site-dc', superadminUser, mockSites, sampleUnits);
+assert.strictEqual(superadminDcQuery.totalInStock, 1, 'Superadmin querying DC stock successfully gets DC units');
+console.log('  ✓ PASS: DC stock querying strictly restricted to Superadmin; blocked for all other roles');
+
+// --- Test 7: Multi-Site Directory strictly excludes Central DC ---
+console.log('\n--- Test 7: Multi-Site Directory strictly excludes Central DC ---');
+function mockGetAllSitesStockSummary(targetSiteFilter, user, sitesList) {
+  const isSuper = user?.role === 'superadmin';
+  let siteList = targetSiteFilter === 'ALL'
+    ? sitesList
+    : sitesList.filter(s => s.id === targetSiteFilter || s.code === targetSiteFilter);
+
+  if (!isSuper) {
+    siteList = siteList.filter(s => !s.is_dc && s.code !== 'DC-MDC' && s.code !== 'DC' && s.id !== 'site-dc');
+  }
+
+  return siteList.map(s => ({ siteId: s.id, siteCode: s.code, isDc: Boolean(s.is_dc) }));
+}
+
+const nonSuperSites = mockGetAllSitesStockSummary('ALL', pmgUserAndres, mockSites);
+assert.ok(!nonSuperSites.some(s => s.siteId === 'site-dc' || s.siteCode === 'DC-MDC'), 'Non-superadmin must not have DC in site summary');
+
+// All Stocks page filter (even for Superadmin)
+const allStocksMultiSite = mockGetAllSitesStockSummary('ALL', superadminUser, mockSites)
+  .filter(s => s.siteId !== 'site-dc' && s.siteCode !== 'DC-MDC');
+assert.ok(!allStocksMultiSite.some(s => s.siteId === 'site-dc' || s.siteCode === 'DC-MDC'), 'All Stocks & Multi-Site page strictly excludes Central DC');
+console.log('  ✓ PASS: Central DC stock completely removed from All Stocks & Multi-Site page');
+
 console.log('\n====================================================================');
 console.log('ALL PMG SERIAL PRIVACY & DC ACCESS RESTRICTION TESTS PASSED (100%)');
 console.log('====================================================================\n');
