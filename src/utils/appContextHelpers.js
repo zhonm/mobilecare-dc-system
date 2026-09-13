@@ -1570,3 +1570,102 @@ export function filterAvailableDcInStockUnits({
   });
 }
 
+/**
+ * User-Friendly Formatter for Audit Deletion Records
+ * Transforms raw database UUIDs and technical machine IDs into clean, 
+ * professional human-readable identifiers and labels.
+ */
+export function formatAuditEntityDisplay(log) {
+  if (!log) return { id: '—', label: '', fullRawId: '' };
+
+  const rawId = String(log.entity_id || '').trim();
+  const rawLabel = String(log.entity_label || '').trim();
+  const entityType = String(log.entity_type || '').trim();
+  const summary = log.summary || {};
+
+  // 1. First priority: Check structured human-readable fields in summary
+  let cleanId = '';
+  if (summary.invoiceRef && summary.invoiceRef !== 'N/A' && !isUUID(summary.invoiceRef)) {
+    cleanId = String(summary.invoiceRef).trim();
+  } else if (summary.shipmentNumber && summary.shipmentNumber !== 'N/A' && !isUUID(summary.shipmentNumber)) {
+    cleanId = String(summary.shipmentNumber).trim();
+  } else if (summary.tracking_number && summary.tracking_number !== 'N/A' && !isUUID(summary.tracking_number)) {
+    cleanId = String(summary.tracking_number).trim();
+  } else if (summary.poNumber && summary.poNumber !== 'N/A' && !isUUID(summary.poNumber)) {
+    cleanId = String(summary.poNumber).trim();
+  } else if (summary.part_number && !isUUID(summary.part_number)) {
+    cleanId = String(summary.part_number).trim();
+  } else if (summary.site_code && !isUUID(summary.site_code)) {
+    cleanId = String(summary.site_code).trim();
+  }
+
+  // 2. If rawId is NOT a UUID, check if rawId itself is already a human-readable identifier
+  if (!cleanId && rawId && !isUUID(rawId)) {
+    cleanId = rawId;
+  }
+
+  // 3. If the identifier is a raw UUID or technical prefix (e.g. 76f3ac4a-78dd-4036-ae2e-ec7c30bfdd86 or ship-1788349192679)
+  if (!cleanId || isUUID(cleanId) || isUUID(rawId) || cleanId.startsWith('ship-') || cleanId.startsWith('rec-')) {
+    const shortRef = isUUID(rawId) 
+      ? rawId.slice(0, 8).toUpperCase() 
+      : (rawId.replace(/^ship-|^rec-/, '').slice(-6).toUpperCase());
+
+    if (entityType.toLowerCase().includes('shipment')) {
+      cleanId = shortRef ? `MDC-SHP-${shortRef}` : 'OUTBOUND-MANIFEST';
+    } else if (entityType.toLowerCase().includes('part')) {
+      cleanId = summary.part_number || (shortRef ? `PART-${shortRef}` : 'CATALOG-PART');
+    } else if (entityType.toLowerCase().includes('site')) {
+      cleanId = summary.site_code || (shortRef ? `SITE-${shortRef}` : 'SERVICE-SITE');
+    } else if (entityType.toLowerCase().includes('intake')) {
+      cleanId = summary.poNumber && summary.poNumber !== 'N/A'
+        ? `PO-${summary.poNumber}`
+        : (shortRef ? `INTAKE-${shortRef}` : 'DC-INTAKE');
+    } else if (entityType.toLowerCase().includes('snapshot')) {
+      cleanId = shortRef ? `SNAPSHOT-${shortRef}` : 'PERIOD-SNAPSHOT';
+    } else {
+      cleanId = shortRef ? `RECORD-${shortRef}` : (rawId || 'RECORD');
+    }
+  }
+
+  // 4. Resolve clean, human-friendly label
+  let cleanLabel = rawLabel;
+
+  // Clean away duplicate labels that just repeat the ID or "Shipment <uuid>"
+  if (cleanLabel.toLowerCase() === cleanId.toLowerCase() ||
+      cleanLabel.toLowerCase() === rawId.toLowerCase() ||
+      cleanLabel.toLowerCase() === `shipment ${rawId.toLowerCase()}` ||
+      cleanLabel.toLowerCase() === `shipment ${cleanId.toLowerCase()}` ||
+      cleanLabel.toLowerCase() === `shipment manifest`) {
+    cleanLabel = '';
+  }
+
+  if (entityType.toLowerCase().includes('shipment')) {
+    const dest = summary.destinationSite || summary.destination_site_name || summary.site_name;
+    const itemsCount = summary.itemsCount !== undefined ? summary.itemsCount : null;
+    const destLabel = dest && dest !== 'Branch' ? `To: ${dest}` : 'Branch Transfer';
+    const itemsLabel = itemsCount !== null ? `${itemsCount} ${itemsCount === 1 ? 'unit' : 'units'}` : '';
+
+    if (!cleanLabel || cleanLabel.toLowerCase().includes('shipment')) {
+      cleanLabel = [destLabel, itemsLabel].filter(Boolean).join(' • ');
+    }
+  } else if (entityType.toLowerCase().includes('part')) {
+    if (summary.description) {
+      cleanLabel = summary.description + (summary.iphone_model ? ` (${summary.iphone_model})` : '');
+    }
+  } else if (entityType.toLowerCase().includes('intake')) {
+    if (summary.poNumber && summary.poNumber !== 'N/A' && cleanId !== summary.poNumber) {
+      cleanLabel = `PO: ${summary.poNumber}`;
+    }
+  } else if (entityType.toLowerCase().includes('site')) {
+    if (summary.site_name && cleanId !== summary.site_name) {
+      cleanLabel = summary.site_name;
+    }
+  }
+
+  return {
+    id: cleanId,
+    label: cleanLabel,
+    fullRawId: rawId
+  };
+}
+

@@ -4,6 +4,7 @@ import { useApp } from '../context/AppContext';
 import { generateAuditTrailPDF } from '../utils/pdfGenerator';
 import { resolveSerialFullDetails } from '../utils/serialTracker';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
+import { formatAuditEntityDisplay } from '../utils/appContextHelpers';
 import SerialDossierModal from './SerialDossierModal';
 import {
   History,
@@ -149,15 +150,20 @@ export default function AuditTrail() {
     }
     if (!localSearch.trim()) return list;
     const q = localSearch.toLowerCase();
-    return list.filter(l =>
-      (l.entity_id || '').toLowerCase().includes(q) ||
-      (l.entity_label || '').toLowerCase().includes(q) ||
-      (l.entity_type || '').toLowerCase().includes(q) ||
-      (l.deleted_by_name || '').toLowerCase().includes(q) ||
-      (l.deleted_by_email || '').toLowerCase().includes(q) ||
-      (l.deleted_by_role || '').toLowerCase().includes(q) ||
-      (l.reason || '').toLowerCase().includes(q)
-    );
+    return list.filter(l => {
+      const disp = formatAuditEntityDisplay(l);
+      return (
+        (l.entity_id || '').toLowerCase().includes(q) ||
+        (disp.id || '').toLowerCase().includes(q) ||
+        (disp.label || '').toLowerCase().includes(q) ||
+        (l.entity_label || '').toLowerCase().includes(q) ||
+        (l.entity_type || '').toLowerCase().includes(q) ||
+        (l.deleted_by_name || '').toLowerCase().includes(q) ||
+        (l.deleted_by_email || '').toLowerCase().includes(q) ||
+        (l.deleted_by_role || '').toLowerCase().includes(q) ||
+        (l.reason || '').toLowerCase().includes(q)
+      );
+    });
   }, [deletionAuditLogs, deletionEntityTypeFilter, localSearch]);
 
   // 3. Scan Logs Filter
@@ -245,18 +251,33 @@ export default function AuditTrail() {
       showToast?.('No deletion audit records to export', 'warning');
       return;
     }
-    const rows = filteredDeletions.map((d, idx) => ({
-      '#': idx + 1,
-      'Date & Time': formatTo12HourDateTime(d.timestamp),
-      'Entity Type': d.entity_type || 'Record',
-      'Record ID': d.entity_id || '',
-      'Record Label': d.entity_label || '',
-      'Deleted By (Name)': d.deleted_by_name || 'System',
-      'Deleted By (Email)': d.deleted_by_email || '',
-      'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
-      'Reason / Note': d.reason || 'User initiated deletion',
-      'Deleted Details': JSON.stringify(d.summary || {})
-    }));
+    const rows = filteredDeletions.map((d, idx) => {
+      const { id: displayId, label: displayLabel } = formatAuditEntityDisplay(d);
+
+      let impact = [];
+      if (d.summary?.itemsCount !== undefined) impact.push(`${d.summary.itemsCount} units purged`);
+      if (d.summary?.description) impact.push(d.summary.description);
+      if (d.summary?.iphone_model) impact.push(`Model: ${d.summary.iphone_model}`);
+      if (d.summary?.site_name) impact.push(d.summary.site_name);
+      if (d.summary?.region) impact.push(`Region: ${d.summary.region}`);
+      if (d.summary?.poNumber) impact.push(`PO: ${d.summary.poNumber}`);
+      if (d.summary?.destinationSite) impact.push(`Dest: ${d.summary.destinationSite}`);
+      if (d.summary?.forecastPartsCount !== undefined) impact.push(`${d.summary.forecastPartsCount} parts`);
+
+      return {
+        '#': idx + 1,
+        'Date & Time': formatTo12HourDateTime(d.timestamp),
+        'Entity Type': d.entity_type || 'Record',
+        'Record ID': displayId,
+        'Record Label': displayLabel,
+        'Reason / Action Note': d.reason || 'User initiated deletion',
+        'Deleted By (Name)': d.deleted_by_name || 'System',
+        'Deleted By (Email)': d.deleted_by_email || '',
+        'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
+        'Impact Summary': impact.join(' • ') || 'Record purged',
+        'Status': 'Audit Logged'
+      };
+    });
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Deletion_Audits');
@@ -361,17 +382,20 @@ export default function AuditTrail() {
     XLSX.utils.book_append_sheet(wb, wsUploads, 'File_Upload_Audits');
 
     // Sheet 2: Deletions
-    const delRows = (deletionAuditLogs || []).map((d, idx) => ({
-      '#': idx + 1,
-      'Timestamp': formatTo12HourDateTime(d.timestamp),
-      'Entity Type': d.entity_type || '',
-      'Record ID': d.entity_id || '',
-      'Record Label': d.entity_label || '',
-      'Deleted By': d.deleted_by_name || '',
-      'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
-      'Reason': d.reason || '',
-      'Details': JSON.stringify(d.summary || {})
-    }));
+    const delRows = (deletionAuditLogs || []).map((d, idx) => {
+      const { id: displayId, label: displayLabel } = formatAuditEntityDisplay(d);
+      return {
+        '#': idx + 1,
+        'Timestamp': formatTo12HourDateTime(d.timestamp),
+        'Entity Type': d.entity_type || '',
+        'Record ID': displayId,
+        'Record Label': displayLabel,
+        'Deleted By': d.deleted_by_name || '',
+        'Role / Position': d.deleted_by_position || d.deleted_by_role || 'Specialist',
+        'Reason': d.reason || '',
+        'Details': JSON.stringify(d.summary || {})
+      };
+    });
     const wsDeletions = XLSX.utils.json_to_sheet(delRows.length > 0 ? delRows : [{ Notice: 'No deletion audit logs' }]);
     XLSX.utils.book_append_sheet(wb, wsDeletions, 'Data_Deletion_Audits');
 
@@ -1368,9 +1392,10 @@ export default function AuditTrail() {
                 <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                   <th style={{ width: '40px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
                   <th style={{ width: '120px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Timestamp</th>
-                  <th style={{ width: '130px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Entity Type</th>
-                  <th style={{ textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Deleted Record ID &amp; Reason</th>
-                  <th style={{ width: '200px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Deleted By</th>
+                  <th style={{ width: '120px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Entity Type</th>
+                  <th style={{ width: '220px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Record ID &amp; Label</th>
+                  <th style={{ minWidth: '220px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Reason / Action Note</th>
+                  <th style={{ width: '190px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Deleted By</th>
                   <th style={{ width: '150px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Impact Summary</th>
                   <th style={{ width: '85px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
                 </tr>
@@ -1378,7 +1403,7 @@ export default function AuditTrail() {
               <tbody>
                 {filteredDeletions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8' }}>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8' }}>
                       <Trash2 size={36} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
                       <p style={{ margin: '0 0 6px', fontSize: '14px', fontWeight: 600, color: '#64748b' }}>No deletion audit events found</p>
                       <p style={{ margin: 0, fontSize: '12px' }}>When records are deleted, immutable audit logs will appear here.</p>
@@ -1396,6 +1421,8 @@ export default function AuditTrail() {
                     const badgeBg = isPart ? '#f3e8ff' : isSite ? '#e0e7ff' : isIntake ? '#fffbeb' : isSnapshot ? '#eff6ff' : isShipment ? '#f0fdf4' : isPO ? '#fef3c7' : '#fee2e2';
                     const badgeColor = isPart ? '#7e22ce' : isSite ? '#3730a3' : isIntake ? '#b45309' : isSnapshot ? '#1d4ed8' : isShipment ? '#15803d' : isPO ? '#92400e' : '#b91c1c';
                     const badgeBorder = isPart ? '#e9d5ff' : isSite ? '#c7d2fe' : isIntake ? '#fde68a' : isSnapshot ? '#bfdbfe' : isShipment ? '#bbf7d0' : isPO ? '#fde68a' : '#fecaca';
+
+                    const { id: displayId, label: displayLabel, fullRawId } = formatAuditEntityDisplay(log);
 
                     return (
                       <tr
@@ -1433,17 +1460,39 @@ export default function AuditTrail() {
                           </span>
                         </td>
                         <td style={{ padding: '9px 10px' }}>
-                          <div className="font-mono" style={{ fontWeight: 700, fontSize: '12px', color: '#0f172a' }}>
-                            {log.entity_id}
+                          <div
+                            className="font-mono"
+                            style={{
+                              fontWeight: 700,
+                              fontSize: '12px',
+                              color: '#0f172a',
+                              letterSpacing: '0.2px'
+                            }}
+                            title={fullRawId ? `System ID: ${fullRawId}` : undefined}
+                          >
+                            {displayId}
                           </div>
-                          <div style={{ fontSize: '11px', color: '#475569', marginTop: '1px' }}>
-                            {log.entity_label || log.entity_id}
-                          </div>
-                          {log.reason && (
-                            <div style={{ fontSize: '10.5px', color: '#b91c1c', marginTop: '2px', fontStyle: 'italic' }}>
-                              Reason: {log.reason}
+                          {displayLabel && (
+                            <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px', lineHeight: 1.3 }}>
+                              {displayLabel}
                             </div>
                           )}
+                        </td>
+                        <td style={{ padding: '9px 10px' }}>
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'flex-start',
+                            gap: '6px',
+                            background: '#fef2f2',
+                            border: '1px solid #fecaca',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            fontSize: '11.5px',
+                            color: '#991b1b',
+                            lineHeight: 1.35
+                          }}>
+                            <span style={{ fontWeight: 600 }}>{log.reason || 'User initiated deletion'}</span>
+                          </div>
                         </td>
                         <td style={{ padding: '9px 10px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>

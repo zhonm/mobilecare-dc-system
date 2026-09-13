@@ -24,10 +24,6 @@ import {
   Layers,
   Tag,
   ArrowLeftRight,
-  Eye,
-  EyeOff,
-  ChevronDown,
-  ChevronRight,
   AlertTriangle,
   Copy,
   Boxes,
@@ -234,26 +230,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
   const [isSaveIntakeModalOpen, setIsSaveIntakeModalOpen] = useState(false);
   const [unitToDelete, setUnitToDelete] = useState(null);
+  const [deletionReason, setDeletionReason] = useState('Wrong Serial Scanned');
+  const [customDeletionReason, setCustomDeletionReason] = useState('');
   const [showPnDropdown, setShowPnDropdown] = useState(false);
 
-  // Option to hide or show Scanner Simulator & Quick Tools bar
-  const [showSimulator, setShowSimulator] = useState(() => {
-    try {
-      return localStorage.getItem('mdc_show_scanner_simulator') === 'true';
-    } catch (e) {
-      return false;
-    }
-  });
-
-  const toggleShowSimulator = () => {
-    setShowSimulator(prev => {
-      const next = !prev;
-      try {
-        localStorage.setItem('mdc_show_scanner_simulator', String(next));
-      } catch (e) {}
-      return next;
-    });
-  };
 
   // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR' | 'SVNR - Service Non-Repair'
   const [intakeAssignment, setIntakeAssignment] = useState(() => {
@@ -934,60 +914,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     }
   };
 
-  // Quick Mock Scanner Simulator with Genuine 17-Character Apple Serial Numbers
-  const testSampleParts = [
-    { pn: '661-30373', desc: 'Battery, iPhone 14', prefix: 'F8Y6234C9A', suffix: 'R231LB3' },
-    { pn: '661-30394', desc: 'Battery, iPhone 14 Plus', prefix: 'F8Y6235D1B', suffix: 'R235LB4' },
-    { pn: '661-30366', desc: 'Display, iPhone 14', prefix: 'GH3891MZP0', suffix: '1289XC' },
-    { pn: '661-21991', desc: 'Battery, iPhone 13', prefix: 'DN86234C1U', suffix: 'QMCN3R' },
-    { pn: '661-21996', desc: 'Battery, iPhone 13 Pro', prefix: 'DNM6234C2U', suffix: 'Q33817' },
-    { pn: '661-22294', desc: 'Battery, iPhone 13 Pro Max', prefix: 'F8Y6235C3Z', suffix: 'A13XCBB' },
-    { pn: '661-36918', desc: 'Battery, iPhone 15 Pro Max', prefix: 'FG9HTN0049', suffix: 'R00006TT' },
-    { pn: '661-30401', desc: 'Display, iPhone 14 Pro Max', prefix: 'GH36234D9A', suffix: '00MUZ' }
-  ];
-
-  const handleSimulateScan = (pn, prefix = 'F8Y6234C9A', suffix = 'R231LB3') => {
-    const randomSerial = `${prefix}${Date.now().toString().slice(-4)}${suffix}`;
-    const serial = randomSerial;
-    setPartNumberInput(pn);
-    setSerialInput(serial);
-    setShowPnDropdown(false);
-    const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
-
-    if (autoReceive) {
-      setTimeout(() => {
-        const res = addScanInUnit({
-          partNumber: pn,
-          serialNumber: serial,
-          poId: selectedPoId || null,
-          intakeAssignment: currentAssignment,
-          notes: currentAssignment,
-          targetSiteId: activeReceivingSite.id,
-          targetSiteCode: activeReceivingSite.code,
-          targetSiteName: activeReceivingSite.name
-        });
-        if (res.success) {
-          setScanResult({
-            type: 'success',
-            message: `[AUTO-RECEIVED ${currentAssignment} @ ${activeReceivingSite.code}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})`
-          });
-          setSessionScans(prev => [res.unit, ...prev]);
-          setSerialInput('');
-          if (!keepPartNumber) {
-            setPartNumberInput('');
-            pnInputRef.current?.focus();
-          } else {
-            serialInputRef.current?.focus();
-          }
-        } else {
-          setScanResult({ type: 'error', message: res.error });
-        }
-      }, 120);
-    } else {
-      showToast(`Scanned ${pn} (S/N: ${serial}). Auto-Receive is OFF — click Receive button to save.`, 'info');
-      serialInputRef.current?.focus();
-    }
-  };
 
   // --- XLSX / CSV File Import Handling ---
   const handleFileSelect = async (file) => {
@@ -1371,12 +1297,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const handleConfirmDeletePart = async () => {
     if (!unitToDelete) return;
     const serial = unitToDelete.serial_number;
-    await deleteScanInUnit(unitToDelete);
+    const finalReason = deletionReason === 'OTHER'
+      ? (customDeletionReason.trim() || 'Inventory unit removed from stock by user')
+      : (deletionReason || 'Inventory unit removed from stock by user');
+    await deleteScanInUnit(unitToDelete, finalReason);
     setSessionScans(prev => prev.filter(u => String(u.serial_number).toUpperCase() !== String(serial).toUpperCase()));
     if (serial) {
       sessionSerialsSetRef.current.delete(String(serial).trim().toUpperCase());
     }
     setUnitToDelete(null);
+    setDeletionReason('Wrong Serial Scanned');
+    setCustomDeletionReason('');
   };
 
   const handleExportPmgPartsXLSX = async () => {
@@ -2228,120 +2159,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         )}
       </div>
 
-      {/* Simulator Tools for Rapid Paired Testing (Collapsible / Hideable) */}
-      <div
-        className="card"
-        style={{
-          marginBottom: '20px',
-          background: showSimulator ? '#f8fafc' : '#ffffff',
-          border: '1px solid var(--border-light)',
-          padding: showSimulator ? '16px 20px' : '10px 16px',
-          transition: 'all 0.2s ease'
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            cursor: 'pointer',
-            userSelect: 'none'
-          }}
-          onClick={toggleShowSimulator}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '6px',
-              background: showSimulator ? '#e0f2fe' : '#f1f5f9',
-              color: showSimulator ? 'var(--primary)' : '#64748b',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <Zap size={14} />
-            </div>
-            <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>Scanner Simulator & Quick Tools</strong>
-            <span
-              className="badge"
-              style={{
-                fontSize: '11px',
-                background: showSimulator ? '#e0f2fe' : '#f1f5f9',
-                color: showSimulator ? '#0369a1' : '#64748b',
-                padding: '2px 8px'
-              }}
-            >
-              {showSimulator ? 'Visible' : 'Hidden'}
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {showSimulator && (
-              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                Click any sample part to simulate hardware scan into <strong style={{ color: intakeAssignment === 'DC - CRBR' ? '#d97706' : '#0284c7' }}>{intakeAssignment}</strong>
-              </span>
-            )}
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              style={{
-                fontSize: '12px',
-                color: 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '3px 8px'
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleShowSimulator();
-              }}
-              title={showSimulator ? "Hide Simulator Bar" : "Show Simulator Bar"}
-            >
-              {showSimulator ? (
-                <>
-                  <EyeOff size={13} />
-                  <span>Hide Simulator</span>
-                  <ChevronDown size={14} />
-                </>
-              ) : (
-                <>
-                  <Eye size={13} />
-                  <span>Show Simulator Tools</span>
-                  <ChevronRight size={14} />
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {showSimulator && (
-          <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-              {testSampleParts.map((sample, idx) => (
-                <button
-                  key={idx}
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => handleSimulateScan(sample.pn, sample.prefix, sample.suffix)}
-                  style={{
-                    background: '#fff',
-                    fontSize: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 12px'
-                  }}
-                  title={`Simulate scanning ${sample.pn} (${sample.desc}) into ${intakeAssignment}`}
-                >
-                  <Barcode size={13} color="var(--primary)" />
-                  <span><strong>{sample.pn}</strong> — {sample.desc}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Scanned Inventory Units Table - Both Central DC Superadmin & Retail Branch PMG */}
       <div className="card" style={{ marginBottom: '24px', background: '#ffffff', border: '1px solid #e2e8f0', padding: '18px 20px' }}>
@@ -3460,9 +3277,38 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
                 Are you sure you want to delete unit <strong>#{unitToDelete.part_number}</strong> with Serial <strong>{unitToDelete.serial_number}</strong>?
               </p>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>
                 This will remove the item from active DC In-Stock inventory and delete its registration in the central database.
               </p>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={deletionReason}
+                  onChange={(e) => setDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Wrong Serial Scanned">Wrong Serial Scanned</option>
+                  <option value="Defective / Damaged Part">Defective / Damaged Part</option>
+                  <option value="Barcode Mismatch">Barcode Mismatch</option>
+                  <option value="Incorrect Part Number">Incorrect Part Number</option>
+                  <option value="Test Intake Voided">Test Intake Voided</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {deletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deletion..."
+                    value={customDeletionReason}
+                    onChange={(e) => setCustomDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
+              </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>

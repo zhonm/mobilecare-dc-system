@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
+import { formatAuditEntityDisplay } from './appContextHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -2576,13 +2577,18 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
       if (d.summary?.poNumber) impact.push(`PO: ${d.summary.poNumber}`);
       if (d.summary?.destinationSite) impact.push(`Dest: ${d.summary.destinationSite}`);
       if (d.summary?.forecastPartsCount !== undefined) impact.push(`${d.summary.forecastPartsCount} parts`);
+
+      const { id: displayId, label: displayLabel } = formatAuditEntityDisplay(d);
+      const idAndLabel = displayLabel ? `${displayId}\n${displayLabel}` : displayId;
+      const reasonText = d.reason || 'User initiated deletion';
+
       return [
         i + 1,
         new Date(d.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
         d.entity_type || 'Record',
-        `${d.entity_id || ''}\n${d.entity_label || ''}`,
+        idAndLabel,
         `${d.deleted_by_name || 'System'}\n${d.deleted_by_email || ''}\n[${d.deleted_by_position || d.deleted_by_role || 'Specialist'}]`,
-        d.reason || 'User initiated deletion',
+        reasonText,
         impact.join(' • ') || 'Record purged',
         'Audit Logged'
       ];
@@ -2593,6 +2599,7 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
       head: [tableHeaders],
       body: tableRows,
       theme: 'grid',
+      rowPageBreak: 'avoid',
       headStyles: {
         fillColor: [185, 28, 28], // red-700
         textColor: 255,
@@ -2610,12 +2617,12 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
       columnStyles: {
         0: { halign: 'center', cellWidth: 10 },
         1: { cellWidth: 26 },
-        2: { fontStyle: 'bold', cellWidth: 32 },
+        2: { fontStyle: 'bold', cellWidth: 30 },
         3: { cellWidth: 44 },
-        4: { cellWidth: 48 },
-        5: { cellWidth: 46 },
-        6: { cellWidth: 42 },
-        7: { halign: 'center', cellWidth: 22 }
+        4: { cellWidth: 46 },
+        5: { cellWidth: 50 },
+        6: { cellWidth: 44 },
+        7: { halign: 'center', cellWidth: 20 }
       },
       alternateRowStyles: { fillColor: [248, 250, 252] },
       margin: { left: margin, right: margin }

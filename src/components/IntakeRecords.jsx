@@ -78,6 +78,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   const [selectedRecordToInspect, setSelectedRecordToInspect] = useState(null);
   const [recordToDelete, setRecordToDelete] = useState(null);
   const [unitToDelete, setUnitToDelete] = useState(null);
+  const [deletionReason, setDeletionReason] = useState('Duplicate Intake Record');
+  const [customDeletionReason, setCustomDeletionReason] = useState('');
   const [inspectSearch, setInspectSearch] = useState('');
   const [copiedSerial, setCopiedSerial] = useState(null);
 
@@ -578,17 +580,27 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Delete Individual Stock Unit Handler
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;
+    const finalReason = deletionReason === 'OTHER'
+      ? (customDeletionReason.trim() || 'Inventory unit removed from stock by user')
+      : (deletionReason || 'Inventory unit removed from stock by user');
     if (deleteScanInUnit) {
-      await deleteScanInUnit(unitToDelete);
+      await deleteScanInUnit(unitToDelete, finalReason);
     }
     setUnitToDelete(null);
+    setDeletionReason('Defective / Damaged Part');
+    setCustomDeletionReason('');
   };
 
   // Delete Batch Record Handler
   const handleConfirmDeleteBatch = async () => {
     if (!recordToDelete) return;
-    await deleteIntakeRecord(recordToDelete.id);
+    const finalReason = deletionReason === 'OTHER'
+      ? (customDeletionReason.trim() || 'Deleted by warehouse staff / administrator')
+      : (deletionReason || 'Deleted by warehouse staff / administrator');
+    await deleteIntakeRecord(recordToDelete.id, finalReason);
     setRecordToDelete(null);
+    setDeletionReason('Duplicate Intake Record');
+    setCustomDeletionReason('');
     if (selectedRecordToInspect?.id === recordToDelete.id) {
       setSelectedRecordToInspect(null);
     }
@@ -1982,9 +1994,38 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
                 Are you sure you want to remove unit <strong>#{unitToDelete.part_number}</strong> with Serial <strong>{unitToDelete.serial_number}</strong>?
               </p>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>
                 This will delete the item from active DC In-Stock inventory in the database.
               </p>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={deletionReason}
+                  onChange={(e) => setDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Defective / Damaged Part">Defective / Damaged Part</option>
+                  <option value="Wrong Serial Scanned">Wrong Serial Scanned</option>
+                  <option value="Barcode Mismatch">Barcode Mismatch</option>
+                  <option value="Return to Supplier / Vendor">Return to Supplier / Vendor</option>
+                  <option value="Voided Intake Unit">Voided Intake Unit</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {deletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deletion..."
+                    value={customDeletionReason}
+                    onChange={(e) => setCustomDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
+              </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>
@@ -2014,9 +2055,38 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
               <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 10px 0' }}>
                 Are you sure you want to delete history record <strong>{recordToDelete.id}</strong> ({recordToDelete.record_name})?
               </p>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>
                 This action cannot be undone. In-stock parts remain preserved in DC inventory.
               </p>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={deletionReason}
+                  onChange={(e) => setDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Duplicate Intake Record">Duplicate Intake Record</option>
+                  <option value="Data Entry / Scanning Error">Data Entry / Scanning Error</option>
+                  <option value="PO Canceled / Re-assigned">PO Canceled / Re-assigned</option>
+                  <option value="Physical Count Reconciliation">Physical Count Reconciliation</option>
+                  <option value="Warehouse Staging Cleanup">Warehouse Staging Cleanup</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {deletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deletion..."
+                    value={customDeletionReason}
+                    onChange={(e) => setCustomDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
+              </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setRecordToDelete(null)}>Cancel</button>

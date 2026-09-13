@@ -23,7 +23,6 @@ import {
 export default function DataImport() {
   const {
     applyParsedDataset,
-    resetToDefaultData,
     sites,
     parts,
     currentUser,
@@ -50,13 +49,8 @@ export default function DataImport() {
     }
   });
 
-  const [allocationMode, setAllocationMode] = useState(() => {
-    try {
-      return localStorage.getItem('mdc_allocation_mode') || 'OPTION_B';
-    } catch {
-      return 'OPTION_B';
-    }
-  });
+  // Default Allocation Mode is strictly Option B (zero-drift exact match proportional allocation)
+  const allocationMode = 'OPTION_B';
 
   const MONTH_FULL_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -167,15 +161,6 @@ export default function DataImport() {
     }
   };
 
-  const handleAllocationModeChange = async (newMode) => {
-    setAllocationMode(newMode);
-    try {
-      localStorage.setItem('mdc_allocation_mode', newMode);
-    } catch (e) {}
-    if (lastFileObj) {
-      await processFile(lastFileObj, filterScope, selectedMonth, newMode);
-    }
-  };
 
   const handleMonthChange = async (newMonth) => {
     setSelectedMonth(newMonth);
@@ -312,15 +297,6 @@ export default function DataImport() {
               <RotateCcw size={14} />
               <span>Clear to Empty State</span>
             </button>
-
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={resetToDefaultData}
-              title="Load sample August 2026 dataset for demonstration"
-            >
-              <Sparkles size={14} color="var(--primary)" />
-              <span>Load Demo Data</span>
-            </button>
           </div>
         </div>
 
@@ -437,37 +413,6 @@ export default function DataImport() {
             </div>
           </div>
 
-          {/* Allocation Engine Mode Selector */}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-              <Split size={15} color="var(--primary)" />
-              <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
-                Allocation Mode:
-              </strong>
-            </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${allocationMode === 'OPTION_B' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => handleAllocationModeChange('OPTION_B')}
-                disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1.2, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                title="Option B: 100% Exact Forecast Match (zero-drift proportional quota allocation across service sites)"
-              >
-                Option B (Exact Match)
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${allocationMode === 'OPTION_A' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => handleAllocationModeChange('OPTION_A')}
-                disabled={!isSuperAdmin}
-                style={{ fontSize: '12px', flex: 1, padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                title="Option A: Bit-for-bit Excel workbook formula parity (2D cumulative column sum)"
-              >
-                Option A (Excel 2D)
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Universal Dropzone */}

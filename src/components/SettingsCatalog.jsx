@@ -175,6 +175,8 @@ export default function SettingsCatalog() {
 
   // Delete Part Modal State
   const [deletingPart, setDeletingPart] = useState(null);
+  const [partDeletionReason, setPartDeletionReason] = useState('Obsolete / End-of-Service-Life Part');
+  const [customPartDeletionReason, setCustomPartDeletionReason] = useState('');
 
   // ── Site Management State ──────────────────────────────────────────────────
   const [siteSearch, setSiteSearch] = useState('');
@@ -189,6 +191,8 @@ export default function SettingsCatalog() {
   };
   const [newSite, setNewSite] = useState(BLANK_SITE);
   const [deletingSite, setDeletingSite] = useState(null);
+  const [siteDeletionReason, setSiteDeletionReason] = useState('Branch Site Closed Permanently');
+  const [customSiteDeletionReason, setCustomSiteDeletionReason] = useState('');
 
   // Dynamically compute all unique region options (strictly excluding "Other")
   const allRegionOptions = useMemo(() => {
@@ -354,14 +358,24 @@ export default function SettingsCatalog() {
 
   const handleConfirmDeletePart = () => {
     if (!deletingPart) return;
-    deletePart(deletingPart);
+    const finalReason = partDeletionReason === 'OTHER'
+      ? (customPartDeletionReason.trim() || 'Part permanently removed from catalog by user')
+      : (partDeletionReason || 'Obsolete / End-of-Service-Life Part');
+    deletePart(deletingPart, finalReason);
     setDeletingPart(null);
+    setPartDeletionReason('Obsolete / End-of-Service-Life Part');
+    setCustomPartDeletionReason('');
   };
 
   const handleConfirmDeleteSite = async () => {
     if (!deletingSite) return;
-    await deleteSite(deletingSite.id, deletingSite.code);
+    const finalReason = siteDeletionReason === 'OTHER'
+      ? (customSiteDeletionReason.trim() || 'Service site permanently removed from directory by user')
+      : (siteDeletionReason || 'Branch Site Closed Permanently');
+    await deleteSite(deletingSite.id, deletingSite.code, finalReason);
     setDeletingSite(null);
+    setSiteDeletionReason('Branch Site Closed Permanently');
+    setCustomSiteDeletionReason('');
   };
 
   // Execute Force Global Sync & Purge Peer Cache
@@ -1182,6 +1196,34 @@ export default function SettingsCatalog() {
                 <div style={{ marginBottom: '4px' }}><strong>iPhone Model:</strong> {deletingPart.iphone_model || 'iPhone'}</div>
                 <div><strong>Stock Price:</strong> ${deletingPart.stocking_price || 0}</div>
               </div>
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={partDeletionReason}
+                  onChange={(e) => setPartDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Obsolete / End-of-Service-Life Part">Obsolete / End-of-Service-Life Part</option>
+                  <option value="Duplicate Part Number Catalog Entry">Duplicate Part Number Catalog Entry</option>
+                  <option value="Wrong Part Specification / Replaced">Wrong Part Specification / Replaced</option>
+                  <option value="Inventory Catalog Cleanup">Inventory Catalog Cleanup</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {partDeletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deleting part..."
+                    value={customPartDeletionReason}
+                    onChange={(e) => setCustomPartDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
+              </div>
               <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '11px 14px', borderRadius: '8px', fontSize: '12px', color: '#991b1b', lineHeight: 1.5 }}>
                 <strong>Accidental Deletion Protection:</strong> This component will be removed from master catalog indexing. This deletion will be <strong>permanently logged in the system Audit Trail</strong>.
               </div>
@@ -1387,6 +1429,34 @@ export default function SettingsCatalog() {
                     <div style={{ marginBottom: '4px' }}><strong>Branch Name:</strong> {deletingSite.name}</div>
                     <div style={{ marginBottom: '4px' }}><strong>Region:</strong> {deletingSite.region || 'Metro Manila'}</div>
                     <div><strong>Address:</strong> {deletingSite.address || deletingSite.full_address || '—'}</div>
+                  </div>
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                      Reason for Deletion:
+                    </label>
+                    <select
+                      className="form-select"
+                      value={siteDeletionReason}
+                      onChange={(e) => setSiteDeletionReason(e.target.value)}
+                      style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                    >
+                      <option value="Branch Site Closed Permanently">Branch Site Closed Permanently</option>
+                      <option value="Duplicate Branch Code Entry">Duplicate Branch Code Entry</option>
+                      <option value="Wrong Region / Relocated Branch">Wrong Region / Relocated Branch</option>
+                      <option value="Directory Cleanup">Directory Cleanup</option>
+                      <option value="OTHER">Other Reason (Specify)</option>
+                    </select>
+                    {siteDeletionReason === 'OTHER' && (
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Enter reason for deleting branch..."
+                        value={customSiteDeletionReason}
+                        onChange={(e) => setCustomSiteDeletionReason(e.target.value)}
+                        style={{ width: '100%', fontSize: '12px' }}
+                        autoFocus
+                      />
+                    )}
                   </div>
                   <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '11px 14px', borderRadius: '8px', fontSize: '12px', color: '#991b1b', lineHeight: 1.5 }}>
                     <strong>Accidental Deletion Protection:</strong> This branch will be removed from all active matrices, allocations, and site catalogs. This deletion will be <strong>permanently logged in the system Audit Trail</strong>.

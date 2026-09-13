@@ -32,7 +32,8 @@ export function useInventory({
   dcIntakeRecords = [],
   setDcIntakeRecords,
   setShipments,
-  setCloudSyncStatus
+  setCloudSyncStatus,
+  logDeletionAudit
 }) {
   const [inventoryUnits, setInventoryUnits] = useState(() => {
     try {
@@ -1308,7 +1309,7 @@ export function useInventory({
     return { success: true, count: finalUnits.length, units: finalUnits };
   };
 
-  const deleteScanInUnit = async (serialOrUnit) => {
+  const deleteScanInUnit = async (serialOrUnit, reason = 'Inventory unit removed from stock by user') => {
     let cleanSerial = '';
     let existing = null;
 
@@ -1354,6 +1355,24 @@ export function useInventory({
       updatedDeleted = [cleanSerial];
     }
     dbStorage.setItem('mdc_deleted_unit_serials', updatedDeleted);
+
+    if (logDeletionAudit) {
+      await logDeletionAudit({
+        entityType: 'Inventory Unit',
+        entityId: cleanSerial,
+        entityLabel: existing?.part_number
+          ? `${existing.part_number} — ${existing.description || 'Apple Service Part'}`
+          : `Unit Serial ${cleanSerial}`,
+        summary: {
+          partNumber: existing?.part_number || 'N/A',
+          serialNumber: cleanSerial,
+          siteCode: existing?.site_code || existing?.site_name || 'DC',
+          intakeAssignment: existing?.intake_assignment || 'DC Stock',
+          poNumber: existing?.po_number || 'N/A'
+        },
+        reason: reason || 'Inventory unit removed from stock by user'
+      });
+    }
 
     let nextUnits = [];
     setInventoryUnits(prev => {

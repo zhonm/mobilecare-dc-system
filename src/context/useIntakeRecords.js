@@ -255,7 +255,7 @@ export function useIntakeRecords({
   };
 
   // Delete a saved intake record
-  const deleteIntakeRecord = async (recordId) => {
+  const deleteIntakeRecord = async (recordId, reason = 'Deleted by warehouse staff / administrator') => {
     let target = (dcIntakeRecords || []).find(r => String(r.id).trim().toUpperCase() === String(recordId).trim().toUpperCase() || r.id === recordId);
     if (!target) {
       try {
@@ -299,17 +299,22 @@ export function useIntakeRecords({
     dbStorage.setItem('mdc_dc_intake_records', nextRecords);
 
     if (logDeletionAudit) {
+      let cleanLabel = target?.record_name || '';
+      if (cleanLabel.trim().toLowerCase() === String(recordId).trim().toLowerCase()) {
+        cleanLabel = target?.po_number ? `PO ${target.po_number}` : '';
+      }
+
       await logDeletionAudit({
         entityType: 'DC Intake Record',
         entityId: recordId,
-        entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Parts History Record ${recordId}`),
+        entityLabel: cleanLabel || (target?.po_number ? `PO ${target.po_number}` : `Parts History Record`),
         summary: {
           itemsCount: target?.items?.length || target?.total_units || 0,
           poNumber: target?.po_number || target?.poNumber || 'N/A',
           intakeDate: target?.intake_date,
           originalSavedBy: target?.saved_by_name || 'Warehouse Staff'
         },
-        reason: 'Deleted by warehouse staff / administrator'
+        reason: reason || 'Deleted by warehouse staff / administrator'
       });
     }
 

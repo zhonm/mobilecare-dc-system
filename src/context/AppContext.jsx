@@ -296,7 +296,8 @@ export function AppProvider({ children }) {
     dcIntakeRecords: intakeRecords.dcIntakeRecords,
     setDcIntakeRecords: intakeRecords.setDcIntakeRecords,
     setShipments: (...args) => shipmentsDomain.setShipments(...args),
-    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
+    logDeletionAudit: auditLogs.logDeletionAudit
   });
 
   // 9. Shipments Domain

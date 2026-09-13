@@ -19,7 +19,8 @@ import {
   generateAppleSerialNumber,
   consolidatePurchaseOrdersList,
   consolidateDcIntakeRecordsList,
-  isExplicitlyCleared
+  isExplicitlyCleared,
+  formatAuditEntityDisplay
 } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
@@ -977,6 +978,21 @@ export function useCloudSync({
         });
 
         const mergedDeletions = Array.from(delMap.values())
+          .map(l => {
+            if (isUUID(l.entity_id) || !l.entity_id || String(l.entity_id).startsWith('ship-')) {
+              const disp = formatAuditEntityDisplay(l);
+              return {
+                ...l,
+                entity_id: disp.id,
+                entity_label: disp.label || l.entity_label,
+                summary: {
+                  ...(l.summary || {}),
+                  system_uuid: l.entity_id
+                }
+              };
+            }
+            return l;
+          })
           .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
           .slice(0, 300);
 

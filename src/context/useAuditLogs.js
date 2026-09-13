@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { getDefaultRolePosition } from '../constants/roles';
+import { formatAuditEntityDisplay, isUUID } from '../utils/appContextHelpers';
 
 export function useAuditLogs({
   currentUser,
@@ -45,7 +46,23 @@ export function useAuditLogs({
       const saved = localStorage.getItem('mdc_deletion_audit_logs');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(l => {
+            if (isUUID(l.entity_id) || !l.entity_id || String(l.entity_id).startsWith('ship-')) {
+              const disp = formatAuditEntityDisplay(l);
+              return {
+                ...l,
+                entity_id: disp.id,
+                entity_label: disp.label || l.entity_label,
+                summary: {
+                  ...(l.summary || {}),
+                  system_uuid: l.entity_id
+                }
+              };
+            }
+            return l;
+          });
+        }
       }
       return [
         {
@@ -112,20 +129,31 @@ export function useAuditLogs({
     summary = {},
     reason = 'User initiated deletion'
   }) => {
+    const disp = formatAuditEntityDisplay({
+      entity_type: entityType,
+      entity_id: entityId,
+      entity_label: entityLabel,
+      summary,
+      reason
+    });
+
     const newLog = {
       id: `del-audit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
       timestamp: new Date().toISOString(),
       action: 'DELETE',
       entity_type: entityType,
-      entity_id: entityId,
-      entity_label: entityLabel || entityId,
+      entity_id: disp.id,
+      entity_label: disp.label || entityLabel || disp.id,
       deleted_by_id: currentUser?.id || 'usr-system',
       deleted_by_name: currentUser?.fullName || 'System User',
       deleted_by_email: currentUser?.email || '',
       deleted_by_role: currentUser?.role || 'admin',
       deleted_by_position: currentUser?.rolePosition || getDefaultRolePosition(currentUser?.role) || 'Parts Management Specialist',
       reason,
-      summary
+      summary: {
+        ...summary,
+        system_uuid: entityId
+      }
     };
 
     setDeletionAuditLogs(prev => {

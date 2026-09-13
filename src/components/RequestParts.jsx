@@ -245,6 +245,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   // Unit Delete & Edit Modal State (Branch & Multi-Site Parts Management)
   const [unitToDelete, setUnitToDelete] = useState(null);
   const [isDeletingUnit, setIsDeletingUnit] = useState(false);
+  const [deletionReason, setDeletionReason] = useState('Defective / Damaged Part');
+  const [customDeletionReason, setCustomDeletionReason] = useState('');
   const [unitToEdit, setUnitToEdit] = useState(null);
   const [editBoxNumber, setEditBoxNumber] = useState(1);
   const [editWorkOrder, setEditWorkOrder] = useState('');
@@ -344,10 +346,15 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     if (!unitToDelete) return;
     setIsDeletingUnit(true);
     try {
-      const res = await deleteScanInUnit(unitToDelete);
+      const finalReason = deletionReason === 'OTHER'
+        ? (customDeletionReason.trim() || 'Inventory unit removed from stock by user')
+        : (deletionReason || 'Inventory unit removed from stock by user');
+      const res = await deleteScanInUnit(unitToDelete, finalReason);
       if (res && res.success !== false) {
         showToast(`Successfully deleted unit #${unitToDelete.serial_number || unitToDelete.serialNumber}`, 'success');
         setUnitToDelete(null);
+        setDeletionReason('Defective / Damaged Part');
+        setCustomDeletionReason('');
       }
     } finally {
       setIsDeletingUnit(false);
@@ -3966,6 +3973,35 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   <span style={{ color: '#64748b' }}>Branch / Location:</span>
                   <span style={{ fontWeight: 600 }}>{unitToDelete.site_code || unitToDelete.siteCode || 'Branch'}</span>
                 </div>
+              </div>
+
+              <div style={{ marginTop: '12px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={deletionReason}
+                  onChange={(e) => setDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Defective / Damaged Part">Defective / Damaged Part</option>
+                  <option value="Wrong Serial Scanned">Wrong Serial Scanned</option>
+                  <option value="Barcode Mismatch">Barcode Mismatch</option>
+                  <option value="Return to Supplier / Vendor">Return to Supplier / Vendor</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {deletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deletion..."
+                    value={customDeletionReason}
+                    onChange={(e) => setCustomDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
               </div>
             </div>
 

@@ -382,7 +382,7 @@ export function useCatalogAndSites({
     return { success: true, part: savedPartObj };
   };
 
-  const deletePart = async (partIdOrObj) => {
+  const deletePart = async (partIdOrObj, reason = 'Part permanently removed from catalog by user') => {
     if (!['superadmin', 'admin'].includes(currentUser?.role)) {
       showToast('Permission denied: Only Superadmin or Admin can modify the parts catalog.', 'error');
       return { success: false, error: 'Insufficient catalog permissions' };
@@ -398,82 +398,81 @@ export function useCatalogAndSites({
       const match = prev.find(p =>
         (targetId && p.id === targetId) ||
         (targetPN && targetDesc && p.part_number === targetPN && p.description === targetDesc) ||
-        (!targetDesc && targetPN && p.part_number === targetPN)
+        (targetPN && p.part_number === targetPN)
       );
+      if (match) deletedPart = match;
 
-      if (!match) return prev;
-      deletedPart = match;
-      const updated = prev.filter(p => p.id !== match.id);
-
-      try {
-        localStorage.setItem('mdc_parts', JSON.stringify(updated));
-      } catch (e) {
-        console.warn('LocalStorage save error in deletePart:', e);
-      }
-      dbStorage.setItem('mdc_parts', updated);
-      return updated;
+      return prev.filter(p => {
+        if (targetId && p.id === targetId) return false;
+        if (targetPN && targetDesc && p.part_number === targetPN && p.description === targetDesc) return false;
+        if (targetPN && !targetDesc && !targetId && p.part_number === targetPN) return false;
+        return true;
+      });
     });
 
-    if (deletedPart) {
-      let persistenceFailed = false;
-      if (supabase) {
-        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          if (deletedPart.id && isUUID(deletedPart.id)) {
-            const { error } = await supabase.from('parts').delete().eq('id', deletedPart.id);
-            if (error) throw error;
-          } else if (deletedPart.part_number) {
-            const { error } = await supabase.from('parts').delete().eq('part_number', deletedPart.part_number);
-            if (error) throw error;
-          }
-          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-          if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
-        } catch (e) {
-          console.error('Supabase part delete error:', e.message);
-          persistenceFailed = true;
-          setParts(previousParts);
-          try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
-          dbStorage.setItem('mdc_parts', previousParts);
-          if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
-          if (enqueueOfflineAction) enqueueOfflineAction('PART_DELETE', { id: deletedPart.id, part_number: deletedPart.part_number });
-          if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
+    if (!deletedPart) {
+      return { success: false, error: 'Part not found' };
+    }
+
+    const nextParts = previousParts.filter(p => p.id !== deletedPart.id);
+    const isCloudConfigured = !!(supabase && !supabase.__isMockClient);
+    let persistenceFailed = false;
+    if (supabase) {
+      if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        if (deletedPart.id && isUUID(deletedPart.id)) {
+          const { error } = await supabase.from('parts').delete().eq('id', deletedPart.id);
+          if (error) throw error;
+        } else if (deletedPart.part_number) {
+          const { error } = await supabase.from('parts').delete().eq('part_number', deletedPart.part_number);
+          if (error) throw error;
         }
-      } else {
+        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
+      } catch (e) {
+        console.error('Supabase part delete error:', e.message);
+        persistenceFailed = true;
+        setParts(previousParts);
+        try { localStorage.setItem('mdc_parts', JSON.stringify(previousParts)); } catch (storageError) {}
+        dbStorage.setItem('mdc_parts', previousParts);
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
+        if (enqueueOfflineAction) enqueueOfflineAction('PART_DELETE', { id: deletedPart.id, part_number: deletedPart.part_number });
         if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
       }
-
-      if (persistenceFailed) {
-        showToast(`Could not delete part ${deletedPart.part_number}; the previous catalog state was restored.`, 'error');
-        return { success: false, error: 'Parts catalog persistence failed', part: deletedPart };
-      }
-
-      if (typeof logDeletionAudit === 'function') {
-        const activeUser = (typeof getCurrentUser === 'function' ? getCurrentUser() : currentUser) || null;
-        try {
-          await logDeletionAudit({
-            entityType: 'Part Catalog',
-            entityId: deletedPart.part_number,
-            entityLabel: `${deletedPart.part_number} - ${deletedPart.description} (${deletedPart.iphone_model || 'iPhone'})`,
-            reason: 'Part permanently removed from catalog by user',
-            summary: {
-              part_id: deletedPart.id,
-              part_number: deletedPart.part_number,
-              description: deletedPart.description,
-              iphone_model: deletedPart.iphone_model || 'iPhone',
-              category_id: deletedPart.category_id,
-              stocking_price: deletedPart.stocking_price,
-              deleted_by: activeUser?.fullName || 'Specialist'
-            }
-          });
-        } catch (auditErr) {
-          console.warn('Part deletion audit logging note:', auditErr);
-        }
-      }
-
-      showToast(`Deleted part ${deletedPart.part_number} (${deletedPart.description}) from catalog`, 'info');
-      return { success: true, part: deletedPart };
+    } else {
+      if (broadcastCloudEvent) broadcastCloudEvent('PART_DELETED', { partNumber: deletedPart.part_number, id: deletedPart.id });
     }
-    return { success: false, error: 'Part not found' };
+
+    if (persistenceFailed) {
+      showToast(`Could not delete part ${deletedPart.part_number}; the previous catalog state was restored.`, 'error');
+      return { success: false, error: 'Parts catalog persistence failed', part: deletedPart };
+    }
+
+    if (typeof logDeletionAudit === 'function') {
+      const activeUser = (typeof getCurrentUser === 'function' ? getCurrentUser() : currentUser) || null;
+      try {
+        await logDeletionAudit({
+          entityType: 'Part Catalog',
+          entityId: deletedPart.part_number,
+          entityLabel: `${deletedPart.description} (${deletedPart.iphone_model || 'iPhone'})`,
+          reason: reason || 'Part permanently removed from catalog by user',
+          summary: {
+            part_id: deletedPart.id,
+            part_number: deletedPart.part_number,
+            description: deletedPart.description,
+            iphone_model: deletedPart.iphone_model || 'iPhone',
+            category_id: deletedPart.category_id,
+            stocking_price: deletedPart.stocking_price,
+            deleted_by: activeUser?.fullName || 'Specialist'
+          }
+        });
+      } catch (auditErr) {
+        console.warn('Part deletion audit logging note:', auditErr);
+      }
+    }
+
+    showToast(`Deleted part ${deletedPart.part_number} (${deletedPart.description}) from catalog`, 'info');
+    return { success: true, part: deletedPart };
   };
 
   const saveSite = async (siteData) => {
@@ -622,7 +621,7 @@ export function useCatalogAndSites({
     }
   };
 
-  const deleteSite = async (siteId, siteCode) => {
+  const deleteSite = async (siteId, siteCode, reason = 'Service site permanently removed from directory by user') => {
     const normCode = normalizeSiteCode(siteCode);
     const target = sites.find(s => s.id === siteId || normalizeSiteCode(s.code) === normCode);
     if (!target) return { success: false, error: 'Site not found' };
@@ -659,7 +658,7 @@ export function useCatalogAndSites({
           entityType: 'Service Site',
           entityId: target.code,
           entityLabel: `${target.name} (${target.code})`,
-          reason: 'Service site permanently removed from directory by user',
+          reason: reason || 'Service site permanently removed from directory by user',
           summary: {
             site_id: target.id,
             site_code: target.code,

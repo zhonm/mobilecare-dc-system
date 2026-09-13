@@ -172,6 +172,7 @@ export const executeSaveIntakeRecord = async ({
 
 export const executeDeleteIntakeRecord = async ({
   recordId,
+  reason = 'Deleted by warehouse staff / administrator',
   dcIntakeRecords,
   setDcIntakeRecords,
   currentUser,
@@ -208,17 +209,22 @@ export const executeDeleteIntakeRecord = async ({
 
   // 2. Log deletion audit with user accountability
   if (logDeletionAudit) {
+    let cleanLabel = target?.record_name || '';
+    if (cleanLabel.trim().toLowerCase() === cleanRecId.toLowerCase()) {
+      cleanLabel = target?.po_number ? `PO ${target.po_number}` : '';
+    }
+
     await logDeletionAudit({
       entityType: 'DC Intake Record',
       entityId: recordId,
-      entityLabel: target?.record_name || (target?.intake_number ? `Intake #${target.intake_number}` : `Parts History Record ${recordId}`),
+      entityLabel: cleanLabel || (target?.po_number ? `PO ${target.po_number}` : `Parts History Record`),
       summary: {
         itemsCount: target?.items?.length || target?.total_units || 0,
         poNumber: target?.po_number || target?.poNumber || 'N/A',
         intakeDate: target?.intake_date,
         originalSavedBy: target?.saved_by_name || 'Warehouse Staff'
       },
-      reason: 'Deleted by warehouse staff / administrator'
+      reason: reason || 'Deleted by warehouse staff / administrator'
     });
   }
 

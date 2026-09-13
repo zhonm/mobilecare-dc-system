@@ -246,7 +246,7 @@ export function useShipments({
     return { success: true, count: serialsToRevert.size };
   };
 
-  const deleteShipment = async (shipmentId) => {
+  const deleteShipment = async (shipmentId, reason = 'Deleted by warehouse dispatcher / admin (parts purged)') => {
     const target = shipments.find(s => s.id === shipmentId);
     if (!target) return { success: false, error: 'Shipment not found' };
 
@@ -315,17 +315,25 @@ export function useShipments({
     } catch (e) {}
 
     if (logDeletionAudit) {
+      const cleanEntityId = target.invoice_ref || target.shipment_number || target.tracking_number || shipmentId;
+      const cleanLabel = target.destination_site_name
+        ? `Shipment to ${target.destination_site_name}`
+        : (target.shipment_number && target.shipment_number !== cleanEntityId ? target.shipment_number : 'Shipment Manifest');
+
       await logDeletionAudit({
         entityType: 'Shipment Manifest',
-        entityId: shipmentId,
-        entityLabel: target.tracking_number ? `Shipment #${target.tracking_number}` : `Shipment ${shipmentId}`,
+        entityId: cleanEntityId,
+        entityLabel: cleanLabel,
         summary: {
+          rawId: shipmentId,
+          invoiceRef: target.invoice_ref || 'N/A',
+          shipmentNumber: target.shipment_number || 'N/A',
           destinationSite: target.destination_site_name || target.destination_site_id || 'Branch',
           itemsCount: target.items?.length || 0,
           boxCount: target.box_count || 1,
           shippedAt: target.shipped_at || target.created_at
         },
-        reason: 'Deleted by warehouse dispatcher / admin (parts purged)'
+        reason: reason || 'Deleted by warehouse dispatcher / admin (parts purged)'
       });
     }
 

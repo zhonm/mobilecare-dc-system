@@ -118,6 +118,27 @@ export default function Shipments() {
   const [parsedBatch, setParsedBatch] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Shipment Deletion Modal State
+  const [shipmentToDelete, setShipmentToDelete] = useState(null);
+  const [deletionReason, setDeletionReason] = useState('Manifest Canceled / Not Dispatched');
+  const [customDeletionReason, setCustomDeletionReason] = useState('');
+
+  const handleConfirmDeleteShipment = async () => {
+    if (!shipmentToDelete) return;
+    const finalReason = deletionReason === 'OTHER'
+      ? (customDeletionReason.trim() || 'Shipment manifest deleted by user')
+      : (deletionReason || 'Manifest Canceled / Not Dispatched');
+    try {
+      await deleteShipment(shipmentToDelete.id, finalReason);
+      setShipmentToDelete(null);
+      setDeletionReason('Manifest Canceled / Not Dispatched');
+      setCustomDeletionReason('');
+    } catch (err) {
+      console.error('Failed to delete shipment:', err);
+      showToast('Failed to delete shipment: ' + (err.message || err), 'error');
+    }
+  };
+
   // Status Change Loading Screen State
   const [statusLoadingState, setStatusLoadingState] = useState(null);
   const [isSubmittingPickup, setIsSubmittingPickup] = useState(false);
@@ -1113,9 +1134,9 @@ export default function Shipments() {
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => {
-                  if (window.confirm(`Delete pending shipment "${sh.invoice_ref || sh.shipment_number}"? This will cancel the pending manifest and unpack serialized parts back to DC stock.`)) {
-                    deleteShipment(sh.id);
-                  }
+                  setShipmentToDelete(sh);
+                  setDeletionReason('Manifest Canceled / Not Dispatched');
+                  setCustomDeletionReason('');
                 }}
                 title="Delete Pending Shipment"
                 style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5', padding: '4px 7px' }}
@@ -3225,6 +3246,74 @@ export default function Shipments() {
                 onClick={() => setIsSiteSerialsModalOpen(false)}
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shipment Deletion Confirmation Modal with Audit Reason */}
+      {shipmentToDelete && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setShipmentToDelete(null); }}>
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ background: '#991b1b', color: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Trash2 size={18} color="#fca5a5" />
+                <h3 style={{ color: '#fff', fontSize: '16px', margin: 0, fontWeight: 700 }}>Delete Pending Shipment</h3>
+              </div>
+              <button
+                onClick={() => setShipmentToDelete(null)}
+                style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '20px' }}>
+              <p style={{ fontSize: '13.5px', color: '#1e293b', margin: '0 0 10px 0' }}>
+                Are you sure you want to delete pending shipment <strong>{shipmentToDelete.invoice_ref || shipmentToDelete.shipment_number || shipmentToDelete.id}</strong>?
+              </p>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                This action will cancel the pending manifest and return all allocated serialized parts back into active DC stock.
+              </p>
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '5px' }}>
+                  Reason for Deletion:
+                </label>
+                <select
+                  className="form-select"
+                  value={deletionReason}
+                  onChange={(e) => setDeletionReason(e.target.value)}
+                  style={{ width: '100%', fontSize: '12.5px', marginBottom: '8px' }}
+                >
+                  <option value="Manifest Canceled / Not Dispatched">Manifest Canceled / Not Dispatched</option>
+                  <option value="Wrong Destination Branch Selected">Wrong Destination Branch Selected</option>
+                  <option value="Packing Error / Repack Required">Packing Error / Repack Required</option>
+                  <option value="Duplicate Draft Manifest">Duplicate Draft Manifest</option>
+                  <option value="Branch Request Revoked">Branch Request Revoked</option>
+                  <option value="Courier Handover Aborted">Courier Handover Aborted</option>
+                  <option value="OTHER">Other Reason (Specify)</option>
+                </select>
+                {deletionReason === 'OTHER' && (
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter reason for deleting manifest..."
+                    value={customDeletionReason}
+                    onChange={(e) => setCustomDeletionReason(e.target.value)}
+                    style={{ width: '100%', fontSize: '12px' }}
+                    autoFocus
+                  />
+                )}
+              </div>
+              <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', padding: '11px 14px', borderRadius: '8px', fontSize: '12px', color: '#991b1b', lineHeight: 1.5 }}>
+                <strong>Accidental Deletion Protection:</strong> This deletion and reason will be <strong>permanently logged in the system Audit Trail</strong>.
+              </div>
+            </div>
+            <div className="modal-footer" style={{ padding: '12px 20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShipmentToDelete(null)}>Cancel</button>
+              <button className="btn btn-danger btn-sm" onClick={handleConfirmDeleteShipment} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <Trash2 size={13} />
+                <span>Yes, Delete Shipment</span>
               </button>
             </div>
           </div>
