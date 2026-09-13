@@ -281,14 +281,14 @@ export default function ScanOutPacking() {
     });
   }, [currentUser, selectedSiteId, selectedSite?.code, selectedSite?.name, broadcastPackingPresence]);
 
-  // Immediate presence broadcast when site or items change + 25s heartbeat
+  // Immediate presence broadcast when site or items change + 60s heartbeat (quota defense)
   useEffect(() => {
     sendPresence(true);
     const heartbeatInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         sendPresence(true);
       }
-    }, 25000);
+    }, 60000);
 
     return () => {
       clearInterval(heartbeatInterval);

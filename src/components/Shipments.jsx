@@ -26,7 +26,12 @@ import {
   ChevronDown,
   ChevronUp,
   Calendar,
-  Loader2
+  Loader2,
+  Archive,
+  Package,
+  Boxes,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
@@ -36,7 +41,12 @@ import {
   isShipmentProvince,
   extractShipmentSerials,
   buildSerialDictionary,
-  healShipmentItem
+  healShipmentItem,
+  sortShipmentsChronological,
+  partitionShipmentsByRecency,
+  parseShipmentDate,
+  isShipmentOlderArchive,
+  isShipmentToday
 } from '../utils/shipmentHelpers';
 
 export default function Shipments() {
@@ -76,6 +86,10 @@ export default function Shipments() {
   const [regionTab, setRegionTab] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [search, setSearch] = useState('');
+
+  // Older Shipments Dropdown & View Mode State
+  const [viewArchiveMode, setViewArchiveMode] = useState('recent_default'); // 'recent_default' | 'all' | 'older_only'
+  const [isOlderExpanded, setIsOlderExpanded] = useState(false);
 
   // Serials Modal State (View & Copy Plain Text for GSX / Fixably)
   const [serialsModalState, setSerialsModalState] = useState(null);
@@ -230,9 +244,64 @@ export default function Shipments() {
     return { total: validTotal, pending, shipped, received, draft };
   }, [shipments, regionTab, sites]);
 
-  // Filtered shipments list (regional tab + status pill + search query)
+  // Operational KPI metrics across active regional filter
+  const kpiMetrics = useMemo(() => {
+    let pendingManifests = 0;
+    let pendingUnits = 0;
+    let shippedManifests = 0;
+    let shippedUnits = 0;
+    let receivedManifests = 0;
+    let receivedUnits = 0;
+    let todayManifests = 0;
+    let todayUnits = 0;
+    let draftManifests = 0;
+    let draftUnits = 0;
+
+    (shipments || []).forEach(sh => {
+      if (!sh.items || sh.items.length === 0) return;
+      if (regionTab === 'METRO_MANILA' && !isShipmentMetroManila(sh, sites)) return;
+      if (regionTab === 'PROVINCE' && !isShipmentProvince(sh, sites)) return;
+
+      const units = sh.items?.length || 0;
+      const norm = getNormalizedStatus(sh);
+
+      if (norm === 'draft') {
+        draftManifests++;
+        draftUnits += units;
+      } else if (norm === 'pending_pickup') {
+        pendingManifests++;
+        pendingUnits += units;
+      } else if (norm === 'shipped') {
+        shippedManifests++;
+        shippedUnits += units;
+      } else if (norm === 'received_confirmed') {
+        receivedManifests++;
+        receivedUnits += units;
+      }
+
+      if (isShipmentToday(sh)) {
+        todayManifests++;
+        todayUnits += units;
+      }
+    });
+
+    return {
+      pendingManifests,
+      pendingUnits,
+      shippedManifests,
+      shippedUnits,
+      receivedManifests,
+      receivedUnits,
+      todayManifests,
+      todayUnits,
+      draftManifests,
+      draftUnits
+    };
+  }, [shipments, regionTab, sites]);
+
+  // Filtered shipments list (regional tab + status pill + search query), chronologically sorted newest-first
   const filteredShipments = useMemo(() => {
-    return (shipments || []).filter(s => {
+    const list = (shipments || []).filter(s => {
       if (!s.items || s.items.length === 0) return false;
 
       // 1. Regional Tab Filter
@@ -246,6 +315,7 @@ export default function Shipments() {
         if (filterStatus === 'shipped' && norm !== 'shipped') return false;
         if (filterStatus === 'received_confirmed' && norm !== 'received_confirmed') return false;
         if (filterStatus === 'draft' && norm !== 'draft') return false;
+        if (filterStatus === 'today' && !isShipmentToday(s)) return false;
       }
 
       // 3. Search Filter (searches Invoice Ref, TS#, Tracking, Site, Courier, Rider, and Serial Numbers)
@@ -267,16 +337,36 @@ export default function Shipments() {
       }
       return true;
     });
+
+    return sortShipmentsChronological(list, 'desc');
   }, [shipments, regionTab, filterStatus, search, sites]);
 
-  // Today's Shipments: all manifests created today, sorted newest → oldest
+  // Recency Partitioning: Recent & Active vs Older Historical Archive
+  const { recentShipments, olderShipments } = useMemo(() => {
+    const partitioned = partitionShipmentsByRecency(filteredShipments, 7);
+    return {
+      recentShipments: partitioned.recent,
+      olderShipments: partitioned.older
+    };
+  }, [filteredShipments]);
+
+  // Date span for older shipments archive description
+  const olderDateSpan = useMemo(() => {
+    if (olderShipments.length === 0) return '';
+    const oldest = parseShipmentDate(olderShipments[olderShipments.length - 1]);
+    const newestOlder = parseShipmentDate(olderShipments[0]);
+    if (!oldest || !newestOlder) return '';
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    if (fmt(oldest) === fmt(newestOlder)) return fmt(oldest);
+    return `${fmt(oldest)} — ${fmt(newestOlder)}`;
+  }, [olderShipments]);
+
+  // Today's Shipments: all manifests created or active today, sorted newest → oldest
   const todaysShipments = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
     return (shipments || [])
       .filter(s => {
         if (!s.items || s.items.length === 0) return false;
-        const d = (s.created_at || s.shipment_date || s.pickup_date || '').slice(0, 10);
-        return d === today;
+        return isShipmentToday(s);
       })
       .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   }, [shipments]);
@@ -675,6 +765,379 @@ export default function Shipments() {
     }
   };
 
+  // Render a standardized, ergonomic table row for a shipment
+  const renderShipmentRow = (sh, isOlder = false) => {
+    const destSite = resolveSite(sh.site_id || sh.site_name, sites);
+    const normStatus = getNormalizedStatus(sh);
+    const isLatest = filteredShipments[0]?.id === sh.id;
+    const isToday = todaysShipments.some(ts => ts.id === sh.id);
+
+    return (
+      <tr key={sh.id} style={{ background: isOlder ? '#fafbfc' : 'inherit' }}>
+        <td className="font-mono">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <strong style={{ color: '#0f172a', fontSize: '13px' }}>{sh.invoice_ref || sh.shipment_number}</strong>
+            {isLatest && !isOlder && (
+              <span style={{
+                background: '#1d4ed8',
+                color: '#fff',
+                fontSize: '9px',
+                fontWeight: 800,
+                padding: '1px 6px',
+                borderRadius: '8px',
+                letterSpacing: '0.3px'
+              }}>
+                LATEST
+              </span>
+            )}
+            {isToday && !isLatest && !isOlder && (
+              <span style={{
+                background: '#dbeafe',
+                color: '#1d4ed8',
+                fontSize: '9px',
+                fontWeight: 700,
+                padding: '1px 5px',
+                borderRadius: '8px'
+              }}>
+                TODAY
+              </span>
+            )}
+            {isOlder && (
+              <span style={{
+                background: '#f1f5f9',
+                color: '#64748b',
+                fontSize: '9px',
+                fontWeight: 700,
+                padding: '1px 5px',
+                borderRadius: '6px',
+                border: '1px solid #e2e8f0'
+              }}>
+                ARCHIVED
+              </span>
+            )}
+          </div>
+          {(sh.transfer_slip_number || sh.transfer_slip) && (
+            <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+              <span>TS:</span>
+              <span style={{ fontWeight: 600 }}>{sh.transfer_slip_number || sh.transfer_slip}</span>
+            </div>
+          )}
+        </td>
+        <td>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <strong style={{ color: '#0f172a' }}>{destSite.code || 'ASP'}</strong>
+            <span
+              className="badge"
+              style={{
+                fontSize: '9.5px',
+                padding: '1px 5px',
+                background: isShipmentMetroManila(sh, sites) ? '#e0f2fe' : '#f3e8ff',
+                color: isShipmentMetroManila(sh, sites) ? '#0369a1' : '#6b21a8',
+                border: `1px solid ${isShipmentMetroManila(sh, sites) ? '#bae6fd' : '#e9d5ff'}`,
+                fontWeight: 600
+              }}
+            >
+              {isShipmentMetroManila(sh, sites) ? 'Metro Manila' : 'Province'}
+            </span>
+          </div>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            {destSite.name || sh.site_name}
+          </div>
+        </td>
+        <td>
+          <div>
+            {(sh.pickup_date || (normStatus !== 'pending_pickup' && sh.shipment_date)) ? (
+              <span style={{ fontWeight: 500, color: '#334155' }}>{sh.pickup_date || sh.shipment_date}</span>
+            ) : (
+              <span style={{ color: '#d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <Clock size={11} />
+                Pending Dispatch
+              </span>
+            )}
+          </div>
+          {sh.received_date && (
+            <div style={{ fontSize: '11px', color: '#059669', marginTop: '1px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+              <CheckCircle size={10} />
+              <span>Received: {sh.received_date}</span>
+            </div>
+          )}
+        </td>
+        <td>
+          <div style={{ fontWeight: 600, color: '#0f172a' }}>{sh.carrier || sh.courier || 'Lite Express'}</div>
+          <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+            {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
+          </div>
+          {sh.pickup_by_name && (
+            <div style={{ fontSize: '11px', color: '#64748b' }}>
+              Rider: {sh.pickup_by_name}
+            </div>
+          )}
+          {sh.received_by_name && (
+            <div style={{ fontSize: '11px', color: '#047857' }}>
+              Recv: {sh.received_by_name}
+            </div>
+          )}
+        </td>
+        <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+          {sh.items?.length || 0}
+        </td>
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
+          {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
+        </td>
+        <td style={{ textAlign: 'center' }}>
+          {(normStatus === 'pending_pickup' || normStatus === 'draft') ? (
+            <select
+              value={normStatus === 'pending_pickup' ? 'pending_pickup' : 'draft'}
+              onChange={(e) => handleStatusChange(sh.id, e.target.value)}
+              style={{
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 700,
+                borderRadius: '8px',
+                cursor: 'pointer',
+                background: normStatus === 'pending_pickup' ? '#fffbeb' : '#f1f5f9',
+                color: normStatus === 'pending_pickup' ? '#b45309' : '#475569',
+                border: normStatus === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #cbd5e1',
+                outline: 'none',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+              }}
+              title="Click to toggle status between Draft and Ready for Pickup"
+            >
+              <option value="draft">📝 DRAFT</option>
+              <option value="pending_pickup">📦 READY FOR PICKUP</option>
+            </select>
+          ) : normStatus === 'shipped' ? (
+            <span
+              className="badge"
+              style={{
+                background: '#f0f9ff',
+                color: '#0369a1',
+                border: '1px solid #bae6fd',
+                fontWeight: 700,
+                fontSize: '10.5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 8px',
+                borderRadius: '8px'
+              }}
+            >
+              <Truck size={11} />
+              <span>SHIPPED</span>
+            </span>
+          ) : (
+            <span
+              className="badge"
+              style={{
+                background: '#ecfdf5',
+                color: '#047857',
+                border: '1px solid #a7f3d0',
+                fontWeight: 700,
+                fontSize: '10.5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 8px',
+                borderRadius: '8px'
+              }}
+            >
+              <CheckCircle size={11} />
+              <span>RECEIVED CONFIRMED</span>
+            </span>
+          )}
+        </td>
+
+        <td style={{ textAlign: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
+            {/* Document group */}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleOpenSerialsModal(sh)}
+              title="View Serial Numbers inside Packing List & Copy for GSX / Fixably"
+              style={{
+                background: '#f8fafc',
+                color: '#0f172a',
+                borderColor: '#cbd5e1',
+                fontWeight: 600,
+                fontSize: '11.5px',
+                padding: '4px 7px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+            >
+              <Hash size={12} color="#0284c7" />
+              <span>Serials</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
+              title="Download Corporate PDF Manifest"
+              style={{
+                fontSize: '11.5px',
+                padding: '4px 7px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+            >
+              <Download size={12} />
+              <span>PDF</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
+              title="Download Excel (.xlsx) Backup"
+              style={{
+                background: '#f0fdf4',
+                color: '#15803d',
+                borderColor: '#bbf7d0',
+                fontSize: '11.5px',
+                padding: '4px 7px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+            >
+              <FileSpreadsheet size={12} color="#16a34a" />
+              <span>XLSX</span>
+            </button>
+
+            {/* ACTION: Mark Ready when Draft */}
+            {normStatus === 'draft' && (
+              <button
+                className="btn btn-sm"
+                onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
+                title="Mark manifest as Ready for Pickup"
+                style={{
+                  background: '#fffbeb',
+                  color: '#b45309',
+                  border: '1px solid #fde68a',
+                  fontWeight: 600,
+                  fontSize: '11.5px',
+                  padding: '4px 8px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <CheckCircle2 size={12} />
+                <span>Mark Ready</span>
+              </button>
+            )}
+
+            {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
+            {normStatus === 'pending_pickup' && (
+              <>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => handleOpenPickupModal(sh)}
+                  title="Handover package to Courier (Update status to Shipped)"
+                  style={{
+                    background: '#f59e0b',
+                    color: '#ffffff',
+                    border: '1px solid #d97706',
+                    fontWeight: 700,
+                    fontSize: '11.5px',
+                    padding: '4px 9px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    boxShadow: '0 1px 3px rgba(245, 158, 11, 0.3)'
+                  }}
+                >
+                  <Truck size={12} />
+                  <span>Pick Up</span>
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => handleStatusChange(sh.id, 'draft')}
+                  title="Revert status to Draft for editing"
+                  style={{
+                    background: '#f1f5f9',
+                    color: '#475569',
+                    border: '1px solid #cbd5e1',
+                    fontWeight: 600,
+                    fontSize: '11.5px',
+                    padding: '4px 7px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px'
+                  }}
+                >
+                  <RotateCcw size={11} />
+                  <span>Set Draft</span>
+                </button>
+              </>
+            )}
+
+            {/* ACTION BUTTON 2: Site Receive (When Shipped / In Transit) */}
+            {normStatus === 'shipped' && (
+              <button
+                className="btn btn-sm"
+                onClick={() => handleOpenReceiveModal(sh)}
+                title="Branch/Site confirms receipt of package"
+                style={{
+                  background: '#10b981',
+                  color: '#ffffff',
+                  border: '1px solid #059669',
+                  fontWeight: 700,
+                  fontSize: '11.5px',
+                  padding: '4px 9px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: '0 1px 3px rgba(16, 185, 129, 0.3)'
+                }}
+              >
+                <PackageCheck size={12} />
+                <span>Receive</span>
+              </button>
+            )}
+
+            {/* ACTION BUTTON 3: Locked / Dispatched / Delete Controls */}
+            {isLockedConfirmedShipment(sh) ? (
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled
+                style={{ opacity: 0.85, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5', padding: '4px 7px' }}
+                title="Locked Record: Manifest is Received Confirmed and permanently archived."
+              >
+                <Lock size={12} />
+              </button>
+            ) : normStatus === 'shipped' ? (
+              null
+            ) : canUserDeleteRecord(sh, currentUser) ? (
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => {
+                  if (window.confirm(`Delete pending shipment "${sh.invoice_ref || sh.shipment_number}"? This will cancel the pending manifest and unpack serialized parts back to DC stock.`)) {
+                    deleteShipment(sh.id);
+                  }
+                }}
+                title="Delete Pending Shipment"
+                style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5', padding: '4px 7px' }}
+              >
+                <Trash2 size={12} />
+              </button>
+            ) : (
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled
+                style={{ opacity: 0.4, cursor: 'not-allowed', padding: '4px 7px' }}
+                title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
   return (
     <div className="shipments-view">
       {/* 1. Header & Action Controls */}
@@ -730,126 +1193,194 @@ export default function Shipments() {
               <span>Import Manifests (XLSX / CSV)</span>
             </button>
 
-            <div style={{ position: 'relative', width: '220px' }}>
-              <Search size={13} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <div style={{ position: 'relative', width: '260px' }}>
+              <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
                 className="form-input"
                 placeholder="Search ref, site, courier, tracking..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                style={{ paddingLeft: '26px', height: '34px', fontSize: '12px', width: '100%' }}
+                style={{ paddingLeft: '28px', paddingRight: search ? '28px' : '10px', height: '34px', fontSize: '12px', width: '100%' }}
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#94a3b8',
+                    padding: '2px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                  title="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* 2. Regional Navigation Tabs (Metro Manila vs Province) */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '14px' }}>
-          <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginRight: '4px' }}>
-            Region:
-          </span>
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setRegionTab('ALL')}
-            style={{
-              background: regionTab === 'ALL' ? '#0f172a' : '#f8fafc',
-              color: regionTab === 'ALL' ? '#ffffff' : '#475569',
-              borderColor: regionTab === 'ALL' ? '#0f172a' : '#e2e8f0',
-              fontWeight: 700,
-              fontSize: '12px',
-              borderRadius: '8px',
-              padding: '5px 12px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              boxShadow: regionTab === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-            }}
-          >
-            <Layers size={13} />
-            <span>All Sites</span>
-            <span style={{
-              background: regionTab === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
-              color: regionTab === 'ALL' ? '#fff' : '#475569',
-              padding: '1px 6px',
-              borderRadius: '10px',
-              fontSize: '10.5px',
-              fontWeight: 700,
-              marginLeft: '2px'
-            }}>
-              {regionalCounts.all}
+        {/* 2. Regional Navigation Tabs & Archive View Filter */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
+          marginTop: '16px',
+          borderTop: '1px solid #f1f5f9',
+          paddingTop: '14px'
+        }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginRight: '4px' }}>
+              Region:
             </span>
-          </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setRegionTab('ALL')}
+              style={{
+                background: regionTab === 'ALL' ? '#0f172a' : '#f8fafc',
+                color: regionTab === 'ALL' ? '#ffffff' : '#475569',
+                borderColor: regionTab === 'ALL' ? '#0f172a' : '#e2e8f0',
+                fontWeight: 700,
+                fontSize: '12px',
+                borderRadius: '8px',
+                padding: '5px 12px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: regionTab === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              <Layers size={13} />
+              <span>All Sites</span>
+              <span style={{
+                background: regionTab === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                color: regionTab === 'ALL' ? '#fff' : '#475569',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                marginLeft: '2px'
+              }}>
+                {regionalCounts.all}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setRegionTab('METRO_MANILA')}
-            style={{
-              background: regionTab === 'METRO_MANILA' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#f8fafc',
-              color: regionTab === 'METRO_MANILA' ? '#ffffff' : '#475569',
-              borderColor: regionTab === 'METRO_MANILA' ? '#0284c7' : '#e2e8f0',
-              fontWeight: 700,
-              fontSize: '12px',
-              borderRadius: '8px',
-              padding: '5px 12px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              boxShadow: regionTab === 'METRO_MANILA' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-            }}
-          >
-            <Building2 size={13} />
-            <span>Metro Manila</span>
-            <span style={{
-              background: regionTab === 'METRO_MANILA' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-              color: regionTab === 'METRO_MANILA' ? '#fff' : '#475569',
-              padding: '1px 6px',
-              borderRadius: '10px',
-              fontSize: '10.5px',
-              fontWeight: 700,
-              marginLeft: '2px'
-            }}>
-              {regionalCounts.mm}
-            </span>
-          </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setRegionTab('METRO_MANILA')}
+              style={{
+                background: regionTab === 'METRO_MANILA' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#f8fafc',
+                color: regionTab === 'METRO_MANILA' ? '#ffffff' : '#475569',
+                borderColor: regionTab === 'METRO_MANILA' ? '#0284c7' : '#e2e8f0',
+                fontWeight: 700,
+                fontSize: '12px',
+                borderRadius: '8px',
+                padding: '5px 12px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: regionTab === 'METRO_MANILA' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
+              }}
+            >
+              <Building2 size={13} />
+              <span>Metro Manila</span>
+              <span style={{
+                background: regionTab === 'METRO_MANILA' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+                color: regionTab === 'METRO_MANILA' ? '#fff' : '#475569',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                marginLeft: '2px'
+              }}>
+                {regionalCounts.mm}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setRegionTab('PROVINCE')}
-            style={{
-              background: regionTab === 'PROVINCE' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : '#f8fafc',
-              color: regionTab === 'PROVINCE' ? '#ffffff' : '#475569',
-              borderColor: regionTab === 'PROVINCE' ? '#7c3aed' : '#e2e8f0',
-              fontWeight: 700,
-              fontSize: '12px',
-              borderRadius: '8px',
-              padding: '5px 12px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              boxShadow: regionTab === 'PROVINCE' ? '0 2px 6px rgba(124,58,237,0.25)' : 'none'
-            }}
-          >
-            <MapPin size={13} />
-            <span>Province</span>
-            <span style={{
-              background: regionTab === 'PROVINCE' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-              color: regionTab === 'PROVINCE' ? '#fff' : '#475569',
-              padding: '1px 6px',
-              borderRadius: '10px',
-              fontSize: '10.5px',
-              fontWeight: 700,
-              marginLeft: '2px'
-            }}>
-              {regionalCounts.prov}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setRegionTab('PROVINCE')}
+              style={{
+                background: regionTab === 'PROVINCE' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : '#f8fafc',
+                color: regionTab === 'PROVINCE' ? '#ffffff' : '#475569',
+                borderColor: regionTab === 'PROVINCE' ? '#7c3aed' : '#e2e8f0',
+                fontWeight: 700,
+                fontSize: '12px',
+                borderRadius: '8px',
+                padding: '5px 12px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: regionTab === 'PROVINCE' ? '0 2px 6px rgba(124,58,237,0.25)' : 'none'
+              }}
+            >
+              <MapPin size={13} />
+              <span>Province</span>
+              <span style={{
+                background: regionTab === 'PROVINCE' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
+                color: regionTab === 'PROVINCE' ? '#fff' : '#475569',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                marginLeft: '2px'
+              }}>
+                {regionalCounts.prov}
+              </span>
+            </button>
+          </div>
+
+          {/* Archive View Filter Dropdown */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Archive View:
             </span>
-          </button>
+            <select
+              value={viewArchiveMode}
+              onChange={(e) => {
+                const val = e.target.value;
+                setViewArchiveMode(val);
+                if (val === 'all' || val === 'older_only') {
+                  setIsOlderExpanded(true);
+                }
+              }}
+              style={{
+                padding: '4px 10px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                background: '#ffffff',
+                color: '#0f172a',
+                cursor: 'pointer',
+                height: '32px',
+                outline: 'none',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+              }}
+              title="Select view mode: Recent & Active (Default), All Shipments, or Older Archive"
+            >
+              <option value="recent_default">Recent &amp; Active (Default)</option>
+              <option value="all">All Shipments ({statusCounts.total})</option>
+              <option value="older_only">Older Archive Only ({olderShipments.length})</option>
+            </select>
+          </div>
         </div>
 
         {/* 3. Interactive Status Filter Pills */}
@@ -949,646 +1480,463 @@ export default function Shipments() {
             <CheckCircle size={12} />
             <span>Received Confirmed ({statusCounts.received})</span>
           </button>
+
+          <button
+            className="btn btn-sm"
+            onClick={() => setFilterStatus(filterStatus === 'today' ? 'ALL' : 'today')}
+            style={{
+              background: filterStatus === 'today' ? '#4f46e5' : '#eef2ff',
+              color: filterStatus === 'today' ? '#fff' : '#4338ca',
+              borderColor: filterStatus === 'today' ? '#4f46e5' : '#c7d2fe',
+              fontWeight: 600,
+              fontSize: '12px',
+              borderRadius: '20px',
+              padding: '4px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <Calendar size={12} />
+            <span>Today ({kpiMetrics.todayManifests})</span>
+          </button>
         </div>
       </div>
 
-      {/* ── Today's Shipments Accordion Panel ─────────────────────── */}
-      {todaysShipments.length > 0 && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: '16px', border: '1.5px solid #e2e8f0' }}>
-          {/* Panel Header */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '12px 16px',
-            background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-            borderBottom: '1px solid #e2e8f0'
-          }}>
-            <div style={{ background: '#dbeafe', padding: '6px', borderRadius: '8px', display: 'flex' }}>
-              <Calendar size={15} color="#1d4ed8" />
+      {/* ── Operational KPI Metric Strip ───────────────────────────── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+        gap: '12px',
+        marginBottom: '16px'
+      }}>
+        {/* Card 1: Pending Pickup */}
+        <div
+          onClick={() => setFilterStatus(filterStatus === 'pending_pickup' ? 'ALL' : 'pending_pickup')}
+          className="card"
+          style={{
+            padding: '14px 16px',
+            cursor: 'pointer',
+            background: filterStatus === 'pending_pickup' ? '#fffbeb' : '#ffffff',
+            border: `1.5px solid ${filterStatus === 'pending_pickup' ? '#f59e0b' : '#fde68a'}`,
+            boxShadow: filterStatus === 'pending_pickup' ? '0 2px 8px rgba(245, 158, 11, 0.2)' : '0 1px 2px rgba(0,0,0,0.03)',
+            transition: 'all 0.15s ease'
+          }}
+          title="Click to filter by Pending for Pickup"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Pending Pickup
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                {kpiMetrics.pendingManifests}
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#92400e', marginTop: '2px' }}>
+                {kpiMetrics.pendingUnits} units awaiting courier
+              </div>
             </div>
-            <div style={{ flex: 1 }}>
-              <span style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>
-                Today&apos;s Shipments
-              </span>
-              <span style={{
-                marginLeft: '8px',
-                background: '#dbeafe',
-                color: '#1d4ed8',
-                fontSize: '10.5px',
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: '10px'
-              }}>
-                {todaysShipments.length} manifest{todaysShipments.length !== 1 ? 's' : ''}
-              </span>
-              <span style={{ marginLeft: '6px', fontSize: '11.5px', color: '#64748b' }}>
-                · {new Date().toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })}
-              </span>
+            <div style={{ background: '#fef3c7', padding: '8px', borderRadius: '10px', color: '#d97706', display: 'flex' }}>
+              <Clock size={18} />
             </div>
-            <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
-              Latest auto-expanded
-            </span>
           </div>
+        </div>
 
-          {/* Accordion Entries */}
-          {todaysShipments.map((sh, idx) => {
-            const isLatest = idx === 0;
-            const isOpen = expandedTodayId === sh.id;
-            const destSite = resolveSite(sh.site_id || sh.site_name, sites);
-            const normStatus = getNormalizedStatus(sh);
+        {/* Card 2: In Transit */}
+        <div
+          onClick={() => setFilterStatus(filterStatus === 'shipped' ? 'ALL' : 'shipped')}
+          className="card"
+          style={{
+            padding: '14px 16px',
+            cursor: 'pointer',
+            background: filterStatus === 'shipped' ? '#f0f9ff' : '#ffffff',
+            border: `1.5px solid ${filterStatus === 'shipped' ? '#0284c7' : '#bae6fd'}`,
+            boxShadow: filterStatus === 'shipped' ? '0 2px 8px rgba(2, 132, 199, 0.2)' : '0 1px 2px rgba(0,0,0,0.03)',
+            transition: 'all 0.15s ease'
+          }}
+          title="Click to filter by Shipped / In Transit"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                In Transit
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#0369a1', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                {kpiMetrics.shippedManifests}
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#0284c7', marginTop: '2px' }}>
+                {kpiMetrics.shippedUnits} units with couriers
+              </div>
+            </div>
+            <div style={{ background: '#e0f2fe', padding: '8px', borderRadius: '10px', color: '#0284c7', display: 'flex' }}>
+              <Truck size={18} />
+            </div>
+          </div>
+        </div>
 
-            const statusBadge = normStatus === 'received_confirmed'
-              ? { bg: '#ecfdf5', color: '#047857', border: '#a7f3d0', label: 'RECEIVED CONFIRMED', Icon: CheckCircle }
-              : normStatus === 'shipped'
-              ? { bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd', label: 'SHIPPED', Icon: Truck }
-              : normStatus === 'draft'
-              ? { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1', label: 'DRAFT', Icon: FileText }
-              : { bg: '#fffbeb', color: '#b45309', border: '#fde68a', label: 'READY FOR PICKUP', Icon: Clock };
+        {/* Card 3: Received Confirmed */}
+        <div
+          onClick={() => setFilterStatus(filterStatus === 'received_confirmed' ? 'ALL' : 'received_confirmed')}
+          className="card"
+          style={{
+            padding: '14px 16px',
+            cursor: 'pointer',
+            background: filterStatus === 'received_confirmed' ? '#ecfdf5' : '#ffffff',
+            border: `1.5px solid ${filterStatus === 'received_confirmed' ? '#059669' : '#a7f3d0'}`,
+            boxShadow: filterStatus === 'received_confirmed' ? '0 2px 8px rgba(5, 150, 105, 0.2)' : '0 1px 2px rgba(0,0,0,0.03)',
+            transition: 'all 0.15s ease'
+          }}
+          title="Click to filter by Received Confirmed"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Received Confirmed
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#047857', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                {kpiMetrics.receivedManifests}
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#059669', marginTop: '2px' }}>
+                {kpiMetrics.receivedUnits} units branch verified
+              </div>
+            </div>
+            <div style={{ background: '#d1fae5', padding: '8px', borderRadius: '10px', color: '#059669', display: 'flex' }}>
+              <CheckCircle size={18} />
+            </div>
+          </div>
+        </div>
 
-            return (
-              <div
-                key={sh.id}
-                style={{ borderBottom: idx < todaysShipments.length - 1 ? '1px solid #f1f5f9' : 'none' }}
-              >
-                {/* Row Header — always visible, click to toggle */}
-                <button
-                  type="button"
-                  onClick={() => setExpandedTodayId(isOpen ? null : sh.id)}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '10px 16px',
-                    background: isOpen ? '#f8fafc' : 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'background 0.15s'
-                  }}
-                >
-                  {/* Expand/Collapse chevron */}
-                  <span style={{ color: '#64748b', flexShrink: 0 }}>
-                    {isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        {/* Card 4: Today's Dispatches */}
+        <div
+          onClick={() => setFilterStatus(filterStatus === 'today' ? 'ALL' : 'today')}
+          className="card"
+          style={{
+            padding: '14px 16px',
+            cursor: 'pointer',
+            background: filterStatus === 'today' ? '#eef2ff' : '#ffffff',
+            border: `1.5px solid ${filterStatus === 'today' ? '#4f46e5' : '#c7d2fe'}`,
+            boxShadow: filterStatus === 'today' ? '0 2px 8px rgba(79, 70, 229, 0.2)' : '0 1px 2px rgba(0,0,0,0.03)',
+            transition: 'all 0.15s ease'
+          }}
+          title="Click to filter manifests active today"
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#4338ca', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Today's Dispatches
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 800, color: '#3730a3', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                {kpiMetrics.todayManifests}
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#4f46e5', marginTop: '2px' }}>
+                {kpiMetrics.todayUnits} units active today
+              </div>
+            </div>
+            <div style={{ background: '#e0e7ff', padding: '8px', borderRadius: '10px', color: '#4f46e5', display: 'flex' }}>
+              <Calendar size={18} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Primary Shipment Manifests Table ────────────────────────── */}
+      {(() => {
+        const primaryDisplayShipments = viewArchiveMode === 'older_only'
+          ? olderShipments
+          : (viewArchiveMode === 'all' ? filteredShipments : recentShipments);
+
+        const shouldRenderOlderDropdown = viewArchiveMode === 'recent_default' && olderShipments.length > 0;
+        const isSearchActive = search.trim().length > 0;
+        const effectiveOlderExpanded = isOlderExpanded || (isSearchActive && olderShipments.length > 0) || (filterStatus === 'received_confirmed' && recentShipments.length === 0);
+
+        return (
+          <>
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+              {/* Primary Table Header Banner */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '12px 18px',
+                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+                borderBottom: '1px solid #e2e8f0',
+                flexWrap: 'wrap',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, fontSize: '13.5px', color: '#0f172a' }}>
+                    {viewArchiveMode === 'older_only'
+                      ? 'Older Shipments Archive'
+                      : (viewArchiveMode === 'all' ? 'All Outbound Manifests' : 'Active & Recent Shipments')}
                   </span>
-
-                  {/* Invoice Ref */}
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '12.5px', color: '#0f172a', minWidth: '150px' }}>
-                    {sh.invoice_ref || sh.shipment_number}
-                    {isLatest && (
-                      <span style={{
-                        marginLeft: '6px',
-                        background: '#1d4ed8',
-                        color: '#fff',
-                        fontSize: '9px',
-                        fontWeight: 800,
-                        padding: '1px 6px',
-                        borderRadius: '8px',
-                        letterSpacing: '0.3px',
-                        verticalAlign: 'middle'
-                      }}>
-                        LATEST
-                      </span>
-                    )}
-                  </span>
-
-                  {/* Site */}
-                  <span style={{ fontSize: '12.5px', color: '#334155', flex: 1 }}>
-                    <strong>{destSite.code || 'ASP'}</strong>
-                    <span style={{ color: '#94a3b8', marginLeft: '4px' }}>·</span>
-                    <span style={{ color: '#64748b', marginLeft: '4px' }}>{destSite.name || sh.site_name}</span>
-                  </span>
-
-                  {/* Units */}
-                  <span style={{ fontSize: '12px', color: '#475569', marginRight: '4px', whiteSpace: 'nowrap' }}>
-                    <strong>{sh.items?.length || 0}</strong> units
-                  </span>
-
-                  {/* Status badge */}
                   <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    background: statusBadge.bg,
-                    color: statusBadge.color,
-                    border: `1px solid ${statusBadge.border}`,
-                    fontSize: '10.5px',
+                    background: '#dbeafe',
+                    color: '#1d4ed8',
+                    fontSize: '11px',
                     fontWeight: 700,
                     padding: '2px 8px',
-                    borderRadius: '8px',
-                    whiteSpace: 'nowrap'
+                    borderRadius: '10px'
                   }}>
-                    <statusBadge.Icon size={10} />
-                    {statusBadge.label}
+                    {primaryDisplayShipments.length} manifest{primaryDisplayShipments.length !== 1 ? 's' : ''}
                   </span>
-                </button>
+                  {viewArchiveMode === 'recent_default' && (
+                    <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                      · Active queue &amp; recent dispatches
+                    </span>
+                  )}
+                  {todaysShipments.length > 0 && (
+                    <span style={{
+                      background: '#ecfdf5',
+                      color: '#047857',
+                      border: '1px solid #a7f3d0',
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: '8px'
+                    }}>
+                      {todaysShipments.length} today
+                    </span>
+                  )}
+                </div>
 
-                {/* Expanded Details */}
-                <div style={{
-                  maxHeight: isOpen ? '400px' : '0px',
-                  overflow: 'hidden',
-                  transition: 'max-height 0.22s ease',
-                }}>
-                  <div style={{
-                    padding: '12px 16px 14px 42px',
-                    background: '#f8fafc',
-                    borderTop: '1px solid #f1f5f9',
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '24px',
-                    flexWrap: 'wrap'
-                  }}>
-                    {/* Left: Detail columns */}
-                    <div style={{ display: 'flex', gap: '24px', flex: 1, flexWrap: 'wrap' }}>
-                      {/* Courier & Tracking */}
-                      <div>
-                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
-                          Courier &amp; Tracking
-                        </div>
-                        <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0f172a' }}>
-                          {sh.carrier || sh.courier || 'Lite Express'}
-                        </div>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0284c7' }}>
-                          {sh.tracking_number ? `#${sh.tracking_number}` : <em style={{ color: '#94a3b8', fontStyle: 'italic' }}>No tracking #</em>}
-                        </div>
-                        {sh.pickup_by_name && (
-                          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                            Rider: {sh.pickup_by_name}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Dates */}
-                      <div>
-                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
-                          Shipment Date
-                        </div>
-                        <div style={{ fontSize: '12.5px', color: '#334155' }}>
-                          {sh.pickup_date || sh.shipment_date || (
-                            <span style={{ color: '#d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                              <Clock size={11} /> Pending Dispatch
-                            </span>
-                          )}
-                        </div>
-                        {sh.received_date && (
-                          <div style={{ fontSize: '11px', color: '#059669', marginTop: '2px' }}>
-                            Received: {sh.received_date}
-                          </div>
-                        )}
-                        {sh.received_by_name && (
-                          <div style={{ fontSize: '11px', color: '#059669' }}>
-                            By: {sh.received_by_name}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* TS Number */}
-                      {(sh.transfer_slip_number || sh.transfer_slip) && (
-                        <div>
-                          <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
-                            Transfer Slip
-                          </div>
-                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0284c7' }}>
-                            {sh.transfer_slip_number || sh.transfer_slip}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Boxes */}
-                      <div>
-                        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px' }}>
-                          Box(es)
-                        </div>
-                        <div style={{ fontSize: '12.5px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
-                          {sh.box_number_label || (sh.total_boxes ? `${sh.total_boxes} box(es)` : '1 box')}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Right: Action buttons */}
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => handleOpenSerialsModal(sh)}
-                        title="View Serial Numbers"
-                        style={{ background: '#fff', color: '#0f172a', borderColor: '#cbd5e1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <Hash size={13} color="#0284c7" />
-                        <span>Serials</span>
-                      </button>
-
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
-                        title="Download PDF Manifest"
-                        style={{ background: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <Download size={13} />
-                        <span>PDF</span>
-                      </button>
-
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
-                        title="Download Excel (.xlsx) Backup"
-                        style={{ background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <FileSpreadsheet size={13} color="#16a34a" />
-                        <span>XLSX</span>
-                      </button>
-
-                      {normStatus === 'draft' && (
-                        <button
-                          className="btn btn-sm"
-                          onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
-                          title="Mark manifest as Ready for Pickup"
-                          style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                        >
-                          <CheckCircle2 size={13} />
-                          <span>Mark Ready</span>
-                        </button>
-                      )}
-
-                      {normStatus === 'pending_pickup' && (
-                        <>
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => handleOpenPickupModal(sh)}
-                            title="Handover to Courier"
-                            style={{ background: '#f59e0b', color: '#fff', border: '1px solid #d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <Truck size={13} />
-                            <span>Pick Up</span>
-                          </button>
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => handleStatusChange(sh.id, 'draft')}
-                            title="Revert status to Draft for editing"
-                            style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <RotateCcw size={12} />
-                            <span>Set Draft</span>
-                          </button>
-                        </>
-                      )}
-
-                      {normStatus === 'shipped' && (
-                        <button
-                          className="btn btn-sm"
-                          onClick={() => handleOpenReceiveModal(sh)}
-                          title="Confirm Branch Receipt"
-                          style={{ background: '#10b981', color: '#fff', border: '1px solid #059669', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                        >
-                          <PackageCheck size={13} />
-                          <span>Receive</span>
-                        </button>
-                      )}
-
-                      {isLockedConfirmedShipment(sh) && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          disabled
-                          style={{ opacity: 0.85, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
-                          title="Locked: Received Confirmed"
-                        >
-                          <Lock size={13} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  {shouldRenderOlderDropdown && (
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>
+                      {olderShipments.length} older shipment{olderShipments.length !== 1 ? 's' : ''} archived below
+                    </span>
+                  )}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
 
-      {/* 3. Shipment Manifests Table */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Invoice Ref</th>
-                <th>Destination Site</th>
-                <th>Shipment / Pickup Date</th>
-                <th>Courier & Tracking</th>
-                <th style={{ textAlign: 'center' }}>Total Units</th>
-                <th style={{ textAlign: 'center' }}>Boxes</th>
-                <th style={{ textAlign: 'center' }}>Status</th>
-                <th style={{ textAlign: 'center' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredShipments.length === 0 ? (
-                <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
-                    {search ? `No shipments found matching "${search}".` : 'No shipments found for this status. Pack parts or import manifests above.'}
-                  </td>
-                </tr>
-              ) : (
-                filteredShipments.map(sh => {
-                  const destSite = resolveSite(sh.site_id || sh.site_name, sites);
-                  const normStatus = getNormalizedStatus(sh);
-
-                  return (
-                    <tr key={sh.id}>
-                      <td className="font-mono">
-                        <strong>{sh.invoice_ref || sh.shipment_number}</strong>
-                        {(sh.transfer_slip_number || sh.transfer_slip) && (
-                          <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '2px' }}>
-                            TS: {sh.transfer_slip_number || sh.transfer_slip}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <strong>{destSite.code || 'ASP'}</strong>
-                          <span
-                            className="badge"
-                            style={{
-                              fontSize: '9.5px',
-                              padding: '1px 5px',
-                              background: isShipmentMetroManila(sh, sites) ? '#e0f2fe' : '#f3e8ff',
-                              color: isShipmentMetroManila(sh, sites) ? '#0369a1' : '#6b21a8',
-                              border: `1px solid ${isShipmentMetroManila(sh, sites) ? '#bae6fd' : '#e9d5ff'}`,
-                              fontWeight: 600
-                            }}
-                          >
-                            {isShipmentMetroManila(sh, sites) ? 'Metro Manila' : 'Province'}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                          {destSite.name || sh.site_name}
-                        </div>
-                      </td>
-                      <td>
-                        <div>
-                          {(sh.pickup_date || (normStatus !== 'pending_pickup' && sh.shipment_date)) ? (
-                            <span>{sh.pickup_date || sh.shipment_date}</span>
-                          ) : (
-                            <span style={{ color: '#d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                              <Clock size={11} />
-                              Pending Dispatch
-                            </span>
-                          )}
-                        </div>
-                        {sh.received_date && (
-                          <div style={{ fontSize: '11px', color: '#059669', marginTop: '1px' }}>
-                            Received: {sh.received_date}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <div><strong>{sh.carrier || sh.courier || 'Lite Express'}</strong></div>
-                        <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                          {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
-                        </div>
-                        {sh.pickup_by_name && (
-                          <div style={{ fontSize: '11px', color: '#64748b' }}>
-                            Rider: {sh.pickup_by_name}
-                          </div>
-                        )}
-                        {sh.received_by_name && (
-                          <div style={{ fontSize: '11px', color: '#047857' }}>
-                            Recv: {sh.received_by_name}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
-                        {sh.items?.length || 0}
-                      </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
-                        {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        {(normStatus === 'pending_pickup' || normStatus === 'draft') ? (
-                          <select
-                            value={normStatus === 'pending_pickup' ? 'pending_pickup' : 'draft'}
-                            onChange={(e) => handleStatusChange(sh.id, e.target.value)}
-                            style={{
-                              padding: '3px 8px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              borderRadius: '8px',
-                              cursor: 'pointer',
-                              background: normStatus === 'pending_pickup' ? '#fffbeb' : '#f1f5f9',
-                              color: normStatus === 'pending_pickup' ? '#b45309' : '#475569',
-                              border: normStatus === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #cbd5e1',
-                              outline: 'none'
-                            }}
-                            title="Click to toggle status between Draft and Ready for Pickup"
-                          >
-                            <option value="draft">📝 DRAFT</option>
-                            <option value="pending_pickup">📦 READY FOR PICKUP</option>
-                          </select>
-                        ) : normStatus === 'shipped' ? (
-                          <span
-                            className="badge"
-                            style={{
-                              background: '#f0f9ff',
-                              color: '#0369a1',
-                              border: '1px solid #bae6fd',
-                              fontWeight: 600,
-                              fontSize: '11px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '3px 8px'
-                            }}
-                          >
-                            <Truck size={11} />
-                            <span>SHIPPED</span>
-                          </span>
-                        ) : (
-                          <span
-                            className="badge"
-                            style={{
-                              background: '#ecfdf5',
-                              color: '#047857',
-                              border: '1px solid #a7f3d0',
-                              fontWeight: 600,
-                              fontSize: '11px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '3px 8px'
-                            }}
-                          >
-                            <CheckCircle size={11} />
-                            <span>RECEIVED CONFIRMED</span>
-                          </span>
-                        )}
-                      </td>
-
-                      <td style={{ textAlign: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleOpenSerialsModal(sh)}
-                            title="View Serial Numbers inside Packing List & Copy for GSX / Fixably"
-                            style={{
-                              background: '#f8fafc',
-                              color: '#0f172a',
-                              borderColor: '#cbd5e1',
-                              fontWeight: 600,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px'
-                            }}
-                          >
-                            <Hash size={13} color="#0284c7" />
-                            <span>Serials</span>
-                          </button>
-
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
-                            title="Download Corporate PDF Manifest"
-                          >
-                            <Download size={13} />
-                            <span>PDF</span>
-                          </button>
-
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
-                            title="Download Excel (.xlsx) Backup"
-                            style={{ background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          >
-                            <FileSpreadsheet size={13} color="#16a34a" />
-                            <span>XLSX</span>
-                          </button>
-
-                          {/* ACTION: Mark Ready when Draft */}
-                          {normStatus === 'draft' && (
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
-                              title="Mark manifest as Ready for Pickup"
-                              style={{
-                                background: '#fffbeb',
-                                color: '#b45309',
-                                border: '1px solid #fde68a',
-                                fontWeight: 600,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Mark Ready</span>
-                            </button>
-                          )}
-
-                          {/* ACTION BUTTON 1: Courier Pick Up (When Pending Pickup) */}
-                          {normStatus === 'pending_pickup' && (
-                            <>
-                              <button
-                                className="btn btn-sm"
-                                onClick={() => handleOpenPickupModal(sh)}
-                                title="Handover package to Courier (Update status to Shipped)"
-                                style={{
-                                  background: '#f59e0b',
-                                  color: '#ffffff',
-                                  border: '1px solid #d97706',
-                                  fontWeight: 600,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}
-                              >
-                                <Truck size={13} />
-                                <span>Pick Up</span>
-                              </button>
-                              <button
-                                className="btn btn-sm"
-                                onClick={() => handleStatusChange(sh.id, 'draft')}
-                                title="Revert status to Draft for editing"
-                                style={{
-                                  background: '#f1f5f9',
-                                  color: '#475569',
-                                  border: '1px solid #cbd5e1',
-                                  fontWeight: 600,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}
-                              >
-                                <RotateCcw size={12} />
-                                <span>Set Draft</span>
-                              </button>
-                            </>
-                          )}
-
-                          {/* ACTION BUTTON 2: Site Receive (When Shipped / In Transit) */}
-                          {normStatus === 'shipped' && (
-                            <button
-                              className="btn btn-sm"
-                              onClick={() => handleOpenReceiveModal(sh)}
-                              title="Branch/Site confirms receipt of package"
-                              style={{
-                                background: '#10b981',
-                                color: '#ffffff',
-                                border: '1px solid #059669',
-                                fontWeight: 600,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px'
-                              }}
-                            >
-                              <PackageCheck size={13} />
-                              <span>Receive</span>
-                            </button>
-                          )}
-
-                          {/* ACTION BUTTON 3: Locked / Dispatched / Delete Controls */}
-                          {isLockedConfirmedShipment(sh) ? (
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              disabled
-                              style={{ opacity: 0.85, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
-                              title="Locked Record: Manifest is Received Confirmed and permanently archived. To maintain data integrity, confirmed shipments cannot be deleted from the system UI."
-                            >
-                              <Lock size={13} />
-                            </button>
-                          ) : normStatus === 'shipped' ? (
-                            // Package is already SHIPPED and picked up by courier: Delete button is strictly removed from system interface
-                            null
-                          ) : canUserDeleteRecord(sh, currentUser) ? (
-                            <button
-                              className="btn btn-danger btn-sm"
-                              onClick={() => {
-                                if (window.confirm(`Delete pending shipment "${sh.invoice_ref || sh.shipment_number}"? This will cancel the pending manifest and unpack serialized parts back to DC stock.`)) {
-                                  deleteShipment(sh.id);
-                                }
-                              }}
-                              title="Delete Pending Shipment"
-                              style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          ) : (
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              disabled
-                              style={{ opacity: 0.4, cursor: 'not-allowed' }}
-                              title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
+              <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Invoice Ref</th>
+                      <th>Destination Site</th>
+                      <th>Shipment / Pickup Date</th>
+                      <th>Courier &amp; Tracking</th>
+                      <th style={{ textAlign: 'center' }}>Total Units</th>
+                      <th style={{ textAlign: 'center' }}>Boxes</th>
+                      <th style={{ textAlign: 'center' }}>Status</th>
+                      <th style={{ textAlign: 'center' }}>Actions</th>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  </thead>
+                  <tbody>
+                    {primaryDisplayShipments.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: 'var(--text-muted)' }}>
+                          {search ? (
+                            <div>
+                              <div>No active or recent shipments matching &quot;{search}&quot;.</div>
+                              {olderShipments.length > 0 && (
+                                <div style={{ marginTop: '8px', color: '#0284c7', fontWeight: 600 }}>
+                                  {olderShipments.length} matching record{olderShipments.length !== 1 ? 's' : ''} found in the Older Shipments Archive below.
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              {viewArchiveMode === 'recent_default' && olderShipments.length > 0 ? (
+                                <div>
+                                  <div style={{ fontWeight: 600, color: '#334155' }}>
+                                    No active or recent shipments for this filter.
+                                  </div>
+                                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                                    All {olderShipments.length} completed records are archived in the Older Shipments section below.
+                                  </div>
+                                  <div style={{ marginTop: '12px' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      onClick={() => setIsOlderExpanded(true)}
+                                      style={{ fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                                    >
+                                      <ChevronDown size={14} />
+                                      <span>Expand Older Shipments ({olderShipments.length})</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                'No shipments found for this status. Pack parts or import manifests above.'
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ) : (
+                      primaryDisplayShipments.map(sh => renderShipmentRow(sh, false))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* ── Older Shipments Archive Collapsible Dropdown Feature ── */}
+            {shouldRenderOlderDropdown && (
+              <div
+                className="card"
+                style={{
+                  padding: 0,
+                  overflow: 'hidden',
+                  marginTop: '16px',
+                  border: '1.5px solid #e2e8f0',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+                }}
+              >
+                {/* Collapsible Dropdown Header */}
+                <div
+                  onClick={() => setIsOlderExpanded(prev => !prev)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '14px 18px',
+                    background: effectiveOlderExpanded ? 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' : '#f8fafc',
+                    borderBottom: effectiveOlderExpanded ? '1px solid #e2e8f0' : 'none',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    transition: 'background 0.15s ease'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{
+                      background: '#e0f2fe',
+                      color: '#0284c7',
+                      padding: '8px',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      <Archive size={16} />
+                    </div>
+
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: '13.5px', color: '#0f172a' }}>
+                          Older Shipments Archive
+                        </span>
+                        <span style={{
+                          background: '#e2e8f0',
+                          color: '#334155',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '10px'
+                        }}>
+                          {olderShipments.length} manifest{olderShipments.length !== 1 ? 's' : ''}
+                        </span>
+                        {isSearchActive && (
+                          <span style={{
+                            background: '#dbeafe',
+                            color: '#1d4ed8',
+                            fontSize: '10.5px',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: '6px'
+                          }}>
+                            Matched Search
+                          </span>
+                        )}
+                        <span style={{
+                          fontSize: '10px',
+                          color: '#64748b',
+                          background: '#f1f5f9',
+                          border: '1px solid #e2e8f0',
+                          padding: '1px 6px',
+                          borderRadius: '4px',
+                          fontWeight: 600
+                        }}>
+                          Hidden by Default
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                        Completed &amp; confirmed historical dispatches {olderDateSpan ? `(${olderDateSpan})` : 'older than 7 days'} · Kept collapsed to prioritize recent operations
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsOlderExpanded(prev => !prev);
+                      }}
+                      style={{
+                        background: effectiveOlderExpanded ? '#e2e8f0' : '#ffffff',
+                        fontWeight: 600,
+                        fontSize: '12px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '5px 12px'
+                      }}
+                    >
+                      {effectiveOlderExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      <span>{effectiveOlderExpanded ? 'Hide Older Shipments' : `Show Older Shipments (${olderShipments.length})`}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Collapsible Dropdown Table Content */}
+                {effectiveOlderExpanded && (
+                  <div>
+                    <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Invoice Ref</th>
+                            <th>Destination Site</th>
+                            <th>Shipment / Pickup Date</th>
+                            <th>Courier &amp; Tracking</th>
+                            <th style={{ textAlign: 'center' }}>Total Units</th>
+                            <th style={{ textAlign: 'center' }}>Boxes</th>
+                            <th style={{ textAlign: 'center' }}>Status</th>
+                            <th style={{ textAlign: 'center' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {olderShipments.map(sh => renderShipmentRow(sh, true))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{
+                      padding: '10px 18px',
+                      background: '#f8fafc',
+                      borderTop: '1px solid #f1f5f9',
+                      fontSize: '11.5px',
+                      color: '#64748b',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '8px'
+                    }}>
+                      <span>
+                        Showing all {olderShipments.length} archived historical manifests. All items and serials are permanently preserved in database storage.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsOlderExpanded(false)}
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: '11px', padding: '2px 8px', height: '26px' }}
+                      >
+                        <ChevronUp size={12} />
+                        <span>Collapse Archive</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* --- XLSX / CSV Import Modal Dialog --- */}
       {isImportModalOpen && (

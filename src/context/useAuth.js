@@ -9,7 +9,7 @@ import {
   clearStoredUserSession
 } from '../utils/security';
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
-import { ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
+import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { isUUID } from '../utils/appContextHelpers';
@@ -519,8 +519,8 @@ export function useAuth({
       } catch (e) {}
     }
 
-    // 3. Fallback to local memory / storage ONLY if offline / Supabase was not reachable
-    if (!user && !cloudReachable) {
+    // 3. Fallback to local memory / storage / INITIAL_USERS if not found in cloud
+    if (!user) {
       const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
       user = matchUserByEmail(activeCandidates, email);
       if (!user) {
@@ -529,6 +529,10 @@ export function useAuth({
           const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
           user = matchUserByEmail(activeLocal, email);
         } catch (e) {}
+      }
+      if (!user && Array.isArray(INITIAL_USERS)) {
+        const activeInitial = INITIAL_USERS.filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+        user = matchUserByEmail(activeInitial, email);
       }
     }
 
@@ -673,8 +677,8 @@ export function useAuth({
       } catch (e) {}
     }
 
-    // 3. Fallback to local memory / storage ONLY if offline / Supabase was not reachable
-    if (!user && !cloudReachable) {
+    // 3. Fallback to local memory / storage / INITIAL_USERS if not found in cloud
+    if (!user) {
       const activeCandidates = (usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
       user = matchUserByEmail(activeCandidates, cleanEmail);
       if (!user) {
@@ -683,6 +687,10 @@ export function useAuth({
           const activeLocal = (localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
           user = matchUserByEmail(activeLocal, cleanEmail);
         } catch (e) {}
+      }
+      if (!user && Array.isArray(INITIAL_USERS)) {
+        const activeInitial = INITIAL_USERS.filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase()));
+        user = matchUserByEmail(activeInitial, cleanEmail);
       }
     }
 
@@ -697,6 +705,7 @@ export function useAuth({
     // 1. Supabase Auth Verification
     let authPassed = false;
     let authErrorMessage = null;
+    let hasNativeSession = false;
 
     if (supabase) {
       try {
@@ -708,6 +717,7 @@ export function useAuth({
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword(authPayload);
         if (!authError && authData?.session) {
           authPassed = true;
+          hasNativeSession = true;
         } else if (authError) {
           authErrorMessage = authError.message;
         }
@@ -734,6 +744,29 @@ export function useAuth({
           ? authErrorMessage
           : 'Incorrect password. Please try again or contact DC if you need a password reset.'
       };
+    }
+
+    // Seamlessly promote authenticated user into native Supabase Auth session if not already acquired
+    if (supabase && !hasNativeSession) {
+      (async () => {
+        try {
+          await supabase.rpc('register_or_update_auth_user', {
+            p_email: cleanEmail,
+            p_password: cleanPassword,
+            p_full_name: user.fullName || cleanEmail.split('@')[0],
+            p_role: user.role || 'parts_management',
+            p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
+            p_role_position: user.rolePosition || null,
+            p_is_active: user.isActive !== false
+          });
+          await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: cleanPassword
+          });
+        } catch (promoteErr) {
+          console.debug('Native auth session promotion note:', promoteErr?.message);
+        }
+      })();
     }
 
     // Update client state & storage with latest authenticated credentials
@@ -858,8 +891,17 @@ export function useAuth({
       } catch (e) {}
     }
 
-    if (!user && !cloudReachable) {
+    if (!user) {
       user = matchUserByEmail((usersList || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
+      if (!user) {
+        try {
+          const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
+          user = matchUserByEmail((localUsers || []).filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
+        } catch (e) {}
+      }
+      if (!user && Array.isArray(INITIAL_USERS)) {
+        user = matchUserByEmail(INITIAL_USERS.filter(u => !deletedSet.has(u.id?.toLowerCase()) && !deletedSet.has(u.email?.toLowerCase())), cleanEmail);
+      }
     }
 
     if (!user || deletedSet.has(user.id?.toLowerCase()) || deletedSet.has(user.email?.toLowerCase())) {
@@ -900,6 +942,24 @@ export function useAuth({
               .ilike('email', cleanEmail);
 
         await passUpdateQuery;
+
+        try {
+          await supabase.rpc('register_or_update_auth_user', {
+            p_email: cleanEmail,
+            p_password: newPassword,
+            p_full_name: user.fullName || cleanEmail.split('@')[0],
+            p_role: user.role || 'parts_management',
+            p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
+            p_role_position: user.rolePosition || null,
+            p_is_active: true
+          });
+          await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: newPassword
+          });
+        } catch (authBridgeErr) {
+          console.debug('Auth bridge registration note:', authBridgeErr?.message);
+        }
       } catch (e) {
         console.warn('Supabase password hash profile update error:', e.message);
       }

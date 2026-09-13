@@ -1946,10 +1946,12 @@ export default function SettingsCatalog() {
 
               {/* Bottom Row */}
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
-                <div>
-                  <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>MDC - SUPERVISOR</div>
-                  <div style={{ position: 'relative', borderBottom: '1px solid #64748b', minHeight: '38px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                    <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', zIndex: 1, paddingBottom: '2px' }}>{supervisorName.toUpperCase()}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div>
+                    <div style={{ fontSize: '9.5pt', fontWeight: 800, color: '#0f172a', marginBottom: '2px' }}>MDC - SUPERVISOR</div>
+                    <div style={{ fontSize: '9.5pt', minHeight: '18px', paddingBottom: '2px', borderBottom: '1px solid #64748b', color: '#0f172a' }}>
+                      {supervisorName || 'Anjo Alcazar'}
+                    </div>
                   </div>
                 </div>
 

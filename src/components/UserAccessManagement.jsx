@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { ALL_PAGES } from '../constants/navigation';
 import { ROLE_OPTIONS, ROLE_PRESETS, getDefaultRolePosition, sortUsersDeterministically } from '../constants/roles';
-import { resolveSite } from '../utils/appContextHelpers';
+import { resolveSite, isDcSite } from '../utils/appContextHelpers';
 import {
   ShieldCheck,
   UserPlus,
@@ -34,14 +34,10 @@ import {
 
 const SUGGESTED_POSITIONS = [
   'Parts Management Specialist',
-  'DC Operations Lead',
-  'Warehouse Specialist',
-  'Inventory Controller',
-  'Logistics Coordinator',
-  'Service Center Technician',
-  'Branch Coordinator',
-  'Area Manager',
-  'Management Auditor'
+  'Parts Management Analyst',
+  'Customer Service Officer',
+  'Site Supervisor',
+  'Area Manager'
 ];
 
 const emptyForm = {
@@ -49,7 +45,7 @@ const emptyForm = {
   email: '',
   role: 'parts_management',
   rolePosition: '',
-  siteId: 'site-dc',
+  siteId: '',
   permittedPages: [...ROLE_PRESETS.parts_management]
 };
 
@@ -185,12 +181,12 @@ export default function UserAccessManagement() {
   }, [usersList, searchQuery, roleFilter, siteFilter, sortKey, sites]);
 
   const openAddModal = () => {
-    const defaultSiteId = (sites || []).find(s => s.is_dc || s.code === 'DC' || s.code === 'DC-MDC')?.id || sites?.[0]?.id || 'site-dc';
+    const firstBranchSite = (sites || []).find(s => !s.is_dc && s.code !== 'DC' && s.code !== 'DC-MDC')?.id || sites?.[0]?.id || '';
     setForm({
       ...emptyForm,
       role: 'parts_management',
       rolePosition: getDefaultRolePosition('parts_management'),
-      siteId: defaultSiteId,
+      siteId: firstBranchSite,
       permittedPages: [...ROLE_PRESETS.parts_management]
     });
     setShowAddModal(true);
@@ -198,12 +194,14 @@ export default function UserAccessManagement() {
 
   const openEditModal = (user) => {
     setEditingUser(user);
+    const isPmg = user.role === 'parts_management';
+    const fallbackSite = isPmg ? ((sites || []).find(s => !s.is_dc)?.id || '') : 'site-dc';
     setForm({
       fullName: user.fullName,
       email: user.email,
       role: user.role || 'user',
       rolePosition: user.rolePosition || getDefaultRolePosition(user.role || 'user'),
-      siteId: user.siteId || user.site_id || 'site-dc',
+      siteId: user.siteId || user.site_id || fallbackSite,
       permittedPages: Array.isArray(user.permittedPages) ? [...user.permittedPages] : [...(ROLE_PRESETS[user.role] || ROLE_PRESETS.user)]
     });
   };
@@ -279,14 +277,22 @@ export default function UserAccessManagement() {
 
   const handleRoleChangeInForm = (newRole) => {
     const defaultPages = ROLE_PRESETS[newRole] || ROLE_PRESETS.user;
-    setForm(prev => ({
-      ...prev,
-      role: newRole,
-      rolePosition: prev.rolePosition && prev.rolePosition !== getDefaultRolePosition(prev.role)
-        ? prev.rolePosition
-        : getDefaultRolePosition(newRole),
-      permittedPages: [...defaultPages]
-    }));
+    setForm(prev => {
+      let nextSiteId = prev.siteId;
+      if (newRole === 'parts_management' && (isDcSite(nextSiteId, sites) || !nextSiteId)) {
+        const firstBranch = (sites || []).find(s => !s.is_dc && s.code !== 'DC' && s.code !== 'DC-MDC')?.id || '';
+        nextSiteId = firstBranch;
+      }
+      return {
+        ...prev,
+        role: newRole,
+        rolePosition: prev.rolePosition && prev.rolePosition !== getDefaultRolePosition(prev.role)
+          ? prev.rolePosition
+          : getDefaultRolePosition(newRole),
+        siteId: nextSiteId,
+        permittedPages: [...defaultPages]
+      };
+    });
   };
 
   const handleToggleModalPage = (pageId) => {
@@ -308,6 +314,14 @@ export default function UserAccessManagement() {
       return;
     }
 
+    if (form.role === 'parts_management') {
+      const isMissingSite = !form.siteId || !String(form.siteId).trim();
+      if (isMissingSite || isDcSite(form.siteId, sites)) {
+        showToast('Please select a valid ASP service branch location for Parts Management (PMG). Central DC is restricted.', 'error');
+        return;
+      }
+    }
+
     setIsProvisionSubmitting(true);
     try {
       const res = await provisionUser({
@@ -322,6 +336,9 @@ export default function UserAccessManagement() {
       if (res && res.success !== false) {
         closeModals();
       }
+    } catch (err) {
+      console.error('Failed to provision user:', err);
+      showToast(err?.message || 'Failed to provision user', 'error');
     } finally {
       setIsProvisionSubmitting(false);
     }
@@ -332,6 +349,14 @@ export default function UserAccessManagement() {
     if (!form.fullName.trim() || !form.email.trim()) {
       showToast('Please provide full name and company email', 'error');
       return;
+    }
+
+    if (form.role === 'parts_management') {
+      const isMissingSite = !form.siteId || !String(form.siteId).trim();
+      if (isMissingSite || isDcSite(form.siteId, sites)) {
+        showToast('Please select a valid ASP service branch location for Parts Management (PMG). Central DC is restricted.', 'error');
+        return;
+      }
     }
 
     setIsProvisionSubmitting(true);
@@ -351,6 +376,9 @@ export default function UserAccessManagement() {
       } else {
         closeModals();
       }
+    } catch (err) {
+      console.error('Failed to update user:', err);
+      showToast(err?.message || 'Failed to update user', 'error');
     } finally {
       setIsProvisionSubmitting(false);
     }
@@ -916,14 +944,32 @@ export default function UserAccessManagement() {
                       {/* Assigned Location */}
                       <td style={{ textAlign: 'left', padding: '10px 12px' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '5px' }}>
-                          <MapPin size={12} color="#0284c7" style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <MapPin size={12} color={user.needsSiteAssignment ? '#ef4444' : '#0284c7'} style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
-                              {siteObj.code || 'DC-MDC'}
-                            </div>
-                            <div style={{ fontSize: '10.5px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>
-                              {siteObj.name || 'MobileCare Central DC'}
-                            </div>
+                            {user.needsSiteAssignment ? (
+                              <span
+                                className="badge"
+                                style={{
+                                  background: '#fef2f2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fca5a5',
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  padding: '2px 6px'
+                                }}
+                              >
+                                Branch Required
+                              </span>
+                            ) : (
+                              <>
+                                <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155' }}>
+                                  {siteObj.code || (user.role === 'parts_management' ? 'Unassigned' : 'DC-MDC')}
+                                </div>
+                                <div style={{ fontSize: '10.5px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>
+                                  {siteObj.name || (user.role === 'parts_management' ? 'Pending Branch Setup' : 'MobileCare Central DC')}
+                                </div>
+                              </>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1385,18 +1431,32 @@ export default function UserAccessManagement() {
                 <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}>
                   <MapPin size={12} color="#0284c7" />
                   <span>Assigned Location / Service Branch</span>
+                  {form.role === 'parts_management' && (
+                    <span style={{ color: '#ef4444', fontSize: '10.5px', fontWeight: 600, marginLeft: '4px' }}>* Branch Required (DC Restricted)</span>
+                  )}
                 </label>
                 <select
                   className="form-select"
                   value={form.siteId}
                   onChange={(e) => setForm(prev => ({ ...prev, siteId: e.target.value }))}
                 >
-                  {sites.map(s => (
-                    <option key={s.id || s.code} value={s.id}>
-                      {s.code} - {s.name} {s.is_dc ? '(Central DC)' : ''}
-                    </option>
-                  ))}
+                  {form.role === 'parts_management' && !form.siteId && (
+                    <option value="" disabled>-- Select an ASP Service Branch --</option>
+                  )}
+                  {sites.map(s => {
+                    const isDcRestricted = form.role === 'parts_management' && s.is_dc;
+                    return (
+                      <option key={s.id || s.code} value={s.id} disabled={isDcRestricted}>
+                        {s.code} - {s.name} {s.is_dc ? (isDcRestricted ? '(Central DC - Restricted for PMG)' : '(Central DC)') : ''}
+                      </option>
+                    );
+                  })}
                 </select>
+                {form.role === 'parts_management' && (
+                  <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '4px' }}>
+                    Parts Management accounts are isolated to their designated ASP branch with serial privacy.
+                  </div>
+                )}
               </div>
 
               {/* Admin Permissions Checklist (Conditional) */}
@@ -1507,7 +1567,7 @@ export default function UserAccessManagement() {
                   className="form-input"
                   value={newPositionText}
                   onChange={(e) => setNewPositionText(e.target.value)}
-                  placeholder="e.g. Warehouse Specialist..."
+                  placeholder="e.g. Parts Management Specialist..."
                   required
                   autoFocus
                 />

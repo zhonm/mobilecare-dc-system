@@ -56,6 +56,20 @@ export function resolveSite(siteIdOrCode, sitesList = []) {
   };
 }
 
+// Helper: Determine if an ID, code, or site object represents Central DC
+export function isDcSite(siteIdOrCode, sitesList = []) {
+  if (!siteIdOrCode) return false;
+  const clean = String(siteIdOrCode).trim().toLowerCase();
+  if (clean === 'site-dc' || clean === 'dc' || clean === 'dc-mdc' || clean.startsWith('dc-')) return true;
+  const list = Array.isArray(sitesList) && sitesList.length > 0
+    ? sitesList
+    : (() => {
+        try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+      })();
+  const match = list.find(s => String(s.id).toLowerCase() === clean || String(s.code).toLowerCase() === clean);
+  return Boolean(match && match.is_dc);
+}
+
 // Helper to guarantee serialized units that are in an active draft or saved shipments maintain their 'packed' or 'shipped' status
 export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], explicitDraft = null, activeStations = null) {
   const inputUnits = Array.isArray(units) ? units : [];

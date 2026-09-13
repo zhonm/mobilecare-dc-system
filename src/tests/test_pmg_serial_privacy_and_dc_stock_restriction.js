@@ -97,11 +97,25 @@ function filterUnitsForPmgUser(units, user, activeSite) {
   });
 }
 
-// Helper: mask serial number according to privacy rules
+// Helper: mask serial number according to privacy rules:
+// - Serials for the user's assigned site MUST remain visible.
+// - Serials for parts added by the user MUST remain visible.
+// - Serials belonging to OTHER sites MUST be hidden/masked.
+// - Superadmin/Admin see all serials.
 function getDisplaySerialNumber(unit, user) {
-  if (!user) return '••••••••••••••••';
-  if (user.role === 'superadmin') return unit.serial_number;
+  if (!user || !unit) return '••••••••••••••••';
+  if (user.role === 'superadmin' || user.role === 'admin') return unit.serial_number;
   if (isUnitAddedByCurrentUser(unit, user)) return unit.serial_number;
+
+  const userSiteId = String(user.siteId || user.site_id || '').toLowerCase();
+  const userSiteCode = String(user.siteCode || user.site_code || '').toUpperCase();
+  const uSiteId = String(unit.current_site_id || unit.site_id || unit.siteId || '').toLowerCase();
+  const uSiteCode = String(unit.site_code || unit.siteCode || '').toUpperCase();
+
+  const isOwnSite = (userSiteId && (uSiteId === userSiteId || uSiteCode === userSiteId.toUpperCase())) ||
+                    (userSiteCode && (uSiteCode === userSiteCode || uSiteId.toUpperCase() === userSiteCode));
+
+  if (isOwnSite) return unit.serial_number;
   return '••••••••••••••••';
 }
 
@@ -172,18 +186,23 @@ assert.strictEqual(andresOwnUnits[0].id, 'u-zam-1');
 assert.strictEqual(getDisplaySerialNumber(andresOwnUnits[0], pmgUserAndres), 'F8Y6305C84E18FK01', 'Serial must be fully visible to the user who added it');
 console.log('  ✓ PASS: Andres sees his own added part with complete serial number (F8Y6305C84E18FK01)');
 
-// --- Test 3: Other users only see part numbers and quantities at designated sites; serials are protected ---
-console.log('\n--- Test 3: Other users viewing the same site only see part number and quantity, with serial protected ---');
-// Andres viewing Maria's unit at ASP ZAM:
+// --- Test 3: Serials belonging to user's assigned site remain visible; serials for other sites are protected ---
+console.log('\n--- Test 3: Serials belonging to user\'s assigned site remain visible; serials for other sites are protected ---');
+// Andres viewing Maria's unit at the SAME site (ASP ZAM):
 const mariaUnitAtZam = andresVisibleUnits.find(u => u.id === 'u-zam-2');
 assert.ok(mariaUnitAtZam, 'Unit at designated site ASP ZAM should be visible in site inventory');
 assert.strictEqual(mariaUnitAtZam.part_number, '661-21996', 'Part number is visible');
-assert.strictEqual(getDisplaySerialNumber(mariaUnitAtZam, pmgUserAndres), '••••••••••••••••', 'Serial must be masked and protected for other users');
-console.log('  ✓ PASS: Maria\'s unit serial is masked as •••••••••••••••• when viewed by Andres');
+assert.strictEqual(getDisplaySerialNumber(mariaUnitAtZam, pmgUserAndres), 'F8Y6305C84E18FK02', 'Serials belonging to the user\'s assigned site must remain visible');
+console.log('  ✓ PASS: Maria\'s unit serial (ASP ZAM) is VISIBLE to Andres who is assigned to the same site (ASP ZAM)');
 
-// Maria viewing her own unit:
-assert.strictEqual(getDisplaySerialNumber(mariaUnitAtZam, pmgUserMaria), 'F8Y6305C84E18FK02', 'Maria sees her own serial number in full');
-console.log('  ✓ PASS: Maria sees her own serial number in full (F8Y6305C84E18FK02)');
+// Andres viewing unit at an OTHER site (ASP CEB):
+const cebUnit = sampleUnits.find(u => u.id === 'u-ceb-1');
+assert.strictEqual(getDisplaySerialNumber(cebUnit, pmgUserAndres), '••••••••••••••••', 'Serials for other sites must remain masked and protected');
+console.log('  ✓ PASS: ASP CEB unit serial is MASKED as •••••••••••••••• when viewed by Andres (assigned to ASP ZAM)');
+
+// Maria viewing unit at her assigned site (ASP ZAM):
+assert.strictEqual(getDisplaySerialNumber(mariaUnitAtZam, pmgUserMaria), 'F8Y6305C84E18FK02', 'Maria sees serial at her assigned site in full');
+console.log('  ✓ PASS: Maria sees serial number in full (F8Y6305C84E18FK02) at her assigned site');
 
 // --- Test 4: Designated Site Summary groups by Part Number & Site (Quantities only, zero serials) ---
 console.log('\n--- Test 4: Designated Site Summary shows P/N & Quantity without serial numbers ---');

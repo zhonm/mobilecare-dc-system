@@ -100,8 +100,13 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   }, [initialTab, isPmgUser]);
 
   const userSiteObj = useMemo(() => {
-    return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
-  }, [sites, currentUser?.siteId]);
+    const rawId = currentUser?.siteId || currentUser?.site_id;
+    const rawCode = currentUser?.siteCode || currentUser?.site_code;
+    return sites.find(s =>
+      (rawId && (s.id === rawId || s.code === rawId)) ||
+      (rawCode && (s.code === rawCode || s.id === rawCode))
+    ) || sites[0] || {};
+  }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode, currentUser?.site_code]);
 
   const dcSiteObj = useMemo(() => {
     return sites.find(s => s.is_dc || s.code === 'DC-MDC' || s.code === 'DC') || { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center' };
@@ -112,8 +117,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     return dcSiteObj;
   }, [isPmgUser, userSiteObj, dcSiteObj]);
 
-  // PMG Private / Site View Modes: 'my_added' | 'site_available' | 'site_summary'
-  const [pmgViewMode, setPmgViewMode] = useState('my_added');
+  // PMG Private / Site View Modes: 'site_available' | 'my_added' | 'site_summary'
+  const [pmgViewMode, setPmgViewMode] = useState('site_available');
 
   // Detect whether a unit belongs to DC stock (which PMG users are strictly barred from viewing/accessing)
   const isDcStockUnit = useCallback((unit) => {
@@ -139,6 +144,51 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (curName && unitAddedName && curName === unitAddedName) return true;
     return false;
   }, [currentUser]);
+
+  // Determine if a unit belongs to the current user's assigned branch location
+  const isUnitInCurrentUserSite = useCallback((unit) => {
+    if (!currentUser || !unit) return false;
+    if (currentUser.role === 'superadmin' || currentUser.role === 'admin') return true;
+
+    const userSiteId = String(currentUser.siteId || currentUser.site_id || userSiteObj?.id || '').trim().toLowerCase();
+    const userSiteCode = String(currentUser.siteCode || currentUser.site_code || userSiteObj?.code || '').trim().toUpperCase();
+
+    const uSiteId = String(unit.current_site_id || unit.site_id || unit.siteId || '').trim().toLowerCase();
+    const uSiteCode = String(unit.site_code || unit.siteCode || '').trim().toUpperCase();
+
+    // Direct match by ID
+    if (userSiteId && uSiteId && userSiteId === uSiteId) return true;
+    // Direct match by Code
+    if (userSiteCode && uSiteCode && userSiteCode === uSiteCode) return true;
+    // Cross-match if userSiteId is a code or uSiteId is a code
+    if (userSiteCode && uSiteId && userSiteCode.toLowerCase() === uSiteId) return true;
+    if (userSiteId && uSiteCode && userSiteId.toUpperCase() === uSiteCode) return true;
+
+    // Match via sites catalog lookup
+    if (userSiteObj?.id && (uSiteId === userSiteObj.id.toLowerCase() || uSiteCode === userSiteObj.code?.toUpperCase())) return true;
+    if (userSiteObj?.code && (uSiteCode === userSiteObj.code.toUpperCase() || uSiteId === userSiteObj.code.toLowerCase())) return true;
+
+    // Match via active receiving site if in PMG mode
+    if (isPmgUser && activeReceivingSite) {
+      const activeId = String(activeReceivingSite.id || '').toLowerCase();
+      const activeCode = String(activeReceivingSite.code || '').toUpperCase();
+      if (activeId && uSiteId && activeId === uSiteId) return true;
+      if (activeCode && uSiteCode && activeCode === uSiteCode) return true;
+    }
+
+    return false;
+  }, [currentUser, userSiteObj, isPmgUser, activeReceivingSite]);
+
+  // Determine whether current user has permission to view authentic serial number of a unit
+  // Rule: Serials for the user's assigned site and user-added parts must remain visible.
+  // Serials for other external sites are masked/protected.
+  const canViewUnitSerial = useCallback((unit) => {
+    if (!currentUser || !unit) return false;
+    if (currentUser.role === 'superadmin' || currentUser.role === 'admin') return true;
+    if (isUnitInCurrentUserSite(unit)) return true;
+    if (isUnitAddedByCurrentUser(unit)) return true;
+    return false;
+  }, [currentUser, isUnitInCurrentUserSite, isUnitAddedByCurrentUser]);
 
   const pmgIncomingShipments = useMemo(() => {
     if (!isPmgUser) return [];
@@ -1260,8 +1310,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       if (tableSearch.trim()) {
         const q = tableSearch.toLowerCase().trim();
         const matchesPn = (u.part_number || '').toLowerCase().includes(q);
-        // Only allow searching by serial if the current user owns it or if not a PMG account
-        const matchesSn = (!isPmgUser || isUnitAddedByCurrentUser(u)) && (u.serial_number || '').toLowerCase().includes(q);
+        // Allow searching by serial if user has serial visibility permission (own site or added by self)
+        const matchesSn = (!isPmgUser || canViewUnitSerial(u)) && (u.serial_number || '').toLowerCase().includes(q);
         const matchesDesc = (u.description || '').toLowerCase().includes(q);
         const matchesModel = (u.iphone_model || '').toLowerCase().includes(q);
         const matchesCat = (u.category_name || '').toLowerCase().includes(q);
@@ -1272,7 +1322,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
       return true;
     }).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-  }, [enrichedReceivedUnits, isPmgUser, pmgViewMode, isDcStockUnit, isUnitAddedByCurrentUser, assignmentFilter, categoryFilter, tableSearch]);
+  }, [enrichedReceivedUnits, isPmgUser, pmgViewMode, isDcStockUnit, canViewUnitSerial, isUnitAddedByCurrentUser, assignmentFilter, categoryFilter, tableSearch]);
 
   // Aggregated Designated Sites Summary Table (Part Numbers & Quantities Only - Zero Serial Visibility)
   const pmgSiteSummaryRows = useMemo(() => {
@@ -2309,13 +2359,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 <span className="badge badge-success" style={{ fontSize: '11.5px', padding: '2px 8px' }}>
                   {availableInStockUnits.length} in-stock
                 </span>
-                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 8px' }}>
-                  {isPmgUser ? `${pmgCounts.myAdded} Added by You` : `${assignmentCounts.all} Total Units`}
-                </span>
+                {!isPmgUser && (
+                  <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px', padding: '2px 8px' }}>
+                    {assignmentCounts.all} Total Units
+                  </span>
+                )}
               </div>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
                 {isPmgUser
-                  ? 'Private serial protection active: Your added parts show authentic serial numbers; other users see part numbers and quantities at designated sites.'
+                  ? `Branch serial visibility active: Your assigned branch (${activeReceivingSite?.code || 'Branch'}) stock displays authentic serial numbers. Serials for external sites remain protected.`
                   : 'Manage serialized inventory in DC and click any assignment badge to switch tags'}
               </p>
             </div>
@@ -2852,7 +2904,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <th style={{ width: '100px' }}>Category</th>
                   <th style={{ width: '190px' }}>Serial Number</th>
                   <th style={{ width: '160px' }}>{isPmgUser ? 'Receiving Branch' : 'Assignment (Click to switch)'}</th>
-                  <th style={{ width: '140px' }}>Intake Source</th>
+                  {!isPmgUser && <th style={{ width: '140px' }}>Intake Source</th>}
                   <th style={{ width: '90px' }}>Timestamp</th>
                   <th style={{ width: '80px' }}>Status</th>
                   <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
@@ -2868,6 +2920,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   const badgeBorder = isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
                   const badgeLabel = isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting';
                   const isAddedBySelf = isUnitAddedByCurrentUser(unit);
+                  const canSeeSerial = canViewUnitSerial(unit);
 
                   return (
                     <tr key={unit.id || `${unit.serial_number}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -2889,7 +2942,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         </span>
                       </td>
                       <td className="font-mono" style={{ fontWeight: 600, color: '#0369a1', letterSpacing: '0.02em' }}>
-                        {isPmgUser && !isAddedBySelf ? (
+                        {isPmgUser && !canSeeSerial ? (
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
                             <span style={{ color: '#94a3b8', letterSpacing: '0.08em', fontSize: '11.5px' }}>
                               ••••••••••••••••
@@ -2906,7 +2959,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                                 alignItems: 'center',
                                 gap: '3px'
                               }}
-                              title="Protected: Serial numbers are only visible to the user who added them."
+                              title="Protected: Serial numbers for external sites are restricted."
                             >
                               <Lock size={10} />
                               <span>Protected</span>
@@ -2926,21 +2979,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             >
                               <Copy size={11} />
                             </button>
-                            {isPmgUser && (
-                              <span
-                                className="badge"
-                                style={{
-                                  background: '#ecfdf5',
-                                  color: '#047857',
-                                  border: '1px solid #a7f3d0',
-                                  fontSize: '9.5px',
-                                  padding: '1px 5px',
-                                  fontWeight: 700
-                                }}
-                              >
-                                Added by You
-                              </span>
-                            )}
                           </div>
                         )}
                       </td>
@@ -3002,24 +3040,21 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                           </button>
                         )}
                       </td>
-                      <td>
-                        {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
-                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '10.5px' }}>
-                            <FileSpreadsheet size={11} style={{ display: 'inline', marginRight: '3px' }} />
-                            Spreadsheet Import
-                          </span>
-                        ) : (
-                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', fontSize: '10.5px' }}>
-                            <Barcode size={11} style={{ display: 'inline', marginRight: '3px' }} />
-                            Barcode Scan
-                          </span>
-                        )}
-                        {isPmgUser && (
-                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
-                            By: {isAddedBySelf ? 'You' : 'Branch Staff'}
-                          </div>
-                        )}
-                      </td>
+                      {!isPmgUser && (
+                        <td>
+                          {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
+                            <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '10.5px' }}>
+                              <FileSpreadsheet size={11} style={{ display: 'inline', marginRight: '3px' }} />
+                              Spreadsheet Import
+                            </span>
+                          ) : (
+                            <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', fontSize: '10.5px' }}>
+                              <Barcode size={11} style={{ display: 'inline', marginRight: '3px' }} />
+                              Barcode Scan
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         {unit.received_at ? formatTo12HourTime(unit.received_at, false) : 'Recent'}
                       </td>

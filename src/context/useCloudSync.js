@@ -104,6 +104,7 @@ export function useCloudSync({
 
   const lastRefreshTimeRef = useRef(0);
   const realtimeChannelRef = useRef(null);
+  const alertsChannelRef = useRef(null);
   const isSavingRef = useRef(false);
   const lastShipmentsBackfillAttemptRef = useRef(0);
   const lastIntakesBackfillAttemptRef = useRef(0);
@@ -129,7 +130,7 @@ export function useCloudSync({
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
 
-  // Broadcast event across peers and browser tabs
+  // Broadcast event across peers and browser tabs (Site-Isolated with Global Alert Routing)
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -139,15 +140,37 @@ export function useCloudSync({
       }
     } catch (e) {}
 
-    if (supabase && realtimeChannelRef.current) {
-      try {
-        realtimeChannelRef.current.send({
-          type: 'broadcast',
-          event: 'mdc_sync',
-          payload: { type: eventType, payload, senderId: currentUser?.id || 'anon', timestamp: Date.now() }
-        });
-      } catch (e) {
-        console.warn('Realtime broadcast note:', e.message);
+    const isGlobalAlert = [
+      'FORCE_LOGOUT_USER',
+      'SUPERVISOR_SETTINGS_UPDATED',
+      'GLOBAL_FORCE_CACHE_REFRESH',
+      'MASTER_DATA_UPDATED',
+      'MASTER_DATA_CLEARED'
+    ].includes(eventType);
+
+    if (supabase) {
+      const msgObj = {
+        type: 'broadcast',
+        event: 'mdc_sync',
+        payload: { type: eventType, payload, senderId: currentUser?.id || 'anon', timestamp: Date.now() }
+      };
+
+      // 1. If global alert, publish to lightweight alerts room (reaches all connected users with zero heartbeats)
+      if (isGlobalAlert && alertsChannelRef.current) {
+        try {
+          alertsChannelRef.current.send(msgObj);
+        } catch (e) {
+          console.warn('Realtime global alerts broadcast note:', e.message);
+        }
+      }
+
+      // 2. Publish to local primary channel (reaches branch peers or DC peers without company-wide fan-out)
+      if (realtimeChannelRef.current) {
+        try {
+          realtimeChannelRef.current.send(msgObj);
+        } catch (e) {
+          console.warn('Realtime primary broadcast note:', e.message);
+        }
       }
     }
   }, [currentUser]);
@@ -196,7 +219,7 @@ export function useCloudSync({
     broadcastCloudEvent('PACKING_PRESENCE', payload);
   }, [currentUser, broadcastCloudEvent]);
 
-  // Prune stale packing station sessions (> 120s since last heartbeat)
+  // Prune stale packing station sessions (> 180s since last heartbeat, aligned with 60s throttle)
   useEffect(() => {
     const pruneTimer = setInterval(() => {
       const now = Date.now();
@@ -204,7 +227,7 @@ export function useCloudSync({
         let changed = false;
         const next = {};
         for (const [uid, st] of Object.entries(prev)) {
-          if (now - (st.timestamp || 0) < 120000 && st.isPacking) {
+          if (now - (st.timestamp || 0) < 180000 && st.isPacking) {
             next[uid] = st;
           } else {
             changed = true;
@@ -306,6 +329,10 @@ export function useCloudSync({
     if (!supabase) return false;
 
     try {
+      const isPmgUser = currentUser?.role === 'parts_management';
+      const userSiteId = currentUser?.siteId;
+      const isSiteRestrictedPmg = Boolean(isPmgUser && userSiteId && userSiteId !== 'site-dc');
+
       const shouldFetch = (tbl) => {
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
@@ -326,6 +353,17 @@ export function useCloudSync({
         shouldFetch('profiles') ? supabase.from('profiles').select('*').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? (async () => {
+          // Egress Defense: PMG branch users only need shared metadata registries (no heavy DC master states or stock transfers)
+          if (isSiteRestrictedPmg) {
+            const PMG_DOC_IDS = [
+              'master_supervisor_settings_registry',
+              'master_auto_logout_settings_registry',
+              'master_users_registry'
+            ];
+            const resPmgDocs = await supabase.from('saved_records').select('*').in('id', PMG_DOC_IDS);
+            return { data: resPmgDocs.data || [] };
+          }
+
           const SYSTEM_DOC_IDS = [
             LIVE_MASTER_RECORD_ID,
             'master_masterlist_data_registry',
@@ -418,15 +456,33 @@ export function useCloudSync({
 
           return { data: [...systemRows, ...shipmentRows, ...periodRows] };
         })() : Promise.resolve({ data: null }),
-        shouldFetch('dc_intake_records') ? supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100) : Promise.resolve({ data: null }),
-        // Egress optimization: fetch unit attributes directly; local cache joins parts and sites in memory
-        shouldFetch('inventory_units') ? supabase.from('inventory_units').select('*').limit(2000) : Promise.resolve({ data: null }),
+        // DC Intakes: PMG branch users do not manage Central DC intakes
+        shouldFetch('dc_intake_records') ? (
+          isSiteRestrictedPmg
+            ? Promise.resolve({ data: [] })
+            : supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100)
+        ) : Promise.resolve({ data: null }),
+        // Egress optimization: Scope by current_site_id for PMG branch users
+        shouldFetch('inventory_units') ? (
+          isSiteRestrictedPmg
+            ? supabase.from('inventory_units').select('*').eq('current_site_id', userSiteId).limit(1000)
+            : supabase.from('inventory_units').select('*').limit(2000)
+        ) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
-        // Egress optimization: fetch shipments & items directly; local cache joins parts and sites in memory
-        shouldFetch('shipments') ? supabase.from('shipments').select('*, shipment_items(*)').order('created_at', { ascending: false }).limit(200) : Promise.resolve({ data: null }),
-        shouldFetch('parts_requests') ? supabase.from('parts_requests').select('*').order('created_at', { ascending: false }).limit(300) : Promise.resolve({ data: null })
+        // Egress optimization: Scope by site_id destination for PMG branch users
+        shouldFetch('shipments') ? (
+          isSiteRestrictedPmg
+            ? supabase.from('shipments').select('*, shipment_items(*)').eq('site_id', userSiteId).order('created_at', { ascending: false }).limit(50)
+            : supabase.from('shipments').select('*, shipment_items(*)').order('created_at', { ascending: false }).limit(200)
+        ) : Promise.resolve({ data: null }),
+        // Egress optimization: Scope by site_id for PMG branch users
+        shouldFetch('parts_requests') ? (
+          isSiteRestrictedPmg
+            ? supabase.from('parts_requests').select('*').eq('site_id', userSiteId).order('created_at', { ascending: false }).limit(300)
+            : supabase.from('parts_requests').select('*').order('created_at', { ascending: false }).limit(300)
+        ) : Promise.resolve({ data: null })
       ]);
 
       const dbProfiles = resProfiles.data;
@@ -2403,10 +2459,10 @@ export function useCloudSync({
   // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
     let realtimeChannel = null;
+    let alertsChannel = null;
+    let broadcastBus = null;
 
     autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
-
-    let broadcastBus = null;
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         broadcastBus = new BroadcastChannel('mdc_sync_bus');
@@ -2522,12 +2578,26 @@ export function useCloudSync({
       }
 
       if (supabase && typeof supabase.channel === 'function') {
+        const isPmg = currentUser?.role === 'parts_management';
+        const userSiteId = currentUser?.siteId;
+        const isSiteRestricted = Boolean(isPmg && userSiteId && userSiteId !== 'site-dc');
+
+        // Partition channels to isolate traffic and prevent global message fan-out (§2.1):
+        // - PMG users join their branch channel: `mdc-site-sync-${userSiteId}`
+        // - Superadmins and DC staff join `mdc-admin-sync-room`
+        const primaryRoomName = isSiteRestricted
+          ? `mdc-site-sync-${userSiteId}`
+          : 'mdc-admin-sync-room';
+
+        console.debug(`[Realtime WebSocket] Connecting primary room [${primaryRoomName}] and global alerts room.`);
+
+        // 1. Primary Site-Isolated Channel (Handles branch presence, packing drafts, and row changes)
         realtimeChannel = supabase
-          .channel('mdc-global-sync-room', {
+          .channel(primaryRoomName, {
             config: { broadcast: { self: false } }
           })
           .on('broadcast', { event: 'mdc_sync' }, async (payload) => {
-            console.debug('[Realtime WebSocket] Received global peer sync broadcast:', payload);
+            console.debug(`[Realtime WebSocket ${primaryRoomName}] Received peer sync broadcast:`, payload);
             const bType = payload?.payload?.type;
             const bPayload = payload?.payload?.payload;
 
@@ -2593,29 +2663,10 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
-              if (bType === 'GLOBAL_FORCE_CACHE_REFRESH') {
-                await clearOperationalLocalStorage({ keepSession: true });
-                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
-                lastRefreshTimeRef.current = 0;
-                await autoRefreshData({ force: true, silent: false, isManual: true, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
-                showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
-              } else if (bType === 'MASTER_DATA_CLEARED') {
-                clearOperationalLocalStorage({
-                  keepSession: true,
-                  preservePeriod: bPayload?.period || null
-                });
-                try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
-                if (bPayload?.period && setActivePeriod) {
-                  setActivePeriod(bPayload.period);
-                }
-                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
-              } else if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
+            } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
+              if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
                 triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
-                if (bPayload?.period && setActivePeriod) {
-                  setActivePeriod(bPayload.period);
-                }
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
               }
             } else if (bType === 'STOCK_TRANSFERS_UPDATED') {
@@ -2635,7 +2686,34 @@ export function useCloudSync({
               if (bPayload?.updatedAt) {
                 dbStorage.setItem('mdc_stock_transfer_updated_at', bPayload.updatedAt);
               }
-            } else if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
+            }
+
+            const isAlreadyHandledLocally = [
+              'PACKING_PRESENCE', 'PACKING_STATION_DRAFT_UPDATE', 'REQUEST_PACKING_STATIONS',
+              'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNITS_BATCH_PACKED', 'UNIT_DELETED',
+              'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
+              'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
+              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
+              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
+              'SUPERVISOR_SETTINGS_UPDATED'
+            ].includes(bType);
+
+            if (!isAlreadyHandledLocally && payload?.payload?.table) {
+              triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload.payload.table);
+            }
+          });
+
+        // 2. Global Lightweight Alerts Channel (Zero heartbeats, strictly for administrative notifications)
+        alertsChannel = supabase
+          .channel('mdc-global-alerts-room', {
+            config: { broadcast: { self: false } }
+          })
+          .on('broadcast', { event: 'mdc_sync' }, async (payload) => {
+            const bType = payload?.payload?.type;
+            const bPayload = payload?.payload?.payload;
+
+            if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
               const targetUserId = String(bPayload?.userId || '').trim().toLowerCase();
               const targetEmail = String(bPayload?.email || '').trim().toLowerCase();
               const curUserId = String(currentUser?.id || '').trim().toLowerCase();
@@ -2671,29 +2749,32 @@ export function useCloudSync({
                   return merged;
                 });
               }
-            }
-
-            // Egress Defense: Only trigger full/selective HTTP hydration if an unhandled table was explicitly targeted.
-            // Events that are already applied in-memory (presences, pack updates, model changes) do not re-query the cloud DB.
-            const isAlreadyHandledLocally = [
-              'PACKING_PRESENCE', 'PACKING_STATION_DRAFT_UPDATE', 'REQUEST_PACKING_STATIONS',
-              'CALCULATION_MODEL_CHANGED', 'UNIT_PACKED', 'UNIT_UNPACKED', 'UNITS_BATCH_PACKED', 'UNIT_DELETED',
-              'PERIOD_RECORD_SAVED', 'PERIOD_RECORD_DELETED', 'GLOBAL_FORCE_CACHE_REFRESH',
-              'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
-              'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
-              'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
-              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
-              'SUPERVISOR_SETTINGS_UPDATED'
-            ].includes(bType);
-
-            if (!isAlreadyHandledLocally && payload?.payload?.table) {
-              triggerDebouncedRealtimeSync(`WebSocket Broadcast: ${bType || 'SYNC'}`, payload.payload.table);
+            } else if (bType === 'GLOBAL_FORCE_CACHE_REFRESH') {
+              await clearOperationalLocalStorage({ keepSession: true });
+              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              lastRefreshTimeRef.current = 0;
+              await autoRefreshData({ force: true, silent: false, isManual: true, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
+              showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
+            } else if (bType === 'MASTER_DATA_CLEARED') {
+              clearOperationalLocalStorage({
+                keepSession: true,
+                preservePeriod: bPayload?.period || null
+              });
+              try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
+              if (bPayload?.period && setActivePeriod) {
+                setActivePeriod(bPayload.period);
+              }
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+            } else if (bType === 'MASTER_DATA_UPDATED') {
+              const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
+              if (Date.now() - lastLocalTime >= 3000) {
+                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'WebSocket Broadcast [MASTER_DATA_UPDATED]' });
+              }
             }
           });
 
-        // Only subscribe to low-frequency, event-driven tables for postgres_changes.
-        // High-volume bulk tables (inventory_units, scan_logs, allocation_items, etc.) are synchronized
-        // via lightweight Supabase Broadcast events to prevent hitting MessagesPerSecondRateLimitReached.
+        // 3. Row-filtered postgres_changes subscriptions
+        // PMG branch users only subscribe to change events for their own site_id
         const REALTIME_POSTGRES_TABLES = [
           'parts_requests',
           'profiles',
@@ -2704,8 +2785,19 @@ export function useCloudSync({
         ];
 
         REALTIME_POSTGRES_TABLES.forEach(tbl => {
-          realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, (ev) => {
-            console.debug(`[Realtime Postgres] ${tbl} ${ev.eventType}`);
+          const filterParam = (isSiteRestricted && (tbl === 'parts_requests' || tbl === 'shipments'))
+            ? `site_id=eq.${userSiteId}`
+            : undefined;
+
+          const subConfig = {
+            event: '*',
+            schema: 'public',
+            table: tbl,
+            ...(filterParam ? { filter: filterParam } : {})
+          };
+
+          realtimeChannel.on('postgres_changes', subConfig, (ev) => {
+            console.debug(`[Realtime Postgres] ${tbl} ${ev.eventType}`, filterParam ? `(filter: ${filterParam})` : '');
 
             if (tbl === 'parts_requests' && setPartsRequests) {
               if (ev.eventType === 'INSERT' && ev.new?.id) {
@@ -2738,7 +2830,7 @@ export function useCloudSync({
         });
 
         realtimeChannel.subscribe((status) => {
-          console.debug('[Realtime WebSocket] Global channel status:', status);
+          console.debug(`[Realtime WebSocket] Room [${primaryRoomName}] status:`, status);
           if (status === 'SUBSCRIBED') {
             setRealtimeConnected(true);
             setCloudSyncStatus(prev => ({ ...prev, isOnline: true }));
@@ -2747,7 +2839,12 @@ export function useCloudSync({
           }
         });
 
+        alertsChannel.subscribe((status) => {
+          console.debug('[Realtime WebSocket] Alerts channel status:', status);
+        });
+
         realtimeChannelRef.current = realtimeChannel;
+        alertsChannelRef.current = alertsChannel;
       }
     } catch (e) {
       console.warn('Realtime / Broadcast channel notice:', e);
@@ -2758,12 +2855,16 @@ export function useCloudSync({
         try { broadcastBus.close(); } catch (e) {}
       }
       if (realtimeChannel && supabase) {
-        supabase.removeChannel(realtimeChannel);
+        try { supabase.removeChannel(realtimeChannel); } catch (e) {}
         realtimeChannelRef.current = null;
+      }
+      if (alertsChannel && supabase) {
+        try { supabase.removeChannel(alertsChannel); } catch (e) {}
+        alertsChannelRef.current = null;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentUser?.id, currentUser?.role, currentUser?.siteId]);
 
   // 1.5. Immediate forced auto-refresh when currentUser logs in or transitions
   const prevUserIdRef = useRef(currentUser?.id);

@@ -79,6 +79,18 @@ try {
   assert(textsWithTracking.includes('20227458'), 'Valid tracking number must be rendered');
   console.log('  ✓ PASS: Valid tracking number (20227458) is correctly displayed when present');
 
+  // Test 3: MDC - SUPERVISOR and GUARD ON DUTY alignment on Page 2 Declaration Form
+  const page2BottomTexts = capturedTexts.filter(t => t.y >= 198);
+  const supEntry = page2BottomTexts.find(t => t.text.toLowerCase().includes('anjo alcazar'));
+  const guardEntry = page2BottomTexts.find(t => t.text.toLowerCase().includes('joy libiano'));
+  assert(supEntry, 'MDC Supervisor name must be present in Page 2 bottom section');
+  assert(guardEntry, 'Guard on duty name must be present in Page 2 bottom section');
+  assert.strictEqual(supEntry.y, 214, 'Supervisor name must be positioned at y=214 (bottomY + 16)');
+  assert.strictEqual(guardEntry.y, 214, 'Guard on duty name must be positioned at y=214 (bottomY + 16)');
+  assert.strictEqual(supEntry.y, guardEntry.y, 'MDC Supervisor name and Guard on Duty name must be vertically aligned');
+  console.log('  ✓ PASS: MDC Supervisor name is aligned with Guard on Duty in the top section (y=214)');
+
+
 } finally {
   jspdfModule.default.jsPDF = origJSPDF;
 }

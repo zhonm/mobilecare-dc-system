@@ -3149,8 +3149,12 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                       {activeSiteStockRows.map((row, idx) => {
                         const rowKey = `${currentActiveMultiSite.id}-${row.partNumber}-${idx}`;
                         const isExpanded = expandedPartKey === rowKey;
-                        const isOwnSite = currentActiveMultiSite.id === currentUser?.siteId || currentActiveMultiSite.code === userSiteObj?.code;
-                        const canSeeFullDetails = isSuperadmin || (isPmgUser ? Boolean(row.canViewDetails) : isOwnSite);
+                        const isOwnSite = currentActiveMultiSite.id === currentUser?.siteId ||
+                          currentActiveMultiSite.id === currentUser?.site_id ||
+                          currentActiveMultiSite.code === userSiteObj?.code ||
+                          currentActiveMultiSite.code === currentUser?.siteCode ||
+                          currentActiveMultiSite.code === currentUser?.site_code;
+                        const canSeeFullDetails = isSuperadmin || isOwnSite || Boolean(row.canViewDetails);
 
                         return (
                           <tr key={rowKey} style={{ background: isOwnSite ? '#f8fafc' : '#ffffff' }}>
@@ -3238,8 +3242,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                     <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
                                       {row.serializedUnits.map(u => {
                                         const isAddedByCurUser = isSuperadmin || Boolean(currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
-                                        const canManageUnit = isSuperadmin || (!isPmgUser && isOwnSite) || isAddedByCurUser;
-                                        const isMaskedUnit = u.isMasked || (isPmgUser && !isAddedByCurUser);
+                                        const canManageUnit = isSuperadmin || isOwnSite || isAddedByCurUser;
+                                        const isMaskedUnit = u.isMasked || (!isSuperadmin && !isOwnSite && !isAddedByCurUser);
 
                                         return (
                                           <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
@@ -3296,9 +3300,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
                                   <Lock size={13} color="#94a3b8" />
                                   <span style={{ fontStyle: 'italic' }}>
-                                    {isPmgUser
-                                      ? 'Serial numbers protected (only visible to the user who added them)'
-                                      : `Serials restricted to ${currentActiveMultiSite.code} authorized staff`}
+                                    {`Serials restricted to ${currentActiveMultiSite.code} authorized staff`}
                                   </span>
                                 </div>
                               )}

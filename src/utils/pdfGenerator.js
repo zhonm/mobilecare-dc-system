@@ -503,16 +503,18 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.setTextColor(15, 23, 42);
   doc.text('MDC - SUPERVISOR', decLeftColX, bottomY);
 
+  // Supervisor Name (aligned with Guard on Duty field in the top section above the line)
+  if (supervisorName) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(supervisorName, decLeftColX, bottomY + 16);
+  }
+
   // Supervisor Underline for manual wet signature
   doc.setDrawColor(100, 116, 139);
   doc.setLineWidth(0.35);
   doc.line(decLeftColX, bottomY + 22, decLeftColX + decLeftColWidth, bottomY + 22);
-
-  // Supervisor Printed Name (centered neatly under the signature line)
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(51, 65, 85);
-  doc.text(supervisorName.toUpperCase(), decLeftColX + (decLeftColWidth / 2), bottomY + 26.5, { align: 'center' });
 
   // 2. Right: GUARD ON DUTY & DATE PICKED UP
   const rightBottomColX = idBoxX;
@@ -526,6 +528,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   if (guardOnDuty) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
     doc.text(guardOnDuty, rightBottomColX, bottomY + 16);
   }
   doc.line(rightBottomColX, bottomY + 22, rightBottomColX + rightBottomWidth, bottomY + 22);

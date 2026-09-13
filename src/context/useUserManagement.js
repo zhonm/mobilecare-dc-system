@@ -11,7 +11,7 @@ import {
   LEGACY_MOCK_IDS,
   sortUsersDeterministically
 } from '../constants/roles';
-import { isUUID, toValidUUID } from '../utils/appContextHelpers';
+import { isUUID, toValidUUID, isDcSite, resolveSite } from '../utils/appContextHelpers';
 
 export function useUserManagement({
   currentUser,
@@ -113,13 +113,21 @@ export function useUserManagement({
                 const passHash = p.password_hash || null;
                 const isPasswordSet = Boolean(p.has_set_password || passHash);
 
+                const isPmg = role === 'parts_management';
+                const isDc = isDcSite(p.site_id);
+                const resolvedSiteId = isPmg
+                  ? (!isDc && p.site_id ? p.site_id : null)
+                  : (p.site_id || 'site-dc');
+                const needsAssignment = isPmg && (!resolvedSiteId || isDc);
+
                 return {
                   id: p.id || `usr-${Date.now()}`,
                   email: p.email,
                   fullName: p.full_name || p.email.split('@')[0],
                   role: role,
                   rolePosition: resolvedPosition,
-                  siteId: p.site_id || 'site-dc',
+                  siteId: resolvedSiteId,
+                  needsSiteAssignment: needsAssignment,
                   hasSetPassword: isPasswordSet,
                   passwordHash: passHash,
                   isActive: p.is_active ?? true,
@@ -299,7 +307,20 @@ export function useUserManagement({
       return { success: false, error: 'User already exists' };
     }
 
-    const validUserId = toValidUUID(`usr-${cleanEmail}`);
+    if (role === 'parts_management') {
+      const isMissingSite = !siteId || !String(siteId).trim();
+      if (isMissingSite || isDcSite(siteId)) {
+        const errorMsg = 'A designated branch location is required for Parts Management (PMG) accounts. Central DC is restricted.';
+        showToast(errorMsg, 'error');
+        return { success: false, error: errorMsg };
+      }
+    }
+
+    const resolvedSiteId = (role === 'parts_management')
+      ? siteId
+      : (siteId || 'site-dc');
+
+    const validUserId = toValidUUID(`usr-${Date.now()}-${cleanEmail}`);
 
     const newUser = {
       id: validUserId,
@@ -307,7 +328,8 @@ export function useUserManagement({
       fullName: fullName.trim(),
       role,
       rolePosition: String(rolePosition || '').trim() || getDefaultRolePosition(role),
-      siteId: siteId || 'site-dc',
+      siteId: resolvedSiteId,
+      needsSiteAssignment: false,
       hasSetPassword: false,
       passwordHash: null,
       isActive: true,
@@ -324,7 +346,7 @@ export function useUserManagement({
     const defaultPages = newUser.permittedPages;
     const finalRolePosition = newUser.rolePosition;
 
-    const nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
+    let nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
     setUsersList(nextList);
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
@@ -337,6 +359,17 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
+        let effectiveSiteUUID = (resolvedSiteId && isUUID(resolvedSiteId)) ? resolvedSiteId : null;
+        if (!effectiveSiteUUID && resolvedSiteId) {
+          const resolved = resolveSite(resolvedSiteId);
+          if (resolved?.id && isUUID(resolved.id)) {
+            effectiveSiteUUID = resolved.id;
+          }
+        }
+        if (!effectiveSiteUUID && resolvedSiteId) {
+          effectiveSiteUUID = toValidUUID(resolvedSiteId);
+        }
+
         const { data: inserted, error: profErr } = await supabase
           .from('profiles')
           .upsert({
@@ -345,7 +378,7 @@ export function useUserManagement({
             full_name: fullName.trim(),
             role: role,
             role_position: finalRolePosition,
-            site_id: (siteId && isUUID(siteId)) ? siteId : null,
+            site_id: effectiveSiteUUID,
             has_set_password: false,
             password_hash: null,
             is_active: true,
@@ -358,6 +391,17 @@ export function useUserManagement({
         if (profErr) console.warn('Supabase profile upsert warning:', profErr.message);
 
         const effectiveUserId = (inserted?.[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validUserId;
+        if (effectiveUserId !== validUserId) {
+          newUser.id = effectiveUserId;
+          nextList = nextList.map(u => u.email.toLowerCase() === cleanEmail ? { ...u, id: effectiveUserId } : u);
+          setUsersList(nextList);
+          try {
+            localStorage.setItem('mdc_users', JSON.stringify(nextList));
+            sessionStorage.setItem('mdc_users', JSON.stringify(nextList));
+            dbStorage.setItem('mdc_users', nextList);
+          } catch (e) {}
+        }
+
         if (defaultPages && defaultPages.length > 0 && isUUID(effectiveUserId)) {
           const permRows = defaultPages.map(pageId => ({
             user_id: effectiveUserId,
@@ -367,10 +411,24 @@ export function useUserManagement({
           if (permErr) console.warn('Permission sync warning:', permErr.message);
         }
 
+        try {
+          await supabase.rpc('register_or_update_auth_user', {
+            p_email: cleanEmail,
+            p_password: null,
+            p_full_name: fullName.trim(),
+            p_role: role,
+            p_site_id: effectiveSiteUUID,
+            p_role_position: finalRolePosition,
+            p_is_active: true
+          });
+        } catch (rpcErr) {
+          console.debug('Provision RPC sync note:', rpcErr?.message);
+        }
+
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { email: cleanEmail, userId: effectiveUserId, table: 'saved_records' });
       } catch (dbErr) {
-        console.error('Could not sync provisioned user to Supabase:', dbErr.message);
+        console.error('Could not sync provisioned user to Supabase:', dbErr?.message || dbErr);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
         if (enqueueOfflineAction) {
           enqueueOfflineAction('PROFILE_UPSERT', {
@@ -568,6 +626,16 @@ export function useUserManagement({
           : supabase.from('profiles').update({ is_active: nextState, updated_at: new Date().toISOString() }).ilike('email', target.email);
         const { error } = await statusUpdateQuery;
         if (error) throw error;
+
+        try {
+          await supabase.rpc('register_or_update_auth_user', {
+            p_email: target.email,
+            p_is_active: nextState
+          });
+        } catch (rpcErr) {
+          console.debug('Status RPC sync note:', rpcErr?.message);
+        }
+
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) {
           if (!nextState) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Account deactivated by administrator' });
@@ -616,13 +684,24 @@ export function useUserManagement({
         : target.permittedPages;
     }
 
+    if (resolvedRole === 'parts_management') {
+      const targetSiteId = siteId || target.siteId;
+      const isMissingSite = !targetSiteId || !String(targetSiteId).trim();
+      if (isMissingSite || isDcSite(targetSiteId)) {
+        const errorMsg = 'A designated branch location is required for Parts Management (PMG) accounts. Central DC is restricted.';
+        showToast(errorMsg, 'error');
+        return { success: false, error: errorMsg };
+      }
+    }
+
     const updatedUser = {
       ...target,
       fullName: fullName.trim(),
       email: cleanEmail,
       role: resolvedRole,
       rolePosition: resolvedPosition,
-      siteId: siteId || target.siteId,
+      siteId: resolvedRole === 'parts_management' ? (siteId || target.siteId) : (siteId || target.siteId || 'site-dc'),
+      needsSiteAssignment: false,
       permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : finalPermittedPages
     };
 
@@ -644,7 +723,17 @@ export function useUserManagement({
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         let updatedInDb = false;
-        const effectiveSiteId = (siteId && isUUID(siteId)) ? siteId : (target.siteId && isUUID(target.siteId) ? target.siteId : null);
+        const targetSiteId = resolvedRole === 'parts_management' ? (siteId || target.siteId) : (siteId || target.siteId || 'site-dc');
+        let effectiveSiteId = (targetSiteId && isUUID(targetSiteId)) ? targetSiteId : null;
+        if (!effectiveSiteId && targetSiteId) {
+          const resolved = resolveSite(targetSiteId);
+          if (resolved?.id && isUUID(resolved.id)) {
+            effectiveSiteId = resolved.id;
+          }
+        }
+        if (!effectiveSiteId && targetSiteId) {
+          effectiveSiteId = toValidUUID(targetSiteId);
+        }
 
         const updatePayload = {
           email: cleanEmail,
@@ -826,6 +915,23 @@ export function useUserManagement({
 
         const { error } = await passUpdateQuery;
         if (error) throw error;
+
+        if (finalPassword) {
+          try {
+            await supabase.rpc('register_or_update_auth_user', {
+              p_email: target.email,
+              p_password: finalPassword,
+              p_full_name: target.fullName,
+              p_role: target.role,
+              p_site_id: (target.siteId && isUUID(target.siteId)) ? target.siteId : null,
+              p_role_position: target.rolePosition || null,
+              p_is_active: target.isActive !== false
+            });
+          } catch (rpcErr) {
+            console.debug('Password reset RPC sync note:', rpcErr?.message);
+          }
+        }
+
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) {
           if (requireNextLoginReset) broadcastCloudEvent('FORCE_LOGOUT_USER', { userId, email: target.email, reason: 'Password reset: Please set a new password' });

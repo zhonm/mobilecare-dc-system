@@ -425,3 +425,170 @@ export const formatSerialsForExport = (shipment, format = 'lines', serialDict = 
   return serials.join('\n');
 };
 
+/**
+ * Extracts a normalized Date object from a shipment.
+ * Tries pickup_date, shipment_date, created_at, received_date, dispatched_at,
+ * and falls back to extracting the MMDDYY date code from invoice_ref / shipment_number.
+ */
+export const parseShipmentDate = (sh) => {
+  if (!sh) return null;
+
+  // 1. Try explicit date fields
+  const candidates = [
+    sh.pickup_date,
+    sh.shipment_date,
+    sh.created_at,
+    sh.dispatched_at,
+    sh.received_date,
+    sh.received_at,
+    sh.updated_at
+  ];
+
+  for (const val of candidates) {
+    if (val && typeof val === 'string' && val.trim().length >= 8) {
+      const d = new Date(val);
+      if (!isNaN(d.getTime())) return d;
+    } else if (val instanceof Date && !isNaN(val.getTime())) {
+      return val;
+    }
+  }
+
+  // 2. Parse from invoice reference format (e.g. DCONWED#091226A or DCOWNED#083126E -> 2026-09-12 or 2026-08-31)
+  const ref = String(sh.invoice_ref || sh.shipment_number || '').trim();
+  const refMatch = ref.match(/(\d{2})(\d{2})(\d{2})[A-Za-z]?$/);
+  if (refMatch) {
+    const mm = parseInt(refMatch[1], 10);
+    const dd = parseInt(refMatch[2], 10);
+    const yy = parseInt(refMatch[3], 10);
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      const fullYear = yy < 50 ? 2000 + yy : 1900 + yy;
+      const parsedDate = new Date(fullYear, mm - 1, dd, 12, 0, 0);
+      if (!isNaN(parsedDate.getTime())) return parsedDate;
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Sorts shipments chronologically (default: newest to oldest).
+ */
+export const sortShipmentsChronological = (shipments = [], order = 'desc') => {
+  if (!Array.isArray(shipments)) return [];
+  const multiplier = order === 'asc' ? 1 : -1;
+
+  return [...shipments].sort((a, b) => {
+    const dateA = parseShipmentDate(a);
+    const dateB = parseShipmentDate(b);
+    const timeA = dateA ? dateA.getTime() : 0;
+    const timeB = dateB ? dateB.getTime() : 0;
+
+    if (timeA !== timeB) {
+      return (timeA - timeB) * multiplier;
+    }
+
+    // Secondary sort: invoice reference or id
+    const refA = String(a.invoice_ref || a.shipment_number || a.id || '');
+    const refB = String(b.invoice_ref || b.shipment_number || b.id || '');
+    return refB.localeCompare(refA) * (order === 'asc' ? -1 : 1);
+  });
+};
+
+/**
+ * Evaluates whether a completed shipment qualifies as an older archive manifest.
+ * Active shipments (pending pickup, shipped, draft) are NEVER older archive.
+ */
+export const isShipmentOlderArchive = (sh, referenceTime = Date.now(), daysThreshold = 7) => {
+  if (!sh) return false;
+  // Active/in-progress manifests always stay in the active operational view
+  if (isShipmentActive(sh)) return false;
+
+  const date = parseShipmentDate(sh);
+  if (!date) return false;
+
+  const thresholdMs = daysThreshold * 24 * 60 * 60 * 1000;
+  const ageMs = referenceTime - date.getTime();
+  return ageMs > thresholdMs;
+};
+
+/**
+ * Partitions a list of shipments into Recent / Active vs Older Historical Archive.
+ * Always ensures:
+ * 1. All active shipments (Draft, Pending Pickup, Shipped) stay in Recent.
+ * 2. Chronological sorting (newest first).
+ * 3. Completed shipments newer than daysThreshold stay in Recent.
+ * 4. Completed shipments older than daysThreshold move to Older Archive.
+ */
+export const partitionShipmentsByRecency = (shipments = [], daysThreshold = 7, minRecentCompleted = 5) => {
+  if (!Array.isArray(shipments)) return { recent: [], older: [], totalCount: 0, recentCount: 0, olderCount: 0 };
+
+  const sorted = sortShipmentsChronological(shipments, 'desc');
+  if (sorted.length === 0) {
+    return { recent: [], older: [], totalCount: 0, recentCount: 0, olderCount: 0 };
+  }
+
+  // Determine reference time: latest shipment date in the dataset or now (whichever is later)
+  let maxTime = Date.now();
+  for (const s of sorted) {
+    const d = parseShipmentDate(s);
+    if (d && d.getTime() > maxTime) {
+      maxTime = d.getTime();
+    }
+  }
+
+  const thresholdMs = daysThreshold * 24 * 60 * 60 * 1000;
+  const cutoffTime = maxTime - thresholdMs;
+
+  const recent = [];
+  const older = [];
+  let completedInRecent = 0;
+
+  for (const sh of sorted) {
+    const active = isShipmentActive(sh);
+    if (active) {
+      recent.push(sh);
+      continue;
+    }
+
+    const d = parseShipmentDate(sh);
+    const time = d ? d.getTime() : 0;
+
+    if (time >= cutoffTime || completedInRecent < minRecentCompleted) {
+      recent.push(sh);
+      completedInRecent++;
+    } else {
+      older.push(sh);
+    }
+  }
+
+  return {
+    recent,
+    older,
+    totalCount: sorted.length,
+    recentCount: recent.length,
+    olderCount: older.length
+  };
+};
+
+/**
+ * Checks whether a shipment was created, dispatched, or scheduled today.
+ * Handles YYYY-MM-DD date strings, ISO timestamps, and MMDDYY invoice codes.
+ */
+export const isShipmentToday = (sh, referenceDate = new Date()) => {
+  if (!sh) return false;
+  const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+  const refIsoDate = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}-${String(ref.getDate()).padStart(2, '0')}`;
+
+  const rawCandidates = [sh.shipment_date, sh.pickup_date, sh.created_at, sh.dispatched_at, sh.received_date]
+    .filter(Boolean)
+    .map(v => String(v).slice(0, 10));
+  if (rawCandidates.includes(refIsoDate)) return true;
+
+  const d = parseShipmentDate(sh);
+  if (!d) return false;
+  const dIsoDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return dIsoDate === refIsoDate;
+};
+
+
+

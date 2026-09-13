@@ -851,8 +851,9 @@ export function usePartsRequests({
             u.received_by_id === userId ||
             (u.received_by && currentUser?.fullName && u.received_by.toLowerCase() === currentUser.fullName.toLowerCase())
           ));
-          // In PMG accounts, serial numbers are only visible to the user who added them!
-          const canViewDetails = isSuper || (isPmg ? isAddedBySelf : (isOwnSite || isAddedBySelf));
+          // Serial numbers are visible for the user's assigned site, parts added by self, or Superadmin/Admin.
+          // Serials for other external sites remain protected.
+          const canViewDetails = isSuper || isOwnSite || isAddedBySelf;
 
           if (canViewDetails) {
             return {
@@ -897,7 +898,7 @@ export function usePartsRequests({
           }
         });
 
-        const hasUnmaskedAccess = isSuper || (isPmg ? serializedUnits.some(u => !u.isMasked) : isOwnSite);
+        const hasUnmaskedAccess = isSuper || isOwnSite || serializedUnits.some(u => !u.isMasked);
 
         return {
           ...partItem,
