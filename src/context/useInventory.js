@@ -898,18 +898,23 @@ export function useInventory({
       ? 'DC - CRBR'
       : 'MDC - Forecasting';
 
+    const nowIso = new Date().toISOString();
+
+    let updatedUnits = [];
     setInventoryUnits(prev => {
       const updated = (prev || []).map(u => {
         if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
           return {
             ...u,
             intake_assignment: effectiveAssignment,
-            notes: effectiveAssignment
+            notes: effectiveAssignment,
+            updated_at: nowIso
           };
         }
         return u;
       });
       const normalized = normalizeInventoryUnits(updated, parts);
+      updatedUnits = normalized;
       try {
         localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
         localStorage.removeItem('mdc_recent_scans');
@@ -918,55 +923,85 @@ export function useInventory({
       return normalized;
     });
 
+    if (updatedUnits.length === 0) {
+      try {
+        const saved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        if (Array.isArray(saved) && saved.length > 0) {
+          updatedUnits = saved.map(u => {
+            if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
+              return { ...u, intake_assignment: effectiveAssignment, notes: effectiveAssignment, updated_at: nowIso };
+            }
+            return u;
+          });
+        }
+      } catch (e) {}
+    }
+
+    let updatedRecords = [];
+    const matchingBatches = [];
     if (setDcIntakeRecords) {
       setDcIntakeRecords(prev => {
         let modified = false;
-        const updatedRecords = (prev || []).map(rec => {
+        const nextRecords = (prev || []).map(rec => {
           if (Array.isArray(rec.items) && rec.items.some(it => String(it.serial_number || '').toUpperCase() === cleanSerial)) {
             modified = true;
             const updatedItems = rec.items.map(it => {
               if (String(it.serial_number || '').toUpperCase() === cleanSerial) {
-                return { ...it, intake_assignment: effectiveAssignment, notes: effectiveAssignment };
+                return { ...it, intake_assignment: effectiveAssignment, notes: effectiveAssignment, updated_at: nowIso };
               }
               return it;
             });
-            const updatedRec = { ...rec, items: updatedItems, updated_at: new Date().toISOString() };
-            if (supabase) {
-              const formattedRow = formatDcIntakeRecordForDb(updatedRec, currentUser);
-              if (formattedRow) {
-                supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
-              }
-              const intakeYear = new Date(updatedRec.intake_date || new Date()).getFullYear() || new Date().getFullYear();
-              const intakeMonth = (new Date(updatedRec.intake_date || new Date()).getMonth() + 1) || (new Date().getMonth() + 1);
-              supabase.from('saved_records').upsert({
-                id: updatedRec.id,
-                record_type: 'intake_batch',
-                period_label: updatedRec.record_name,
-                period_year: intakeYear,
-                period_month: intakeMonth,
-                snapshot_data: updatedRec,
-                updated_at: new Date().toISOString()
-              }, { onConflict: 'id' }).then(() => {}).catch(() => {});
-            }
+            const updatedRec = { ...rec, items: updatedItems, updated_at: nowIso };
+            matchingBatches.push(updatedRec);
             return updatedRec;
           }
           return rec;
         });
         if (modified) {
-          try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updatedRecords)); } catch (e) {}
-          dbStorage.setItem('mdc_dc_intake_records', updatedRecords);
+          updatedRecords = nextRecords;
+          try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords)); } catch (e) {}
+          dbStorage.setItem('mdc_dc_intake_records', nextRecords);
         }
-        return updatedRecords;
+        return nextRecords;
       });
     }
 
+    if (updatedRecords.length === 0) {
+      try {
+        const savedIntakes = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
+        if (Array.isArray(savedIntakes) && savedIntakes.length > 0) {
+          let modified = false;
+          updatedRecords = savedIntakes.map(rec => {
+            if (Array.isArray(rec.items) && rec.items.some(it => String(it.serial_number || '').toUpperCase() === cleanSerial)) {
+              modified = true;
+              const updatedItems = rec.items.map(it => {
+                if (String(it.serial_number || '').toUpperCase() === cleanSerial) {
+                  return { ...it, intake_assignment: effectiveAssignment, notes: effectiveAssignment, updated_at: nowIso };
+                }
+                return it;
+              });
+              const updatedRec = { ...rec, items: updatedItems, updated_at: nowIso };
+              matchingBatches.push(updatedRec);
+              return updatedRec;
+            }
+            return rec;
+          });
+          if (modified) {
+            try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updatedRecords)); } catch (e) {}
+            dbStorage.setItem('mdc_dc_intake_records', updatedRecords);
+          }
+        }
+      } catch (e) {}
+    }
+
     if (supabase) {
+      if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         const { error: updateErr } = await supabase
           .from('inventory_units')
           .update({
             notes: effectiveAssignment,
-            updated_at: new Date().toISOString()
+            updated_at: nowIso
           })
           .eq('serial_number', cleanSerial);
         if (updateErr) {
@@ -975,13 +1010,70 @@ export function useInventory({
       } catch (e) {
         console.error('Supabase assignment update error:', e.message);
       }
+
+      for (const updatedRec of matchingBatches) {
+        try {
+          const formattedRow = formatDcIntakeRecordForDb(updatedRec, currentUser);
+          if (formattedRow) {
+            await supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' });
+          }
+          const intakeYear = new Date(updatedRec.intake_date || nowIso).getFullYear() || new Date().getFullYear();
+          const intakeMonth = (new Date(updatedRec.intake_date || nowIso).getMonth() + 1) || (new Date().getMonth() + 1);
+          await queuedSavedRecordsUpsert(supabase, {
+            id: updatedRec.id,
+            record_type: 'intake_batch',
+            period_label: updatedRec.record_name,
+            period_year: intakeYear,
+            period_month: intakeMonth,
+            snapshot_data: updatedRec,
+            updated_at: nowIso
+          }, { immediate: true });
+        } catch (e) {
+          console.warn('Failed to upsert updated intake record batch:', e.message);
+        }
+      }
+
+      if (updatedUnits.length > 0) {
+        queuedSavedRecordsUpsert(supabase, {
+          id: 'live_master_dc_inventory',
+          record_type: 'master_inventory',
+          period_label: 'Live Master DC Inventory',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master operational serialized inventory snapshot synchronized across all users',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { units: updatedUnits },
+          updated_at: nowIso
+        }, { debounceMs: 500 });
+      }
+
+      if (updatedRecords.length > 0) {
+        queuedSavedRecordsUpsert(supabase, {
+          id: 'master_dc_intakes_registry',
+          record_type: 'intake_registry',
+          period_label: 'Master DC Intakes Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master operational intake batches synchronized across all users',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: { records: updatedRecords },
+          updated_at: nowIso
+        }, { debounceMs: 500 });
+      }
+
+      if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
     }
 
     if (broadcastCloudEvent) {
       broadcastCloudEvent('STOCK_UPDATED', {
         serialNumber: cleanSerial,
+        serial: cleanSerial,
         assignment: effectiveAssignment,
         table: 'inventory_units'
+      });
+      broadcastCloudEvent('UNIT_SAVED', {
+        serialNumber: cleanSerial,
+        assignment: effectiveAssignment
       });
     }
 

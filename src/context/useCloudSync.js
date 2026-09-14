@@ -1952,17 +1952,32 @@ export function useCloudSync({
                 } else {
                   const existing = map.get(s);
                   const isExistingPackedOrShipped = existing && (existing.status === 'packed' || existing.status === 'shipped');
+
+                  // Compare timestamps: if existing (from authoritative inventory_units table) has newer or equal updated_at, its assignment takes precedence
+                  const existingTime = existing?.updated_at ? new Date(existing.updated_at).getTime() : 0;
+                  const uTime = u?.updated_at ? new Date(u.updated_at).getTime() : 0;
+                  const preferExisting = existingTime >= uTime || !u.intake_assignment;
+
+                  const resolvedAssignment = preferExisting
+                    ? (existing.intake_assignment || u.intake_assignment || 'MDC - Forecasting')
+                    : (u.intake_assignment || existing.intake_assignment || 'MDC - Forecasting');
+
+                  const resolvedNotes = preferExisting
+                    ? (existing.notes || u.notes || resolvedAssignment)
+                    : (u.notes || existing.notes || resolvedAssignment);
+
                   map.set(s, {
-                    ...existing,
                     ...u,
+                    ...existing,
                     status: isExistingPackedOrShipped ? existing.status : (u.status || existing.status || 'in_stock'),
                     current_site_id: isExistingPackedOrShipped ? existing.current_site_id : (u.current_site_id || existing.current_site_id),
                     box_number: isExistingPackedOrShipped ? (existing.box_number || 1) : (u.box_number || existing.box_number || 1),
-                    po_number: u.po_number || existing.po_number || null,
-                    po_id: u.po_id || existing.po_id || null,
-                    intake_assignment: u.intake_assignment || existing.intake_assignment || null,
-                    notes: u.notes || existing.notes || null,
-                    stocking_price: u.stocking_price || existing.stocking_price || 99
+                    po_number: existing.po_number || u.po_number || null,
+                    po_id: existing.po_id || u.po_id || null,
+                    intake_assignment: resolvedAssignment,
+                    notes: resolvedNotes,
+                    stocking_price: existing.stocking_price || u.stocking_price || 99,
+                    updated_at: preferExisting ? (existing.updated_at || u.updated_at) : (u.updated_at || existing.updated_at)
                   });
                 }
               }
@@ -2058,6 +2073,18 @@ export function useCloudSync({
               } else if (u.isSessionDraft) {
                 const cloudUnit = map.get(s);
                 map.set(s, { ...cloudUnit, ...u });
+              } else {
+                const cloudUnit = map.get(s);
+                const localTime = u.updated_at ? new Date(u.updated_at).getTime() : 0;
+                const cloudTime = cloudUnit?.updated_at ? new Date(cloudUnit.updated_at).getTime() : 0;
+                if (localTime > cloudTime && (u.intake_assignment || u.notes)) {
+                  map.set(s, {
+                    ...cloudUnit,
+                    intake_assignment: u.intake_assignment || cloudUnit.intake_assignment,
+                    notes: u.notes || cloudUnit.notes,
+                    updated_at: u.updated_at
+                  });
+                }
               }
             }
           });
@@ -2425,6 +2452,27 @@ export function useCloudSync({
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+    } else if (type === 'STOCK_UPDATED' && (payload.serialNumber || payload.serial)) {
+      const cleanS = String(payload.serialNumber || payload.serial).trim().toUpperCase();
+      const newAssign = payload.assignment || (payload.unit ? (payload.unit.intake_assignment || payload.unit.notes) : null);
+      if (cleanS && newAssign) {
+        setInventoryUnits(prev => {
+          const updated = (prev || []).map(u => {
+            if (String(u.serial_number || '').trim().toUpperCase() === cleanS) {
+              return {
+                ...u,
+                intake_assignment: newAssign,
+                notes: newAssign,
+                updated_at: new Date().toISOString()
+              };
+            }
+            return u;
+          });
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
     } else if ((type === 'STOCK_UPDATED' || type === 'UNIT_ADDED') && payload.unit) {
       const u = payload.unit;
       const cleanS = String(u.serial_number || payload.serial || '').trim().toUpperCase();

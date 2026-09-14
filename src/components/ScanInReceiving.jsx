@@ -44,13 +44,13 @@ import IntakeRecords from './IntakeRecords';
 // Pure category & assignment classification helpers
 function isUnitSvnr(u) {
   if (!u) return false;
-  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
   return a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr);
 }
 
 function isUnitCrbr(u) {
   if (!u) return false;
-  const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
   return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u);
 }
 
@@ -1167,13 +1167,20 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         category_name = unit.category_name || catMap.get(unit.category_id)?.name || 'Service Parts';
       }
 
+      const rawAssign = unit.intake_assignment || unit.part_assignment || unit.assignment || (unit.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : unit.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const intakeAssignment = String(rawAssign).includes('SVNR')
+        ? 'SVNR - Service Non-Repair'
+        : String(rawAssign).includes('CRBR')
+        ? 'DC - CRBR'
+        : 'MDC - Forecasting';
+
       return {
         ...unit,
         description: desc,
         iphone_model: unit.iphone_model || partInfo?.model || 'Universal / Multi-Model',
         category_code,
         category_name,
-        intake_assignment: unit.intake_assignment || unit.part_assignment || unit.assignment || 'MDC - Forecasting'
+        intake_assignment: intakeAssignment
       };
     });
   }, [availableInStockUnits, parts, categories]);
@@ -2830,17 +2837,19 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         ) : (
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={async () => {
                               let newDest = 'MDC - Forecasting';
                               if (isSvnr) {
                                 newDest = 'MDC - Forecasting';
                               } else if (isCrbr) {
-                                newDest = isProvincialSite(activeReceivingSite?.code) ? 'SVNR - Service Non-Repair' : 'MDC - Forecasting';
+                                newDest = 'SVNR - Service Non-Repair';
                               } else {
                                 newDest = 'DC - CRBR';
                               }
-                              updateUnitAssignment(unit.serial_number, newDest);
-                              setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest } : u));
+                              setSessionScans(prev => (prev || []).map(u => String(u.serial_number || '').toUpperCase() === String(unit.serial_number || '').toUpperCase() ? { ...u, intake_assignment: newDest, notes: newDest, updated_at: new Date().toISOString() } : u));
+                              if (updateUnitAssignment) {
+                                await updateUnitAssignment(unit.serial_number, newDest);
+                              }
                             }}
                             className="badge"
                             style={{
