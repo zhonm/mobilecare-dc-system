@@ -28,7 +28,8 @@ import {
   ChevronUp,
   Calendar,
   Loader2,
-  Archive
+  Archive,
+  Eye
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
@@ -91,10 +92,8 @@ export default function Shipments() {
   const [viewArchiveMode, setViewArchiveMode] = useState('recent_default'); // 'recent_default' | 'all' | 'older_only'
   const [isOlderExpanded, setIsOlderExpanded] = useState(false);
 
-  // Serials Modal State (View & Copy Plain Text for GSX / Fixably)
-  const [serialsModalState, setSerialsModalState] = useState(null);
+  // Consolidated Plain Text Serials Format & Copy State
   const [serialsFormat, setSerialsFormat] = useState('lines'); // 'lines' | 'csv' | 'tsv'
-  const [serialsModalSearch, setSerialsModalSearch] = useState('');
   const [showPlainTextArea, setShowPlainTextArea] = useState(false);
   const [copiedSerialToken, setCopiedSerialToken] = useState(null); // 'ALL' | specific serial string
 
@@ -107,6 +106,65 @@ export default function Shipments() {
 
   // Site Confirmation & Receipt Modal State
   const [receiveModalState, setReceiveModalState] = useState(null);
+
+  // Completed Delivered Package Full Details Pop-up Modal State
+  const [viewPackageModalState, setViewPackageModalState] = useState(null);
+  const [packageModalSearch, setPackageModalSearch] = useState('');
+  const [copiedPackageSerialToken, setCopiedPackageSerialToken] = useState(null);
+
+  const handleOpenPackageDetails = (shipment) => {
+    if (!shipment) return;
+    const dest = resolveSite(shipment.site_id || shipment.site_name, sites);
+    setViewPackageModalState({
+      shipment,
+      site: dest
+    });
+    setPackageModalSearch('');
+    setCopiedPackageSerialToken(null);
+    setSerialsFormat('lines');
+    setShowPlainTextArea(false);
+  };
+
+  const handleCopyPackageModalSingleSerial = (sn) => {
+    if (!sn) return;
+    const clean = String(sn).trim().toUpperCase();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(clean);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = clean;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    setCopiedPackageSerialToken(clean);
+    showToast(`Copied ${clean} to clipboard`, 'info');
+    setTimeout(() => setCopiedPackageSerialToken(null), 2000);
+  };
+
+  const handleCopyPackageModalAllSerials = (shipment) => {
+    if (!shipment || !Array.isArray(shipment.items)) return;
+    const serials = extractShipmentSerials(shipment);
+    if (serials.length === 0) {
+      showToast('No serial numbers found in this package.', 'warning');
+      return;
+    }
+    const textToCopy = serials.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = textToCopy;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    setCopiedPackageSerialToken('ALL');
+    showToast(`Copied ${serials.length} serials to clipboard`, 'success');
+    setTimeout(() => setCopiedPackageSerialToken(null), 2500);
+  };
 
   // Tracking Number Required Prompt Modal State (for Print / PDF)
   const [trackingModalState, setTrackingModalState] = useState(null);
@@ -414,16 +472,9 @@ export default function Shipments() {
     return Array.from(siteMap.values());
   }, [shipments, sites]);
 
-  // --- Packing List Serial Numbers Modal Handlers ---
+  // --- Consolidated Shipment & Serial Numbers Handlers ---
   const handleOpenSerialsModal = (shipment) => {
-    const destSite = resolveSite(shipment.site_id || shipment.site_name, sites);
-    setSerialsModalState({
-      shipment,
-      site: destSite
-    });
-    setSerialsFormat('lines');
-    setSerialsModalSearch('');
-    setShowPlainTextArea(false);
+    handleOpenPackageDetails(shipment);
   };
 
   const handleCopySerials = (shipment, format = serialsFormat) => {
@@ -464,8 +515,12 @@ export default function Shipments() {
     }
 
     setCopiedSerialToken('ALL');
+    setCopiedPackageSerialToken('ALL');
     showToast(`Copied ${serials.length} serials to clipboard (${format === 'lines' ? 'GSX/Fixably plain text' : format.toUpperCase()})`, 'success');
-    setTimeout(() => setCopiedSerialToken(null), 2500);
+    setTimeout(() => {
+      setCopiedSerialToken(null);
+      setCopiedPackageSerialToken(null);
+    }, 2500);
   };
 
   const handleCopySingleSerial = (sn) => {
@@ -795,7 +850,21 @@ export default function Shipments() {
     const isToday = todaysShipments.some(ts => ts.id === sh.id);
 
     return (
-      <tr key={sh.id} style={{ background: isOlder ? '#fafbfc' : 'inherit' }}>
+      <tr
+        key={sh.id}
+        onClick={(e) => {
+          if (e.target.closest('button') || e.target.closest('a') || e.target.closest('input')) {
+            return;
+          }
+          handleOpenPackageDetails(sh);
+        }}
+        className="shipment-row-clickable"
+        style={{
+          background: isOlder ? '#fafbfc' : 'inherit',
+          cursor: 'pointer'
+        }}
+        title="Click row to view full package & delivery details"
+      >
         <td className="font-mono">
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
             <strong style={{ color: '#0f172a', fontSize: '13px' }}>{sh.invoice_ref || sh.shipment_number}</strong>
@@ -906,7 +975,7 @@ export default function Shipments() {
         <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
           {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
         </td>
-        <td style={{ textAlign: 'center' }}>
+        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
           {normStatus === 'draft' ? (
             <span
               className="badge"
@@ -920,7 +989,8 @@ export default function Shipments() {
                 alignItems: 'center',
                 gap: '4px',
                 padding: '4px 8px',
-                borderRadius: '8px'
+                borderRadius: '8px',
+                whiteSpace: 'nowrap'
               }}
             >
               <FileText size={11} />
@@ -939,7 +1009,8 @@ export default function Shipments() {
                 alignItems: 'center',
                 gap: '4px',
                 padding: '4px 8px',
-                borderRadius: '8px'
+                borderRadius: '8px',
+                whiteSpace: 'nowrap'
               }}
             >
               <Clock size={11} />
@@ -958,7 +1029,8 @@ export default function Shipments() {
                 alignItems: 'center',
                 gap: '4px',
                 padding: '4px 8px',
-                borderRadius: '8px'
+                borderRadius: '8px',
+                whiteSpace: 'nowrap'
               }}
             >
               <Truck size={11} />
@@ -977,7 +1049,8 @@ export default function Shipments() {
                 alignItems: 'center',
                 gap: '4px',
                 padding: '4px 8px',
-                borderRadius: '8px'
+                borderRadius: '8px',
+                whiteSpace: 'nowrap'
               }}
             >
               <CheckCircle size={11} />
@@ -989,26 +1062,6 @@ export default function Shipments() {
         <td style={{ textAlign: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
             {/* Document group */}
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleOpenSerialsModal(sh)}
-              title="View Serial Numbers inside Packing List & Copy for GSX / Fixably"
-              style={{
-                background: '#f8fafc',
-                color: '#0f172a',
-                borderColor: '#cbd5e1',
-                fontWeight: 600,
-                fontSize: '11.5px',
-                padding: '4px 7px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '3px'
-              }}
-            >
-              <Hash size={12} color="#0284c7" />
-              <span>Serials</span>
-            </button>
-
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
@@ -1136,40 +1189,58 @@ export default function Shipments() {
               </button>
             )}
 
-            {/* ACTION BUTTON 3: Locked / Dispatched / Delete Controls */}
-            {isLockedConfirmedShipment(sh) ? (
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled
-                style={{ opacity: 0.85, cursor: 'not-allowed', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5', padding: '4px 7px' }}
-                title="Locked Record: Manifest is Received Confirmed and permanently archived."
-              >
-                <Lock size={12} />
-              </button>
-            ) : normStatus === 'shipped' ? (
-              null
-            ) : canUserDeleteRecord(sh, currentUser) ? (
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={() => {
-                  setShipmentToDelete(sh);
-                  setDeletionReason('Manifest Canceled / Not Dispatched');
-                  setCustomDeletionReason('');
-                }}
-                title="Delete Pending Shipment"
-                style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5', padding: '4px 7px' }}
-              >
-                <Trash2 size={12} />
-              </button>
-            ) : (
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled
-                style={{ opacity: 0.4, cursor: 'not-allowed', padding: '4px 7px' }}
-                title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
-              >
-                <Trash2 size={12} />
-              </button>
+            {/* ACTION BUTTON 3: View Full Shipment & Package Details */}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenPackageDetails(sh);
+              }}
+              style={{
+                color: isLockedConfirmedShipment(sh) ? '#047857' : '#0369a1',
+                borderColor: isLockedConfirmedShipment(sh) ? '#a7f3d0' : '#bae6fd',
+                background: isLockedConfirmedShipment(sh) ? '#ecfdf5' : '#f0f9ff',
+                padding: '4px 8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontWeight: 600,
+                fontSize: '11px',
+                cursor: 'pointer'
+              }}
+              title="View full package shipment and delivery details"
+            >
+              <Eye size={12} color={isLockedConfirmedShipment(sh) ? '#059669' : '#0284c7'} />
+              <span>Details</span>
+            </button>
+
+            {/* ACTION BUTTON 4: Delete Controls for Pending / Draft Manifests */}
+            {!isLockedConfirmedShipment(sh) && normStatus !== 'shipped' && (
+              canUserDeleteRecord(sh, currentUser) ? (
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShipmentToDelete(sh);
+                    setDeletionReason('Manifest Canceled / Not Dispatched');
+                    setCustomDeletionReason('');
+                  }}
+                  title="Delete Pending Shipment"
+                  style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5', padding: '4px 7px' }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled
+                  style={{ opacity: 0.4, cursor: 'not-allowed', padding: '4px 7px' }}
+                  title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )
             )}
           </div>
         </td>
@@ -1179,6 +1250,14 @@ export default function Shipments() {
 
   return (
     <div className="shipments-view">
+      <style>{`
+        .shipment-row-clickable {
+          transition: background-color 0.15s ease;
+        }
+        .shipment-row-clickable:hover {
+          background-color: #f0fdf4 !important;
+        }
+      `}</style>
       {/* 1. Header & Action Controls */}
       <div className="card" style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
@@ -2790,112 +2869,460 @@ export default function Shipments() {
         </div>
       )}
 
-      {/* --- Packing List Serial Numbers Modal (View & Plain-Text Copy for GSX/Fixably) --- */}
-      {serialsModalState && (
-        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setSerialsModalState(null); }}>
-          <div className="modal-content" style={{ maxWidth: '780px', width: '95%' }}>
-            <div className="modal-header" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderBottom: '1px solid #334155' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '8px', borderRadius: '8px' }}>
-                  <Hash size={22} color="#38bdf8" />
-                </div>
-                <div>
-                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Packing List Serial Numbers</h3>
-                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Manifest: <strong style={{ color: '#f8fafc' }}>{serialsModalState.shipment?.invoice_ref || serialsModalState.shipment?.shipment_number}</strong>
-                    {(serialsModalState.shipment?.transfer_slip_number || serialsModalState.shipment?.transfer_slip) && (
-                      <span> • TS: <strong style={{ color: '#38bdf8' }}>{serialsModalState.shipment?.transfer_slip_number || serialsModalState.shipment?.transfer_slip}</strong></span>
-                    )}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSerialsModalState(null)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
-              >
-                <X size={20} />
-              </button>
-            </div>
+      {/* --- Delivered / Package Full Details Pop-up Modal --- */}
+      {viewPackageModalState && (() => {
+        const sh = viewPackageModalState.shipment;
+        const site = viewPackageModalState.site;
+        const normStatus = getNormalizedStatus(sh);
+        const isReceivedConfirmed = normStatus === 'received_confirmed' || isLockedConfirmedShipment(sh);
+        const isShipped = normStatus === 'shipped';
+        const isPendingPickup = normStatus === 'pending_pickup';
 
-            <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
-              {/* Manifest Details Ribbon */}
+        const headerGradient = isReceivedConfirmed
+          ? 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)'
+          : isShipped
+          ? 'linear-gradient(135deg, #0369a1 0%, #0284c7 100%)'
+          : isPendingPickup
+          ? 'linear-gradient(135deg, #b45309 0%, #d97706 100%)'
+          : 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)';
+
+        const modalTitle = isReceivedConfirmed
+          ? 'Delivered Package Details'
+          : isShipped
+          ? 'In-Transit Package Details'
+          : isPendingPickup
+          ? 'Ready for Pickup Package Details'
+          : 'Draft Manifest Package Details';
+
+        const statusBadgeStyle = isReceivedConfirmed
+          ? { background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }
+          : isShipped
+          ? { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }
+          : isPendingPickup
+          ? { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' }
+          : { background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1' };
+
+        const statusBadgeLabel = isReceivedConfirmed
+          ? 'DELIVERED & CONFIRMED'
+          : isShipped
+          ? 'SHIPPED / IN TRANSIT'
+          : isPendingPickup
+          ? 'PENDING PICKUP'
+          : 'DRAFT';
+
+        return (
+          <div
+            className="modal-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setViewPackageModalState(null);
+            }}
+          >
+            <div
+              className="modal-content"
+              style={{
+                maxWidth: '880px',
+                width: '95%',
+                maxHeight: '92vh',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: 0,
+                overflow: 'hidden'
+              }}
+            >
+              {/* Modal Header */}
+              <div
+                className="modal-header"
+                style={{
+                  background: headerGradient,
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '16px 20px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.15)',
+                      padding: '8px',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {isReceivedConfirmed ? (
+                      <PackageCheck size={24} color="#6ee7b7" />
+                    ) : isShipped ? (
+                      <Truck size={24} color="#93c5fd" />
+                    ) : (
+                      <Clock size={24} color="#fde68a" />
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <h3 style={{ color: '#ffffff', fontSize: '17px', margin: 0, fontWeight: 700 }}>
+                        {modalTitle}
+                      </h3>
+                      <span
+                        style={{
+                          fontSize: '10.5px',
+                          fontWeight: 700,
+                          padding: '3px 10px',
+                          borderRadius: '12px',
+                          textTransform: 'uppercase',
+                          whiteSpace: 'nowrap',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          ...statusBadgeStyle
+                        }}
+                      >
+                        {statusBadgeLabel}
+                      </span>
+                    </div>
+                    <p style={{ color: '#cbd5e1', fontSize: '12px', margin: '3px 0 0 0' }}>
+                      Manifest: <strong style={{ color: '#f8fafc' }}>{sh?.invoice_ref || sh?.shipment_number}</strong>
+                      {(sh?.transfer_slip_number || sh?.transfer_slip) && (
+                        <span> • TS: <strong style={{ color: '#93c5fd' }}>{sh?.transfer_slip_number || sh?.transfer_slip}</strong></span>
+                      )}
+                      <span> • Destination: <strong style={{ color: '#f8fafc' }}>{site?.name || sh?.site_name}</strong></span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewPackageModalState(null)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    border: 'none',
+                    color: '#e2e8f0',
+                    cursor: 'pointer',
+                    borderRadius: '6px',
+                    padding: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div
+                className="modal-body"
+                style={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  padding: '20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px',
+                  background: '#ffffff'
+                }}
+              >
+                {/* Summary Cards Ribbon */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                    gap: '12px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '10px',
+                    padding: '14px 16px'
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
+                      Destination Site
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '13.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {site?.name || sh?.site_name}
+                    </div>
+                    <div style={{ marginTop: '4px' }}>
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '10px',
+                          background: isShipmentMetroManila(sh, sites) ? '#e0f2fe' : '#f3e8ff',
+                          color: isShipmentMetroManila(sh, sites) ? '#0369a1' : '#6b21a8',
+                          border: `1px solid ${isShipmentMetroManila(sh, sites) ? '#bae6fd' : '#e9d5ff'}`,
+                          fontWeight: 600
+                        }}
+                      >
+                        {isShipmentMetroManila(sh, sites) ? 'Metro Manila' : 'Province'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
+                      Courier &amp; Logistics
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
+                      {getShipmentCourierDisplay(sh)}
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#475569', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
+                      {sh?.tracking_number
+                        ? `Waybill #${sh.tracking_number}`
+                        : 'Direct Transfer / Hand Carry'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
+                      Package Volume
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#0284c7', marginTop: '2px' }}>
+                      {(sh?.items || []).length} Serialized Units
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                      {sh?.total_boxes || 1} Box{(sh?.total_boxes || 1) > 1 ? 'es' : ''}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
+                      Reference Slip
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
+                      {sh?.transfer_slip_number || sh?.transfer_slip ? (
+                        <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                          TS #{sh?.transfer_slip_number || sh?.transfer_slip}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#94a3b8' }}>None specified</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                      Inv: {sh?.invoice_ref || sh?.shipment_number || 'N/A'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Delivery & Confirmation Details Section */}
+                <div
+                  style={{
+                    background: isReceivedConfirmed ? '#f0fdf4' : '#f8fafc',
+                    border: `1px solid ${isReceivedConfirmed ? '#86efac' : '#e2e8f0'}`,
+                    borderRadius: '10px',
+                    padding: '14px 16px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {isReceivedConfirmed ? (
+                        <PackageCheck size={16} color="#16a34a" />
+                      ) : (
+                        <Clock size={16} color="#0284c7" />
+                      )}
+                      <strong
+                        style={{
+                          fontSize: '13px',
+                          color: isReceivedConfirmed ? '#166534' : '#0369a1',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.4px'
+                        }}
+                      >
+                        Branch Delivery &amp; Receipt Confirmation
+                      </strong>
+                    </div>
+                    {!isReceivedConfirmed && (
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: '10.5px',
+                          background: isShipped ? '#e0f2fe' : '#fef3c7',
+                          color: isShipped ? '#0369a1' : '#b45309',
+                          border: `1px solid ${isShipped ? '#bae6fd' : '#fde68a'}`,
+                          fontWeight: 600
+                        }}
+                      >
+                        {isShipped ? 'In Transit — Awaiting Site Receipt' : 'Awaiting Courier Handover'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: '12px'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
+                        Received By (Staff / Tech)
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: '13px', color: isReceivedConfirmed ? '#14532d' : '#64748b', marginTop: '2px' }}>
+                        {isReceivedConfirmed ? (
+                          sh?.received_by_name || sh?.receiving_signature || 'Authorized Branch Staff'
+                        ) : (
+                          <span style={{ fontStyle: 'italic', fontWeight: 500, color: '#94a3b8' }}>
+                            Awaiting Site Confirmation (Not yet received)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
+                        Date &amp; Time of Receipt
+                      </div>
+                      <div style={{ fontWeight: 600, fontSize: '13px', color: isReceivedConfirmed ? '#14532d' : '#64748b', marginTop: '2px' }}>
+                        {isReceivedConfirmed ? (
+                          (() => {
+                            const raw = sh?.received_at || sh?.received_date;
+                            if (!raw) return 'Confirmed upon receipt';
+                            try {
+                              const d = new Date(raw);
+                              if (isNaN(d.getTime())) return String(raw);
+                              return d.toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                                hour12: true
+                              });
+                            } catch {
+                              return String(raw);
+                            }
+                          })()
+                        ) : (
+                          <span style={{ fontStyle: 'italic', fontWeight: 500, color: '#94a3b8' }}>
+                            {isShipped ? 'Pending physical delivery to branch' : 'Awaiting dispatch & delivery'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ gridColumn: 'span 2' }}>
+                      <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
+                        Package &amp; Parts Condition
+                      </div>
+                      <div style={{ fontWeight: 600, fontSize: '12.5px', color: isReceivedConfirmed ? '#14532d' : '#64748b', marginTop: '2px' }}>
+                        {isReceivedConfirmed ? (
+                          sh?.receiving_condition || 'Good Condition (All parts intact & verified)'
+                        ) : (
+                          <span style={{ fontStyle: 'italic', fontWeight: 500, color: '#94a3b8' }}>
+                            Pending physical inspection upon branch arrival
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ gridColumn: 'span 2' }}>
+                      <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
+                        Branch Remarks &amp; Notes
+                      </div>
+                      <div
+                        style={{
+                          background: '#ffffff',
+                          border: `1px solid ${isReceivedConfirmed ? '#bbf7d0' : '#e2e8f0'}`,
+                          borderRadius: '6px',
+                          padding: '8px 12px',
+                          fontSize: '12px',
+                          color: isReceivedConfirmed ? '#166534' : '#64748b',
+                          marginTop: '4px',
+                          lineHeight: 1.4,
+                          fontStyle: isReceivedConfirmed ? 'normal' : 'italic'
+                        }}
+                      >
+                        {isReceivedConfirmed ? (
+                          sh?.receiving_notes || 'Confirmed physical receipt of package and parts at branch.'
+                        ) : (
+                          isShipped
+                            ? 'This package has been dispatched and is currently in transit with the courier. Receiving remarks and verification notes will only be recorded once the site user physically receives and confirms the shipment.'
+                            : 'Package is in preparation/pending courier pickup. Confirmation details will appear after delivery and branch verification.'
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              {/* Dispatch & Courier Handover Details Section */}
               <div
                 style={{
                   background: '#f8fafc',
                   border: '1px solid #e2e8f0',
                   borderRadius: '10px',
-                  padding: '12px 16px',
-                  marginBottom: '16px',
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                  gap: '12px'
+                  padding: '14px 16px'
                 }}
               >
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Destination Site</div>
-                  <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
-                    {serialsModalState.site?.name || serialsModalState.shipment?.site_name}
-                  </div>
-                  <div style={{ marginTop: '3px' }}>
-                    <span
-                      className="badge"
-                      style={{
-                        fontSize: '10px',
-                        background: isShipmentMetroManila(serialsModalState.shipment, sites) ? '#e0f2fe' : '#f3e8ff',
-                        color: isShipmentMetroManila(serialsModalState.shipment, sites) ? '#0369a1' : '#6b21a8',
-                        border: `1px solid ${isShipmentMetroManila(serialsModalState.shipment, sites) ? '#bae6fd' : '#e9d5ff'}`,
-                        fontWeight: 600
-                      }}
-                    >
-                      {isShipmentMetroManila(serialsModalState.shipment, sites) ? 'Metro Manila' : 'Province'}
-                    </span>
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                  <Truck size={16} color="#475569" />
+                  <strong style={{ fontSize: '13px', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Dispatch &amp; Handover Information
+                  </strong>
                 </div>
 
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Courier &amp; Tracking</div>
-                  <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
-                    {getShipmentCourierDisplay(serialsModalState.shipment)}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: '12px'
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Pickup / Dispatch Date</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {viewPackageModalState.shipment?.pickup_date ||
+                        viewPackageModalState.shipment?.shipment_date ||
+                        (viewPackageModalState.shipment?.dispatched_at ? new Date(viewPackageModalState.shipment.dispatched_at).toLocaleDateString('en-US') : 'N/A')}
+                    </div>
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
-                    {serialsModalState.shipment?.tracking_number ? `#${serialsModalState.shipment?.tracking_number}` : 'Hand Carry / Direct'}
-                  </div>
-                </div>
 
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Dispatched Units</div>
-                  <div style={{ fontWeight: 700, fontSize: '15px', color: '#0284c7', marginTop: '2px' }}>
-                    {extractShipmentSerials(serialsModalState.shipment).length} Serialized Units
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Rider / Handover Name</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {viewPackageModalState.shipment?.pickup_by_name ||
+                        viewPackageModalState.shipment?.courier_name ||
+                        'Assigned Rider'}
+                    </div>
                   </div>
-                  <div style={{ fontSize: '11.5px', color: '#64748b' }}>
-                    {serialsModalState.shipment?.total_boxes || 1} Box{(serialsModalState.shipment?.total_boxes || 1) > 1 ? 'es' : ''}
-                  </div>
-                </div>
 
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Shipment Status</div>
-                  <div style={{ marginTop: '3px' }}>
-                    <span className="badge" style={{
-                      background: getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#ecfdf5' : '#f0f9ff',
-                      color: getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#047857' : '#0369a1',
-                      border: `1px solid ${getNormalizedStatus(serialsModalState.shipment) === 'received_confirmed' ? '#a7f3d0' : '#bae6fd'}`,
-                      fontWeight: 700,
-                      fontSize: '11px'
-                    }}>
-                      {getNormalizedStatus(serialsModalState.shipment).toUpperCase().replace('_', ' ')}
-                    </span>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Rider Phone / Contact</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {viewPackageModalState.shipment?.rider_phone || 'N/A'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Vehicle Plate #</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                      {viewPackageModalState.shipment?.vehicle_plate || 'N/A'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Prepared / Packed By</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {viewPackageModalState.shipment?.prepared_by_name ||
+                        viewPackageModalState.shipment?.saved_by_name ||
+                        'DC Warehouse Staff'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Supervisor / Guard on Duty</div>
+                    <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
+                      {viewPackageModalState.shipment?.guard_on_duty ||
+                        viewPackageModalState.shipment?.supervisor_verified_by ||
+                        'Verified'}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* GSX / Fixably Copy Control Card */}
+              {/* GSX / Fixably Plain Text Export Card (Consolidated) */}
               <div
                 style={{
                   background: '#f0fdf4',
                   border: '1px solid #bbf7d0',
                   borderRadius: '10px',
-                  padding: '14px 16px',
-                  marginBottom: '16px'
+                  padding: '14px 16px'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
@@ -2915,9 +3342,9 @@ export default function Shipments() {
                   <button
                     type="button"
                     className="btn btn-sm"
-                    onClick={() => handleCopySerials(serialsModalState.shipment, serialsFormat)}
+                    onClick={() => handleCopySerials(viewPackageModalState.shipment, serialsFormat)}
                     style={{
-                      background: copiedSerialToken === 'ALL' ? '#15803d' : '#16a34a',
+                      background: copiedPackageSerialToken === 'ALL' || copiedSerialToken === 'ALL' ? '#15803d' : '#16a34a',
                       color: '#ffffff',
                       borderColor: '#15803d',
                       fontWeight: 700,
@@ -2930,15 +3357,15 @@ export default function Shipments() {
                       cursor: 'pointer'
                     }}
                   >
-                    {copiedSerialToken === 'ALL' ? (
+                    {copiedPackageSerialToken === 'ALL' || copiedSerialToken === 'ALL' ? (
                       <>
                         <Check size={15} />
-                        <span>Copied {extractShipmentSerials(serialsModalState.shipment).length} Serials!</span>
+                        <span>Copied {extractShipmentSerials(viewPackageModalState.shipment).length} Serials!</span>
                       </>
                     ) : (
                       <>
                         <Copy size={15} />
-                        <span>Copy All Serials ({extractShipmentSerials(serialsModalState.shipment).length})</span>
+                        <span>Copy All Serials ({extractShipmentSerials(viewPackageModalState.shipment).length})</span>
                       </>
                     )}
                   </button>
@@ -3020,13 +3447,13 @@ export default function Shipments() {
                   <div style={{ marginTop: '12px' }}>
                     <textarea
                       readOnly
-                      rows={Math.min(8, Math.max(3, extractShipmentSerials(serialsModalState.shipment).length))}
+                      rows={Math.min(8, Math.max(3, extractShipmentSerials(viewPackageModalState.shipment).length))}
                       value={
                         serialsFormat === 'lines'
-                          ? extractShipmentSerials(serialsModalState.shipment).join('\n')
+                          ? extractShipmentSerials(viewPackageModalState.shipment).join('\n')
                           : serialsFormat === 'csv'
-                          ? extractShipmentSerials(serialsModalState.shipment).join(', ')
-                          : (serialsModalState.shipment?.items || []).map(it => healShipmentItem(it, serialDict, partsMapByPn)).map((it, idx) => `${idx + 1}\t${it.part_number || ''}\t${it.description || ''}\t${it.serial_number || it.serialNumber || ''}\t${it.box_number || 1}`).join('\n')
+                          ? extractShipmentSerials(viewPackageModalState.shipment).join(', ')
+                          : (viewPackageModalState.shipment?.items || []).map(it => healShipmentItem(it, serialDict, partsMapByPn)).map((it, idx) => `${idx + 1}\t${it.part_number || ''}\t${it.description || ''}\t${it.serial_number || it.serialNumber || ''}\t${it.box_number || 1}`).join('\n')
                       }
                       onFocus={(e) => e.target.select()}
                       style={{
@@ -3047,160 +3474,299 @@ export default function Shipments() {
                 )}
               </div>
 
-              {/* Serials Table Header & In-Modal Search */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: '10px' }}>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a' }}>
-                  Packing List Items ({serialsModalState.shipment?.items?.length || 0})
-                </div>
-                <div style={{ position: 'relative', width: '220px' }}>
-                  <Search size={12} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Filter serials or part codes..."
-                    value={serialsModalSearch}
-                    onChange={(e) => setSerialsModalSearch(e.target.value)}
-                    style={{ paddingLeft: '26px', height: '30px', fontSize: '11.5px', width: '100%' }}
-                  />
-                </div>
-              </div>
+              {/* Included Parts Table Section */}
+              <div style={{ marginTop: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Hash size={16} color="#0284c7" />
+                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Included Parts &amp; Serial Numbers ({(viewPackageModalState.shipment?.items || []).length})
+                    </strong>
+                  </div>
 
-              {/* Table of Serial Numbers */}
-              <div className="table-container" style={{ border: '1px solid #e2e8f0', borderRadius: '8px', maxHeight: '340px', overflowY: 'auto' }}>
-                <table className="data-table" style={{ margin: 0 }}>
-                  <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f8fafc' }}>
-                    <tr>
-                      <th style={{ width: '40px', textAlign: 'center' }}>#</th>
-                      <th style={{ width: '120px' }}>Part Number</th>
-                      <th>Description</th>
-                      <th>Serial Number</th>
-                      <th style={{ width: '70px', textAlign: 'center' }}>Box #</th>
-                      <th style={{ width: '80px', textAlign: 'center' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(serialsModalState.shipment?.items || [])
-                      .map(it => healShipmentItem(it, serialDict, partsMapByPn))
-                      .filter(it => {
-                        if (!serialsModalSearch.trim()) return true;
-                        const q = serialsModalSearch.toLowerCase();
-                        const sn = String(it.serial_number || it.serialNumber || it.serial || '').toLowerCase();
-                        const pn = String(it.part_number || it.partNumber || '').toLowerCase();
-                        const desc = String(it.description || it.partDescription || '').toLowerCase();
-                        return sn.includes(q) || pn.includes(q) || desc.includes(q);
-                      })
-                      .map((it, idx) => {
-                        const serialVal = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-                        const isCopied = copiedSerialToken === serialVal;
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {/* Search Input */}
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type="text"
+                        className="form-input form-input-sm"
+                        placeholder="Search part or serial..."
+                        value={packageModalSearch}
+                        onChange={(e) => setPackageModalSearch(e.target.value)}
+                        style={{ fontSize: '12px', paddingLeft: '28px', width: '200px' }}
+                      />
+                      <Search
+                        size={13}
+                        style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}
+                      />
+                    </div>
 
-                        return (
-                          <tr key={idx}>
-                            <td style={{ textAlign: 'center', fontSize: '11px', color: '#64748b' }}>{idx + 1}</td>
-                            <td className="font-mono" style={{ fontWeight: 600, fontSize: '12px' }}>
-                              {it.part_number || it.partNumber || 'N/A'}
-                            </td>
-                            <td style={{ fontSize: '11.5px', color: '#334155' }}>
-                              {it.description || it.partDescription || 'Service Part'}
-                            </td>
-                            <td>
-                              <span
-                                className="font-mono"
-                                style={{
-                                  background: '#f1f5f9',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  fontSize: '12px',
-                                  fontWeight: 700,
-                                  color: '#0f172a',
-                                  border: '1px solid #e2e8f0',
-                                  letterSpacing: '0.5px'
-                                }}
-                              >
-                                {serialVal || 'NO SERIAL'}
-                              </span>
-                            </td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px' }}>
-                              {it.box_number ? `${it.box_number}/${serialsModalState.shipment.total_boxes || 1}` : '1/1'}
-                            </td>
-                            <td style={{ textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => handleCopySingleSerial(serialVal)}
-                                title={`Copy ${serialVal}`}
-                                style={{
-                                  padding: '2px 8px',
-                                  fontSize: '11px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  borderColor: isCopied ? '#86efac' : '#cbd5e1',
-                                  background: isCopied ? '#f0fdf4' : '#ffffff',
-                                  color: isCopied ? '#16a34a' : '#475569'
-                                }}
-                              >
-                                {isCopied ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
-                                <span>{isCopied ? 'Copied' : 'Copy'}</span>
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
+                    {/* Copy All Serials */}
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => handleCopyPackageModalAllSerials(viewPackageModalState.shipment)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        background: copiedPackageSerialToken === 'ALL' ? '#ecfdf5' : '#ffffff',
+                        color: copiedPackageSerialToken === 'ALL' ? '#059669' : '#334155',
+                        borderColor: copiedPackageSerialToken === 'ALL' ? '#a7f3d0' : '#cbd5e1'
+                      }}
+                      title="Copy all serial numbers in this package to clipboard"
+                    >
+                      {copiedPackageSerialToken === 'ALL' ? <Check size={13} color="#059669" /> : <Copy size={13} />}
+                      <span>{copiedPackageSerialToken === 'ALL' ? 'Copied All!' : 'Copy All Serials'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Parts Table */}
+                <div
+                  style={{
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    maxHeight: '260px',
+                    overflowY: 'auto'
+                  }}
+                >
+                  <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', position: 'sticky', top: 0, zIndex: 1 }}>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600, width: '40px' }}>#</th>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600 }}>Part Number</th>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600 }}>Description</th>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600 }}>Serial Number</th>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600, width: '70px' }}>Box #</th>
+                        <th style={{ padding: '8px 12px', color: '#475569', fontWeight: 600, width: '115px', textAlign: 'center', whiteSpace: 'nowrap' }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const rawItems = viewPackageModalState.shipment?.items || [];
+                        const healedItems = rawItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+                        const q = packageModalSearch.trim().toLowerCase();
+                        const filtered = healedItems.filter(it => {
+                          if (!q) return true;
+                          const pn = String(it.part_number || it.partNumber || '').toLowerCase();
+                          const desc = String(it.description || it.partDescription || '').toLowerCase();
+                          const sn = String(it.serial_number || it.serialNumber || it.serial || '').toLowerCase();
+                          const box = String(it.box_number || '').toLowerCase();
+                          return pn.includes(q) || desc.includes(q) || sn.includes(q) || box.includes(q);
+                        });
+
+                        if (filtered.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                                {q ? `No parts match filter "${packageModalSearch}"` : 'No parts listed in this manifest.'}
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return filtered.map((it, idx) => {
+                          const sn = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
+                          const isCopied = copiedPackageSerialToken === sn;
+
+                          return (
+                            <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '8px 12px', color: '#64748b' }}>{idx + 1}</td>
+                              <td style={{ padding: '8px 12px', fontWeight: 600, fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
+                                {it.part_number || it.partNumber || 'N/A'}
+                              </td>
+                              <td style={{ padding: '8px 12px', color: '#334155' }}>
+                                {it.description || it.partDescription || '—'}
+                              </td>
+                              <td style={{ padding: '8px 12px' }}>
+                                {sn ? (
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0369a1' }}>
+                                      {sn}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyPackageModalSingleSerial(sn)}
+                                      title={`Copy serial ${sn}`}
+                                      style={{
+                                        background: isCopied ? '#dcfce7' : '#f1f5f9',
+                                        border: `1px solid ${isCopied ? '#86efac' : '#cbd5e1'}`,
+                                        borderRadius: '4px',
+                                        padding: '2px 5px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                    >
+                                      {isCopied ? <Check size={11} color="#15803d" /> : <Copy size={11} color="#64748b" />}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>Non-serialized</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px 12px', color: '#475569' }}>
+                                Box {it.box_number || 1}
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '4px',
+                                    whiteSpace: 'nowrap',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    lineHeight: 1,
+                                    background: isReceivedConfirmed ? '#ecfdf5' : isShipped ? '#e0f2fe' : isPendingPickup ? '#fef3c7' : '#f1f5f9',
+                                    color: isReceivedConfirmed ? '#047857' : isShipped ? '#0369a1' : isPendingPickup ? '#b45309' : '#64748b',
+                                    border: `1px solid ${isReceivedConfirmed ? '#a7f3d0' : isShipped ? '#bae6fd' : isPendingPickup ? '#fde68a' : '#cbd5e1'}`,
+                                    borderRadius: '12px',
+                                    padding: '3px 9px'
+                                  }}
+                                >
+                                  {isReceivedConfirmed ? (
+                                    <>
+                                      <CheckCircle2 size={11} />
+                                      <span>Verified</span>
+                                    </>
+                                  ) : isShipped ? (
+                                    <>
+                                      <Truck size={11} />
+                                      <span>In Transit</span>
+                                    </>
+                                  ) : isPendingPickup ? (
+                                    <>
+                                      <Clock size={11} />
+                                      <span>Ready</span>
+                                    </>
+                                  ) : (
+                                    <span>Draft</span>
+                                  )}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', gap: '8px' }}>
+            {/* Modal Footer */}
+            <div
+              className="modal-footer"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '12px 20px',
+                background: '#f8fafc',
+                borderTop: '1px solid #e2e8f0'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => handleRequestPrintOrPDF(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site, 'pdf')}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                  onClick={() => {
+                    handleRequestPrintOrPDF(
+                      viewPackageModalState.shipment,
+                      viewPackageModalState.shipment?.items || [],
+                      viewPackageModalState.site,
+                      'pdf'
+                    );
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '12px',
+                    fontWeight: 600
+                  }}
+                  title="Download Corporate PDF Packing List"
                 >
-                  <Download size={14} />
-                  <span>Download PDF</span>
+                  <Download size={13} />
+                  <span>Corporate PDF</span>
                 </button>
+
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => handleDownloadXLSX(serialsModalState.shipment, serialsModalState.shipment.items, serialsModalState.site)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0' }}
+                  onClick={() => {
+                    handleDownloadXLSX(
+                      viewPackageModalState.shipment,
+                      viewPackageModalState.shipment?.items || [],
+                      viewPackageModalState.site
+                    );
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    background: '#f0fdf4',
+                    color: '#15803d',
+                    borderColor: '#bbf7d0'
+                  }}
+                  title="Download Excel Backup (.xlsx)"
                 >
-                  <FileSpreadsheet size={14} color="#16a34a" />
-                  <span>Download Excel (.xlsx)</span>
+                  <FileSpreadsheet size={13} color="#16a34a" />
+                  <span>Download XLSX</span>
                 </button>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={() => setSerialsModalState(null)}
+                  onClick={() => setViewPackageModalState(null)}
+                  style={{ minWidth: '80px' }}
                 >
                   Close
                 </button>
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => handleCopySerials(serialsModalState.shipment, serialsFormat)}
+                  onClick={() => handleCopySerials(viewPackageModalState.shipment, serialsFormat)}
                   style={{
                     background: '#16a34a',
-                    borderColor: '#16a34a',
+                    borderColor: '#15803d',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    fontWeight: 600,
+                    fontSize: '12px'
                   }}
+                  title="Copy plain-text serials formatted for GSX / Fixably"
                 >
-                  <Copy size={14} />
-                  <span>Copy Plain Text Serials</span>
+                  {copiedPackageSerialToken === 'ALL' || copiedSerialToken === 'ALL' ? (
+                    <>
+                      <Check size={13} />
+                      <span>Copied All Serials!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={13} />
+                      <span>Copy Plain Text Serials</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* --- Site Serials Aggregator Modal (All Shipments per Site) --- */}
       {isSiteSerialsModalOpen && (

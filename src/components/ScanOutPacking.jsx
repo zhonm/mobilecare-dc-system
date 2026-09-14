@@ -139,7 +139,7 @@ export default function ScanOutPacking() {
           const rawTrk = parsed.tracking_number;
           const cleanTrk = (rawTrk === '20227258' || rawTrk === '20227303') ? '' : (rawTrk || '');
           const draftSite = sites.find(s => s.id === parsed.site_id);
-          const initialCourier = draftSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express';
+          const initialCourier = draftSite?.region === 'Provincial' || (draftSite && draftSite.region !== 'Metro Manila') ? 'Lite Express' : 'Lalamove';
           const isLite = String(parsed.carrier || parsed.courier || initialCourier).toLowerCase().includes('lite express');
           const resolvedMode = parsed.shipping_mode || parsed.freight_mode || (isLite ? detectRecommendedShippingMode(parsed.items) : '');
           return {
@@ -1203,11 +1203,11 @@ export default function ScanOutPacking() {
     try {
       const cleanTracking = String(currentShipment.tracking_number || '').trim();
       const isMM = selectedSite?.region === 'Metro Manila';
-      const isLite = String(currentShipment.carrier || '').toLowerCase().includes('lite express') || (!currentShipment.carrier && !isMM);
+      const isLite = String(currentShipment.carrier || '').toLowerCase().includes('lite express');
       const resolvedMode = currentShipment.shipping_mode || (isLite ? detectRecommendedShippingMode(currentShipment.items) : '');
       const autoCourier = isLite
         ? formatCourierWithMode('Lite Express', resolvedMode)
-        : (currentShipment.carrier || (isMM ? 'Lalamove' : 'Lite Express'));
+        : (currentShipment.carrier || (isMM ? 'Lalamove' : (selectedSite ? 'Lite Express' : 'Lalamove')));
 
       const activeUserName = currentShipment.prepared_by_name?.trim() && currentShipment.prepared_by_name !== 'Warehouse Staff'
         ? currentShipment.prepared_by_name.trim()
@@ -1749,7 +1749,7 @@ export default function ScanOutPacking() {
                 value={
                   String(currentShipment.carrier || '').toLowerCase().includes('lite express')
                     ? 'Lite Express'
-                    : (currentShipment.carrier === 'Utility' ? 'Utility' : (selectedSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express'))
+                    : (String(currentShipment.carrier || '').toLowerCase().includes('utility') ? 'Utility' : 'Lalamove')
                 }
                 onChange={(e) => handleCourierChange(e.target.value)}
               >
@@ -1766,7 +1766,7 @@ export default function ScanOutPacking() {
                 title="Transfer Slip Number (e.g. TS-2026-0089)"
               />
             </div>
-            {String(currentShipment.carrier || (selectedSite?.region === 'Metro Manila' ? 'Lalamove' : 'Lite Express')).toLowerCase().includes('lite express') && (
+            {String(currentShipment.carrier || 'Lalamove').toLowerCase().includes('lite express') && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px', background: 'rgba(30, 41, 59, 0.6)', padding: '3px 6px', borderRadius: '6px', border: '1px solid #334155' }}>
                 <span style={{ fontSize: '9.5px', color: '#94a3b8', fontWeight: 700, letterSpacing: '0.3px' }}>
                   FREIGHT:

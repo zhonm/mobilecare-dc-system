@@ -650,8 +650,8 @@ export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
  * Resolves the display courier name for a shipment, taking into account shipping_mode and items.
  */
 export const getShipmentCourierDisplay = (shipment, items = null) => {
-  if (!shipment) return 'Lite Express';
-  const rawCarrier = shipment.carrier || shipment.courier || 'Lite Express';
+  if (!shipment) return 'Lalamove';
+  const rawCarrier = shipment.carrier || shipment.courier || 'Lalamove';
   const isLite = String(rawCarrier).toLowerCase().includes('lite express');
   if (!isLite) return rawCarrier;
 
