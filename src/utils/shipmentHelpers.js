@@ -590,5 +590,80 @@ export const isShipmentToday = (sh, referenceDate = new Date()) => {
   return dIsoDate === refIsoDate;
 };
 
+/**
+ * Detects whether an item or list of items contains any battery parts.
+ * Lithium-ion batteries require Land freight under Dangerous Goods / CAAP rules.
+ */
+export const hasBatteryItem = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) return false;
+  return items.some(it => {
+    const desc = String(it.description || it.partDescription || it.part_description || '').toLowerCase();
+    const cat = String(it.category || '').toLowerCase();
+    const pn = String(it.part_number || it.partNumber || '').toUpperCase();
+    return desc.includes('battery') || cat.includes('battery') || pn.includes('BATT');
+  });
+};
+
+/**
+ * Recommends shipping mode ('Land' or 'Air') based on packed items.
+ * Battery or Battery/Display -> 'Land' (IATA / CAAP Hazmat regulation).
+ * Display or other parts without battery -> 'Air'.
+ */
+export const detectRecommendedShippingMode = (items = []) => {
+  return hasBatteryItem(items) ? 'Land' : 'Air';
+};
+
+/**
+ * Formats the courier name with shipping mode (Land or Air) for display on Packing List & Declaration Form.
+ * E.g., 'Lite Express (Air)' or 'Lite Express (Land)'
+ */
+export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
+  const rawCarrier = String(carrier || '').trim();
+  if (!rawCarrier) return 'Lite Express';
+
+  const isLite = rawCarrier.toLowerCase().includes('lite express');
+  if (!isLite) return rawCarrier;
+
+  // Extract explicit mode if already in carrier string
+  if (/\((Air|Land)\)/i.test(rawCarrier)) {
+    const match = rawCarrier.match(/\((Air|Land)\)/i);
+    const resolvedMode = shippingMode ? (shippingMode.toLowerCase() === 'land' ? 'Land' : 'Air') : (match[1].toLowerCase() === 'land' ? 'Land' : 'Air');
+    return `Lite Express (${resolvedMode})`;
+  }
+  if (/- (Air|Land)/i.test(rawCarrier)) {
+    const match = rawCarrier.match(/- (Air|Land)/i);
+    const resolvedMode = shippingMode ? (shippingMode.toLowerCase() === 'land' ? 'Land' : 'Air') : (match[1].toLowerCase() === 'land' ? 'Land' : 'Air');
+    return `Lite Express (${resolvedMode})`;
+  }
+
+  const mode = String(shippingMode || '').trim().toLowerCase();
+  if (mode === 'land') {
+    return 'Lite Express (Land)';
+  } else if (mode === 'air') {
+    return 'Lite Express (Air)';
+  }
+
+  return 'Lite Express';
+};
+
+/**
+ * Resolves the display courier name for a shipment, taking into account shipping_mode and items.
+ */
+export const getShipmentCourierDisplay = (shipment, items = null) => {
+  if (!shipment) return 'Lite Express';
+  const rawCarrier = shipment.carrier || shipment.courier || 'Lite Express';
+  const isLite = String(rawCarrier).toLowerCase().includes('lite express');
+  if (!isLite) return rawCarrier;
+
+  const resolvedItems = items || shipment.items || [];
+  const mode = shipment.shipping_mode || shipment.freight_mode || (resolvedItems.length > 0 ? detectRecommendedShippingMode(resolvedItems) : '');
+  
+  if (mode) {
+    return formatCourierWithMode(rawCarrier, mode);
+  }
+  return formatCourierWithMode(rawCarrier, 'Air');
+};
+
+
 
 

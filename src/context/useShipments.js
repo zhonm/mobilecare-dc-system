@@ -1021,6 +1021,12 @@ export function useShipments({
       return { success: false, error: 'Shipment not found' };
     }
 
+    const normStatus = String(target.status || '').toLowerCase();
+    if (normStatus !== 'shipped' && normStatus !== 'in_transit') {
+      showToast?.('Package must be shipped from DC before site receipt can be confirmed.', 'warning');
+      return { success: false, error: 'Package must be shipped before confirmation' };
+    }
+
     const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Branch Staff');
     const cleanDate = String(receiveDetails.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
     const cleanCondition = receiveDetails.receivedCondition || 'Good Condition (All parts intact & verified)';

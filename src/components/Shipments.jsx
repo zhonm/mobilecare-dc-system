@@ -16,6 +16,7 @@ import {
   Trash2,
   Lock,
   Truck,
+  Plane,
   Clock,
   PackageCheck,
   Hash,
@@ -41,7 +42,11 @@ import {
   sortShipmentsChronological,
   partitionShipmentsByRecency,
   parseShipmentDate,
-  isShipmentToday
+  isShipmentToday,
+  getShipmentCourierDisplay,
+  formatCourierWithMode,
+  detectRecommendedShippingMode,
+  hasBatteryItem
 } from '../utils/shipmentHelpers';
 
 export default function Shipments() {
@@ -484,9 +489,13 @@ export default function Shipments() {
   // --- Courier Handover: Open Modal ---
   const handleOpenPickupModal = (shipment) => {
     const isMM = isShipmentMetroManila(shipment, sites);
+    const rawCarrier = shipment.carrier || shipment.courier || (isMM ? 'Lalamove' : 'Lite Express');
+    const isLite = String(rawCarrier).toLowerCase().includes('lite express');
+    const currentMode = shipment.shipping_mode || shipment.freight_mode || (isLite ? detectRecommendedShippingMode(shipment.items) : '');
     setPickupModalState({
       shipment,
-      carrier: shipment.carrier || shipment.courier || (isMM ? 'Lalamove' : 'Lite Express'),
+      carrier: isLite ? 'Lite Express' : rawCarrier,
+      shippingMode: currentMode || (hasBatteryItem(shipment.items) ? 'Land' : 'Air'),
       trackingNumber: shipment.tracking_number || '',
       transferSlip: shipment.transfer_slip_number || shipment.transfer_slip || '',
       riderName: shipment.pickup_by_name || '',
@@ -509,7 +518,10 @@ export default function Shipments() {
       return;
     }
 
-    const cleanCarrier = String(pickupModalState.carrier || '').trim() || 'Lite Express';
+    const targetShipment = pickupModalState.shipment;
+    const isLite = String(pickupModalState.carrier || '').toLowerCase().includes('lite express');
+    const shippingMode = isLite ? (pickupModalState.shippingMode || detectRecommendedShippingMode(targetShipment?.items)) : '';
+    const cleanCarrier = isLite ? formatCourierWithMode('Lite Express', shippingMode) : (String(pickupModalState.carrier || '').trim() || 'Lite Express');
     const cleanRider = String(pickupModalState.riderName || '').trim();
     const cleanPickupDate = String(pickupModalState.pickupDate || '').trim() || new Date().toISOString().split('T')[0];
     const cleanTS = String(pickupModalState.transferSlip || '').trim();
@@ -517,7 +529,6 @@ export default function Shipments() {
     isSubmittingPickupRef.current = true;
     setIsSubmittingPickup(true);
 
-    const targetShipment = pickupModalState.shipment;
     const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
     const siteName = targetShipment?.site_name || targetShipment?.destination_site_name || '';
 
@@ -539,6 +550,7 @@ export default function Shipments() {
         status: 'shipped',
         carrier: cleanCarrier,
         courier: cleanCarrier,
+        shipping_mode: isLite ? shippingMode : (targetShipment?.shipping_mode || ''),
         tracking_number: cleanTrk,
         booking_id: cleanTrk,
         pickup_by_name: cleanRider,
@@ -682,7 +694,11 @@ export default function Shipments() {
 
     const startTime = Date.now();
     try {
-      const cleanCarrier = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
+      const rawCarrierInput = String(trackingModalState.carrierInput || '').trim() || 'Lite Express';
+      const isLite = rawCarrierInput.toLowerCase().includes('lite express');
+      const sourceItems = trackingModalState.items && trackingModalState.items.length > 0 ? trackingModalState.items : (trackingModalState.shipment?.items || []);
+      const modalMode = trackingModalState.shippingModeInput || (isLite ? (trackingModalState.shipment?.shipping_mode || detectRecommendedShippingMode(sourceItems)) : '');
+      const cleanCarrier = isLite ? formatCourierWithMode('Lite Express', modalMode) : rawCarrierInput;
       const cleanCourierName = String(trackingModalState.courierNameInput || '').trim();
       const cleanGuardOnDuty = String(trackingModalState.guardOnDutyInput || '').trim();
       const cleanPickupDate = String(trackingModalState.pickupDateInput || '').trim() || new Date().toLocaleDateString('en-US');
@@ -693,6 +709,7 @@ export default function Shipments() {
         booking_id: cleanTrk,
         carrier: cleanCarrier,
         courier: cleanCarrier,
+        shipping_mode: isLite ? modalMode : (trackingModalState.shipment?.shipping_mode || ''),
         pickup_by_name: cleanCourierName,
         courier_name: cleanCourierName,
         pickup_date: cleanPickupDate,
@@ -717,7 +734,6 @@ export default function Shipments() {
         pickupDate: updatedShipment.pickup_date
       };
 
-      const sourceItems = trackingModalState.items && trackingModalState.items.length > 0 ? trackingModalState.items : (updatedShipment?.items || []);
       const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
 
       generatePackingListPDF(updatedShipment, resolvedItems, trackingModalState.site, pdfOptions);
@@ -869,7 +885,7 @@ export default function Shipments() {
           )}
         </td>
         <td>
-          <div style={{ fontWeight: 600, color: '#0f172a' }}>{sh.carrier || sh.courier || 'Lite Express'}</div>
+          <div style={{ fontWeight: 600, color: '#0f172a' }}>{getShipmentCourierDisplay(sh)}</div>
           <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
             {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
           </div>
@@ -891,27 +907,44 @@ export default function Shipments() {
           {sh.box_number_label || (sh.box_number ? `${sh.box_number}/${sh.total_boxes || 1}` : `${sh.total_boxes || 1}`)}
         </td>
         <td style={{ textAlign: 'center' }}>
-          {(normStatus === 'pending_pickup' || normStatus === 'draft') ? (
-            <select
-              value={normStatus === 'pending_pickup' ? 'pending_pickup' : 'draft'}
-              onChange={(e) => handleStatusChange(sh.id, e.target.value)}
+          {normStatus === 'draft' ? (
+            <span
+              className="badge"
               style={{
-                padding: '4px 8px',
-                fontSize: '11px',
+                background: '#f1f5f9',
+                color: '#475569',
+                border: '1px solid #cbd5e1',
                 fontWeight: 700,
-                borderRadius: '8px',
-                cursor: 'pointer',
-                background: normStatus === 'pending_pickup' ? '#fffbeb' : '#f1f5f9',
-                color: normStatus === 'pending_pickup' ? '#b45309' : '#475569',
-                border: normStatus === 'pending_pickup' ? '1px solid #fde68a' : '1px solid #cbd5e1',
-                outline: 'none',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                fontSize: '10.5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 8px',
+                borderRadius: '8px'
               }}
-              title="Click to toggle status between Draft and Ready for Pickup"
             >
-              <option value="draft">📝 DRAFT</option>
-              <option value="pending_pickup">📦 READY FOR PICKUP</option>
-            </select>
+              <FileText size={11} />
+              <span>DRAFT</span>
+            </span>
+          ) : normStatus === 'pending_pickup' ? (
+            <span
+              className="badge"
+              style={{
+                background: '#fffbeb',
+                color: '#b45309',
+                border: '1px solid #fde68a',
+                fontWeight: 700,
+                fontSize: '10.5px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 8px',
+                borderRadius: '8px'
+              }}
+            >
+              <Clock size={11} />
+              <span>READY FOR PICKUP</span>
+            </span>
           ) : normStatus === 'shipped' ? (
             <span
               className="badge"
@@ -2165,6 +2198,63 @@ export default function Shipments() {
                       required
                       style={{ fontSize: '12.5px' }}
                     />
+                    {String(trackingModalState.carrierInput || '').toLowerCase().includes('lite express') && (
+                      <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Mode:</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setTrackingModalState(prev => ({ ...prev, shippingModeInput: 'Air', carrierInput: 'Lite Express (Air)' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: (trackingModalState.shippingModeInput === 'Air' || (!trackingModalState.shippingModeInput && !hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '1px solid #0284c7'
+                                : '1px solid #cbd5e1',
+                              background: (trackingModalState.shippingModeInput === 'Air' || (!trackingModalState.shippingModeInput && !hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '#0284c7'
+                                : '#f8fafc',
+                              color: (trackingModalState.shippingModeInput === 'Air' || (!trackingModalState.shippingModeInput && !hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Plane size={11} /> Air
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTrackingModalState(prev => ({ ...prev, shippingModeInput: 'Land', carrierInput: 'Lite Express (Land)' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: (trackingModalState.shippingModeInput === 'Land' || (!trackingModalState.shippingModeInput && hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '1px solid #f59e0b'
+                                : '1px solid #cbd5e1',
+                              background: (trackingModalState.shippingModeInput === 'Land' || (!trackingModalState.shippingModeInput && hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '#d97706'
+                                : '#f8fafc',
+                              color: (trackingModalState.shippingModeInput === 'Land' || (!trackingModalState.shippingModeInput && hasBatteryItem(trackingModalState.shipment?.items)))
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Truck size={11} /> Land
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2332,6 +2422,63 @@ export default function Shipments() {
                       <option value="Grab Express">Grab Express</option>
                       <option value="Utility / Direct MDC">Utility / Direct MDC</option>
                     </select>
+                    {String(pickupModalState.carrier || '').toLowerCase().includes('lite express') && (
+                      <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Freight Mode:</span>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setPickupModalState(prev => ({ ...prev, shippingMode: 'Air' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: (pickupModalState.shippingMode === 'Air' || (!pickupModalState.shippingMode && !hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '1px solid #0284c7'
+                                : '1px solid #cbd5e1',
+                              background: (pickupModalState.shippingMode === 'Air' || (!pickupModalState.shippingMode && !hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '#0284c7'
+                                : '#f8fafc',
+                              color: (pickupModalState.shippingMode === 'Air' || (!pickupModalState.shippingMode && !hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Plane size={11} /> Air Express
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPickupModalState(prev => ({ ...prev, shippingMode: 'Land' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: (pickupModalState.shippingMode === 'Land' || (!pickupModalState.shippingMode && hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '1px solid #f59e0b'
+                                : '1px solid #cbd5e1',
+                              background: (pickupModalState.shippingMode === 'Land' || (!pickupModalState.shippingMode && hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '#d97706'
+                                : '#f8fafc',
+                              color: (pickupModalState.shippingMode === 'Land' || (!pickupModalState.shippingMode && hasBatteryItem(pickupModalState.shipment?.items)))
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Truck size={11} /> Land Cargo
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="form-group" style={{ margin: 0 }}>
@@ -2519,7 +2666,7 @@ export default function Shipments() {
                     </span>
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#047857' }}>
-                    Courier: <strong>{receiveModalState.shipment?.carrier || 'Lite Express'}</strong> • Tracking: <strong>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
+                    Courier: <strong>{getShipmentCourierDisplay(receiveModalState.shipment)}</strong> • Tracking: <strong>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
                   </div>
                 </div>
 
@@ -2708,7 +2855,7 @@ export default function Shipments() {
                 <div>
                   <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Courier &amp; Tracking</div>
                   <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
-                    {serialsModalState.shipment?.carrier || serialsModalState.shipment?.courier || 'Lite Express'}
+                    {getShipmentCourierDisplay(serialsModalState.shipment)}
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
                     {serialsModalState.shipment?.tracking_number ? `#${serialsModalState.shipment?.tracking_number}` : 'Hand Carry / Direct'}

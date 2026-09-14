@@ -1990,7 +1990,7 @@ export default function SettingsCatalog() {
                   <div>
                     <div style={{ fontSize: '9pt', fontWeight: 800, color: '#0f172a', marginBottom: '3px' }}>TYPE OF COURIER</div>
                     <div style={{ fontSize: '10pt', fontWeight: 600, paddingBottom: '3px', borderBottom: '1px solid #64748b' }}>
-                      LALAMOVE / LITE EXPRESS / UTILITY
+                      LALAMOVE / LITE EXPRESS (AIR / LAND) / UTILITY
                     </div>
                   </div>
 

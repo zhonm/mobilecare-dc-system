@@ -6,6 +6,7 @@ import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilt
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
+import { formatCourierWithMode } from '../utils/shipmentHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
   Inbox,
@@ -259,6 +260,12 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [statusLoadingState, setStatusLoadingState] = useState(null);
 
   const handleOpenReceiveModal = (shipment) => {
+    if (!shipment) return;
+    const isShipped = shipment.status === 'shipped' || shipment.status === 'in_transit';
+    if (!isShipped) {
+      alert('Package cannot be confirmed until it has been dispatched/shipped from Central DC.');
+      return;
+    }
     const destSite = sites.find(st => st.id === shipment.site_id || st.code === shipment.site_code) || activeSiteObj;
     setReceiveModalState({
       shipment,
@@ -275,6 +282,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     if (!receiveModalState) return;
 
     const targetShipment = receiveModalState.shipment;
+    const isShipped = targetShipment?.status === 'shipped' || targetShipment?.status === 'in_transit';
+    if (!isShipped) {
+      alert('Package cannot be confirmed until it has been dispatched/shipped from Central DC.');
+      return;
+    }
     const targetSite = receiveModalState.site;
     const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
     const siteName = targetSite?.name || targetShipment?.site_name || '';
@@ -2416,7 +2428,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </div>
 
                 <span className="badge" style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', fontWeight: 700, fontSize: '11px' }}>
-                  Awaiting Receipt Confirmation
+                  {incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? 'Awaiting Receipt Confirmation' : 'Awaiting DC Dispatch'}
                 </span>
               </div>
 
@@ -2424,6 +2436,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 {incomingShipments.map(sh => {
                   const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || activeSiteObj;
                   const itemCount = sh.items?.length || 0;
+                  const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
                   return (
                     <div
                       key={sh.id}
@@ -2444,8 +2457,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                             <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
                               {sh.invoice_ref || sh.shipment_number}
                             </strong>
-                            <span className="badge" style={{ fontSize: '10px', background: sh.status === 'shipped' ? '#e0f2fe' : '#fef3c7', color: sh.status === 'shipped' ? '#0369a1' : '#b45309' }}>
-                              {sh.status === 'shipped' ? 'In Transit' : 'Packed / Ready for Pickup'}
+                            <span className="badge" style={{ fontSize: '10px', background: isShipped ? '#e0f2fe' : '#fef3c7', color: isShipped ? '#0369a1' : '#b45309' }}>
+                              {isShipped ? 'In Transit / Shipped' : 'Packed / Ready for Pickup'}
                             </span>
                           </div>
                           <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0f172a' }}>
@@ -2455,7 +2468,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
                         <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           <div>Destination: <strong style={{ color: '#334155' }}>{destSite.name} ({destSite.code})</strong></div>
-                          <div>Courier / Tracking: <strong style={{ color: '#334155' }}>{sh.carrier || sh.courier || 'Lite Express'} {sh.tracking_number ? `• #${sh.tracking_number}` : ''}</strong></div>
+                          <div>Courier / Tracking: <strong style={{ color: '#334155' }}>{formatCourierWithMode(sh.carrier || sh.courier || 'Lite Express', sh.shipping_mode)} {sh.tracking_number ? `• #${sh.tracking_number}` : ''}</strong></div>
                           <div>Packed by: <span style={{ color: '#334155' }}>{sh.prepared_by_name || 'Warehouse Staff'}</span></div>
                         </div>
 
@@ -2475,16 +2488,23 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
-                          style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
-                          onClick={() => handleOpenReceiveModal(sh)}
-                          title="Confirm physical arrival of this package and activate parts in branch inventory"
-                        >
-                          <PackageCheck size={13} />
-                          <span>Confirm Site Package</span>
-                        </button>
+                        {isShipped ? (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
+                            onClick={() => handleOpenReceiveModal(sh)}
+                            title="Confirm physical arrival of this package and activate parts in branch inventory"
+                          >
+                            <PackageCheck size={13} />
+                            <span>Confirm Site Package</span>
+                          </button>
+                        ) : (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#b45309', fontWeight: 600, padding: '4px 8px', background: '#fffbeb', borderRadius: '4px', border: '1px solid #fef3c7' }}>
+                            <Clock size={12} />
+                            <span>Awaiting DC Dispatch</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

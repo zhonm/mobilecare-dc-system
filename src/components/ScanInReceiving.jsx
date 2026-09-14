@@ -190,8 +190,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (!isPmgUser) return [];
     return (shipments || []).filter(sh => {
       if (!sh.items || sh.items.length === 0) return false;
-      const isPending = sh.status === 'pending_pickup' || sh.status === 'shipped' || sh.status === 'in_transit' || sh.status === 'draft';
-      if (!isPending) return false;
+      const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
+      if (!isShipped) return false;
       const shSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || {};
       return (
         shSite.id === userSiteObj.id ||
@@ -238,9 +238,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Part Intake Assignment: 'MDC - Forecasting' | 'DC - CRBR' | 'SVNR - Service Non-Repair'
   const [intakeAssignment, setIntakeAssignment] = useState(() => {
     try {
-      return localStorage.getItem('mdc_intake_assignment') || 'DC - CRBR';
+      const migrated = localStorage.getItem('mdc_intake_assignment_default_v2');
+      if (!migrated) {
+        localStorage.setItem('mdc_intake_assignment_default_v2', 'true');
+        localStorage.setItem('mdc_intake_assignment', 'MDC - Forecasting');
+        return 'MDC - Forecasting';
+      }
+      return localStorage.getItem('mdc_intake_assignment') || 'MDC - Forecasting';
     } catch (e) {
-      return 'DC - CRBR';
+      return 'MDC - Forecasting';
     }
   });
 
@@ -323,7 +329,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   // Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [modalAssignment, setModalAssignment] = useState('DC - CRBR');
+  const [modalAssignment, setModalAssignment] = useState('MDC - Forecasting');
   const [isDragging, setIsDragging] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [parsedBatch, setParsedBatch] = useState(null);
@@ -605,7 +611,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
       if (dup) {
         barcodeAudio.playError();
-        const dupMsg = `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
+        const dupMsg = `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
         setScanResult({
           type: 'error',
           message: dupMsg
@@ -667,8 +673,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           const recCount = poItem ? (poItem.quantity_received || 0) + 1 : 1;
           const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
           const isDone = recCount >= totalOrd;
-          const routeLabel = res.isAutoRouted ? ` ➜ Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
-          poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received${isDone ? ' ✓' : ''}] (Recorded in Parts Saved History Records)`;
+          const routeLabel = res.isAutoRouted ? ` Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
+          poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received] (Recorded in Parts Saved History Records)`;
         } else {
           poDetail = ` [Direct Stock Intake — Added to DC Warehouse]`;
         }
@@ -788,7 +794,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       barcodeAudio.playError();
       setScanResult({
         type: 'error',
-        message: `⚠️ [DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`
+        message: `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`
       });
       // Automatically highlight/select entered text immediately so user can rescan directly without clicking "X"
       setTimeout(() => {
@@ -805,7 +811,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (validation.isPartNumber) {
       setScanResult({
         type: 'error',
-        message: `⚠️ Part Number detected in Serial field — auto-cleared. Please rescan the Serial Number barcode. (Got: ${cleanSerial.toUpperCase()})`
+        message: `[SECURITY GUARD] Part Number detected in Serial field — auto-cleared. Please rescan the Serial Number barcode. (Got: ${cleanSerial.toUpperCase()})`
       });
       // Auto-clear after brief pause so user sees the warning, then refocus for immediate rescan
       if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
@@ -1506,7 +1512,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         <span>Purchase Order Routing</span>
                       </label>
                       <span className="workstation-mini-tag">
-                        ⚡ Auto-Detect
+                        Auto-Detect
                       </span>
                     </div>
                     <select
@@ -1514,7 +1520,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                       value={selectedPoId}
                       onChange={(e) => handlePoChange(e.target.value)}
                     >
-                      <option value="">⚡ Auto-Route to Designated PO ({purchaseOrders.filter(p => p.status !== 'received').length} Pending Orders)</option>
+                      <option value="">Auto-Route to Designated PO ({purchaseOrders.filter(p => p.status !== 'received').length} Pending Orders)</option>
                       {purchaseOrders.map(po => {
                         const totalOrd = po.items?.reduce((s, it) => s + (it.quantity_ordered || 0), 0) || 0;
                         const totalRec = po.items?.reduce((s, it) => s + (it.quantity_received || 0), 0) || 0;
@@ -1596,7 +1602,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 <div className="workstation-tool-col">
                   <div className="workstation-col-header">
                     <label className="workstation-col-label">
-                      <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
+                      <Barcode size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
                       <span>{isPmgUser ? 'Barcode Intake Mode' : 'Scanner Intake Mode'}</span>
                     </label>
                   </div>
@@ -1611,7 +1617,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   >
                     <div className="auto-receive-text-col">
                       <span className="auto-receive-title">
-                        {autoReceive ? '⚡ Auto-Receive: ON' : 'Auto-Receive: OFF'}
+                        {autoReceive ? 'Auto-Receive: ON' : 'Auto-Receive: OFF'}
                       </span>
                       <span className="auto-receive-sub">
                         {autoReceive ? 'Saves instantly to DB on scan' : 'Requires manual click'}
@@ -1778,7 +1784,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     {rem > 0 ? (
                       <span style={{ color: '#b45309', fontSize: '10.5px', fontWeight: 600 }}>({rem} remaining)</span>
                     ) : (
-                      <span style={{ color: '#16a34a', fontSize: '10.5px', fontWeight: 600 }}>✓ Complete</span>
+                      <span style={{ color: '#16a34a', fontSize: '10.5px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                        <Check size={11} /> Complete
+                      </span>
                     )}
                   </div>
                 );
@@ -1794,8 +1802,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
               <label className="scanner-field-label">Part Number (P/N)</label>
               {matchedPart && (
-                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
-                  ✓ {matchedPart.part_number}
+                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  <Check size={11} /> {matchedPart.part_number}
                 </span>
               )}
             </div>
@@ -1937,12 +1945,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <AlertCircle size={11} /> DUPLICATE S/N (ALREADY RECEIVED)
                 </span>
               ) : serialValidation && serialValidation.isPartNumber ? (
-                <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 6px', background: '#dc2626' }}>
-                  ⚠️ Part Number Detected
+                <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 6px', background: '#dc2626', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  <AlertTriangle size={11} /> Part Number Detected
                 </span>
               ) : serialValidation && serialValidation.isValid ? (
-                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px' }}>
-                  ✓ Valid S/N
+                <span className="badge badge-success" style={{ fontSize: '11px', padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  <Check size={11} /> Valid S/N
                 </span>
               ) : null}
             </div>
@@ -2029,7 +2037,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     <strong>Recorded Unit:</strong> {duplicateSerialMatch.part_number} — {duplicateSerialMatch.description} ({duplicateSerialMatch.assignment}) • <strong>Location:</strong> {duplicateSerialMatch.location}
                   </div>
                   <div style={{ color: '#f87171', fontSize: '11px', marginTop: '3px', fontWeight: 600 }}>
-                    ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
+                    Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
                   </div>
                 </div>
               </div>
@@ -2134,7 +2142,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 </>
               ) : (
                 <>
-                  <span>{autoReceive ? 'Receive ↵' : 'Receive'}</span>
+                  <span>Receive</span>
                   <ArrowRight size={18} />
                 </>
               )}
@@ -3022,8 +3030,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                       value={modalAssignment}
                       onChange={(e) => setModalAssignment(e.target.value)}
                     >
-                      <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
                       <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
+                      <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
                       <option value="SVNR - Service Non-Repair">SVNR - Service Non-Repair</option>
                     </select>
                   </div>

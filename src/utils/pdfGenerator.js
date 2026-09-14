@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
+import { getShipmentCourierDisplay } from './shipmentHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -111,7 +112,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
         { label: 'SHIPMENT DATE:', val: shipmentDateStr },
         { label: 'TRACKING NUMBER:', val: trackingNumberStr },
         { label: 'BOX/S #:', val: boxDisplay },
-        { label: 'COURIER:', val: shipment.carrier || shipment.courier || 'Lite Express' },
+        { label: 'COURIER:', val: getShipmentCourierDisplay(shipment, items) },
         ...((shipment.transfer_slip_number || shipment.transfer_slip) ? [{ label: 'TRANSFER SLIP #:', val: (shipment.transfer_slip_number || shipment.transfer_slip) }] : [])
       ];
 
@@ -202,7 +203,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setFont('helvetica', 'bold');
       doc.text('COURIER:', contRightColX, contHeaderTopY + 10.4);
       doc.setFont('helvetica', 'normal');
-      doc.text(String(shipment.carrier || shipment.courier || 'Lite Express'), contRightValX, contHeaderTopY + 10.4, { align: 'right' });
+      doc.text(getShipmentCourierDisplay(shipment, items), contRightValX, contHeaderTopY + 10.4, { align: 'right' });
 
       // Clean divider line
       doc.setDrawColor(203, 213, 225);
@@ -427,7 +428,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   // Dynamic values
   const destSiteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
-  const courierType = (shipment.carrier || shipment.courier || 'Lite Express').toUpperCase();
+  const courierType = getShipmentCourierDisplay(shipment, items).toUpperCase();
   const rawBookingId = String(shipment.booking_id || shipment.tracking_number || shipment.airway_bill || '').trim();
   const bookingId = (rawBookingId === 'N/A' || rawBookingId === 'n/a' || rawBookingId === 'NA' || !rawBookingId) ? '' : rawBookingId.toUpperCase();
   const guardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';

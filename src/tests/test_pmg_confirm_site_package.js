@@ -350,6 +350,62 @@ assert.strictEqual(shouldShowBranchRecordsTab(superadminZhon), true, 'Superadmin
 assert.strictEqual(shouldShowReceivedHistoryTable(superadminZhon), true, 'Superadmin can access intake history table');
 console.log('  ✓ PASS: Receive Scan-In properly scopes records and history away from PMG users');
 
+// ----------------------------------------------------
+// TEST 10: Confirm Package Option Only Visible & Allowed for Shipped Status
+// ----------------------------------------------------
+console.log('\nTest 10: Confirm Package Option Only Visible & Allowed for Shipped Status');
+
+function canDisplayConfirmPackageButton(shipment) {
+  const normStatus = String(shipment?.status || '').toLowerCase();
+  return normStatus === 'shipped' || normStatus === 'in_transit';
+}
+
+function tryConfirmSiteReceive(shipment, pmgUser, receiveDetails) {
+  const normStatus = String(shipment?.status || '').toLowerCase();
+  if (normStatus !== 'shipped' && normStatus !== 'in_transit') {
+    return { success: false, error: 'Package must be shipped before confirmation' };
+  }
+  return { success: true, shipment: simulateConfirmSiteReceive(shipment, pmgUser, receiveDetails) };
+}
+
+const packedShipment = {
+  id: 'ship-packed-1',
+  invoice_ref: 'DCOWNED#083199P',
+  site_id: 'site-ceb',
+  site_code: 'ASP CEB',
+  status: 'pending_pickup',
+  items: [{ part_number: '661-21988', serial_number: 'SN-PK-1', quantity: 1 }]
+};
+
+const shippedShipment = {
+  id: 'ship-shipped-1',
+  invoice_ref: 'DCOWNED#083199S',
+  site_id: 'site-ceb',
+  site_code: 'ASP CEB',
+  status: 'shipped',
+  items: [{ part_number: '661-21988', serial_number: 'SN-SH-1', quantity: 1 }]
+};
+
+// 1. Packed / Ready for Pickup status must NOT display Confirm Package
+assert.strictEqual(canDisplayConfirmPackageButton(packedShipment), false, 'Packed/Ready for pickup status does NOT display Confirm Package');
+assert.strictEqual(canDisplayConfirmPackageButton({ ...packedShipment, status: 'draft' }), false, 'Draft status does NOT display Confirm Package');
+
+// 2. Shipped status MUST display Confirm Package
+assert.strictEqual(canDisplayConfirmPackageButton(shippedShipment), true, 'Shipped status displays Confirm Package');
+assert.strictEqual(canDisplayConfirmPackageButton({ ...shippedShipment, status: 'in_transit' }), true, 'In-Transit status displays Confirm Package');
+
+// 3. Execution attempt on pending_pickup is rejected
+const packedConfirmResult = tryConfirmSiteReceive(packedShipment, pmgUserAndres, { receivedByName: 'Andres' });
+assert.strictEqual(packedConfirmResult.success, false);
+assert.strictEqual(packedConfirmResult.error, 'Package must be shipped before confirmation');
+
+// 4. Execution attempt on shipped succeeds
+const shippedConfirmResult = tryConfirmSiteReceive(shippedShipment, pmgUserAndres, { receivedByName: 'Andres' });
+assert.strictEqual(shippedConfirmResult.success, true);
+assert.strictEqual(shippedConfirmResult.shipment.status, 'received_confirmed');
+
+console.log('  ✓ PASS: Confirm Package button is strictly restricted to Shipped / In-Transit packages');
+
 console.log('\n====================================================');
 console.log('ALL PMG ACCOUNTS & CONFIRM SITE PACKAGE TESTS PASSED (100%)');
 console.log('====================================================\n');
