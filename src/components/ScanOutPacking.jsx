@@ -150,7 +150,8 @@ export default function ScanOutPacking() {
             courier: isLite ? formatCourierWithMode('Lite Express', resolvedMode) : (parsed.carrier || parsed.courier || initialCourier),
             shipping_mode: resolvedMode,
             transfer_slip_number: parsed.transfer_slip_number || parsed.transfer_slip || '',
-            pickup_by_name: parsed.pickup_by_name || (parsed.carrier === 'Utility' ? 'Utility' : ''),
+            pickup_by_name: parsed.pickup_by_name || parsed.courier_name || (parsed.carrier === 'Utility' ? 'Utility' : ''),
+            courier_name: parsed.courier_name || parsed.pickup_by_name || '',
             tracking_number: cleanTrk,
             prepared_by_name: parsed.prepared_by_name?.trim() && parsed.prepared_by_name !== 'Warehouse Staff' ? parsed.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois')
           };
@@ -3016,6 +3017,11 @@ export default function ScanOutPacking() {
                       <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
                         {s.tracking_number ? `#${s.tracking_number}` : 'Pending Tracking'}
                       </span>
+                      {(s.pickup_by_name || s.courier_name) && (
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
+                          Rider: {s.pickup_by_name || s.courier_name}
+                        </div>
+                      )}
                       {(s.transfer_slip_number || s.transfer_slip) && (
                         <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
                           TS: {s.transfer_slip_number || s.transfer_slip}

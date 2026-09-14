@@ -14,7 +14,6 @@ import {
   RefreshCw,
   Check,
   Trash2,
-  Lock,
   Truck,
   Plane,
   Clock,
@@ -47,7 +46,8 @@ import {
   getShipmentCourierDisplay,
   formatCourierWithMode,
   detectRecommendedShippingMode,
-  hasBatteryItem
+  hasBatteryItem,
+  getShipmentRiderName
 } from '../utils/shipmentHelpers';
 
 export default function Shipments() {
@@ -405,7 +405,8 @@ export default function Shipments() {
         const trackMatch = s.tracking_number?.toLowerCase().includes(q);
         const siteMatch = s.site_name?.toLowerCase().includes(q);
         const carrierMatch = (s.carrier || s.courier)?.toLowerCase().includes(q);
-        const pickupMatch = s.pickup_by_name?.toLowerCase().includes(q);
+        const riderStr = getShipmentRiderName(s, shipments).toLowerCase();
+        const pickupMatch = riderStr.includes(q) || s.pickup_by_name?.toLowerCase().includes(q) || s.courier_name?.toLowerCase().includes(q);
         const receivedMatch = s.received_by_name?.toLowerCase().includes(q);
         const serialMatch = s.items?.some(it => {
           const sn = String(it.serial_number || it.serialNumber || it.serial || '').toLowerCase();
@@ -523,24 +524,6 @@ export default function Shipments() {
     }, 2500);
   };
 
-  const handleCopySingleSerial = (sn) => {
-    if (!sn) return;
-    const clean = String(sn).trim().toUpperCase();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(clean);
-    } else {
-      const textarea = document.createElement('textarea');
-      textarea.value = clean;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
-    setCopiedSerialToken(clean);
-    showToast(`Copied ${clean} to clipboard`, 'info');
-    setTimeout(() => setCopiedSerialToken(null), 2000);
-  };
-
   // --- Courier Handover: Open Modal ---
   const handleOpenPickupModal = (shipment) => {
     const isMM = isShipmentMetroManila(shipment, sites);
@@ -553,7 +536,7 @@ export default function Shipments() {
       shippingMode: currentMode || (hasBatteryItem(shipment.items) ? 'Land' : 'Air'),
       trackingNumber: shipment.tracking_number || '',
       transferSlip: shipment.transfer_slip_number || shipment.transfer_slip || '',
-      riderName: shipment.pickup_by_name || '',
+      riderName: getShipmentRiderName(shipment, shipments) || '',
       riderPhone: shipment.rider_phone || '',
       vehiclePlate: shipment.vehicle_plate || '',
       guardOnDuty: shipment.guard_on_duty || supervisorSettings?.guard_on_duty || 'Anjo Alcazar / MDC DC Guard',
@@ -958,11 +941,15 @@ export default function Shipments() {
           <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
             {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
           </div>
-          {sh.pickup_by_name && (
-            <div style={{ fontSize: '11px', color: '#64748b' }}>
-              Rider: {sh.pickup_by_name}
-            </div>
-          )}
+          {(() => {
+            const rider = getShipmentRiderName(sh, shipments);
+            if (!rider) return null;
+            return (
+              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
+                <span style={{ fontWeight: 500 }}>Rider:</span> {rider}
+              </div>
+            );
+          })()}
           {sh.received_by_name && (
             <div style={{ fontSize: '11px', color: '#047857' }}>
               Recv: {sh.received_by_name}
@@ -3276,7 +3263,8 @@ export default function Shipments() {
                   <div>
                     <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Rider / Handover Name</div>
                     <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#0f172a', marginTop: '2px' }}>
-                      {viewPackageModalState.shipment?.pickup_by_name ||
+                      {getShipmentRiderName(viewPackageModalState.shipment, shipments) ||
+                        viewPackageModalState.shipment?.pickup_by_name ||
                         viewPackageModalState.shipment?.courier_name ||
                         'Assigned Rider'}
                     </div>

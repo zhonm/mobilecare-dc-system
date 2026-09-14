@@ -664,6 +664,61 @@ export const getShipmentCourierDisplay = (shipment, items = null) => {
   return formatCourierWithMode(rawCarrier, 'Air');
 };
 
+/**
+ * Resolves the Rider / Courier Handover Name consistently across all shipment objects.
+ * Checks all possible fields (pickup_by_name, courier_name, rider_name, driver_name, pickup_by, handover_to, courier_rider)
+ * while filtering out non-rider labels (e.g. carrier company name, 'N/A', 'Assigned Rider', etc.).
+ * Supports optional fallback to sibling shipments dispatched together under the same tracking number or transfer slip.
+ */
+export const getShipmentRiderName = (sh, allShipments = []) => {
+  if (!sh) return '';
+  const carrier = String(sh.carrier || sh.courier || '').toLowerCase();
+  
+  const candidates = [
+    sh.pickup_by_name,
+    sh.courier_name,
+    sh.rider_name,
+    sh.driver_name,
+    sh.pickup_by,
+    sh.handover_to,
+    sh.courier_rider
+  ];
+  
+  for (const cand of candidates) {
+    if (cand && typeof cand === 'string') {
+      const trimmed = cand.trim();
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      // Ignore placeholders or generic labels
+      if (lower === 'assigned rider' || lower === 'n/a' || lower === 'none' || lower === 'pending' || lower === 'pending rider' || lower === 'unassigned') {
+        continue;
+      }
+      // If the candidate string is just the courier company itself, skip
+      if (carrier && (lower === carrier || lower === 'lite express' || lower === 'lalamove' || lower === 'grab' || lower === 'grab express' || lower === 'lbc')) {
+        continue;
+      }
+      return trimmed;
+    }
+  }
 
+  // Fallback: Check sibling shipments sharing the same tracking number or transfer slip
+  if (Array.isArray(allShipments) && allShipments.length > 0) {
+    const trk = String(sh.tracking_number || '').trim();
+    const ts = String(sh.transfer_slip_number || sh.transfer_slip || '').trim();
+    
+    if (trk || ts) {
+      const sibling = allShipments.find(s => {
+        if (!s || s.id === sh.id) return false;
+        const matchTrk = trk && String(s.tracking_number || '').trim() === trk;
+        const matchTs = ts && String(s.transfer_slip_number || s.transfer_slip || '').trim() === ts;
+        return matchTrk || matchTs;
+      });
+      if (sibling) {
+        const siblingRider = getShipmentRiderName(sibling);
+        if (siblingRider) return siblingRider;
+      }
+    }
+  }
 
-
+  return '';
+};

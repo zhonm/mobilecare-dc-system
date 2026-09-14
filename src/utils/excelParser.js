@@ -3500,7 +3500,7 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
         status = rawStatusStr;
       }
       const verBy = row['Verified By'] || 'Admin Staff';
-      const pickupBy = row['Pickup By'] || row['Driver Name'] || '';
+      const pickupBy = row['Pickup By'] || row['Driver Name'] || row['Rider'] || row['Rider Name'] || row['Rider / Handover Name'] || row['Courier Name'] || row['Handover Name'] || row['pickup_by_name'] || row['courier_name'] || row['rider_name'] || '';
       const prepBy = row['Prepared By'] || 'Warehouse Staff';
       const shipDate = row['Shipment Date'] || new Date().toISOString().split('T')[0];
       const pn = row['Part Number'] || row['Part #'] || row['P/N'] || '';
@@ -3527,6 +3527,7 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
           tracking_number: tracking,
           transfer_slip_number: transferSlip,
           pickup_by_name: pickupBy,
+          courier_name: pickupBy,
           total_boxes: box,
           status,
           prepared_by_name: prepBy,

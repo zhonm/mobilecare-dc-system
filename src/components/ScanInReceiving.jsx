@@ -4,7 +4,6 @@ import {
   Barcode,
   CheckCircle2,
   AlertCircle,
-  Zap,
   ArrowRight,
   UploadCloud,
   FileSpreadsheet,
@@ -33,7 +32,7 @@ import {
   Shield
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
-import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber, isProvincialSite } from '../utils/partResolver';
+import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import { exportPmgBranchInventoryToExcel, exportDcCompleteStockInventoryToExcel } from '../utils/stockExportUtils';
 import { barcodeAudio } from '../utils/barcodeAudio';
@@ -672,7 +671,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           const poItem = matchedPo.items?.find(it => it.part_number.toUpperCase() === res.unit.part_number.toUpperCase());
           const recCount = poItem ? (poItem.quantity_received || 0) + 1 : 1;
           const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
-          const isDone = recCount >= totalOrd;
           const routeLabel = res.isAutoRouted ? ` Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
           poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received] (Recorded in Parts Saved History Records)`;
         } else {

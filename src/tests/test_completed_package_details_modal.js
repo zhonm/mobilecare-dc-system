@@ -4,7 +4,6 @@ import path from 'path';
 import { resolveSite, isLockedConfirmedShipment } from '../utils/appContextHelpers.js';
 import {
   extractShipmentSerials,
-  healShipmentItem,
   getShipmentCourierDisplay,
   isShipmentMetroManila
 } from '../utils/shipmentHelpers.js';

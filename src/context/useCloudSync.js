@@ -1295,10 +1295,14 @@ export function useCloudSync({
 
               const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
               const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
+              const resolvedPickupByName = dbS.pickup_by_name || existing?.pickup_by_name || dbS.courier_name || existing?.courier_name || '';
+              const resolvedCourierName = dbS.courier_name || existing?.courier_name || dbS.pickup_by_name || existing?.pickup_by_name || '';
 
               shipmentMap.set(canonicalRef, {
                 ...(existing || {}),
                 ...dbS,
+                pickup_by_name: resolvedPickupByName,
+                courier_name: resolvedCourierName,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
                 items: formattedItems.length > 0 ? formattedItems : existingItems

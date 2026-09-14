@@ -642,6 +642,8 @@ export function useShipments({
       status: shipmentData.status || 'pending_pickup',
       prepared_by_name: resolvedPreparedBy,
       saved_by_name: resolvedPreparedBy,
+      pickup_by_name: shipmentData.pickup_by_name || shipmentData.courier_name || '',
+      courier_name: shipmentData.courier_name || shipmentData.pickup_by_name || '',
       shipment_date: cleanShipmentDate,
       created_at: shipmentData.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
