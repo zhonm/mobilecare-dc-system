@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -27,11 +27,7 @@ import {
   ChevronUp,
   Calendar,
   Loader2,
-  Archive,
-  Package,
-  Boxes,
-  Eye,
-  EyeOff
+  Archive
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
@@ -45,7 +41,6 @@ import {
   sortShipmentsChronological,
   partitionShipmentsByRecency,
   parseShipmentDate,
-  isShipmentOlderArchive,
   isShipmentToday
 } from '../utils/shipmentHelpers';
 
@@ -391,16 +386,6 @@ export default function Shipments() {
       })
       .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   }, [shipments]);
-
-  // Accordion state: ID of the currently expanded today's shipment (null = all collapsed)
-  const [expandedTodayId, setExpandedTodayId] = useState(null);
-
-  // Auto-expand the latest (first) shipment whenever today's list changes
-  useEffect(() => {
-    if (todaysShipments.length > 0) {
-      setExpandedTodayId(prev => prev ?? todaysShipments[0].id);
-    }
-  }, [todaysShipments]);
 
   // Aggregate sites with active shipments for site-level serial viewer
   const availableSitesWithShipments = useMemo(() => {

@@ -82,11 +82,19 @@ export function useAuth({
               return;
             }
 
-            const { data: dbProf } = await supabase
+            const { data: dbProf, error: profError } = await supabase
               .from('profiles')
-              .select('*')
+              .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at')
               .ilike('email', cleanAuthEmail)
               .maybeSingle();
+
+            if (profError) {
+              console.warn('[useAuth] Failed to fetch profile for session:', profError.message);
+              clearStoredUserSession();
+              await dbStorage.removeItem('mdc_current_user');
+              setCurrentUser(null);
+              return;
+            }
 
             if (isMounted && dbProf && !dbProf.is_deleted && !deletedIds.includes(dbProf.id?.toLowerCase())) {
               const { data: dbPerms } = await supabase
@@ -100,7 +108,7 @@ export function useAuth({
                 ? dbPerms.map(p => p.page_id)
                 : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
 
-              const hasSet = Boolean(dbProf.has_set_password || dbProf.password_hash);
+              const hasSet = Boolean(dbProf.has_set_password);
               const isDeleted = dbProf.is_deleted === true ||
                 deletedIds.includes(cleanAuthEmail) ||
                 deletedIds.includes(dbProf.id?.toLowerCase());
@@ -131,7 +139,7 @@ export function useAuth({
                 rolePosition: resolvedPosition,
                 siteId: dbProf.site_id || 'site-dc',
                 hasSetPassword: true,
-                passwordHash: dbProf.password_hash || null,
+                passwordHash: null,
                 isActive: true,
                 permittedPages: perms
               };
@@ -420,65 +428,117 @@ export function useAuth({
     } catch (e) {}
 
     let user = null;
-    let cloudReachable = false;
-
-    // 1. Direct PostgreSQL profiles query as PRIMARY authority
+    // 1. Direct PostgreSQL query / RPC as PRIMARY authority
     if (supabase) {
       try {
-        const { data: dbProf, error: profErr } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('email', email)
-          .maybeSingle();
+        let rpcResolved = false;
+        try {
+          const { data: creds, error: rpcErr } = await supabase.rpc('verify_login_credentials', {
+            p_email: email,
+            p_password: ''
+          });
 
-        if (!profErr) {
-          cloudReachable = true;
+          if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
+            rpcResolved = true;
+
+            if (creds.is_deleted) {
+              return {
+                success: false,
+                error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const userId = creds.id || creds.user_id;
+            deletedSet.delete(email);
+            if (userId) deletedSet.delete(String(userId).toLowerCase());
+
+            if (creds.is_active === false || creds.isActive === false) {
+              return {
+                success: false,
+                error: 'This account has been deactivated. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const resolvedRole = creds.role || 'user';
+            const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
+            const rawPerms = creds.permitted_pages || creds.permittedPages;
+            const perms = (rawPerms && rawPerms.length > 0)
+              ? rawPerms
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            const hasPasswordSet = (creds.has_set_password !== undefined)
+              ? Boolean(creds.has_set_password)
+              : (creds.needs_password_setup !== undefined ? !creds.needs_password_setup : Boolean(creds.hasSetPassword));
+
+            user = {
+              id: userId,
+              email: creds.email,
+              fullName: creds.full_name || creds.fullName || email.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: creds.site_id || creds.siteId || 'site-dc',
+              hasSetPassword: hasPasswordSet,
+              passwordHash: null,
+              isActive: true,
+              permittedPages: perms
+            };
+          }
+        } catch (rpcEx) {
+          // RPC may not be deployed yet; fallback to direct table query
         }
 
-        if (dbProf) {
-          if (dbProf.is_deleted) {
-            return {
-              success: false,
-              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+        if (!rpcResolved) {
+          const { data: dbProf } = await supabase
+            .from('profiles')
+            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
+            .ilike('email', email)
+            .maybeSingle();
+
+          if (dbProf) {
+            if (dbProf.is_deleted) {
+              return {
+                success: false,
+                error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            // Active database user found: unblock immediately
+            deletedSet.delete(email);
+            if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+
+            if (dbProf.is_active === false) {
+              return {
+                success: false,
+                error: 'This account has been deactivated. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const { data: dbPerms } = await supabase
+              .from('user_page_permissions')
+              .select('page_id')
+              .eq('user_id', dbProf.id);
+
+            const resolvedRole = dbProf.role || 'user';
+            const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
+            const perms = (dbPerms && dbPerms.length > 0)
+              ? dbPerms.map(p => p.page_id)
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            const hasPasswordSet = Boolean(dbProf.has_set_password);
+
+            user = {
+              id: dbProf.id,
+              email: dbProf.email,
+              fullName: dbProf.full_name || email.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: dbProf.site_id || 'site-dc',
+              hasSetPassword: hasPasswordSet,
+              passwordHash: null,
+              isActive: true,
+              permittedPages: perms
             };
           }
-
-          // Active database user found: unblock immediately
-          deletedSet.delete(email);
-          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
-
-          if (dbProf.is_active === false) {
-            return {
-              success: false,
-              error: 'This account has been deactivated. Please contact DC if there is an issue with login.'
-            };
-          }
-
-          const { data: dbPerms } = await supabase
-            .from('user_page_permissions')
-            .select('page_id')
-            .eq('user_id', dbProf.id);
-
-          const resolvedRole = dbProf.role || 'user';
-          const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-          const perms = (dbPerms && dbPerms.length > 0)
-            ? dbPerms.map(p => p.page_id)
-            : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
-
-          const hasPasswordSet = Boolean(dbProf.has_set_password || dbProf.password_hash);
-
-          user = {
-            id: dbProf.id,
-            email: dbProf.email,
-            fullName: dbProf.full_name || email.split('@')[0],
-            role: resolvedRole,
-            rolePosition: resolvedPosition,
-            siteId: dbProf.site_id || 'site-dc',
-            hasSetPassword: hasPasswordSet,
-            passwordHash: dbProf.password_hash || null,
-            isActive: true,
-            permittedPages: perms
-          };
         }
       } catch (e) {
         console.warn('Supabase profiles verification note:', e.message);
@@ -495,7 +555,6 @@ export function useAuth({
           .maybeSingle();
 
         if (!regErr && regDoc) {
-          cloudReachable = true;
           const regUsers = regDoc.snapshot_data?.users || [];
           const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
 
@@ -582,61 +641,121 @@ export function useAuth({
     } catch (e) {}
 
     let user = null;
-    let cloudReachable = false;
+    let rpcPasswordVerified = false;
 
-    // 1. Direct PostgreSQL profiles query as PRIMARY authority
+    // 1. Direct PostgreSQL query / RPC as PRIMARY authority
     if (supabase) {
       try {
-        const { data: dbProf, error: profErr } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('email', cleanEmail)
-          .maybeSingle();
+        let rpcResolved = false;
+        try {
+          const { data: creds, error: rpcErr } = await supabase.rpc('verify_login_credentials', {
+            p_email: cleanEmail,
+            p_password: cleanPassword
+          });
 
-        if (!profErr) cloudReachable = true;
+          if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
+            rpcResolved = true;
 
-        if (dbProf) {
-          if (dbProf.is_deleted) {
-            return {
-              success: false,
-              error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+            if (creds.is_deleted) {
+              return {
+                success: false,
+                error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const userId = creds.id || creds.user_id;
+            deletedSet.delete(cleanEmail);
+            if (userId) deletedSet.delete(String(userId).toLowerCase());
+
+            if (creds.is_active === false || creds.isActive === false) {
+              return {
+                success: false,
+                error: 'Account is deactivated. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const resolvedRole = creds.role || 'user';
+            const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
+            const rawPerms = creds.permitted_pages || creds.permittedPages;
+            const perms = (rawPerms && rawPerms.length > 0)
+              ? rawPerms
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            const hasPasswordSet = (creds.has_set_password !== undefined)
+              ? Boolean(creds.has_set_password)
+              : (creds.needs_password_setup !== undefined ? !creds.needs_password_setup : Boolean(creds.hasSetPassword));
+
+            user = {
+              id: userId,
+              email: creds.email,
+              fullName: creds.full_name || creds.fullName || cleanEmail.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: creds.site_id || creds.siteId || 'site-dc',
+              hasSetPassword: hasPasswordSet,
+              passwordHash: null,
+              isActive: true,
+              permittedPages: perms
+            };
+
+            if (creds.is_valid) {
+              rpcPasswordVerified = true;
+            }
+          }
+        } catch (rpcEx) {
+          // RPC may not be deployed yet; fallback to direct table query
+        }
+
+        if (!rpcResolved) {
+          const { data: dbProf } = await supabase
+            .from('profiles')
+            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
+            .ilike('email', cleanEmail)
+            .maybeSingle();
+
+          if (dbProf) {
+            if (dbProf.is_deleted) {
+              return {
+                success: false,
+                error: 'This account has been deleted. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            // Active database user found: unblock immediately
+            deletedSet.delete(cleanEmail);
+            if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+
+            if (dbProf.is_active === false) {
+              return {
+                success: false,
+                error: 'Account is deactivated. Please contact DC if there is an issue with login.'
+              };
+            }
+
+            const { data: dbPerms } = await supabase
+              .from('user_page_permissions')
+              .select('page_id')
+              .eq('user_id', dbProf.id);
+
+            const resolvedRole = dbProf.role || 'user';
+            const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
+            const perms = (dbPerms && dbPerms.length > 0)
+              ? dbPerms.map(p => p.page_id)
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            user = {
+              id: dbProf.id,
+              email: dbProf.email,
+              fullName: dbProf.full_name || cleanEmail.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: dbProf.site_id || 'site-dc',
+              hasSetPassword: Boolean(dbProf.has_set_password),
+              passwordHash: null,
+              isActive: true,
+              permittedPages: perms
             };
           }
-
-          // Active database user found: unblock immediately
-          deletedSet.delete(cleanEmail);
-          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
-
-          if (dbProf.is_active === false) {
-            return {
-              success: false,
-              error: 'Account is deactivated. Please contact DC if there is an issue with login.'
-            };
-          }
-
-          const { data: dbPerms } = await supabase
-            .from('user_page_permissions')
-            .select('page_id')
-            .eq('user_id', dbProf.id);
-
-          const resolvedRole = dbProf.role || 'user';
-          const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-          const perms = (dbPerms && dbPerms.length > 0)
-            ? dbPerms.map(p => p.page_id)
-            : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
-
-          user = {
-            id: dbProf.id,
-            email: dbProf.email,
-            fullName: dbProf.full_name || cleanEmail.split('@')[0],
-            role: resolvedRole,
-            rolePosition: resolvedPosition,
-            siteId: dbProf.site_id || 'site-dc',
-            hasSetPassword: Boolean(dbProf.has_set_password || dbProf.password_hash),
-            passwordHash: dbProf.password_hash || null,
-            isActive: true,
-            permittedPages: perms
-          };
         }
       } catch (e) {
         console.warn('Supabase sign-in profile query note:', e.message);
@@ -653,7 +772,6 @@ export function useAuth({
           .maybeSingle();
 
         if (!regErr && regDoc) {
-          cloudReachable = true;
           const regUsers = regDoc.snapshot_data?.users || [];
           const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
 
@@ -702,12 +820,12 @@ export function useAuth({
       return { success: false, error: 'Account is deactivated. Please contact DC if there is an issue with login.' };
     }
 
-    // 1. Supabase Auth Verification
-    let authPassed = false;
+    // Auth Verification: 0. Server-side RPC verification, 1. Supabase Auth, 2. SHA-256 fallback
+    let authPassed = Boolean(rpcPasswordVerified);
     let authErrorMessage = null;
     let hasNativeSession = false;
 
-    if (supabase) {
+    if (!authPassed && supabase) {
       try {
         const authPayload = {
           email: user.email,
@@ -726,7 +844,7 @@ export function useAuth({
       }
     }
 
-    // 2. Cryptographic Salted SHA-256 Hash Verification (checks user's configured passwordHash from database)
+    // 2. Cryptographic Salted SHA-256 Hash Verification (checks user's configured passwordHash from database or cache)
     if (!authPassed) {
       if (user.passwordHash) {
         const isPasswordValid = await verifyPassword(cleanPassword, user.passwordHash);
@@ -748,25 +866,26 @@ export function useAuth({
 
     // Seamlessly promote authenticated user into native Supabase Auth session if not already acquired
     if (supabase && !hasNativeSession) {
-      (async () => {
-        try {
-          await supabase.rpc('register_or_update_auth_user', {
-            p_email: cleanEmail,
-            p_password: cleanPassword,
-            p_full_name: user.fullName || cleanEmail.split('@')[0],
-            p_role: user.role || 'parts_management',
-            p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
-            p_role_position: user.rolePosition || null,
-            p_is_active: user.isActive !== false
-          });
-          await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password: cleanPassword
-          });
-        } catch (promoteErr) {
-          console.debug('Native auth session promotion note:', promoteErr?.message);
+      try {
+        await supabase.rpc('register_or_update_auth_user', {
+          p_email: cleanEmail,
+          p_password: cleanPassword,
+          p_full_name: user.fullName || cleanEmail.split('@')[0],
+          p_role: user.role || 'parts_management',
+          p_site_id: (user.siteId && isUUID(user.siteId)) ? user.siteId : null,
+          p_role_position: user.rolePosition || null,
+          p_is_active: user.isActive !== false
+        });
+        const { error: nativeSignInErr } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password: cleanPassword
+        });
+        if (!nativeSignInErr) {
+          hasNativeSession = true;
         }
-      })();
+      } catch (promoteErr) {
+        console.debug('Native auth session promotion note:', promoteErr?.message);
+      }
     }
 
     // Update client state & storage with latest authenticated credentials
@@ -820,49 +939,88 @@ export function useAuth({
     } catch (e) {}
 
     let user = null;
-    let cloudReachable = false;
-
-    // 1. Direct PostgreSQL profiles query as PRIMARY authority
+    // 1. Direct PostgreSQL query / RPC as PRIMARY authority
     if (supabase) {
       try {
-        const { data: dbProf, error: profErr } = await supabase
-          .from('profiles')
-          .select('*')
-          .ilike('email', cleanEmail)
-          .maybeSingle();
+        let rpcResolved = false;
+        try {
+          const { data: creds, error: rpcErr } = await supabase.rpc('verify_login_credentials', {
+            p_email: cleanEmail,
+            p_password: ''
+          });
 
-        if (!profErr) cloudReachable = true;
+          if (!rpcErr && creds && (creds.exists === true || creds.success === true)) {
+            rpcResolved = true;
 
-        if (dbProf) {
-          if (dbProf.is_deleted) {
-            return { success: false, error: 'This account has been deleted. Please contact DC if there is an issue with login.' };
+            if (creds.is_deleted) {
+              return { success: false, error: 'This account has been deleted. Please contact DC if there is an issue with login.' };
+            }
+
+            const userId = creds.id || creds.user_id;
+            deletedSet.delete(cleanEmail);
+            if (userId) deletedSet.delete(String(userId).toLowerCase());
+
+            const resolvedRole = creds.role || 'user';
+            const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
+            const rawPerms = creds.permitted_pages || creds.permittedPages;
+            const perms = (rawPerms && rawPerms.length > 0)
+              ? rawPerms
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            user = {
+              id: userId,
+              email: creds.email,
+              fullName: creds.full_name || creds.fullName || cleanEmail.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: creds.site_id || creds.siteId || 'site-dc',
+              hasSetPassword: true,
+              isActive: true,
+              permittedPages: perms
+            };
           }
+        } catch (rpcEx) {
+          // Fall back to the local user registry below.
+        }
 
-          deletedSet.delete(cleanEmail);
-          if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
+        if (!rpcResolved) {
+          const { data: dbProf } = await supabase
+            .from('profiles')
+            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted')
+            .ilike('email', cleanEmail)
+            .maybeSingle();
 
-          const { data: dbPerms } = await supabase
-            .from('user_page_permissions')
-            .select('page_id')
-            .eq('user_id', dbProf.id);
+          if (dbProf) {
+            if (dbProf.is_deleted) {
+              return { success: false, error: 'This account has been deleted. Please contact DC if there is an issue with login.' };
+            }
 
-          const resolvedRole = dbProf.role || 'user';
-          const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-          const perms = (dbPerms && dbPerms.length > 0)
-            ? dbPerms.map(p => p.page_id)
-            : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            deletedSet.delete(cleanEmail);
+            if (dbProf.id) deletedSet.delete(String(dbProf.id).toLowerCase());
 
-          user = {
-            id: dbProf.id,
-            email: dbProf.email,
-            fullName: dbProf.full_name || cleanEmail.split('@')[0],
-            role: resolvedRole,
-            rolePosition: resolvedPosition,
-            siteId: dbProf.site_id || 'site-dc',
-            hasSetPassword: true,
-            isActive: true,
-            permittedPages: perms
-          };
+            const { data: dbPerms } = await supabase
+              .from('user_page_permissions')
+              .select('page_id')
+              .eq('user_id', dbProf.id);
+
+            const resolvedRole = dbProf.role || 'user';
+            const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
+            const perms = (dbPerms && dbPerms.length > 0)
+              ? dbPerms.map(p => p.page_id)
+              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+
+            user = {
+              id: dbProf.id,
+              email: dbProf.email,
+              fullName: dbProf.full_name || cleanEmail.split('@')[0],
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
+              siteId: dbProf.site_id || 'site-dc',
+              hasSetPassword: true,
+              isActive: true,
+              permittedPages: perms
+            };
+          }
         }
       } catch (e) {}
     }
@@ -877,7 +1035,6 @@ export function useAuth({
           .maybeSingle();
 
         if (!regErr && regDoc) {
-          cloudReachable = true;
           const regUsers = regDoc.snapshot_data?.users || [];
           const regDeleted = (regDoc.snapshot_data?.deletedUserIds || []).map(s => String(s).toLowerCase().trim());
 
@@ -916,32 +1073,46 @@ export function useAuth({
       passwordHash: secureHash
     };
 
-    // Update profiles directly in Supabase PostgreSQL
+    // Update profiles directly in Supabase PostgreSQL (via set_initial_user_password RPC or fallback query)
     if (supabase) {
       try {
-        const passUpdateQuery = (user.id && isUUID(user.id))
-          ? supabase
-              .from('profiles')
-              .update({
-                has_set_password: true,
-                password_hash: secureHash,
-                is_deleted: false,
-                is_active: true,
-                updated_at: new Date().toISOString()
-              })
-              .or(`id.eq.${user.id},email.ilike.${cleanEmail}`)
-          : supabase
-              .from('profiles')
-              .update({
-                has_set_password: true,
-                password_hash: secureHash,
-                is_deleted: false,
-                is_active: true,
-                updated_at: new Date().toISOString()
-              })
-              .ilike('email', cleanEmail);
+        let rpcSaved = false;
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('set_initial_user_password', {
+            p_email: cleanEmail,
+            p_password: newPassword,
+            p_password_hash: secureHash
+          });
+          if (!rpcErr && rpcRes && rpcRes.success) {
+            rpcSaved = true;
+          }
+        } catch (rpcEx) {}
 
-        await passUpdateQuery;
+        if (!rpcSaved) {
+          const passUpdateQuery = (user.id && isUUID(user.id))
+            ? supabase
+                .from('profiles')
+                .update({
+                  has_set_password: true,
+                  password_hash: secureHash,
+                  is_deleted: false,
+                  is_active: true,
+                  updated_at: new Date().toISOString()
+                })
+                .or(`id.eq.${user.id},email.ilike.${cleanEmail}`)
+            : supabase
+                .from('profiles')
+                .update({
+                  has_set_password: true,
+                  password_hash: secureHash,
+                  is_deleted: false,
+                  is_active: true,
+                  updated_at: new Date().toISOString()
+                })
+                .ilike('email', cleanEmail);
+
+          await passUpdateQuery;
+        }
 
         try {
           await supabase.rpc('register_or_update_auth_user', {

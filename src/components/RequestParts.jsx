@@ -799,20 +799,19 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   }, [siteStockData, stockCategoryFilter, stockSearchQuery]);
 
   // Regional Site Classification (Metro Manila vs Provincial vs DC)
-  const { metroManilaSites, provincialSites, dcSite } = useMemo(() => {
+  const { metroManilaSites, provincialSites } = useMemo(() => {
     const mm = [];
     const prov = [];
-    let dc = null;
     (sites || []).forEach(s => {
       if (s.is_dc || s.code === 'DC-MDC' || s.code === 'DC' || s.id === 'site-dc') {
-        dc = s;
+        return;
       } else if (isProvincialSite(s)) {
         prov.push(s);
       } else {
         mm.push(s);
       }
     });
-    return { metroManilaSites: mm, provincialSites: prov, dcSite: dc };
+    return { metroManilaSites: mm, provincialSites: prov };
   }, [sites]);
 
   // Calculate Region Stock Totals (Branch ASPs only)
@@ -958,7 +957,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       });
     });
     return all.sort((a, b) => b.inStock - a.inStock || a.siteCode.localeCompare(b.siteCode));
-  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin, isPmgUser]);
+  }, [multiSiteStockData, allStocksSearchQuery, currentUser, userSiteObj, isSuperadmin]);
 
   // Dynamic header configuration based on active view and role
   const viewHeaderMeta = useMemo(() => {
@@ -1209,7 +1208,6 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     regionStockTotals,
     metroManilaSites.length,
     provincialSites.length,
-    dcStockSummary,
     isSuperadmin
   ]);
 

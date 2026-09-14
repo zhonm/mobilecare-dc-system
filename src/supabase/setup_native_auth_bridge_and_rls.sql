@@ -375,10 +375,9 @@ CREATE POLICY inventory_units_policy ON public.inventory_units
     USING (
         -- Superadmin, DC admin, and DC warehouse staff have global oversight
         public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
-        -- PMG users can only access their assigned branch and NEVER Central DC
+        -- PMG users can access all ASP branch inventory and NEVER Central DC
         OR (
             public.current_user_role() = 'parts_management'
-            AND current_site_id = public.current_user_site_id()
             AND NOT public.is_central_dc_site(current_site_id)
         )
         -- Fallback for application-managed unauthenticated or transition sessions

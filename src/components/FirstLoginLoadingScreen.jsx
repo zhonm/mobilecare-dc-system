@@ -63,9 +63,9 @@ export default function FirstLoginLoadingScreen() {
     }, 1400));
 
     try {
-      // Safety timeout: If Supabase connection takes > 12s, fallback gracefully
+      // Safety timeout: If Supabase connection takes > 25s, fallback gracefully
       const timeoutPromise = new Promise((resolve) =>
-        setTimeout(() => resolve({ timedOut: true }), 12000)
+        setTimeout(() => resolve({ timedOut: true }), 25000)
       );
 
       const syncPromise = (async () => {

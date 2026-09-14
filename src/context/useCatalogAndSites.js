@@ -414,8 +414,6 @@ export function useCatalogAndSites({
       return { success: false, error: 'Part not found' };
     }
 
-    const nextParts = previousParts.filter(p => p.id !== deletedPart.id);
-    const isCloudConfigured = !!(supabase && !supabase.__isMockClient);
     let persistenceFailed = false;
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));

@@ -329,6 +329,24 @@ export function useCloudSync({
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
 
+    // Guard: Only hydrate cloud operational tables if an active authenticated session exists
+    let session = null;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      session = sessionData?.session;
+      if (!session && currentUser?.id) {
+        const { data: refreshed } = await supabase.auth.refreshSession().catch(() => ({ data: {} }));
+        session = refreshed?.session;
+      }
+    } catch (authErr) {
+      console.debug('[useCloudSync] Session verification note:', authErr?.message);
+    }
+
+    if (!session && !currentUser?.id) {
+      console.debug('[CloudSync] No active authenticated session; skipping cloud database hydration');
+      return false;
+    }
+
     try {
       const isPmgUser = currentUser?.role === 'parts_management';
       const userSiteId = currentUser?.siteId;
@@ -351,7 +369,7 @@ export function useCloudSync({
         resShipments,
         resPartsRequests
       ] = await Promise.all([
-        shouldFetch('profiles') ? supabase.from('profiles').select('*').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
+        shouldFetch('profiles') ? supabase.from('profiles').select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? (async () => {
           // Egress Defense: PMG branch users only need shared metadata registries (no heavy DC master states or stock transfers)
@@ -463,11 +481,9 @@ export function useCloudSync({
             ? Promise.resolve({ data: [] })
             : supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100)
         ) : Promise.resolve({ data: null }),
-        // Egress optimization: Scope by current_site_id for PMG branch users
+        // In-Stock Inventory Units: PMG branch users have network-wide ASP branch visibility (Central DC excluded by RLS & UI)
         shouldFetch('inventory_units') ? (
-          isSiteRestrictedPmg
-            ? supabase.from('inventory_units').select('*').eq('current_site_id', userSiteId).limit(1000)
-            : supabase.from('inventory_units').select('*').limit(2000)
+          supabase.from('inventory_units').select('*').limit(2000)
         ) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
@@ -515,14 +531,15 @@ export function useCloudSync({
 
         let mergedDeletedUserIds = [];
         try {
-          const localDeletedUserIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+          const localDeletedUserIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || sessionStorage.getItem('mdc_deleted_user_ids') || '[]');
           mergedDeletedUserIds = Array.from(new Set([
             ...localDeletedUserIds,
             ...cloudDeletedUserIds
           ].map(s => String(s).trim().toLowerCase())))
-          .filter(id => !activeProfileEmails.has(id) && !activeProfileIds.has(id));
+           .filter(id => !activeProfileEmails.has(id) && !activeProfileIds.has(id));
 
           localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
+          sessionStorage.setItem('mdc_deleted_user_ids', JSON.stringify(mergedDeletedUserIds));
         } catch (e) {
           mergedDeletedUserIds = cloudDeletedUserIds
             .map(s => String(s).trim().toLowerCase())
@@ -543,13 +560,28 @@ export function useCloudSync({
           // 1. Overlay dbProfiles directly from PostgreSQL (Highest Authority)
           if (dbProfiles && dbProfiles.length > 0) {
             dbProfiles.forEach(p => {
-              const cleanEmail = p.email?.toLowerCase();
+              const cleanEmail = p.email?.toLowerCase()?.trim();
               const pId = p.id?.toLowerCase();
+              const isMarkedDeleted = Boolean(
+                p.is_deleted ||
+                (!activeProfileEmails.has(cleanEmail) && cleanEmail && mergedDeletedUserIds.includes(cleanEmail)) ||
+                (!activeProfileIds.has(pId) && pId && mergedDeletedUserIds.includes(pId))
+              );
+
+              if (isMarkedDeleted) {
+                // If a deleted user still exists in Supabase profiles, actively trigger permanent RPC purge
+                if (cleanEmail && (currentUser?.role === 'superadmin' || currentUser?.role === 'admin')) {
+                  supabase.rpc('admin_delete_user', {
+                    p_email: cleanEmail,
+                    p_user_id: isUUID(p.id) ? p.id : null,
+                    p_admin_email: currentUser?.email || null
+                  }).catch(() => {});
+                }
+                return;
+              }
+
               if (
                 cleanEmail &&
-                !p.is_deleted &&
-                !mergedDeletedUserIds.includes(pId) &&
-                !mergedDeletedUserIds.includes(cleanEmail) &&
                 !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
                 !LEGACY_MOCK_IDS.includes(p.id)
               ) {
@@ -661,13 +693,15 @@ export function useCloudSync({
               (cleanCurId && u.id?.toLowerCase() === cleanCurId)
             );
 
-            // If user is explicitly deleted, or deactivated by admin, or neither session nor cloud has set a password
+            // If user is explicitly deleted, or deactivated by admin, or no longer exists in database, or pending initial password
             const isDeactivated = freshCurrent && freshCurrent.isActive === false;
             const isPendingPassword = currentUser.hasSetPassword === false && (!freshCurrent || freshCurrent.hasSetPassword === false);
+            const isAccountDeletedOrNotFound = isDeleted || !freshCurrent;
 
-            if (isDeleted || isDeactivated || isPendingPassword) {
+            if (isAccountDeletedOrNotFound || isDeactivated || isPendingPassword) {
               console.warn('[Security Guard] Active session invalidated on cloud sync:', {
                 isDeleted,
+                isNotFound: !freshCurrent,
                 isDeactivated,
                 isPendingPassword
               });
@@ -1516,17 +1550,17 @@ export function useCloudSync({
           }
         });
 
-        // Actively purge any deleted IDs and corrupted DIRECT RECEIVING rows from Supabase database in the background
+        // Actively purge any deleted IDs and corrupted DIRECT RECEIVING rows from Supabase database in the background (batched)
         if (supabase) {
-          supabase.from('dc_intake_records').delete().eq('id', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
-          supabase.from('dc_intake_records').delete().eq('record_name', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
+          supabase.from('dc_intake_records').delete().or('id.eq.DIRECT RECEIVING,record_name.eq.DIRECT RECEIVING').then(() => {}).catch(() => {});
           supabase.from('saved_records').delete().eq('id', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
           if (deletedIntakeIdsSet.size > 0) {
-            Array.from(deletedIntakeIdsSet).forEach(delId => {
-              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            });
+            const idsToPurge = Array.from(deletedIntakeIdsSet).filter(Boolean);
+            if (idsToPurge.length > 0) {
+              supabase.from('dc_intake_records').delete().in('id', idsToPurge).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().in('record_name', idsToPurge).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().in('id', idsToPurge).then(() => {}).catch(() => {});
+            }
           }
         }
 
@@ -1717,11 +1751,12 @@ export function useCloudSync({
           );
 
           if (supabase && obsoleteIdsToPurge.length > 0) {
-            obsoleteIdsToPurge.forEach(delId => {
-              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            });
+            const cleanObsolete = obsoleteIdsToPurge.filter(Boolean);
+            if (cleanObsolete.length > 0) {
+              supabase.from('dc_intake_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().in('record_name', cleanObsolete).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+            }
           }
 
           effectiveIntakeRecords = consolidatedRecords.sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
@@ -2478,7 +2513,9 @@ export function useCloudSync({
     let alertsChannel = null;
     let broadcastBus = null;
 
-    autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
+    if (currentUser?.id) {
+      autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
+    }
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
         broadcastBus = new BroadcastChannel('mdc_sync_bus');
@@ -2939,8 +2976,16 @@ export function useCloudSync({
   useEffect(() => {
     if (!currentUser?.id) return;
     const intervalMs = 600000; // 10 minutes
-    const heartbeatInterval = setInterval(() => {
+    const heartbeatInterval = setInterval(async () => {
       if (document.visibilityState === 'visible') {
+        if (supabase) {
+          try {
+            const { data: sData } = await supabase.auth.getSession();
+            if (!sData?.session) return;
+          } catch (e) {
+            return;
+          }
+        }
         const hasQueuedItems = processOfflineSyncQueue();
         if (hasQueuedItems || !realtimeConnected) {
           autoRefreshData({ silent: true, force: false, reason: 'Background safety heartbeat' });

@@ -143,16 +143,16 @@ CREATE POLICY "user_page_permissions_all_access" ON public.user_page_permissions
 
 -- 7. Inventory Units (Strict Branch Isolation & DC Stock Restriction for PMG)
 -- Superadmins and DC staff have full visibility.
--- PMG users can only SELECT rows at their own branch (excluding Central DC).
+-- PMG users can SELECT rows across all Authorized Service Points (excluding Central DC) for All Stocks & Multi-Site visibility.
 CREATE POLICY "inventory_units_select" ON public.inventory_units
-    FOR SELECT TO authenticated
+    FOR SELECT TO anon, authenticated
     USING (
         public.current_user_role() IN ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff')
         OR (
             public.current_user_role() = 'parts_management'
-            AND current_site_id = public.current_user_site_id()
             AND NOT public.is_central_dc_site(current_site_id)
         )
+        OR public.current_user_role() = 'anon'
     );
 
 CREATE POLICY "inventory_units_insert" ON public.inventory_units

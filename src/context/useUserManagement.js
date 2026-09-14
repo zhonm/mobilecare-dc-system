@@ -91,74 +91,171 @@ export function useUserManagement({
     let isMounted = true;
     const recoverUsersFromDb = async () => {
       try {
-        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
+        let deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || sessionStorage.getItem('mdc_deleted_user_ids') || '[]').map(s => String(s).toLowerCase());
         const activeSessionUser = getActiveUser();
 
         if (supabase) {
-          const { data: dbProf, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: true });
-          if (!error && dbProf && dbProf.length > 0 && isMounted) {
-            const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
-            const permsMap = new Map();
-            (dbPerms || []).forEach(p => {
-              if (!permsMap.has(p.user_id)) permsMap.set(p.user_id, []);
-              permsMap.get(p.user_id).push(p.page_id);
+          // Pre-fetch deleted user IDs from master_users_registry to ensure instant tombstone coverage
+          try {
+            const { data: regDoc } = await supabase
+              .from('saved_records')
+              .select('snapshot_data')
+              .eq('id', 'master_users_registry')
+              .maybeSingle();
+
+            if (regDoc?.snapshot_data?.deletedUserIds && Array.isArray(regDoc.snapshot_data.deletedUserIds)) {
+              regDoc.snapshot_data.deletedUserIds.forEach(id => {
+                const clean = String(id).toLowerCase().trim();
+                if (clean && !deletedIds.includes(clean)) deletedIds.push(clean);
+              });
+              try {
+                localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+                sessionStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+              } catch (e) {}
+            }
+          } catch (e) {}
+
+          const { data: sessionData } = await supabase.auth.getSession();
+          const isAuthenticated = Boolean(sessionData?.session?.user || activeSessionUser);
+
+          let dbProf = [];
+          try {
+            const { data, error } = await supabase
+              .from('profiles')
+              .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at')
+              .order('created_at', { ascending: true });
+            if (!error && data) dbProf = data;
+          } catch (e) {}
+
+          const activeDbEmails = new Set(
+            (dbProf || []).filter(p => !p.is_deleted).map(p => p.email?.toLowerCase().trim()).filter(Boolean)
+          );
+          const activeDbIds = new Set(
+            (dbProf || []).filter(p => !p.is_deleted).map(p => p.id?.toLowerCase().trim()).filter(Boolean)
+          );
+          deletedIds = deletedIds.filter(id => !activeDbEmails.has(id) && !activeDbIds.has(id));
+          try {
+            localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+            sessionStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+          } catch (e) {}
+
+          let dbPerms = [];
+          if (isAuthenticated) {
+            try {
+              const { data: permsData, error: permErr } = await supabase.from('user_page_permissions').select('*');
+              if (!permErr && permsData) dbPerms = permsData;
+            } catch (e) {}
+          }
+          const permsMap = new Map();
+          (dbPerms || []).forEach(p => {
+            if (!permsMap.has(p.user_id)) permsMap.set(p.user_id, []);
+            permsMap.get(p.user_id).push(p.page_id);
+          });
+
+          let activeProfiles = (dbProf || [])
+            .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()) && !deletedIds.includes(p.id?.toLowerCase()) && !deletedIds.includes(p.email.toLowerCase()))
+            .map(p => {
+              const customPerms = permsMap.get(p.id);
+              const role = p.role || 'user';
+              const resolvedPosition = p.role_position || getDefaultRolePosition(role);
+              const isPasswordSet = Boolean(p.has_set_password);
+
+              const isPmg = role === 'parts_management';
+              const isDc = isDcSite(p.site_id);
+              const resolvedSiteId = isPmg
+                ? (!isDc && p.site_id ? p.site_id : null)
+                : (p.site_id || 'site-dc');
+              const needsAssignment = isPmg && (!resolvedSiteId || isDc);
+
+              return {
+                id: p.id || `usr-${Date.now()}`,
+                email: p.email,
+                fullName: p.full_name || p.email.split('@')[0],
+                role: role,
+                rolePosition: resolvedPosition,
+                siteId: resolvedSiteId,
+                needsSiteAssignment: needsAssignment,
+                hasSetPassword: isPasswordSet,
+                passwordHash: null,
+                isActive: p.is_active ?? true,
+                permittedPages: role === 'superadmin'
+                  ? ROLE_PRESETS.superadmin
+                  : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+              };
             });
 
-            let activeProfiles = dbProf
-              .filter(p => !p.is_deleted && p.email && !LEGACY_MOCK_EMAILS.includes(p.email.toLowerCase()) && !deletedIds.includes(p.id?.toLowerCase()) && !deletedIds.includes(p.email.toLowerCase()))
-              .map(p => {
-                const customPerms = permsMap.get(p.id);
-                const role = p.role || 'user';
-                const resolvedPosition = p.role_position || getDefaultRolePosition(role);
-                const passHash = p.password_hash || null;
-                const isPasswordSet = Boolean(p.has_set_password || passHash);
+          // Overlay users from master_users_registry (saved_records)
+          try {
+            const { data: regDoc } = await supabase
+              .from('saved_records')
+              .select('snapshot_data')
+              .eq('id', 'master_users_registry')
+              .maybeSingle();
 
-                const isPmg = role === 'parts_management';
-                const isDc = isDcSite(p.site_id);
-                const resolvedSiteId = isPmg
-                  ? (!isDc && p.site_id ? p.site_id : null)
-                  : (p.site_id || 'site-dc');
-                const needsAssignment = isPmg && (!resolvedSiteId || isDc);
-
-                return {
-                  id: p.id || `usr-${Date.now()}`,
-                  email: p.email,
-                  fullName: p.full_name || p.email.split('@')[0],
-                  role: role,
-                  rolePosition: resolvedPosition,
-                  siteId: resolvedSiteId,
-                  needsSiteAssignment: needsAssignment,
-                  hasSetPassword: isPasswordSet,
-                  passwordHash: passHash,
-                  isActive: p.is_active ?? true,
-                  permittedPages: role === 'superadmin'
-                    ? ROLE_PRESETS.superadmin
-                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
-                };
+            if (regDoc?.snapshot_data?.users && Array.isArray(regDoc.snapshot_data.users)) {
+              regDoc.snapshot_data.users.forEach(ru => {
+                const cleanEmail = ru.email?.toLowerCase().trim();
+                const uId = ru.id?.toLowerCase();
+                if (cleanEmail && !deletedIds.includes(cleanEmail) && !deletedIds.includes(uId) && !LEGACY_MOCK_EMAILS.includes(cleanEmail)) {
+                  const exists = activeProfiles.some(p => p.email?.toLowerCase() === cleanEmail || (ru.id && p.id === ru.id));
+                  if (!exists) {
+                    activeProfiles.push({
+                      ...ru,
+                      hasSetPassword: Boolean(ru.hasSetPassword || ru.passwordHash),
+                      isActive: ru.isActive ?? true
+                    });
+                  }
+                }
               });
+            }
+          } catch (e) {}
 
-            // If activeSessionUser is logged in and not in activeProfiles, preserve them so refresh never drops session
-            if (activeSessionUser && activeSessionUser.email && !deletedIds.includes(activeSessionUser.email.toLowerCase()) && !deletedIds.includes(activeSessionUser.id?.toLowerCase())) {
-              const exists = activeProfiles.some(u =>
-                (activeSessionUser.id && u.id?.toLowerCase() === activeSessionUser.id.toLowerCase()) ||
-                (u.email && u.email.toLowerCase() === activeSessionUser.email.toLowerCase())
-              );
-              if (!exists) {
-                activeProfiles.push(activeSessionUser);
-              }
+          // If activeSessionUser is logged in and not in activeProfiles, preserve them so refresh never drops session
+          if (activeSessionUser && activeSessionUser.email && !deletedIds.includes(activeSessionUser.email.toLowerCase()) && !deletedIds.includes(activeSessionUser.id?.toLowerCase())) {
+            const exists = activeProfiles.some(u =>
+              (activeSessionUser.id && u.id?.toLowerCase() === activeSessionUser.id.toLowerCase()) ||
+              (u.email && u.email.toLowerCase() === activeSessionUser.email.toLowerCase())
+            );
+            if (!exists) {
+              activeProfiles.push(activeSessionUser);
+            }
+          }
+
+          // Also preserve any locally provisioned users (e.g. Josh1) not yet in dbProf
+          let hasUnsyncedLocalUsers = false;
+          try {
+            const localUsers = JSON.parse(localStorage.getItem('mdc_users') || sessionStorage.getItem('mdc_users') || '[]');
+            if (Array.isArray(localUsers)) {
+              localUsers.forEach(lu => {
+                if (lu?.email && !deletedIds.includes(lu.email.toLowerCase()) && !deletedIds.includes(lu.id?.toLowerCase()) && !LEGACY_MOCK_EMAILS.includes(lu.email.toLowerCase())) {
+                  const alreadyInDb = activeProfiles.some(p => p.email?.toLowerCase() === lu.email.toLowerCase() || (lu.id && p.id === lu.id));
+                  if (!alreadyInDb) {
+                    activeProfiles.push(lu);
+                    hasUnsyncedLocalUsers = true;
+                  }
+                }
+              });
+            }
+          } catch (e) {}
+
+          const sortedProfiles = sortUsersDeterministically(activeProfiles);
+
+          if (sortedProfiles.length > 0 && isMounted) {
+            setUsersList(sortedProfiles);
+            try {
+              localStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
+              sessionStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
+              dbStorage.setItem('mdc_users', sortedProfiles);
+            } catch (e) {}
+
+            // If there are unsynced local users and user is authenticated, background sync them
+            if (hasUnsyncedLocalUsers && isAuthenticated) {
+              setTimeout(() => {
+                syncAllUsersToDatabase(sortedProfiles).catch(() => {});
+              }, 1000);
             }
 
-            const sortedProfiles = sortUsersDeterministically(activeProfiles);
-
-            if (sortedProfiles.length > 0) {
-              setUsersList(sortedProfiles);
-              try {
-                localStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
-                sessionStorage.setItem('mdc_users', JSON.stringify(sortedProfiles));
-                dbStorage.setItem('mdc_users', sortedProfiles);
-              } catch (e) {}
-              return;
-            }
+            return;
           }
         }
 
@@ -198,6 +295,8 @@ export function useUserManagement({
     return () => {
       isMounted = false;
     };
+  // The sync helper is intentionally recreated with current user state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getActiveUser]);
 
   // Helper to persist authoritative users registry to cloud
@@ -252,37 +351,54 @@ export function useUserManagement({
         const validId = (u.id && isUUID(u.id)) ? u.id : toValidUUID(u.id || cleanEmail);
         const resolvedRole = u.role || 'user';
         const resolvedPosition = u.rolePosition || getDefaultRolePosition(resolvedRole);
-
-        // 1. Upsert into public.profiles
-        const { data: inserted, error: profErr } = await supabase
-          .from('profiles')
-          .upsert({
-            id: validId,
-            email: cleanEmail,
-            full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
-            role: resolvedRole,
-            role_position: resolvedPosition,
-            site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
-            password_hash: u.passwordHash || null,
-            has_set_password: Boolean(u.hasSetPassword || u.passwordHash),
-            is_active: u.isActive ?? true,
-            is_deleted: false,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'email' })
-          .select();
-
-        if (profErr) console.warn('Supabase profile sync note:', cleanEmail, profErr.message);
-
-        const effectiveUserId = (inserted && inserted[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validId;
-
-        // 2. Upsert page permissions into public.user_page_permissions
         const perms = u.permittedPages || (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
-        if (perms && perms.length > 0 && isUUID(effectiveUserId)) {
-          const permRows = perms.map(pageId => ({
-            user_id: effectiveUserId,
-            page_id: pageId
-          }));
-          await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+
+        let syncedViaRpc = false;
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_provision_user', {
+            p_email: cleanEmail,
+            p_full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
+            p_role: resolvedRole,
+            p_role_position: resolvedPosition,
+            p_site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
+            p_permitted_pages: perms || [],
+            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+          });
+          if (!rpcErr && rpcRes?.success) {
+            syncedViaRpc = true;
+          }
+        } catch (e) {}
+
+        if (!syncedViaRpc) {
+          // 1. Upsert into public.profiles
+          const { data: inserted, error: profErr } = await supabase
+            .from('profiles')
+            .upsert({
+              id: validId,
+              email: cleanEmail,
+              full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
+              role: resolvedRole,
+              role_position: resolvedPosition,
+              site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
+              has_set_password: Boolean(u.hasSetPassword || u.passwordHash),
+              is_active: u.isActive ?? true,
+              is_deleted: false,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'email' })
+            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted');
+
+          if (profErr) console.warn('Supabase profile sync note:', cleanEmail, profErr.message);
+
+          const effectiveUserId = (inserted && inserted[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validId;
+
+          // 2. Upsert page permissions into public.user_page_permissions
+          if (perms && perms.length > 0 && isUUID(effectiveUserId)) {
+            const permRows = perms.map(pageId => ({
+              user_id: effectiveUserId,
+              page_id: pageId
+            }));
+            await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+          }
         }
       }
 
@@ -338,9 +454,10 @@ export function useUserManagement({
 
     let filteredDeleted = [];
     try {
-      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || sessionStorage.getItem('mdc_deleted_user_ids') || '[]');
       filteredDeleted = deletedIds.filter(id => id?.toLowerCase() !== cleanEmail && id?.toLowerCase() !== newUser.id.toLowerCase());
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
+      sessionStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
     } catch (e) {}
 
     const defaultPages = newUser.permittedPages;
@@ -370,30 +487,67 @@ export function useUserManagement({
           effectiveSiteUUID = toValidUUID(resolvedSiteId);
         }
 
-        const { data: inserted, error: profErr } = await supabase
-          .from('profiles')
-          .upsert({
-            id: validUserId,
-            email: cleanEmail,
-            full_name: fullName.trim(),
-            role: role,
-            role_position: finalRolePosition,
-            site_id: effectiveSiteUUID,
-            has_set_password: false,
-            password_hash: null,
-            is_active: true,
-            is_deleted: false,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'email' })
-          .select();
+        let effectiveUserId = validUserId;
+        let provisionSuccess = false;
 
-        if (profErr) console.warn('Supabase profile upsert warning:', profErr.message);
+        // 1. Try admin_provision_user RPC first (bypasses RLS friction safely as database owner)
+        try {
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_provision_user', {
+            p_email: cleanEmail,
+            p_full_name: fullName.trim(),
+            p_role: role,
+            p_role_position: finalRolePosition,
+            p_site_id: effectiveSiteUUID,
+            p_permitted_pages: (defaultPages && defaultPages.length > 0) ? defaultPages : [],
+            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+          });
 
-        const effectiveUserId = (inserted?.[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validUserId;
-        if (effectiveUserId !== validUserId) {
-          newUser.id = effectiveUserId;
-          nextList = nextList.map(u => u.email.toLowerCase() === cleanEmail ? { ...u, id: effectiveUserId } : u);
+          if (!rpcErr && rpcData?.success) {
+            provisionSuccess = true;
+            if (rpcData.user_id && isUUID(rpcData.user_id)) {
+              effectiveUserId = rpcData.user_id;
+            }
+          } else if (rpcErr) {
+            console.debug('admin_provision_user RPC notice:', rpcErr.message);
+          }
+        } catch (rpcEx) {
+          console.debug('admin_provision_user RPC fallback notice:', rpcEx);
+        }
+
+        // 2. Direct profiles upsert fallback if RPC was not available
+        if (!provisionSuccess) {
+          const { data: inserted, error: profErr } = await supabase
+            .from('profiles')
+            .upsert({
+              id: validUserId,
+              email: cleanEmail,
+              full_name: fullName.trim(),
+              role: role,
+              role_position: finalRolePosition,
+              site_id: effectiveSiteUUID,
+              has_set_password: false,
+              password_hash: null,
+              is_active: true,
+              is_deleted: false,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'email' })
+            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted');
+
+          if (profErr) {
+            console.warn('Supabase profile upsert warning:', profErr.message);
+          } else {
+            provisionSuccess = true;
+            if (inserted?.[0]?.id && isUUID(inserted[0].id)) {
+              effectiveUserId = inserted[0].id;
+            }
+          }
+        }
+
+        const resolvedUserId = (effectiveUserId && isUUID(effectiveUserId)) ? effectiveUserId : validUserId;
+        if (resolvedUserId !== validUserId) {
+          newUser.id = resolvedUserId;
+          nextList = nextList.map(u => u.email.toLowerCase() === cleanEmail ? { ...u, id: resolvedUserId } : u);
           setUsersList(nextList);
           try {
             localStorage.setItem('mdc_users', JSON.stringify(nextList));
@@ -402,9 +556,9 @@ export function useUserManagement({
           } catch (e) {}
         }
 
-        if (defaultPages && defaultPages.length > 0 && isUUID(effectiveUserId)) {
+        if (defaultPages && defaultPages.length > 0 && isUUID(resolvedUserId) && !provisionSuccess) {
           const permRows = defaultPages.map(pageId => ({
-            user_id: effectiveUserId,
+            user_id: resolvedUserId,
             page_id: pageId
           }));
           const { error: permErr } = await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
@@ -747,7 +901,28 @@ export function useUserManagement({
 
         let effectiveProfId = isUUID(userId) ? userId : null;
 
-        if (isUUID(userId)) {
+        // Try admin_update_user RPC first (bypasses RLS friction safely as database owner)
+        try {
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_update_user', {
+            p_user_id: isUUID(userId) ? userId : null,
+            p_email: cleanEmail,
+            p_full_name: fullName.trim(),
+            p_role: resolvedRole,
+            p_role_position: resolvedPosition,
+            p_site_id: effectiveSiteId,
+            p_is_active: target.isActive ?? true,
+            p_permitted_pages: finalPermittedPages || [],
+            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+          });
+          if (!rpcErr && rpcData?.success) {
+            updatedInDb = true;
+            if (rpcData.id && isUUID(rpcData.id)) effectiveProfId = rpcData.id;
+          }
+        } catch (rpcEx) {
+          console.debug('admin_update_user RPC notice:', rpcEx);
+        }
+
+        if (!updatedInDb && isUUID(userId)) {
           const { data: byIdData, error: byIdErr } = await supabase
             .from('profiles')
             .update(updatePayload)
@@ -895,26 +1070,41 @@ export function useUserManagement({
           try { await supabase.auth.updateUser({ password: finalPassword }); } catch (authErr) {}
         }
 
-        const passUpdateQuery = isUUID(userId)
-          ? supabase
-              .from('profiles')
-              .update({
-                has_set_password: hasSet,
-                password_hash: secureHash,
-                updated_at: new Date().toISOString()
-              })
-              .or(`id.eq.${userId},email.ilike.${target.email}`)
-          : supabase
-              .from('profiles')
-              .update({
-                has_set_password: hasSet,
-                password_hash: secureHash,
-                updated_at: new Date().toISOString()
-              })
-              .ilike('email', target.email);
+        let resetViaRpc = false;
+        try {
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
+            p_email: target.email,
+            p_new_password: finalPassword || null,
+            p_require_setup: requireNextLoginReset,
+            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+          });
+          if (!rpcErr && rpcData?.success) {
+            resetViaRpc = true;
+          }
+        } catch (e) {}
 
-        const { error } = await passUpdateQuery;
-        if (error) throw error;
+        if (!resetViaRpc) {
+          const passUpdateQuery = isUUID(userId)
+            ? supabase
+                .from('profiles')
+                .update({
+                  has_set_password: hasSet,
+                  password_hash: secureHash,
+                  updated_at: new Date().toISOString()
+                })
+                .or(`id.eq.${userId},email.ilike.${target.email}`)
+            : supabase
+                .from('profiles')
+                .update({
+                  has_set_password: hasSet,
+                  password_hash: secureHash,
+                  updated_at: new Date().toISOString()
+                })
+                .ilike('email', target.email);
+
+          const { error } = await passUpdateQuery;
+          if (error) throw error;
+        }
 
         if (finalPassword) {
           try {
@@ -1008,6 +1198,7 @@ export function useUserManagement({
 
     try {
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+      sessionStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
     } catch (e) {
       console.warn('Error saving deleted user id:', e);
     }
@@ -1030,23 +1221,36 @@ export function useUserManagement({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        if (isUUID(targetId)) {
-          await supabase.from('user_page_permissions').delete().eq('user_id', targetId);
-          const { error: tombstoneError } = await supabase
-            .from('profiles')
-            .update({ is_active: false, is_deleted: true, updated_at: new Date().toISOString() })
-            .eq('id', targetId);
-          if (tombstoneError) throw tombstoneError;
-          await supabase.from('profiles').delete().eq('id', targetId);
+        let deletedViaRpc = false;
+        try {
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_delete_user', {
+            p_email: cleanEmail,
+            p_user_id: isUUID(targetId) ? targetId : null,
+            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+          });
+          if (!rpcErr && rpcData?.success) {
+            deletedViaRpc = true;
+          } else if (rpcErr) {
+            console.debug('admin_delete_user notice:', rpcErr.message);
+          }
+        } catch (rpcEx) {
+          console.debug('admin_delete_user RPC notice:', rpcEx);
         }
-        if (cleanEmail) {
-          const { error: tombstoneError } = await supabase
-            .from('profiles')
-            .update({ is_active: false, is_deleted: true, updated_at: new Date().toISOString() })
-            .ilike('email', cleanEmail);
-          if (tombstoneError) throw tombstoneError;
-          await supabase.from('profiles').delete().ilike('email', cleanEmail);
+
+        if (!deletedViaRpc) {
+          try {
+            if (isUUID(targetId)) {
+              await supabase.from('user_page_permissions').delete().eq('user_id', targetId);
+              await supabase.from('profiles').delete().eq('id', targetId);
+            }
+            if (cleanEmail) {
+              await supabase.from('profiles').delete().ilike('email', cleanEmail);
+            }
+          } catch (directDelErr) {
+            console.warn('Direct profile deletion fallback notice:', directDelErr.message);
+          }
         }
+
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) {
           broadcastCloudEvent('FORCE_LOGOUT_USER', { userId: targetId, email: cleanEmail, reason: 'Account deleted by administrator' });

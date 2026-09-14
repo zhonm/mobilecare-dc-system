@@ -815,12 +815,11 @@ export function usePartsRequests({
       totalUnits: matchingUnits.length,
       units: matchingUnits
     };
-  }, [inventoryUnits, parts, sites, categories]);
+  }, [inventoryUnits, parts, sites, categories, currentUser?.role]);
 
   // 6. Multi-Site Stock Summary with Granular Serial Privacy & Masking
   const getAllSitesStockSummary = useCallback((targetSiteFilter = 'ALL') => {
     const isSuper = currentUser?.role === 'superadmin';
-    const isPmg = currentUser?.role === 'parts_management';
     const userSiteId = currentUser?.siteId;
     const userId = currentUser?.id;
 

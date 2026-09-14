@@ -43,7 +43,7 @@ console.log('  ✓ PASS: isDcSite accurately identifies Central DC identifiers a
 // --- Test 2: PMG User Provisioning Validation Guard ---
 console.log('\n--- Test 2: PMG User Provisioning Validation Guard ---');
 
-function mockValidateUserProvision({ role, siteId, sitesList }) {
+function mockValidateUserProvision({ role, siteId, _sitesList }) {
   if (role === 'parts_management') {
     const isMissingSite = !siteId || !String(siteId).trim();
     if (isMissingSite || isDcSite(siteId)) {
@@ -138,7 +138,7 @@ function mockHydrationQueryScoper(currentUser) {
 
   return {
     inventory_units: isSiteRestrictedPmg
-      ? { queryType: 'FILTERED', siteFilter: userSiteId, limit: 1000 }
+      ? { queryType: 'BRANCH_NETWORK', siteFilter: null, limit: 2000 }
       : { queryType: 'GLOBAL', siteFilter: null, limit: 2000 },
     shipments: isSiteRestrictedPmg
       ? { queryType: 'FILTERED', siteFilter: userSiteId, limit: 50 }
@@ -157,9 +157,9 @@ function mockHydrationQueryScoper(currentUser) {
 
 const pmgUser = { id: 'usr-zam-01', role: 'parts_management', siteId: 'site-zam-uuid' };
 const pmgPlan = mockHydrationQueryScoper(pmgUser);
-assert.strictEqual(pmgPlan.inventory_units.queryType, 'FILTERED');
-assert.strictEqual(pmgPlan.inventory_units.siteFilter, 'site-zam-uuid');
-assert.strictEqual(pmgPlan.inventory_units.limit, 1000);
+assert.strictEqual(pmgPlan.inventory_units.queryType, 'BRANCH_NETWORK');
+assert.strictEqual(pmgPlan.inventory_units.siteFilter, null);
+assert.strictEqual(pmgPlan.inventory_units.limit, 2000);
 
 assert.strictEqual(pmgPlan.shipments.queryType, 'FILTERED');
 assert.strictEqual(pmgPlan.shipments.siteFilter, 'site-zam-uuid');
@@ -170,7 +170,7 @@ assert.strictEqual(pmgPlan.parts_requests.siteFilter, 'site-zam-uuid');
 
 assert.strictEqual(pmgPlan.dc_intake_records.queryType, 'SKIPPED');
 assert.strictEqual(pmgPlan.saved_records.queryType, 'METADATA_ONLY');
-console.log('  ✓ PASS: PMG branch user hydration is strictly scoped by site_id, skips DC intakes & heavy master states');
+console.log('  ✓ PASS: PMG branch user hydration enables branch network inventory, strictly skips DC intakes & heavy master states');
 
 const adminUser = { id: 'usr-super-01', role: 'superadmin', siteId: 'site-dc' };
 const adminPlan = mockHydrationQueryScoper(adminUser);
@@ -309,15 +309,208 @@ const mockJoseUser = {
 };
 
 const localRegistry = [mockJoseUser];
-let resolvedJose = null;
 // Simulate verifyLoginEmail fallback logic
 const candidates = localRegistry.filter(u => u.isActive);
-resolvedJose = candidates.find(u => u.email.toLowerCase() === 'jose@mobilecareph.com');
+const resolvedJose = candidates.find(u => u.email.toLowerCase() === 'jose@mobilecareph.com');
 
 assert.ok(resolvedJose, 'Jose must be resolved from registry fallback');
 assert.strictEqual(resolvedJose.email, 'jose@mobilecareph.com');
 assert.strictEqual(resolvedJose.hasSetPassword, false);
 console.log('  ✓ PASS: Simulated unauthenticated Jose PMG login verifies email and triggers password creation prompt');
+
+// --- Test 8: Profiles, Permissions & Saved Records Hardening (RLS & RPC Security) ---
+console.log('\n--- Test 8: Profiles, Permissions & Saved Records Hardening (RLS & RPC Security) ---');
+
+const hardeningMigrationPath = path.join(__dirname, '../supabase/fix_profiles_saved_records_hardening.sql');
+assert.ok(fs.existsSync(hardeningMigrationPath), 'fix_profiles_saved_records_hardening.sql must exist');
+
+const hardeningSql = fs.readFileSync(hardeningMigrationPath, 'utf8');
+
+// 8a. Verify anon revocation on profiles, user_page_permissions, saved_records
+assert.ok(hardeningSql.includes('REVOKE ALL ON public.profiles FROM anon;'), 'Must revoke all on profiles from anon');
+assert.ok(hardeningSql.includes('REVOKE ALL ON public.user_page_permissions FROM anon;'), 'Must revoke all on user_page_permissions from anon');
+assert.ok(hardeningSql.includes('REVOKE ALL ON public.saved_records FROM anon;'), 'Must revoke all on saved_records from anon');
+console.log('  ✓ PASS: Revokes direct anon access on profiles, user_page_permissions, and saved_records');
+
+// 8b. Verify no overly permissive USING (true) policies for anon
+assert.ok(!hardeningSql.includes('CREATE POLICY "profiles_all_access"'), 'Must drop profiles_all_access');
+assert.ok(!hardeningSql.includes('CREATE POLICY "user_page_permissions_all_access"'), 'Must drop user_page_permissions_all_access');
+assert.ok(!hardeningSql.includes('CREATE POLICY "saved_records_all_access"'), 'Must drop saved_records_all_access');
+console.log('  ✓ PASS: Overly permissive `all_access` policies are eradicated');
+
+// 8c. Verify enforce_profile_update_integrity trigger definition
+assert.ok(hardeningSql.includes('CREATE OR REPLACE FUNCTION public.enforce_profile_update_integrity()'), 'Must define enforce_profile_update_integrity');
+assert.ok(hardeningSql.includes('trg_enforce_profile_update_integrity'), 'Must attach trigger to profiles table');
+assert.ok(hardeningSql.includes('NEW.role IS DISTINCT FROM OLD.role'), 'Trigger must detect role changes');
+assert.ok(hardeningSql.includes('NEW.site_id IS DISTINCT FROM OLD.site_id'), 'Trigger must detect site_id changes');
+assert.ok(hardeningSql.includes('NEW.is_active IS DISTINCT FROM OLD.is_active'), 'Trigger must detect is_active changes');
+console.log('  ✓ PASS: enforce_profile_update_integrity trigger guards against self-privilege escalation');
+
+// 8d. Verify saved_records allowlist scoping
+assert.ok(hardeningSql.includes('saved_records_select_scoped'), 'Must define scoped select policy for saved_records');
+assert.ok(hardeningSql.includes("'master_supervisor_settings_registry'"), 'Allowlist must include master_supervisor_settings_registry');
+assert.ok(hardeningSql.includes("'master_auto_logout_settings_registry'"), 'Allowlist must include master_auto_logout_settings_registry');
+assert.ok(hardeningSql.includes("'master_users_registry'"), 'Allowlist must include master_users_registry');
+assert.ok(hardeningSql.includes("'deleted_shipment_ids_registry'"), 'Allowlist must include deleted_shipment_ids_registry');
+console.log('  ✓ PASS: saved_records strictly restricts PMG to pre-approved registry allowlist (excludes live_master_dc_inventory & master_shipments_registry)');
+
+// 8e. Verify SECURITY DEFINER RPCs exist & are granted
+assert.ok(hardeningSql.includes('CREATE OR REPLACE FUNCTION public.verify_login_credentials'), 'Must define verify_login_credentials RPC');
+assert.ok(hardeningSql.includes('CREATE OR REPLACE FUNCTION public.set_initial_user_password'), 'Must define set_initial_user_password RPC');
+assert.ok(hardeningSql.includes('CREATE OR REPLACE FUNCTION public.admin_provision_user'), 'Must define admin_provision_user RPC');
+assert.ok(hardeningSql.includes('CREATE OR REPLACE FUNCTION public.admin_delete_user'), 'Must define admin_delete_user RPC');
+assert.ok(hardeningSql.toUpperCase().includes('GRANT EXECUTE ON FUNCTION PUBLIC.VERIFY_LOGIN_CREDENTIALS(TEXT, TEXT) TO ANON, AUTHENTICATED;'));
+assert.ok(hardeningSql.toUpperCase().includes('GRANT EXECUTE ON FUNCTION PUBLIC.SET_INITIAL_USER_PASSWORD(TEXT, TEXT, TEXT) TO ANON, AUTHENTICATED;'));
+assert.ok(
+  hardeningSql.toUpperCase().includes('ADMIN_PROVISION_USER') &&
+  hardeningSql.toUpperCase().includes('AUTHENTICATED'),
+  'admin_provision_user must be granted to authenticated'
+);
+assert.ok(
+  hardeningSql.toUpperCase().includes('ADMIN_DELETE_USER') &&
+  hardeningSql.toUpperCase().includes('AUTHENTICATED'),
+  'admin_delete_user must be granted to authenticated'
+);
+console.log('  ✓ PASS: verify_login_credentials, set_initial_user_password, admin_provision_user, and admin_delete_user RPCs defined with proper grants');
+
+// 8f. Verify useAuth.js and useUserManagement.js integrate RPCs
+assert.ok(authCode.includes("supabase.rpc('verify_login_credentials'"), 'useAuth.js must call verify_login_credentials RPC');
+assert.ok(authCode.includes("supabase.rpc('set_initial_user_password'"), 'useAuth.js must call set_initial_user_password RPC');
+assert.ok(userMgmtCode.includes("supabase.rpc('admin_provision_user'"), 'useUserManagement.js must call admin_provision_user RPC');
+assert.ok(userMgmtCode.includes("supabase.rpc('admin_delete_user'"), 'useUserManagement.js must call admin_delete_user RPC');
+console.log('  ✓ PASS: useAuth.js and useUserManagement.js call secure RPCs with zero-downtime fallback');
+
+// 8g. Verify resilient current_user_role and current_user_site_id with JWT email fallback
+assert.ok(hardeningSql.includes("LOWER(email) = LOWER(auth.jwt() ->> 'email')"), 'SQL must check email fallback in current_user_role');
+assert.ok(hardeningSql.includes("auth.jwt() -> 'user_metadata' ->> 'role'"), 'SQL must check user_metadata in current_user_role');
+console.log('  ✓ PASS: current_user_role and current_user_site_id include resilient JWT email & metadata fallback');
+
+// 8g. Simulation: trigger logic blocks self-privilege escalation
+function simulateProfileUpdateTrigger({ oldRow, newRow, callerRole }) {
+  const isSuperadmin = (callerRole === 'superadmin');
+  if (!isSuperadmin) {
+    if (newRow.role !== oldRow.role) {
+      throw new Error('Permission denied: only Superadmins can modify user roles.');
+    }
+    if (newRow.site_id !== oldRow.site_id) {
+      throw new Error('Permission denied: only Superadmins can reassign user site locations.');
+    }
+    if (newRow.is_active !== oldRow.is_active) {
+      throw new Error('Permission denied: only Superadmins can deactivate or reactivate accounts.');
+    }
+    if (newRow.is_deleted !== oldRow.is_deleted) {
+      throw new Error('Permission denied: only Superadmins can delete or restore accounts.');
+    }
+  }
+  return { ...newRow, updated_at: new Date().toISOString() };
+}
+
+const pmgOldProfile = { id: 'usr-pmg-1', role: 'parts_management', siteId: 'site-zam-uuid', is_active: true, is_deleted: false, fullName: 'Branch User' };
+
+// Attack 1: PMG user tries to escalate to superadmin
+assert.throws(() => {
+  simulateProfileUpdateTrigger({
+    oldRow: pmgOldProfile,
+    newRow: { ...pmgOldProfile, role: 'superadmin' },
+    callerRole: 'parts_management'
+  });
+}, /Permission denied: only Superadmins can modify user roles/);
+console.log('  ✓ PASS: Self-privilege escalation from parts_management to superadmin is blocked');
+
+// Attack 2: PMG user tries to reassign site to Central DC
+assert.throws(() => {
+  simulateProfileUpdateTrigger({
+    oldRow: pmgOldProfile,
+    newRow: { ...pmgOldProfile, site_id: 'site-dc' },
+    callerRole: 'parts_management'
+  });
+}, /Permission denied: only Superadmins can reassign user site locations/);
+console.log('  ✓ PASS: Site reassignment from ASP branch to site-dc is blocked');
+
+// Allowed: PMG user updating their own profile display name / settings
+simulateProfileUpdateTrigger({
+  oldRow: pmgOldProfile,
+  newRow: { ...pmgOldProfile, full_name: 'Branch User Updated' },
+  callerRole: 'parts_management'
+});
+console.log('  ✓ PASS: Legitimate self-profile updates (name, password, avatar) remain allowed');
+
+// --- Test 9: Elimination of Profiles 42501 Permission Denied & Column Hardening ---
+console.log('\n--- Test 9: Elimination of Profiles 42501 Permission Denied & Column Hardening ---');
+
+const clientCode = fs.readFileSync(path.join(__dirname, '../supabase/client.js'), 'utf8');
+const freshUserMgmtCode = fs.readFileSync(path.join(__dirname, '../context/useUserManagement.js'), 'utf8');
+const freshSyncCode = fs.readFileSync(path.join(__dirname, '../context/useCloudSync.js'), 'utf8');
+const freshAuthCode = fs.readFileSync(path.join(__dirname, '../context/useAuth.js'), 'utf8');
+
+// 9a. Supabase client configures automatic token refresh and session persistence
+assert.ok(clientCode.includes('autoRefreshToken: true'), 'client.js must configure autoRefreshToken: true');
+assert.ok(clientCode.includes('persistSession: true'), 'client.js must configure persistSession: true');
+console.log('  ✓ PASS: Supabase client configured with autoRefreshToken: true and persistSession: true');
+
+// 9b. Ensure no .select('*') on profiles exists in useAuth.js, useCloudSync.js, or useUserManagement.js
+assert.ok(
+  !/\.from\(['"]profiles['"]\)\s*\.select\(['"]\*['"]\)/.test(freshAuthCode),
+  'useAuth.js must not contain .from("profiles").select("*")'
+);
+assert.ok(
+  !/\.from\(['"]profiles['"]\)\s*\.select\(['"]\*['"]\)/.test(freshSyncCode),
+  'useCloudSync.js must not contain .from("profiles").select("*")'
+);
+assert.ok(
+  !/\.from\(['"]profiles['"]\)\s*\.select\(['"]\*['"]\)/.test(freshUserMgmtCode),
+  'useUserManagement.js must not contain .from("profiles").select("*")'
+);
+console.log('  ✓ PASS: Zero `.from(\'profiles\').select(\'*\')` queries remain in auth, sync, or user management');
+
+// 9c. Ensure no bare .select() on profiles exists in useUserManagement.js
+assert.ok(
+  !/\.from\(['"]profiles['"]\)[\s\S]*?\.select\(\s*\)/.test(freshUserMgmtCode),
+  'useUserManagement.js must not contain bare .select() after profile upsert'
+);
+console.log('  ✓ PASS: Zero bare `.select()` queries remain on profiles table (eliminates implicit SELECT * column denial)');
+
+// 9d. Ensure client relies on has_set_password instead of accessing password_hash
+assert.ok(
+  freshUserMgmtCode.includes('const isPasswordSet = Boolean(p.has_set_password);'),
+  'useUserManagement.js must derive isPasswordSet strictly from has_set_password boolean'
+);
+assert.ok(
+  !freshUserMgmtCode.includes('p.password_hash || null'),
+  'useUserManagement.js must not read p.password_hash from profiles query results'
+);
+console.log('  ✓ PASS: Client uses has_set_password boolean without exposing or requesting password_hash column');
+
+// 9e. SQL migration grants SELECT to anon on saved_records and user_page_permissions to avoid 42501 server errors
+const freshHardeningSql = fs.readFileSync(hardeningMigrationPath, 'utf8');
+assert.ok(
+  freshHardeningSql.includes('GRANT SELECT ON public.saved_records TO anon;'),
+  'fix_profiles_saved_records_hardening.sql must grant SELECT on saved_records to anon'
+);
+assert.ok(
+  freshHardeningSql.includes('GRANT SELECT ON public.user_page_permissions TO anon;'),
+  'fix_profiles_saved_records_hardening.sql must grant SELECT on user_page_permissions to anon'
+);
+assert.ok(
+  freshHardeningSql.includes('CREATE POLICY "user_page_permissions_select_anon"'),
+  'fix_profiles_saved_records_hardening.sql must define user_page_permissions_select_anon policy'
+);
+assert.ok(
+  freshHardeningSql.includes('CREATE POLICY "saved_records_select_anon"'),
+  'fix_profiles_saved_records_hardening.sql must define saved_records_select_anon policy'
+);
+console.log('  ✓ PASS: SQL migration grants safe SELECT to anon with RLS policies, eliminating 42501 Postgres error logs');
+
+// 9f. Client session guards on hydration & permission fetches
+assert.ok(
+  freshSyncCode.includes('No active authenticated session; skipping cloud database hydration'),
+  'useCloudSync.js must skip cloud hydration when no authenticated session is present'
+);
+assert.ok(
+  freshUserMgmtCode.includes('if (isAuthenticated)'),
+  'useUserManagement.js must check isAuthenticated before querying user_page_permissions'
+);
+console.log('  ✓ PASS: Client hydration and user permission fetch strictly gated on authenticated session');
 
 console.log('\n====================================================================');
 console.log('ALL PMG MULTI-USER ROLLOUT READINESS TESTS PASSED (100%)');

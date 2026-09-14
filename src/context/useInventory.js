@@ -255,11 +255,12 @@ export function useInventory({
         dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
 
         if (supabase && obsoleteIdsToPurge.length > 0) {
-          obsoleteIdsToPurge.forEach(delId => {
-            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-          });
+          const cleanObsolete = obsoleteIdsToPurge.filter(Boolean);
+          if (cleanObsolete.length > 0) {
+            supabase.from('dc_intake_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+            supabase.from('dc_intake_records').delete().in('record_name', cleanObsolete).then(() => {}).catch(() => {});
+            supabase.from('saved_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+          }
         }
 
         const canonicalHistoryRecord = consolidatedRecords.find(r => r.id === basePoNum);
@@ -385,11 +386,12 @@ export function useInventory({
 
         if (supabase) {
           if (obsoleteIdsToPurge.length > 0) {
-            obsoleteIdsToPurge.forEach(delId => {
-              supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            });
+            const cleanObsolete = obsoleteIdsToPurge.filter(Boolean);
+            if (cleanObsolete.length > 0) {
+              supabase.from('dc_intake_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+              supabase.from('dc_intake_records').delete().in('record_name', cleanObsolete).then(() => {}).catch(() => {});
+              supabase.from('saved_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
+            }
           }
 
           consolidatedRecords.forEach(cr => {
