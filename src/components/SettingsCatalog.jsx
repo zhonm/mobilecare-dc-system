@@ -40,7 +40,44 @@ import {
   Sliders,
   Download
 } from 'lucide-react';
-import { egressMonitor } from '../utils/egressMonitor';
+import {
+  formatBytes,
+  getEgressStats,
+  subscribeToEgressUpdates,
+  updateBaselineBytes
+} from '../services/egressMonitorService';
+
+const BYTES_PER_GB = 1024 * 1024 * 1024;
+
+const normalizeEgressStats = (stats) => {
+  const dailyHistory = Object.fromEntries(
+    Object.entries(stats.dailyRecords || {}).map(([date, record]) => [date, record.bytes || 0])
+  );
+  const recentDays = Object.entries(dailyHistory)
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .slice(0, 3);
+  const recentBurnRateBytes = recentDays.length > 0
+    ? recentDays.reduce((sum, [, bytes]) => sum + bytes, 0) / recentDays.length
+    : 0;
+  const daysUntilLimit = recentBurnRateBytes > 0
+    ? stats.remainingBytes / recentBurnRateBytes
+    : 999;
+  const projectedTotalBytes = stats.totalBytes + recentBurnRateBytes * stats.daysRemaining;
+
+  return {
+    ...stats,
+    totalEgressBytes: stats.totalBytes,
+    usagePercent: stats.percentUsed,
+    dailyHistory,
+    recentBurnRateBytes,
+    projectedTotalBytes,
+    daysUntilLimit,
+    alertLevel: stats.health === 'critical' ? 'critical' : stats.health === 'warning' ? 'warning' : 'ok',
+    tableBreakdown: Object.fromEntries(
+      Object.entries(stats.tableBreakdown || {}).map(([table, data]) => [table, data.bytes || 0])
+    )
+  };
+};
 
 const PHILIPPINE_REGIONS = [
   'Metro Manila', 'Batangas', 'Bicol', 'Bulacan', 'Cagayan de Oro',
@@ -95,7 +132,7 @@ export default function SettingsCatalog() {
     triggerTestWarning,
     triggerTestAutoLogout
   } = useApp();
-  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'sql'
+  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'egress' | 'sql'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
 
@@ -109,14 +146,14 @@ export default function SettingsCatalog() {
   const [isSchemaExpanded, setIsSchemaExpanded] = useState(false);
 
   // Egress Monitor State
-  const [egressStats, setEgressStats] = useState(() => egressMonitor.getStats());
+  const [egressStats, setEgressStats] = useState(() => normalizeEgressStats(getEgressStats()));
   const [egressViewTab, setEgressViewTab] = useState('history'); // 'history' | 'tables' | 'requests'
   const [isEditingBaseline, setIsEditingBaseline] = useState(false);
   const [customGb, setCustomGb] = useState('');
 
   useEffect(() => {
-    const unsub = egressMonitor.subscribe(newStats => {
-      setEgressStats(newStats);
+    const unsub = subscribeToEgressUpdates(newStats => {
+      setEgressStats(normalizeEgressStats(newStats));
     });
     return unsub;
   }, []);
@@ -259,7 +296,7 @@ export default function SettingsCatalog() {
       !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
       !String(s.address || '').toUpperCase().includes('SM ILOILO')
     );
-    if (!siteSearch.trim()) return valid;
+    if (!siteSearch.trim()) return valid.sort((a, b) => (a.name || a.code || '').localeCompare(b.name || b.code || ''));
     const q = siteSearch.toLowerCase();
     return valid.filter(s =>
       (s.code || '').toLowerCase().includes(q) ||
@@ -270,7 +307,7 @@ export default function SettingsCatalog() {
       (s.contact_person || '').toLowerCase().includes(q) ||
       (s.contact_phone || '').toLowerCase().includes(q) ||
       (s.contact_email || '').toLowerCase().includes(q)
-    );
+    ).sort((a, b) => (a.name || a.code || '').localeCompare(b.name || b.code || ''));
   }, [sites, siteSearch]);
 
   const handleAddSite = (e) => {
@@ -506,183 +543,71 @@ export default function SettingsCatalog() {
   }, [parts, partSearch, selectedCategoryFilter, categories]);
 
   return (
-    <div className="settings-view" style={{ maxWidth: '1240px', margin: '0 auto', paddingBottom: '30px' }}>
-      {/* Sub-Tabs Ribbon Navigation */}
-      <div
-        style={{
-          background: '#ffffff',
-          padding: '6px',
-          borderRadius: '12px',
-          border: '1px solid #e2e8f0',
-          display: 'flex',
-          gap: '6px',
-          alignItems: 'center',
-          marginBottom: '22px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-          overflowX: 'auto'
-        }}
-      >
+    <div className="settings-view" style={{ width: '100%', paddingBottom: '36px' }}>
+      <div className="settings-shell">
+      {/* macOS-style Settings navigation */}
+      <div className="settings-tab-nav">
+        <div className="settings-nav-heading">
+          <div className="settings-nav-icon"><Settings size={18} /></div>
+          <div>
+            <strong>Settings</strong>
+            <span>System configuration</span>
+          </div>
+        </div>
+        <div className="settings-nav-group-label">Catalog</div>
         <button
           type="button"
+          className={`settings-nav-item ${activeTab === 'parts' ? 'active' : ''}`}
           onClick={() => setActiveTab('parts')}
-          style={{
-            background: activeTab === 'parts' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'parts' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'parts' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'parts' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
         >
-          <Smartphone size={15} />
+          <Smartphone size={17} />
           <span>Parts Master Catalog</span>
-          <span
-            style={{
-              background: activeTab === 'parts' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-              color: activeTab === 'parts' ? '#ffffff' : '#475569',
-              padding: '2px 7px',
-              borderRadius: '12px',
-              fontSize: '11px',
-              fontWeight: 700
-            }}
-          >
-            {parts.length}
-          </span>
+          <span className="settings-nav-count">{parts.length}</span>
         </button>
 
         <button
           type="button"
+          className={`settings-nav-item ${activeTab === 'sites' ? 'active' : ''}`}
           onClick={() => setActiveTab('sites')}
-          style={{
-            background: activeTab === 'sites' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'sites' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'sites' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'sites' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
         >
-          <MapPin size={15} />
+          <MapPin size={17} />
           <span>Service Sites &amp; Branches</span>
-          <span
-            style={{
-              background: activeTab === 'sites' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-              color: activeTab === 'sites' ? '#ffffff' : '#475569',
-              padding: '2px 7px',
-              borderRadius: '12px',
-              fontSize: '11px',
-              fontWeight: 700
-            }}
-          >
-            {sites.length}
-          </span>
+          <span className="settings-nav-count">{sites.length}</span>
         </button>
 
         <button
           type="button"
+          className={`settings-nav-item ${activeTab === 'categories' ? 'active' : ''}`}
           onClick={() => setActiveTab('categories')}
-          style={{
-            background: activeTab === 'categories' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'categories' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'categories' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'categories' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
         >
-          <Settings size={15} />
+          <Settings size={17} />
           <span>Part Categories</span>
-          <span
-            style={{
-              background: activeTab === 'categories' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
-              color: activeTab === 'categories' ? '#ffffff' : '#475569',
-              padding: '2px 7px',
-              borderRadius: '12px',
-              fontSize: '11px',
-              fontWeight: 700
-            }}
-          >
-            {categories.length}
-          </span>
+          <span className="settings-nav-count">{categories.length}</span>
         </button>
 
         <button
           type="button"
+          className={`settings-nav-item ${activeTab === 'supervisor' ? 'active' : ''}`}
           onClick={() => setActiveTab('supervisor')}
-          style={{
-            background: activeTab === 'supervisor' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'supervisor' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'supervisor' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'supervisor' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
         >
-          <FileText size={15} />
+          <FileText size={17} />
           <span>Supervisor &amp; Declaration Form</span>
         </button>
 
         <button
           type="button"
+          className={`settings-nav-item ${activeTab === 'security' ? 'active' : ''}`}
           onClick={() => setActiveTab('security')}
-          style={{
-            background: activeTab === 'security' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'security' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'security' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'security' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
         >
-          <Clock size={15} />
+          <Clock size={17} />
           <span>Session &amp; Auto-Logout</span>
-          <span
+          <span className="settings-nav-count"
             style={{
               background: autoLogoutConfig?.enabled ? '#dcfce7' : '#fee2e2',
               color: autoLogoutConfig?.enabled ? '#15803d' : '#b91c1c',
-              padding: '1px 6px',
-              borderRadius: '10px',
-              fontSize: '10px',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontSize: '11px',
               fontWeight: 700
             }}
           >
@@ -692,59 +617,47 @@ export default function SettingsCatalog() {
 
         <button
           type="button"
-          onClick={() => setActiveTab('sql')}
-          style={{
-            background: activeTab === 'sql' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : 'transparent',
-            color: activeTab === 'sql' ? '#ffffff' : '#475569',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '8px 14px',
-            fontSize: '12.5px',
-            fontWeight: activeTab === 'sql' ? 700 : 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
-            boxShadow: activeTab === 'sql' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
-          }}
+          className={`settings-nav-item ${activeTab === 'egress' || activeTab === 'sql' ? 'active' : ''}`}
+          onClick={() => setActiveTab('egress')}
         >
-          <Database size={15} />
+          <Database size={17} />
           <span>Supabase Cloud Database</span>
-          <span
+          <span className="settings-nav-status"
             style={{
-              width: '8px',
-              height: '8px',
+              width: '9px',
+              height: '9px',
               borderRadius: '50%',
               background: realtimeConnected ? '#10b981' : '#f59e0b',
               display: 'inline-block',
-              boxShadow: realtimeConnected ? '0 0 6px #10b981' : 'none'
+              boxShadow: realtimeConnected ? '0 0 8px #10b981' : 'none'
             }}
           />
         </button>
+
       </div>
+
+      <div className="settings-content">
 
       {/* 1. Parts Catalog Tab */}
       {activeTab === 'parts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           {/* Add Part Card */}
-          <div className="card" style={{ padding: '18px 22px', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAddPartCard ? '16px' : 0, borderBottom: showAddPartCard ? '1px solid #f1f5f9' : 'none', paddingBottom: showAddPartCard ? '12px' : 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Plus size={16} />
+          <div className="card" style={{ padding: '20px 24px', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAddPartCard ? '18px' : 0, borderBottom: showAddPartCard ? '1px solid #f1f5f9' : 'none', paddingBottom: showAddPartCard ? '14px' : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ background: '#e0f2fe', color: '#0284c7', width: '38px', height: '38px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Plus size={18} />
                 </div>
                 <div>
-                  <h4 style={{ margin: 0, fontSize: '14.5px', fontWeight: 700, color: '#0f172a' }}>Add New Part to Master Catalog</h4>
-                  <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>Register an authorized Apple component SKU, model compatibility, and dual-tier pricing</p>
+                  <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>Add New Part to Master Catalog</h4>
+                  <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: '#64748b' }}>Register an authorized Apple component SKU, model compatibility, and dual-tier pricing</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowAddPartCard(!showAddPartCard)}
                 className="btn btn-secondary btn-sm"
-                style={{ padding: '5px 12px', fontSize: '11.5px', color: '#475569', fontWeight: 600 }}
+                style={{ padding: '6px 14px', fontSize: '12.5px', color: '#334155', fontWeight: 600 }}
               >
                 {showAddPartCard ? 'Collapse Form' : '+ Expand Form'}
               </button>
@@ -753,9 +666,9 @@ export default function SettingsCatalog() {
             {showAddPartCard && (
               <form onSubmit={handleAddPart}>
                 {/* Row 1: Part Info */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '16px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       Part Number (P/N) <span style={{ color: '#ef4444' }}>*</span>
                     </label>
                     <input
@@ -765,12 +678,12 @@ export default function SettingsCatalog() {
                       value={newPn}
                       onChange={(e) => setNewPn(e.target.value)}
                       required
-                      style={{ height: '38px', fontSize: '13px' }}
+                      style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
                     />
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       Description <span style={{ color: '#ef4444' }}>*</span>
                     </label>
                     <input
@@ -780,12 +693,12 @@ export default function SettingsCatalog() {
                       value={newDesc}
                       onChange={(e) => setNewDesc(e.target.value)}
                       required
-                      style={{ height: '38px', fontSize: '13px' }}
+                      style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
                     />
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       iPhone Model
                     </label>
                     <input
@@ -794,19 +707,19 @@ export default function SettingsCatalog() {
                       placeholder="e.g. iPhone 15 Pro Max"
                       value={newModel}
                       onChange={(e) => setNewModel(e.target.value)}
-                      style={{ height: '38px', fontSize: '13px' }}
+                      style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
                     />
                   </div>
 
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       Category
                     </label>
                     <select
                       className="form-select"
                       value={newCatId}
                       onChange={(e) => setNewCatId(e.target.value)}
-                      style={{ height: '38px', fontSize: '13px' }}
+                      style={{ height: '42px', fontSize: '13.5px', borderRadius: '8px' }}
                     >
                       {categories.map(c => (
                         <option key={c.id} value={c.id}>{c.name}</option>
@@ -816,13 +729,13 @@ export default function SettingsCatalog() {
                 </div>
 
                 {/* Row 2: Pricing & Action */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px', alignItems: 'flex-end', background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', alignItems: 'flex-end', background: '#f8fafc', padding: '16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#475569' }}>
+                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
                       Stocking Price ($)
                     </label>
                     <div style={{ position: 'relative' }}>
-                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 600, fontSize: '13px' }}>$</span>
+                      <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 700, fontSize: '14px' }}>$</span>
                       <input
                         type="number"
                         step="0.01"
@@ -830,12 +743,12 @@ export default function SettingsCatalog() {
                         placeholder="0.00"
                         value={newStockPrice}
                         onChange={(e) => setNewStockPrice(e.target.value)}
-                        style={{ paddingLeft: '24px', height: '38px', fontSize: '13px', fontWeight: 600, color: '#047857' }}
+                        style={{ paddingLeft: '28px', height: '42px', fontSize: '14px', fontWeight: 700, color: '#047857', borderRadius: '8px' }}
                       />
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', height: '38px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', height: '42px' }}>
                     <button
                       type="submit"
                       className="btn btn-primary"
@@ -845,15 +758,16 @@ export default function SettingsCatalog() {
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: '6px',
+                        gap: '8px',
                         background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
                         border: 'none',
-                        fontWeight: 600,
-                        fontSize: '13px',
-                        boxShadow: '0 2px 4px rgba(2,132,199,0.2)'
+                        fontWeight: 700,
+                        fontSize: '13.5px',
+                        borderRadius: '8px',
+                        boxShadow: '0 2px 6px rgba(2,132,199,0.25)'
                       }}
                     >
-                      <Plus size={15} />
+                      <Plus size={16} />
                       <span>Add Part to Catalog</span>
                     </button>
                   </div>
@@ -863,67 +777,67 @@ export default function SettingsCatalog() {
           </div>
 
           {/* Parts Master Catalog Table Card */}
-          <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+          <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
             {/* Toolbar Header */}
             <div
               style={{
-                padding: '16px 20px',
+                padding: '18px 24px',
                 background: '#ffffff',
                 borderBottom: '1px solid #e2e8f0',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 flexWrap: 'wrap',
-                gap: '14px'
+                gap: '16px'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div style={{ background: '#f0f9ff', color: '#0284c7', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Smartphone size={20} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div style={{ background: '#f0f9ff', color: '#0284c7', width: '42px', height: '42px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Smartphone size={22} />
                 </div>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
                       Parts Master Catalog
                     </h3>
                     <span
                       style={{
                         background: '#e0f2fe',
                         color: '#0369a1',
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        fontSize: '11px',
+                        padding: '3px 10px',
+                        borderRadius: '14px',
+                        fontSize: '12px',
                         fontWeight: 700
                       }}
                     >
                       {filteredParts.length} of {parts.length} Parts
                     </span>
                   </div>
-                  <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  <p style={{ margin: '3px 0 0', fontSize: '13px', color: '#64748b' }}>
                     Standardized Apple component SKUs, stock prices, and category definitions
                   </p>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* Search Bar */}
-                <div style={{ position: 'relative', width: '240px' }}>
-                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                <div style={{ position: 'relative', width: '280px' }}>
+                  <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
                     placeholder="Search P/N, model, desc..."
                     value={partSearch}
                     onChange={(e) => setPartSearch(e.target.value)}
                     className="form-input"
-                    style={{ paddingLeft: '32px', paddingRight: partSearch ? '28px' : '10px', height: '36px', fontSize: '12.5px', width: '100%', borderRadius: '6px' }}
+                    style={{ paddingLeft: '36px', paddingRight: partSearch ? '30px' : '12px', height: '40px', fontSize: '13.5px', width: '100%', borderRadius: '8px' }}
                   />
                   {partSearch && (
                     <button
                       type="button"
                       onClick={() => setPartSearch('')}
-                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                      style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
                     >
-                      <X size={13} />
+                      <X size={14} />
                     </button>
                   )}
                 </div>
@@ -931,7 +845,7 @@ export default function SettingsCatalog() {
                 {/* Category Filter */}
                 <select
                   className="form-select"
-                  style={{ height: '36px', fontSize: '12.5px', width: '185px', borderRadius: '6px' }}
+                  style={{ height: '40px', fontSize: '13.5px', width: '220px', borderRadius: '8px' }}
                   value={selectedCategoryFilter}
                   onChange={(e) => setSelectedCategoryFilter(e.target.value)}
                 >
@@ -951,33 +865,33 @@ export default function SettingsCatalog() {
 
             {/* Table Content */}
             {filteredParts.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8' }}>
-                <Smartphone size={36} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
-                <p style={{ margin: '0 0 8px', fontSize: '14px', fontWeight: 600, color: '#64748b' }}>No parts match your criteria</p>
-                <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8' }}>Try adjusting your search query or selecting a different category.</p>
+              <div style={{ textAlign: 'center', padding: '56px 20px', color: '#94a3b8' }}>
+                <Smartphone size={42} style={{ margin: '0 auto 12px', color: '#cbd5e1' }} />
+                <p style={{ margin: '0 0 8px', fontSize: '15px', fontWeight: 700, color: '#475569' }}>No parts match your criteria</p>
+                <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8' }}>Try adjusting your search query or selecting a different category.</p>
                 {partSearch && (
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => { setPartSearch(''); setSelectedCategoryFilter('ALL'); }}
-                    style={{ marginTop: '12px' }}
+                    style={{ marginTop: '14px', padding: '6px 14px', fontSize: '13px' }}
                   >
                     Reset Filters
                   </button>
                 )}
               </div>
             ) : (
-              <div className="table-container" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+              <div className="table-container" style={{ maxHeight: 'calc(100vh - 350px)', minHeight: '520px', overflowY: 'auto' }}>
                 <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f8fafc' }}>
                     <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
-                      <th style={{ width: '45px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
-                      <th style={{ width: '130px', textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Part Number</th>
-                      <th style={{ textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Description</th>
-                      <th style={{ width: '130px', textAlign: 'left', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>iPhone Model</th>
-                      <th style={{ width: '120px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Category</th>
-                      <th style={{ width: '110px', textAlign: 'right', padding: '10px 14px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Stock Price</th>
-                      <th style={{ width: '90px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
-                      <th style={{ width: '90px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Actions</th>
+                      <th style={{ width: '50px', textAlign: 'center', padding: '12px 10px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>#</th>
+                      <th style={{ width: '140px', textAlign: 'left', padding: '12px 14px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Part Number</th>
+                      <th style={{ textAlign: 'left', padding: '12px 14px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Description</th>
+                      <th style={{ width: '140px', textAlign: 'left', padding: '12px 14px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>iPhone Model</th>
+                      <th style={{ width: '130px', textAlign: 'center', padding: '12px 12px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Category</th>
+                      <th style={{ width: '120px', textAlign: 'right', padding: '12px 14px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Stock Price</th>
+                      <th style={{ width: '100px', textAlign: 'center', padding: '12px 10px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Status</th>
+                      <th style={{ width: '100px', textAlign: 'center', padding: '12px 10px', color: '#475569', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -994,18 +908,18 @@ export default function SettingsCatalog() {
                             background: i % 2 === 0 ? '#ffffff' : '#fafafa'
                           }}
                         >
-                          <td className="font-mono" style={{ textAlign: 'center', fontSize: '11.5px', color: '#94a3b8' }}>
+                          <td className="font-mono" style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
                             {i + 1}
                           </td>
-                          <td className="font-mono" style={{ padding: '12px 14px', fontWeight: 700, color: '#0f172a' }}>
+                          <td className="font-mono" style={{ padding: '14px 14px', fontWeight: 700, color: '#0f172a', fontSize: '13.5px' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                               <span>{p.part_number}</span>
                               {isVariant && (
                                 <span
                                   style={{
-                                    fontSize: '9.5px',
-                                    padding: '1px 5px',
-                                    borderRadius: '3px',
+                                    fontSize: '10px',
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
                                     fontWeight: 700,
                                     background: '#fef3c7',
                                     color: '#92400e',
@@ -1018,56 +932,56 @@ export default function SettingsCatalog() {
                               )}
                             </div>
                           </td>
-                          <td style={{ padding: '12px 14px', fontWeight: 500, color: '#1e293b', fontSize: '13px' }}>
+                          <td style={{ padding: '14px 14px', fontWeight: 500, color: '#1e293b', fontSize: '13.5px' }}>
                             {p.description}
                           </td>
-                          <td style={{ padding: '12px 14px', color: '#475569', fontSize: '12.5px' }}>
-                            <span style={{ background: '#f1f5f9', padding: '3px 8px', borderRadius: '4px', color: '#334155', fontWeight: 500 }}>
+                          <td style={{ padding: '14px 14px', color: '#334155', fontSize: '13px' }}>
+                            <span style={{ background: '#f1f5f9', padding: '4px 10px', borderRadius: '6px', color: '#334155', fontWeight: 600 }}>
                               {p.iphone_model || 'iPhone'}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'center', padding: '12px 10px' }}>
+                          <td style={{ textAlign: 'center', padding: '14px 12px' }}>
                             <span
                               style={{
-                                fontSize: '11px',
+                                fontSize: '12px',
                                 fontWeight: 700,
-                                padding: '3px 9px',
-                                borderRadius: '6px',
+                                padding: '4px 10px',
+                                borderRadius: '7px',
                                 background: catBadge.bg,
                                 color: catBadge.text,
                                 border: `1px solid ${catBadge.border}`,
                                 display: 'inline-block',
                                 textTransform: 'uppercase',
-                                letterSpacing: '0.02em'
+                                letterSpacing: '0.03em'
                               }}
                             >
                               {cat?.name || 'Part'}
                             </span>
                           </td>
-                          <td style={{ textAlign: 'right', padding: '12px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#047857', fontSize: '13px' }}>
+                          <td style={{ textAlign: 'right', padding: '14px 14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#047857', fontSize: '14px' }}>
                             ${parseFloat(p.stocking_price || 0).toFixed(2)}
                           </td>
-                          <td style={{ textAlign: 'center', padding: '12px 8px' }}>
+                          <td style={{ textAlign: 'center', padding: '14px 10px' }}>
                             <span
                               style={{
-                                fontSize: '11px',
+                                fontSize: '12px',
                                 fontWeight: 600,
-                                padding: '3px 8px',
-                                borderRadius: '12px',
+                                padding: '4px 10px',
+                                borderRadius: '14px',
                                 background: p.is_active !== false ? '#ecfdf5' : '#f1f5f9',
                                 color: p.is_active !== false ? '#059669' : '#64748b',
                                 border: `1px solid ${p.is_active !== false ? '#a7f3d0' : '#e2e8f0'}`,
                                 display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: '4px'
+                                gap: '5px'
                               }}
                             >
-                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: p.is_active !== false ? '#10b981' : '#94a3b8' }} />
+                              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: p.is_active !== false ? '#10b981' : '#94a3b8' }} />
                               <span>{p.is_active !== false ? 'Active' : 'Inactive'}</span>
                             </span>
                           </td>
-                          <td style={{ textAlign: 'center', padding: '12px 10px' }}>
-                            <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                          <td style={{ textAlign: 'center', padding: '14px 10px' }}>
+                            <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
                               <button
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => {
@@ -1075,17 +989,17 @@ export default function SettingsCatalog() {
                                   setEditingPart({ ...p, category_id: currentCat?.id || p.category_id });
                                 }}
                                 title="Edit Part details and prices"
-                                style={{ padding: '4px 7px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                                style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                               >
-                                <Edit2 size={13} color="#0284c7" />
+                                <Edit2 size={15} color="#0284c7" />
                               </button>
                               <button
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => setDeletingPart(p)}
                                 title="Delete Part from catalog"
-                                style={{ padding: '4px 7px', fontSize: '11.5px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                                style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                               >
-                                <Trash2 size={13} color="#ef4444" />
+                                <Trash2 size={15} color="#ef4444" />
                               </button>
                             </div>
                           </td>
@@ -1285,32 +1199,32 @@ export default function SettingsCatalog() {
       {activeTab === 'sites' && (
         <div>
           {/* Toolbar */}
-          <div className="card" style={{ marginBottom: '16px', padding: '14px 18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '7px', borderRadius: '7px', display: 'inline-flex' }}>
-                  <Building2 size={20} />
+          <div className="card" style={{ marginBottom: '20px', padding: '18px 24px', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ background: '#e0f2fe', color: '#0284c7', width: '40px', height: '40px', borderRadius: '9px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Building2 size={22} />
                 </div>
                 <div>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
                     Service Sites &amp; Branches
                   </div>
-                  <div style={{ fontSize: '12px', color: '#64748b' }}>
-                    {filteredSites.length} of {sites.length} branches shown
+                  <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px' }}>
+                    {filteredSites.length} of {sites.length} branches configured
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* Search */}
                 <div style={{ position: 'relative' }}>
-                  <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
                     placeholder="Search branch, code, region, address…"
                     value={siteSearch}
                     onChange={e => setSiteSearch(e.target.value)}
-                    style={{ paddingLeft: '28px', paddingRight: '10px', paddingTop: '7px', paddingBottom: '7px',
-                      fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '5px', width: '240px' }}
+                    style={{ paddingLeft: '36px', paddingRight: '12px', height: '40px',
+                      fontSize: '13.5px', border: '1px solid #cbd5e1', borderRadius: '8px', width: '280px' }}
                   />
                 </div>
                 <button
@@ -1322,8 +1236,9 @@ export default function SettingsCatalog() {
                     await refreshSitesFromCloud();
                     setIsRefreshingSites(false);
                   }}
+                  style={{ height: '40px', padding: '0 14px', fontSize: '13px', fontWeight: 600, borderRadius: '8px' }}
                 >
-                  <RefreshCw size={13} className={isRefreshingSites ? 'spin-animation' : ''} />
+                  <RefreshCw size={14} className={isRefreshingSites ? 'spin-animation' : ''} />
                   <span>{isRefreshingSites ? 'Syncing…' : 'Sync / Pull Cloud DB'}</span>
                 </button>
                 <button
@@ -1333,86 +1248,87 @@ export default function SettingsCatalog() {
                     setCustomRegionAddMode(false);
                     setShowAddSiteModal(true);
                   }}
+                  style={{ height: '40px', padding: '0 16px', fontSize: '13.5px', fontWeight: 700, borderRadius: '8px' }}
                 >
-                  <Plus size={14} /><span>Add New Branch</span>
+                  <Plus size={16} /><span>Add New Branch</span>
                 </button>
               </div>
             </div>
           </div>
 
           {/* Table */}
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="table-container" style={{ maxHeight: '580px', overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th style={{ width: 90 }}>Code</th>
-                    <th>Site / Branch Name</th>
-                    <th style={{ width: 110 }}>GSX Ship-To</th>
-                    <th style={{ width: 120 }}>Region</th>
-                    <th>Address</th>
-                    <th style={{ minWidth: 260 }}>Supervisor & Contact</th>
-                    <th style={{ width: 130 }}>Type</th>
-                    <th style={{ width: 80, textAlign: 'center' }}>Actions</th>
+          <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
+            <div className="table-container" style={{ maxHeight: 'calc(100vh - 350px)', minHeight: '520px', overflowX: 'auto' }}>
+              <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f8fafc' }}>
+                  <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                    <th style={{ width: 100, padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Code</th>
+                    <th style={{ padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Site / Branch Name</th>
+                    <th style={{ width: 120, padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>GSX Ship-To</th>
+                    <th style={{ width: 130, padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Region</th>
+                    <th style={{ padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Address</th>
+                    <th style={{ minWidth: 260, padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Supervisor & Contact</th>
+                    <th style={{ width: 140, padding: '12px 14px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Type</th>
+                    <th style={{ width: 90, textAlign: 'center', padding: '12px 10px', fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredSites.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '48px 20px', color: '#94a3b8', fontSize: '14px' }}>
                         {siteSearch ? `No branches match "${siteSearch}"` : 'No branches configured.'}
                       </td>
                     </tr>
                   ) : (
                     filteredSites.map(s => (
-                      <tr key={s.id}>
-                        <td className="font-mono"><strong>{s.code}</strong></td>
-                        <td style={{ fontWeight: 600, fontSize: '13px' }}>{s.name}</td>
-                        <td>
+                      <tr key={s.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td className="font-mono" style={{ padding: '14px 14px', fontSize: '13.5px', fontWeight: 700, color: '#0f172a' }}><strong>{s.code}</strong></td>
+                        <td style={{ fontWeight: 700, fontSize: '14px', padding: '14px 14px', color: '#1e293b' }}>{s.name}</td>
+                        <td style={{ padding: '14px 14px' }}>
                           {s.ship_to ? (
-                            <span className="badge badge-neutral font-mono" style={{ fontSize: '11px', letterSpacing: '0.4px', fontWeight: 600 }}>
+                            <span className="badge badge-neutral font-mono" style={{ fontSize: '12px', letterSpacing: '0.4px', fontWeight: 600, padding: '3px 8px' }}>
                               {s.ship_to}
                             </span>
                           ) : (
-                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '11px' }}>—</span>
+                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '12px' }}>—</span>
                           )}
                         </td>
-                        <td>
-                          <span className={`badge ${resolveSafeRegion(s.code, s.region) === 'Metro Manila' ? 'badge-primary' : 'badge-warning'}`}>
+                        <td style={{ padding: '14px 14px' }}>
+                          <span className={`badge ${resolveSafeRegion(s.code, s.region) === 'Metro Manila' ? 'badge-primary' : 'badge-warning'}`} style={{ fontSize: '12px', padding: '3px 9px' }}>
                             {resolveSafeRegion(s.code, s.region)}
                           </span>
                         </td>
-                        <td style={{ fontSize: '12px', color: '#475569', maxWidth: '220px' }}>
+                        <td style={{ fontSize: '13px', color: '#475569', maxWidth: '240px', padding: '14px 14px', lineHeight: 1.4 }}>
                           {s.address || <span style={{ color: '#cbd5e1', fontStyle: 'italic' }}>No address set</span>}
                         </td>
-                        <td style={{ minWidth: '260px', padding: '10px 12px' }}>
+                        <td style={{ minWidth: '260px', padding: '14px 14px' }}>
                           {s.contact_person && (
-                            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '13px', marginBottom: '4px' }}>
+                            <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '13.5px', marginBottom: '4px' }}>
                               {s.contact_person}
                             </div>
                           )}
                           {s.contact_phone && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)', marginBottom: '3px' }}>
-                              <Phone size={13} style={{ flexShrink: 0, color: '#0284c7' }} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0284c7', fontSize: '12.5px', fontWeight: 600, fontFamily: 'var(--font-mono, monospace)', marginBottom: '3px' }}>
+                              <Phone size={14} style={{ flexShrink: 0, color: '#0284c7' }} />
                               <span>{s.contact_phone}</span>
                             </div>
                           )}
                           {s.contact_email && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#334155', fontSize: '12px', wordBreak: 'break-all', lineHeight: 1.35 }}>
-                              <Mail size={13} style={{ flexShrink: 0, color: '#64748b' }} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#334155', fontSize: '12.5px', wordBreak: 'break-all', lineHeight: 1.35 }}>
+                              <Mail size={14} style={{ flexShrink: 0, color: '#64748b' }} />
                               <span style={{ userSelect: 'all' }}>{s.contact_email}</span>
                             </div>
                           )}
                           {!s.contact_person && !s.contact_phone && !s.contact_email && (
-                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '12px' }}>—</span>
+                            <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '12.5px' }}>—</span>
                           )}
                         </td>
-                        <td>
-                          <span className={`badge ${s.is_dc ? 'badge-success' : 'badge-neutral'}`}>
+                        <td style={{ padding: '14px 14px' }}>
+                          <span className={`badge ${s.is_dc ? 'badge-success' : 'badge-neutral'}`} style={{ fontSize: '12px', padding: '3px 9px' }}>
                             {s.is_dc ? 'Distribution Center' : 'Service Branch'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'center' }}>
+                        <td style={{ textAlign: 'center', padding: '14px 10px' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                             <button
                               className="btn btn-secondary btn-sm"
@@ -1422,9 +1338,9 @@ export default function SettingsCatalog() {
                                 setEditingSite({ ...s, region: safeReg });
                                 setCustomRegionEditMode(false);
                               }}
-                              style={{ padding: '4px 8px' }}
+                              style={{ padding: '5px 9px', fontSize: '12px', borderRadius: '6px' }}
                             >
-                              <Edit2 size={12} />
+                              <Edit2 size={13} />
                               <span>Edit</span>
                             </button>
                             {!s.is_dc && (
@@ -1432,9 +1348,9 @@ export default function SettingsCatalog() {
                                 className="btn btn-danger btn-sm"
                                 title="Delete branch"
                                 onClick={() => setDeletingSite(s)}
-                                style={{ padding: '4px 7px' }}
+                                style={{ padding: '5px 8px', fontSize: '12px', borderRadius: '6px' }}
                               >
-                                <Trash2 size={12} />
+                                <Trash2 size={13} />
                               </button>
                             )}
                           </div>
@@ -1835,28 +1751,32 @@ export default function SettingsCatalog() {
 
       {/* 3. Categories Tab */}
       {activeTab === 'categories' && (
-        <div className="card">
-          <h3 style={{ marginBottom: '14px' }}>Extensible Part Categories</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px' }}>
+        <div className="card" style={{ padding: '22px 24px', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
+          <div style={{ marginBottom: '18px' }}>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Extensible Part Categories</h3>
+            <p style={{ margin: '3px 0 0', fontSize: '13px', color: '#64748b' }}>Hardware categories, serialization rules, and IMEI validation requirements</p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '18px' }}>
             {categories.map(c => (
               <div
                 key={c.id}
                 style={{
-                  border: '1px solid var(--border-light)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '16px',
-                  background: 'var(--bg-primary)'
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '18px 20px',
+                  background: '#f8fafc',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <strong>{c.name}</strong>
-                  <span className="font-mono" style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.code}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <strong style={{ fontSize: '15px', color: '#0f172a', fontWeight: 700 }}>{c.name}</strong>
+                  <span className="font-mono" style={{ fontSize: '12px', fontWeight: 700, color: '#0284c7', background: '#e0f2fe', padding: '2px 8px', borderRadius: '6px' }}>{c.code}</span>
                 </div>
-                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                  Serialized: <strong>{c.is_serialized ? 'Yes (Part # + Serial)' : 'No'}</strong>
+                <div style={{ fontSize: '13px', color: '#475569', marginBottom: '6px' }}>
+                  Serialized: <strong style={{ color: '#1e293b' }}>{c.is_serialized ? 'Yes (Part # + Serial)' : 'No'}</strong>
                 </div>
-                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                  Requires IMEI: <strong>{c.has_imei ? 'Yes' : 'No (Battery/Display)'}</strong>
+                <div style={{ fontSize: '13px', color: '#475569' }}>
+                  Requires IMEI: <strong style={{ color: '#1e293b' }}>{c.has_imei ? 'Yes' : 'No (Battery/Display)'}</strong>
                 </div>
               </div>
             ))}
@@ -1867,14 +1787,14 @@ export default function SettingsCatalog() {
       {/* 4. Supervisor & Declaration Form Settings Tab */}
       {activeTab === 'supervisor' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <div className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+          <div className="card" style={{ padding: '22px 24px', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '22px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ShieldCheck size={20} color="var(--primary)" />
-                  <h3 style={{ margin: 0 }}>MDC Supervisor & Declaration Form Directive</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <ShieldCheck size={24} color="var(--primary)" />
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>MDC Supervisor &amp; Declaration Form Directive</h3>
                 </div>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                <p style={{ fontSize: '13px', color: '#64748b', marginTop: '4px', margin: '4px 0 0' }}>
                   Configure the default Distribution Center supervisor assignment and declaration form auto-population rules.
                 </p>
               </div>
@@ -1882,24 +1802,29 @@ export default function SettingsCatalog() {
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm"
+                  className="btn btn-primary"
                   disabled={isSavingSupervisor}
                   onClick={handleSaveSupervisor}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px',
+                    gap: '8px',
+                    height: '40px',
+                    padding: '0 18px',
+                    fontSize: '13.5px',
+                    fontWeight: 700,
+                    borderRadius: '8px',
                     backgroundColor: saveSupervisorSuccess ? '#16a34a' : undefined,
                     borderColor: saveSupervisorSuccess ? '#16a34a' : undefined,
                     transition: 'all 0.2s ease'
                   }}
                 >
                   {isSavingSupervisor ? (
-                    <RefreshCw size={13} className="spin" />
+                    <RefreshCw size={14} className="spin" />
                   ) : saveSupervisorSuccess ? (
-                    <CheckCircle2 size={13} />
+                    <CheckCircle2 size={14} />
                   ) : (
-                    <Save size={13} />
+                    <Save size={14} />
                   )}
                   <span>{isSavingSupervisor ? 'Saving...' : saveSupervisorSuccess ? 'Saved Details!' : 'Save Supervisor Details'}</span>
                 </button>
@@ -1908,14 +1833,14 @@ export default function SettingsCatalog() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
               {/* Supervisor Info Card */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ margin: '0 0 14px 0', fontSize: '13.5px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <User size={15} color="var(--primary)" />
-                  <span>Supervisor Assignment & Identity</span>
+              <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ margin: '0 0 16px 0', fontSize: '14.5px', color: '#0f172a', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <User size={16} color="var(--primary)" />
+                  <span>Supervisor Assignment &amp; Identity</span>
                 </h4>
 
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155' }}>
                     MDC Supervisor Name <span style={{ color: '#dc2626' }}>*</span>
                   </label>
                   <input
@@ -1924,15 +1849,15 @@ export default function SettingsCatalog() {
                     placeholder="e.g. Anjo Alcazar"
                     value={supervisorName}
                     onChange={(e) => setSupervisorName(e.target.value)}
-                    style={{ fontSize: '13px' }}
+                    style={{ height: '42px', fontSize: '14px', borderRadius: '8px' }}
                   />
-                  <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
+                  <span style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', display: 'block' }}>
                     Default supervisor for all packing lists and declaration forms (Default: Anjo Alcazar).
                   </span>
                 </div>
 
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label" style={{ fontSize: '12px' }}>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label className="form-label" style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155' }}>
                     Supervisor Position / Role Title
                   </label>
                   <input
@@ -1941,12 +1866,12 @@ export default function SettingsCatalog() {
                     placeholder="e.g. MDC Supervisor of DC"
                     value={supervisorTitle}
                     onChange={(e) => setSupervisorTitle(e.target.value)}
-                    style={{ fontSize: '13px' }}
+                    style={{ height: '42px', fontSize: '14px', borderRadius: '8px' }}
                   />
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '4px' }}>
-                  <label className="form-label" style={{ fontSize: '12px' }}>
+                  <label className="form-label" style={{ fontSize: '12.5px', fontWeight: 700, color: '#334155' }}>
                     Default Guard on Duty (Optional)
                   </label>
                   <input
@@ -1955,29 +1880,29 @@ export default function SettingsCatalog() {
                     placeholder="e.g. SG. Roberto Cruz"
                     value={guardOnDutyDefault}
                     onChange={(e) => setGuardOnDutyDefault(e.target.value)}
-                    style={{ fontSize: '13px' }}
+                    style={{ height: '42px', fontSize: '14px', borderRadius: '8px' }}
                   />
-                  <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
+                  <span style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', display: 'block' }}>
                     Can be left blank if guard on duty physically signs upon pickup.
                   </span>
                 </div>
               </div>
 
               {/* Physical / Manual Wet Signature Policy Card */}
-              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <h4 style={{ margin: '0 0 14px 0', fontSize: '13.5px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <ShieldCheck size={15} color="var(--primary)" />
+              <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <h4 style={{ margin: '0 0 16px 0', fontSize: '14.5px', color: '#0f172a', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={16} color="var(--primary)" />
                   <span>Physical Wet Signature Policy</span>
                 </h4>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px', color: '#334155', lineHeight: 1.55 }}>
                   <p style={{ margin: 0 }}>
                     In compliance with internal operational protocols, electronic signatures (e-signatures) are disabled.
                   </p>
                   <p style={{ margin: 0 }}>
-                    When the <strong>Packing List & Site Transfer Declaration Form PDF</strong> is generated and printed, an underline is provided above the supervisor’s printed name for a manual wet-ink signature.
+                    When the <strong>Packing List &amp; Site Transfer Declaration Form PDF</strong> is generated and printed, an underline is provided above the supervisor’s printed name for a manual wet-ink signature.
                   </p>
-                  <div style={{ marginTop: '12px', padding: '10px 12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', fontSize: '11.5px', color: '#1e40af' }}>
+                  <div style={{ marginTop: '14px', padding: '12px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '12.5px', color: '#1e40af' }}>
                     ℹ️ <strong>Manual Sign-Off:</strong> Ensure DC supervisor physically reviews, verifies, and wet-signs Page 2 of the printed document prior to handover to logistics / courier rider.
                   </div>
                 </div>
@@ -2086,7 +2011,7 @@ export default function SettingsCatalog() {
       )}
 
       {/* 5. Enhanced Supabase PostgreSQL Cloud Database Center */}
-      {activeTab === 'sql' && (
+      {(activeTab === 'sql' || activeTab === 'egress') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           
           {/* Card 1: System Health, Connection & Operational Control Hub */}
@@ -2384,24 +2309,13 @@ export default function SettingsCatalog() {
                     </span>
                   </div>
                   <p style={{ margin: '3px 0 0 0', fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                    Quota Cap: <strong>5.00 GB</strong> / Billing Cycle (06 Sep – 06 Oct 2026) · Active Real-Time Client Bandwidth Interceptor
+                    Quota Cap: <strong>5.00 GB</strong> / Billing Cycle ({new Date(egressStats.billingCycle.start).toLocaleDateString()} – {new Date(egressStats.billingCycle.end).toLocaleDateString()}) · Active Real-Time Client Bandwidth Interceptor
                   </p>
                 </div>
               </div>
 
               {/* Action buttons */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${egressStats.egressSaverMode ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => egressMonitor.setEgressSaverMode(!egressStats.egressSaverMode, true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
-                  title="Toggles Egress Saver mode which skips full document downloads when timestamps match"
-                >
-                  <Zap size={14} color={egressStats.egressSaverMode ? '#fff' : '#f59e0b'} />
-                  <span>Egress Saver: {egressStats.egressSaverMode ? 'ACTIVE' : 'STANDBY'}</span>
-                </button>
-
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
@@ -2431,7 +2345,7 @@ export default function SettingsCatalog() {
                   e.preventDefault();
                   const val = parseFloat(customGb);
                   if (!isNaN(val) && val >= 0 && val <= 50) {
-                    egressMonitor.setBaselineUsage(val);
+                    updateBaselineBytes(Math.max(0, (val * BYTES_PER_GB) - egressStats.sessionBytes));
                     setIsEditingBaseline(false);
                     setCustomGb('');
                     showToast(`Egress baseline calibrated to ${val} GB`, 'success');
@@ -2488,7 +2402,7 @@ export default function SettingsCatalog() {
             <div style={{ marginBottom: '22px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
                 <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Cycle Bandwidth Egress: <strong>{egressMonitor.constructor.formatBytes(egressStats.totalEgressBytes, 2)}</strong> of <strong>5.00 GB</strong>
+                  Cycle Bandwidth Egress: <strong>{formatBytes(egressStats.totalEgressBytes, 2)}</strong> of <strong>5.00 GB</strong>
                 </span>
                 <span
                   style={{
@@ -2497,7 +2411,7 @@ export default function SettingsCatalog() {
                     color: egressStats.usagePercent >= 80 ? '#ef4444' : egressStats.usagePercent >= 60 ? '#d97706' : '#0284c7'
                   }}
                 >
-                  {egressStats.usagePercent.toFixed(1)}% Consumed ({egressMonitor.constructor.formatBytes(egressStats.remainingBytes, 2)} headroom remaining)
+                  {egressStats.usagePercent.toFixed(1)}% Consumed ({formatBytes(egressStats.remainingBytes, 2)} headroom remaining)
                 </span>
               </div>
 
@@ -2537,7 +2451,7 @@ export default function SettingsCatalog() {
                   Safe Daily Budget
                 </div>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
-                  {egressMonitor.constructor.formatBytes(egressStats.safeDailyBudgetBytes)} / day
+                  {formatBytes(egressStats.dailySafeBudgetBytes)} / day
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
                   Sustainable pace for remaining {egressStats.daysRemaining} days
@@ -2549,7 +2463,7 @@ export default function SettingsCatalog() {
                   Recent Burn Rate
                 </div>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: egressStats.recentBurnRateBytes > egressStats.safeDailyBudgetBytes ? '#ef4444' : '#10b981', marginTop: '4px' }}>
-                  {egressMonitor.constructor.formatBytes(egressStats.recentBurnRateBytes)} / day
+                  {formatBytes(egressStats.recentBurnRateBytes)} / day
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
                   {egressStats.recentBurnRateBytes > egressStats.safeDailyBudgetBytes ? 'Pace exceeds daily budget' : 'Comfortably below budget'}
@@ -2561,7 +2475,7 @@ export default function SettingsCatalog() {
                   Forecasted Total (Oct 06)
                 </div>
                 <div style={{ fontSize: '18px', fontWeight: 800, color: egressStats.projectedTotalBytes > egressStats.limitBytes ? '#ef4444' : '#10b981', marginTop: '4px' }}>
-                  {egressMonitor.constructor.formatBytes(egressStats.projectedTotalBytes)}
+                  {formatBytes(egressStats.projectedTotalBytes)}
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
                   {egressStats.projectedTotalBytes > egressStats.limitBytes ? 'Will exceed free-tier cap' : 'Within free-tier quota'}
@@ -2670,7 +2584,7 @@ export default function SettingsCatalog() {
                                     }}
                                   />
                                   <strong style={{ color: isSpike ? '#ef4444' : 'inherit' }}>
-                                    {egressMonitor.constructor.formatBytes(bytes)}
+                                    {formatBytes(bytes)}
                                   </strong>
                                 </div>
                               </td>
@@ -2721,7 +2635,7 @@ export default function SettingsCatalog() {
                                 <code>{tbl}</code>
                               </td>
                               <td style={{ padding: '8px 12px' }}>
-                                <strong>{egressMonitor.constructor.formatBytes(bytes)}</strong>
+                                <strong>{formatBytes(bytes)}</strong>
                               </td>
                               <td style={{ padding: '8px 12px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2787,7 +2701,7 @@ export default function SettingsCatalog() {
                                 {req.table}
                               </td>
                               <td style={{ padding: '6px 10px', fontWeight: 700 }}>
-                                {egressMonitor.constructor.formatBytes(req.responseBytes)}
+                                {formatBytes(req.bytes)}
                               </td>
                               <td style={{ padding: '6px 10px' }}>
                                 <span style={{ color: req.status < 400 ? '#10b981' : '#ef4444' }}>
@@ -3038,6 +2952,8 @@ CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', '
           currentUser={currentUser}
         />
       )}
+      </div>
+    </div>
     </div>
   );
 }

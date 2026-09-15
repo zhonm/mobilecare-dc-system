@@ -947,6 +947,31 @@
   border: 1px solid #fecaca;
 }
 
+.header-sync-badge.egress-badge {
+  background: #f8fafc;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+.header-sync-badge.egress-badge:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+.header-sync-badge.egress-badge.badge-healthy {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.header-sync-badge.egress-badge.badge-warning {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+.header-sync-badge.egress-badge.badge-critical {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -1582,6 +1607,211 @@
 
   .matrix-btn-group .btn {
     flex: 1 1 auto;
+  }
+}
+
+/* macOS-style Settings workspace */
+.settings-view {
+  color: #1d1d1f;
+  width: 100%;
+  max-width: 1680px;
+  margin: 0 auto;
+}
+
+.settings-shell {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  min-height: calc(100vh - 122px);
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+}
+
+.settings-tab-nav {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  align-self: stretch;
+  gap: 5px !important;
+  margin-bottom: 0 !important;
+  padding: 18px 14px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  border: 0 !important;
+  border-right: 1px solid #e2e8f0 !important;
+  border-radius: 0 !important;
+  background: #f8fafc !important;
+  box-shadow: none !important;
+}
+
+.settings-nav-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px 18px;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 12px;
+}
+
+.settings-nav-heading strong,
+.settings-nav-heading span {
+  display: block;
+}
+
+.settings-nav-heading strong {
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.settings-nav-heading span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.settings-nav-icon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  border-radius: 9px;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.25);
+}
+
+.settings-nav-group-label {
+  padding: 8px 10px 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-tab-nav > .settings-nav-item {
+  width: 100%;
+  min-height: 42px;
+  justify-content: flex-start !important;
+  padding: 10px 14px !important;
+  gap: 10px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: #334155 !important;
+  box-shadow: none !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  text-align: left;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.settings-tab-nav > .settings-nav-item > svg {
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.settings-tab-nav > .settings-nav-item:hover {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+  transform: none !important;
+}
+
+.settings-tab-nav > .settings-nav-item.active {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.28) !important;
+}
+
+.settings-tab-nav > .settings-nav-item > span:first-of-type {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-tab-nav > .settings-nav-item > .settings-nav-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 8px !important;
+  border-radius: 12px !important;
+  background: #e2e8f0 !important;
+  color: #475569 !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+}
+
+.settings-tab-nav > .settings-nav-item.active > .settings-nav-count {
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #ffffff !important;
+}
+
+.settings-tab-nav > .settings-nav-item > .settings-nav-status {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  margin-left: auto;
+  padding: 0 !important;
+  border-radius: 50% !important;
+}
+
+.settings-content {
+  min-width: 0;
+  padding: 26px 32px 36px;
+  overflow: auto;
+  background: #ffffff;
+}
+
+@media (max-width: 1024px) {
+  .settings-shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .settings-content {
+    padding: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .settings-shell {
+    display: block;
+    min-height: 0;
+  }
+
+  .settings-tab-nav {
+    display: flex !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    padding: 12px 10px !important;
+    gap: 6px !important;
+  }
+
+  .settings-nav-heading {
+    display: none;
+  }
+
+  .settings-nav-group-label {
+    display: none;
+  }
+
+  .settings-tab-nav > .settings-nav-item {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .settings-content {
+    padding: 16px 14px 24px;
   }
 }
 

@@ -1,112 +1,181 @@
 import { useState, useEffect } from 'react';
-import { egressMonitor } from '../utils/egressMonitor';
 import {
   Activity,
-  AlertTriangle,
-  CheckCircle2,
-  ShieldAlert,
-  Zap,
+  ShieldCheck,
+  RefreshCw,
   X,
-  Sliders
+  Zap,
+  Info,
+  Layers,
+  ArrowDownCircle,
+  Calendar,
+  CheckCircle2
 } from 'lucide-react';
+import {
+  getEgressStats,
+  formatBytes,
+  subscribeToEgressUpdates,
+  updateBaselineBytes
+} from '../services/egressMonitorService';
 
-export default function EgressUsageModal({ isOpen, onClose, onNavigateToSettings }) {
-  const [stats, setStats] = useState(() => egressMonitor.getStats());
-  const [isEditingBaseline, setIsEditingBaseline] = useState(false);
-  const [customGb, setCustomGb] = useState('');
+export default function EgressUsageModal({ isOpen, onClose, onForceSync }) {
+  const [stats, setStats] = useState(getEgressStats());
+  const [showCalibrate, setShowCalibrate] = useState(false);
+  const [calibrateInput, setCalibrateInput] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
-    setStats(egressMonitor.getStats());
-    const unsub = egressMonitor.subscribe(newStats => {
+    setStats(getEgressStats());
+    const unsubscribe = subscribeToEgressUpdates((newStats) => {
       setStats(newStats);
     });
-    return unsub;
+    return () => unsubscribe();
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const {
-    totalEgressBytes,
-    limitBytes,
-    remainingBytes,
-    usagePercent,
-    daysRemaining,
-    recentBurnRateBytes,
-    safeDailyBudgetBytes,
-    projectedTotalBytes,
-    alertLevel,
-    egressSaverMode
-  } = stats;
-
-  const handleSaveBaseline = (e) => {
-    e.preventDefault();
-    const val = parseFloat(customGb);
-    if (!isNaN(val) && val >= 0 && val <= 50) {
-      egressMonitor.setBaselineUsage(val);
-      setIsEditingBaseline(false);
-      setCustomGb('');
+  const handleManualSync = async () => {
+    if (typeof onForceSync === 'function') {
+      setIsSyncing(true);
+      try {
+        await onForceSync();
+      } finally {
+        setIsSyncing(false);
+      }
     }
   };
 
-  const alertColors = {
-    ok: { bg: '#ecfdf5', text: '#059669', border: '#a7f3d0', icon: CheckCircle2, label: 'Optimal Budget' },
-    warning: { bg: '#fffbeb', text: '#d97706', border: '#fde68a', icon: AlertTriangle, label: 'Elevated Burn Rate' },
-    critical: { bg: '#fff1f2', text: '#e11d48', border: '#fecdd3', icon: ShieldAlert, label: 'Approaching 5GB Limit' },
-    emergency: { bg: '#450a0a', text: '#f87171', border: '#ef4444', icon: ShieldAlert, label: 'Emergency Quota Depletion' }
+  const handleApplyCalibration = () => {
+    const gbVal = parseFloat(calibrateInput);
+    if (!isNaN(gbVal) && gbVal >= 0) {
+      updateBaselineBytes(Math.round(gbVal * 1024 * 1024 * 1024));
+      setShowCalibrate(false);
+      setCalibrateInput('');
+    }
   };
 
-  const currentAlert = alertColors[alertLevel] || alertColors.ok;
-  const AlertIcon = currentAlert.icon;
+  const getStatusBadge = () => {
+    if (stats.health === 'critical') {
+      return {
+        bg: '#fef2f2',
+        color: '#dc2626',
+        border: '1px solid #fecaca',
+        label: 'Critical High'
+      };
+    }
+    if (stats.health === 'warning') {
+      return {
+        bg: '#fffbeb',
+        color: '#d97706',
+        border: '1px solid #fde68a',
+        label: 'Warning'
+      };
+    }
+    return {
+      bg: '#ecfdf5',
+      color: '#059669',
+      border: '1px solid #a7f3d0',
+      label: 'Budget Safe'
+    };
+  };
+
+  const getProgressBarColor = () => {
+    if (stats.percentUsed >= 90) return '#ef4444';
+    if (stats.percentUsed >= 75) return '#f59e0b';
+    return '#10b981';
+  };
+
+  const badgeStyle = getStatusBadge();
 
   return (
-    <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 9999 }}>
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(15, 23, 42, 0.75)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 2000,
+        padding: '20px'
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
-        className="modal-container"
-        onClick={e => e.stopPropagation()}
         style={{
-          maxWidth: '620px',
-          width: '94%',
-          background: 'var(--bg-card)',
+          background: '#ffffff',
           borderRadius: '16px',
+          width: '100%',
+          maxWidth: '680px',
+          maxHeight: '90vh',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+          border: '1px solid #e2e8f0',
           overflow: 'hidden',
-          boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
-          border: '1px solid var(--border-color)'
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'fadeIn 0.2s ease-out',
+          color: '#1e293b',
+          fontFamily: 'inherit'
         }}
       >
-        {/* Modal Header */}
+        {/* Header */}
         <div
           style={{
-            background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
-            color: '#fff',
-            padding: '20px 24px',
+            padding: '16px 24px',
+            borderBottom: '1px solid #e2e8f0',
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
-            borderBottom: '1px solid #334155'
+            justifyContent: 'space-between',
+            background: '#f8fafc'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div
               style={{
-                background: usagePercent >= 80 ? '#ef4444' : usagePercent >= 60 ? '#f59e0b' : '#0284c7',
-                padding: '8px',
-                borderRadius: '8px',
-                display: 'flex'
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                background: '#e0e7ff',
+                color: '#4338ca',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}
             >
-              <Activity size={20} color="#fff" />
+              <Activity size={22} />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#fff' }}>
-                Supabase Egress Quota Monitor
-              </h3>
-              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
-                Free Plan Cap: 5.00 GB · Billing Cycle Reset: Oct 06
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+                  Supabase Egress & Quota Monitor
+                </h3>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    background: badgeStyle.bg,
+                    color: badgeStyle.color,
+                    border: badgeStyle.border
+                  }}
+                >
+                  {badgeStyle.label}
+                </span>
+              </div>
+              <p style={{ margin: '3px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                Free Tier: <strong>5.00 GB / month</strong> • Billing Cycle: 05 Sep – 05 Oct 2026
               </p>
             </div>
           </div>
-
           <button
             type="button"
             onClick={onClose}
@@ -115,311 +184,398 @@ export default function EgressUsageModal({ isOpen, onClose, onNavigateToSettings
               border: 'none',
               color: '#94a3b8',
               cursor: 'pointer',
-              padding: '4px'
+              padding: '6px',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background 0.15s, color 0.15s'
             }}
-            aria-label="Close modal"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#e2e8f0';
+              e.currentTarget.style.color = '#334155';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = '#94a3b8';
+            }}
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* Modal Content */}
-        <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Alert Status Banner */}
+        {/* Modal Body */}
+        <div style={{ padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Main Quota Progress Card */}
           <div
             style={{
-              background: currentAlert.bg,
-              border: `1px solid ${currentAlert.border}`,
-              borderRadius: '10px',
-              padding: '12px 16px',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '16px 20px',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px'
+              flexDirection: 'column',
+              gap: '10px'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <AlertIcon size={20} color={currentAlert.text} />
-              <div>
-                <strong style={{ fontSize: '13px', color: currentAlert.text }}>
-                  {currentAlert.label}
-                </strong>
-                <p style={{ margin: 0, fontSize: '12px', color: currentAlert.text, opacity: 0.9 }}>
-                  {alertLevel === 'emergency' || alertLevel === 'critical'
-                    ? 'At current burn rate, free-tier egress will be depleted before billing reset.'
-                    : alertLevel === 'warning'
-                    ? 'Recent daily bandwidth is higher than sustainable monthly pace.'
-                    : 'Network traffic is currently within safe limits.'}
-                </p>
-              </div>
-            </div>
-
-            <span
-              style={{
-                fontSize: '11px',
-                fontWeight: 800,
-                textTransform: 'uppercase',
-                padding: '3px 8px',
-                borderRadius: '4px',
-                background: currentAlert.text,
-                color: '#fff',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {usagePercent.toFixed(1)}% Used
-            </span>
-          </div>
-
-          {/* Progress Bar & Quota Gauge */}
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
-                Monthly Egress Consumption
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                Total Monthly Egress Used
               </span>
-              <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)' }}>
-                {egressMonitor.constructor.formatBytes(totalEgressBytes)} / {egressMonitor.constructor.formatBytes(limitBytes)}
+              <span style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
+                {formatBytes(stats.totalBytes)}{' '}
+                <span style={{ fontSize: '12px', fontWeight: 400, color: '#64748b' }}>
+                  / 5.00 GB ({stats.percentUsed.toFixed(1)}%)
+                </span>
               </span>
             </div>
 
+            {/* Gauge Track */}
             <div
               style={{
-                height: '14px',
+                width: '100%',
+                height: '10px',
                 background: '#e2e8f0',
-                borderRadius: '7px',
-                overflow: 'hidden',
-                position: 'relative',
-                boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)'
+                borderRadius: '9999px',
+                overflow: 'hidden'
               }}
             >
               <div
                 style={{
-                  width: `${Math.min(100, usagePercent)}%`,
                   height: '100%',
-                  background: usagePercent >= 80 ? '#ef4444' : usagePercent >= 60 ? '#f59e0b' : '#10b981',
-                  borderRadius: '7px',
+                  borderRadius: '9999px',
+                  background: getProgressBarColor(),
+                  width: `${Math.min(100, stats.percentUsed)}%`,
                   transition: 'width 0.4s ease'
                 }}
               />
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
-              <span>0 GB</span>
-              <span>3.0 GB (60% Warning)</span>
-              <span>4.0 GB (80% Critical)</span>
-              <span>5.0 GB Limit</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#64748b' }}>
+              <span>
+                Remaining Quota: <strong style={{ color: '#0f172a' }}>{formatBytes(stats.remainingBytes)}</strong>
+              </span>
+              <span>
+                Cycle Days Remaining: <strong style={{ color: '#0f172a' }}>{stats.daysRemaining} days</strong>
+              </span>
             </div>
           </div>
 
-          {/* 4 Key Metrics Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            <div
-              style={{
-                padding: '12px 14px',
-                background: 'var(--bg-card-alt, #f8fafc)',
-                borderRadius: '10px',
-                border: '1px solid var(--border-color)'
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Remaining Quota
-              </div>
-              <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
-                {egressMonitor.constructor.formatBytes(remainingBytes)}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                {daysRemaining} day(s) until Oct 06 reset
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '12px 14px',
-                background: 'var(--bg-card-alt, #f8fafc)',
-                borderRadius: '10px',
-                border: '1px solid var(--border-color)'
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Safe Daily Budget
-              </div>
-              <div style={{ fontSize: '17px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
-                {egressMonitor.constructor.formatBytes(safeDailyBudgetBytes)}/day
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                Target pace to finish within free tier
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '12px 14px',
-                background: 'var(--bg-card-alt, #f8fafc)',
-                borderRadius: '10px',
-                border: '1px solid var(--border-color)'
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Recent Burn Rate
-              </div>
-              <div
-                style={{
-                  fontSize: '17px',
-                  fontWeight: 800,
-                  color: recentBurnRateBytes > safeDailyBudgetBytes ? '#ef4444' : '#10b981',
-                  marginTop: '4px'
-                }}
-              >
-                {egressMonitor.constructor.formatBytes(recentBurnRateBytes)}/day
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                {recentBurnRateBytes > safeDailyBudgetBytes ? 'Over daily budget' : 'Under daily budget'}
-              </div>
-            </div>
-
-            <div
-              style={{
-                padding: '12px 14px',
-                background: 'var(--bg-card-alt, #f8fafc)',
-                borderRadius: '10px',
-                border: '1px solid var(--border-color)'
-              }}
-            >
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Projected Total
-              </div>
-              <div
-                style={{
-                  fontSize: '17px',
-                  fontWeight: 800,
-                  color: projectedTotalBytes > limitBytes ? '#ef4444' : '#10b981',
-                  marginTop: '4px'
-                }}
-              >
-                {egressMonitor.constructor.formatBytes(projectedTotalBytes)}
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                {projectedTotalBytes > limitBytes
-                  ? `Exceeds 5.0 GB limit`
-                  : 'Stays within Free Tier'}
-              </div>
-            </div>
-          </div>
-
-          {/* Egress Saver Mode Banner / Control */}
+          {/* 3 Metric Cards Grid */}
           <div
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '14px 16px',
-              background: egressSaverMode ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-card-alt, #f8fafc)',
-              borderRadius: '10px',
-              border: `1px solid ${egressSaverMode ? '#a7f3d0' : 'var(--border-color)'}`
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '12px'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Zap size={20} color={egressSaverMode ? '#10b981' : '#64748b'} />
-              <div>
-                <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
-                  Egress Saver Mode: {egressSaverMode ? 'ACTIVE' : 'STANDBY'}
-                </strong>
-                <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
-                  {egressSaverMode
-                    ? 'Metadata-first delta syncing active. Background re-fetches throttled.'
-                    : 'Auto-engages if usage exceeds 80% to protect against quota exhaustion.'}
-                </p>
+            {/* Safe Daily Budget */}
+            <div
+              style={{
+                background: '#ffffff',
+                border: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
+                <Calendar size={15} color="#6366f1" />
+                Safe Daily Budget
               </div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
+                {formatBytes(stats.dailySafeBudgetBytes)}
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 400 }}> / day</span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8' }}>Target to stay under 5 GB</div>
             </div>
 
-            <button
-              type="button"
-              className={`btn btn-sm ${egressSaverMode ? 'btn-secondary' : 'btn-primary'}`}
-              onClick={() => egressMonitor.setEgressSaverMode(!egressSaverMode, true)}
-              style={{ fontWeight: 700, whiteSpace: 'nowrap' }}
+            {/* Today's Usage */}
+            <div
+              style={{
+                background: '#ffffff',
+                border: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
+              }}
             >
-              {egressSaverMode ? 'Disable Saver' : 'Enable Saver'}
-            </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
+                <ArrowDownCircle size={15} color="#10b981" />
+                Today's Session Usage
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
+                {formatBytes(stats.todayBytes)}
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8' }}>{stats.todayRequests} network queries</div>
+            </div>
+
+            {/* Circuit Breaker Status */}
+            <div
+              style={{
+                background: '#ffffff',
+                border: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px',
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', fontWeight: 600 }}>
+                <Zap size={15} color="#f59e0b" />
+                Circuit Breaker
+              </div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', height: '27px' }}>
+                {stats.isCircuitBreakerActive ? (
+                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#fee2e2', color: '#dc2626', border: '1px solid #fecaca' }}>
+                    Tripped (Cooling 60s)
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0' }}>
+                    Active & Guarding
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: '11px', color: '#94a3b8' }}>Halts runaway query loops</div>
+            </div>
           </div>
 
-          {/* Quick Baseline Calibration Section */}
-          {isEditingBaseline ? (
-            <form onSubmit={handleSaveBaseline} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="50"
-                placeholder="e.g. 2.83"
-                value={customGb}
-                onChange={e => setCustomGb(e.target.value)}
-                className="form-control"
-                style={{ flex: 1, padding: '8px 12px', fontSize: '13px' }}
-                autoFocus
-              />
-              <button type="submit" className="btn btn-primary btn-sm" style={{ fontWeight: 700 }}>
-                Set Baseline (GB)
-              </button>
+          {/* Active Bandwidth Defenses */}
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+              <ShieldCheck size={16} color="#10b981" />
+              Active Egress Reduction Defenses
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '8px' }}>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '8px' }}>
+                <CheckCircle2 size={16} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b' }}>Conditional ETag / Timestamp Hydration</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4, marginTop: '2px' }}>
+                    Heavy documents (masterlist, live state) check headers and skip downloading unchanged multi-MB payloads.
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '8px' }}>
+                <CheckCircle2 size={16} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b' }}>Selective Table Realtime Routing</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4, marginTop: '2px' }}>
+                    Broadcast events reload only the affected table rather than executing blanket 10-table full queries.
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '8px' }}>
+                <CheckCircle2 size={16} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b' }}>Redundant Polling Suppression</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4, marginTop: '2px' }}>
+                    Tab switching & window refocus skip background queries while WebSocket Realtime is connected.
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '8px' }}>
+                <CheckCircle2 size={16} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e293b' }}>Runaway Circuit Breaker</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4, marginTop: '2px' }}>
+                    Automatically suppresses rapid automated query bursts (&gt;35 req/2 min) to protect remaining quota.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Table Breakdown */}
+          {Object.keys(stats.tableBreakdown).length > 0 && (
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                <Layers size={16} color="#64748b" />
+                Session PostgREST Egress by Table
+              </div>
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569' }}>
+                      <th style={{ padding: '8px 12px', fontWeight: 600 }}>Table / Endpoint</th>
+                      <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Queries</th>
+                      <th style={{ padding: '8px 12px', fontWeight: 600, textAlign: 'right' }}>Data Transferred</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(stats.tableBreakdown)
+                      .sort((a, b) => b[1].bytes - a[1].bytes)
+                      .map(([table, data], idx) => (
+                        <tr
+                          key={table}
+                          style={{
+                            borderBottom: idx === Object.keys(stats.tableBreakdown).length - 1 ? 'none' : '1px solid #f1f5f9',
+                            background: idx % 2 === 0 ? '#ffffff' : '#fafafa'
+                          }}
+                        >
+                          <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 600, color: '#334155' }}>
+                            {table}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', color: '#64748b' }}>
+                            {data.requests}
+                          </td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>
+                            {formatBytes(data.bytes)}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Calibrate Baseline Accordion */}
+          <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}>
+            {!showCalibrate ? (
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setIsEditingBaseline(false)}
-              >
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-              <span style={{ color: 'var(--text-muted)' }}>
-                Calibrated from Supabase Dashboard
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsEditingBaseline(true)}
+                onClick={() => setShowCalibrate(true)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#0284c7',
-                  cursor: 'pointer',
+                  color: '#4f46e5',
+                  fontSize: '12px',
                   fontWeight: 600,
-                  padding: 0,
-                  textDecoration: 'underline'
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: 0
                 }}
               >
-                Calibrate Current Total (GB)
+                <Info size={14} />
+                Calibrate baseline from Supabase Usage Dashboard
               </button>
-            </div>
-          )}
+            ) : (
+              <div
+                style={{
+                  background: '#f5f3ff',
+                  border: '1px solid #ddd6fe',
+                  borderRadius: '10px',
+                  padding: '12px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px'
+                }}
+              >
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#4338ca' }}>
+                  Set Baseline Egress from Supabase Dashboard (in GB):
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="number"
+                    step="0.001"
+                    placeholder="e.g. 3.415"
+                    value={calibrateInput}
+                    onChange={(e) => setCalibrateInput(e.target.value)}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid #c7d2fe',
+                      fontSize: '12px',
+                      width: '130px',
+                      outline: 'none',
+                      background: '#ffffff'
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>GB</span>
+                  <button
+                    type="button"
+                    onClick={handleApplyCalibration}
+                    style={{
+                      background: '#4f46e5',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCalibrate(false)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#64748b',
+                      fontSize: '12px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Modal Footer */}
         <div
           style={{
-            padding: '16px 24px',
-            background: 'var(--bg-card-alt, #f8fafc)',
-            borderTop: '1px solid var(--border-color)',
+            padding: '14px 24px',
+            borderTop: '1px solid #e2e8f0',
+            background: '#f8fafc',
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            justifyContent: 'space-between'
           }}
         >
           <button
             type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => {
-              onClose();
-              if (onNavigateToSettings) onNavigateToSettings();
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            style={{
+              background: '#ffffff',
+              border: '1px solid #cbd5e1',
+              borderRadius: '8px',
+              padding: '7px 14px',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: '#334155',
+              cursor: isSyncing ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)',
+              opacity: isSyncing ? 0.6 : 1
             }}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
           >
-            <Sliders size={14} />
-            <span>Full Database Telemetry</span>
+            <RefreshCw size={13} className={isSyncing ? 'spin' : ''} />
+            {isSyncing ? 'Syncing Cloud...' : 'Force Cloud Sync'}
           </button>
-
           <button
             type="button"
-            className="btn btn-primary btn-sm"
             onClick={onClose}
-            style={{ fontWeight: 700, padding: '7px 18px' }}
+            style={{
+              background: '#0f172a',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '7px 18px',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)'
+            }}
           >
             Close
           </button>

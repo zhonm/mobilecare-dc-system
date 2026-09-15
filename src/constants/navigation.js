@@ -14,7 +14,7 @@ export const ALL_PAGES = [
   { id: 'audit', label: 'Serialized Audit Log', section: 'Traceability' },
   { id: 'request-parts', label: 'Parts Requests', section: 'Warehouse Operations' },
   { id: 'all-stocks', label: 'All Stocks & Inventory', section: 'Warehouse Operations' },
-  { id: 'settings', label: 'Parts & Site Catalog', section: 'Admin' },
+  { id: 'settings', label: 'Settings', section: 'Admin' },
   { id: 'user-access', label: 'User Access Management', section: 'Admin' }
 ];
 
@@ -34,6 +34,6 @@ export const PAGE_TITLES = {
   reports: 'Fixably Stock Transfer Reports & Analytics',
   'forecast-reports': 'Fixably Forecasting Reports & Analytics',
   audit: 'Serialized Lifecycle & Traceability Audit',
-  settings: 'Parts Catalog & Site Configuration',
+  settings: 'Settings',
   'user-access': 'User Access & Permissions Management'
 };

@@ -36,6 +36,7 @@ import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } f
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
+import { getEgressStats, isCircuitBreakerActive, setEgressRequestContext } from '../services/egressMonitorService';
 
 export function useCloudSync({
   currentUser,
@@ -131,19 +132,6 @@ export function useCloudSync({
 
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
-
-  // Supabase Egress Defense: In-memory & IndexedDB cache for heavy system documents
-  const cachedSystemDocsRef = useRef({});
-  useEffect(() => {
-    (async () => {
-      try {
-        const cached = await dbStorage.getItem('mdc_cached_system_docs');
-        if (cached && typeof cached === 'object') {
-          cachedSystemDocsRef.current = cached;
-        }
-      } catch (e) {}
-    })();
-  }, []);
 
   // Broadcast event across peers and browser tabs (Site-Isolated with Global Alert Routing)
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
@@ -416,14 +404,18 @@ export function useCloudSync({
             'master_auto_logout_settings_registry',
             'master_session_audit_logs_registry'
           ];
-          // Supabase Free-Tier Egress Defense for SYSTEM_DOC_IDS:
-          // Instead of unconditionally downloading all 17 multi-megabyte documents (~2.5 MB),
-          // first fetch lightweight metadata header (~1 KB). Only download full snapshot_data
-          // for documents whose cloud updated_at is newer or missing locally!
-          const [resSystemHeader, resPeriods, resStockHeader, resShipments] = await Promise.all([
+          const HEAVY_DOC_IDS = [
+            LIVE_MASTER_RECORD_ID,
+            'master_masterlist_data_registry'
+          ];
+          const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
+
+          const [resSystem, resHeavyHeaders, resPeriods, resStockHeader, resShipments] = await Promise.all([
+            supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS),
+            // Bandwidth Egress Defense: Check updated_at timestamps first for multi-megabyte JSON trees
             supabase.from('saved_records')
-              .select('id, record_type, period_label, period_year, period_month, period_week, notes, saved_by_name, saved_by_user_id, updated_at, created_at, is_deleted')
-              .in('id', SYSTEM_DOC_IDS),
+              .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
+              .in('id', HEAVY_DOC_IDS),
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
               .order('created_at', { ascending: false })
@@ -438,51 +430,106 @@ export function useCloudSync({
               .select('*')
               .eq('record_type', 'shipment')
               .order('created_at', { ascending: false })
-              .limit(50)
+              .limit(10)
           ]);
-
-          const headerRows = resSystemHeader?.data || [];
-          const dirtySystemDocIds = [];
-          for (const hRow of headerRows) {
-            const cachedDoc = cachedSystemDocsRef.current[hRow.id];
-            const isMissing = !cachedDoc || !cachedDoc.snapshot_data;
-            const isOutdated = Boolean(cachedDoc && hRow.updated_at && cachedDoc.updated_at !== hRow.updated_at);
-            if (isForce || isMissing || isOutdated) {
-              dirtySystemDocIds.push(hRow.id);
-            }
-          }
-
-          if (dirtySystemDocIds.length > 0) {
-            try {
-              const { data: freshDocs } = await supabase
-                .from('saved_records')
-                .select('*')
-                .in('id', dirtySystemDocIds);
-              if (freshDocs && Array.isArray(freshDocs)) {
-                freshDocs.forEach(d => {
-                  if (d && d.id) {
-                    cachedSystemDocsRef.current[d.id] = d;
-                  }
-                });
-                try {
-                  dbStorage.setItem('mdc_cached_system_docs', cachedSystemDocsRef.current);
-                } catch (e) {}
-              }
-            } catch (err) {
-              console.warn('[Egress Defense] Selective system docs fetch note:', err);
-            }
-          }
-
-          const systemRows = headerRows.map(hRow => {
-            const fullDoc = cachedSystemDocsRef.current[hRow.id];
-            if (fullDoc && fullDoc.snapshot_data) {
-              return { ...fullDoc, ...hRow, snapshot_data: fullDoc.snapshot_data };
-            }
-            return hRow;
-          });
+          const systemRows = resSystem.data || [];
+          const heavyHeaders = resHeavyHeaders?.data || [];
           const shipmentRows = resShipments?.data || [];
           const shipmentIds = new Set(shipmentRows.map(r => r.id));
           const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry' && !shipmentIds.has(r.id));
+
+          // 1. Conditional Egress Optimization for LIVE_MASTER_RECORD_ID:
+          // Contains heavy forecasts, allocations, parts, and sites (~1-3 MB).
+          // If remote updated_at matches local cache, skip payload download entirely.
+          const remoteLiveHeader = heavyHeaders.find(h => h.id === LIVE_MASTER_RECORD_ID);
+          if (remoteLiveHeader) {
+            let localLiveUpdatedAt = null;
+            try { localLiveUpdatedAt = localStorage.getItem('mdc_live_master_updated_at'); } catch (e) {}
+            if (!localLiveUpdatedAt) {
+              try { localLiveUpdatedAt = await dbStorage.getItem('mdc_live_master_updated_at'); } catch (e) {}
+            }
+            const hasLocalLiveState = (Array.isArray(forecastItems) && forecastItems.length > 0) || (Array.isArray(allocations) && allocations.length > 0);
+            const isTimestampMismatch = Boolean(remoteLiveHeader.updated_at && remoteLiveHeader.updated_at !== localLiveUpdatedAt);
+            const isTargetedSync = Boolean(selectiveTables && selectiveTables.includes('saved_records'));
+            const needsLiveDownload = (isForce || !hasLocalLiveState || isTimestampMismatch || isTargetedSync) && remoteLiveHeader.notes !== '__CLEARED__';
+
+            if (needsLiveDownload) {
+              try {
+                const { data: fullLiveDoc } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', LIVE_MASTER_RECORD_ID)
+                  .maybeSingle();
+                if (fullLiveDoc) {
+                  systemRows.push(fullLiveDoc);
+                  if (fullLiveDoc.updated_at) {
+                    try { localStorage.setItem('mdc_live_master_updated_at', fullLiveDoc.updated_at); } catch (e) {}
+                    try { await dbStorage.setItem('mdc_live_master_updated_at', fullLiveDoc.updated_at); } catch (e) {}
+                  }
+                }
+              } catch (err) {
+                console.warn('Full live master fetch note:', err);
+                systemRows.push(remoteLiveHeader);
+              }
+            } else {
+              // Local state is up to date: reuse cached live doc without downloading megabytes
+              systemRows.push({
+                ...remoteLiveHeader,
+                snapshot_data: {
+                  isCleared: isExplicitlyCleared(),
+                  activePeriod: activePeriod,
+                  forecastingModel: _forecastingModel || 'linear',
+                  forecastItems: isExplicitlyCleared() ? [] : (forecastItems || []),
+                  allocations: isExplicitlyCleared() ? [] : (allocations || []),
+                  parts: parts || [],
+                  sites: sites || []
+                }
+              });
+            }
+          }
+
+          // 2. Conditional Egress Optimization for master_masterlist_data_registry:
+          // Masterlist files contain parsed intelligence for thousands of units (~2-4 MB).
+          // Only download if local cache is empty, cloud timestamp is newer, or on Data Import tab.
+          const remoteMasterlistHeader = heavyHeaders.find(h => h.id === 'master_masterlist_data_registry');
+          if (remoteMasterlistHeader) {
+            let localMasterlistUpdatedAt = null;
+            try { localMasterlistUpdatedAt = localStorage.getItem('mdc_masterlist_updated_at'); } catch (e) {}
+            if (!localMasterlistUpdatedAt) {
+              try { localMasterlistUpdatedAt = await dbStorage.getItem('mdc_masterlist_updated_at'); } catch (e) {}
+            }
+            const currentTab = activeTabRef.current || (typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '') : '');
+            const isImportTab = currentTab === 'data-import';
+            const hasLocalMasterlist = masterlistData && masterlistData.totalUnits > 0;
+            const isTimestampMismatch = Boolean(remoteMasterlistHeader.updated_at && remoteMasterlistHeader.updated_at !== localMasterlistUpdatedAt);
+            const isTargetedSync = Boolean(selectiveTables && selectiveTables.includes('saved_records'));
+            const needsMasterlistDownload = (isForce || (!hasLocalMasterlist && isImportTab) || isTimestampMismatch || isTargetedSync) && remoteMasterlistHeader.notes !== '__CLEARED__';
+
+            if (needsMasterlistDownload) {
+              try {
+                const { data: fullMasterlistDoc } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'master_masterlist_data_registry')
+                  .maybeSingle();
+                if (fullMasterlistDoc) {
+                  systemRows.push(fullMasterlistDoc);
+                  if (fullMasterlistDoc.updated_at) {
+                    try { localStorage.setItem('mdc_masterlist_updated_at', fullMasterlistDoc.updated_at); } catch (e) {}
+                    try { await dbStorage.setItem('mdc_masterlist_updated_at', fullMasterlistDoc.updated_at); } catch (e) {}
+                  }
+                }
+              } catch (err) {
+                console.warn('Full masterlist fetch note:', err);
+                systemRows.push(remoteMasterlistHeader);
+              }
+            } else {
+              systemRows.push({
+                ...remoteMasterlistHeader,
+                snapshot_data: masterlistData ? { masterlistData, lastUpdated: remoteMasterlistHeader.updated_at } : null
+              });
+            }
+          }
 
           // Supabase Egress & Quota Defense for Stock Transfer Reports:
           // Stock transfer files contain thousands of rows (~500 KB - 1 MB in JSON).
@@ -2337,6 +2384,18 @@ export function useCloudSync({
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
     const now = Date.now();
 
+    // Bandwidth & Egress Quota Circuit Breaker:
+    // If circuit breaker is tripped due to excessive rate or volume, block non-manual background refreshes
+    if (!isManual && isCircuitBreakerActive()) {
+      console.warn('[AutoRefresh] Blocked by Egress Circuit Breaker (preserving Supabase free-tier quota)');
+      return { success: true, throttled: true, reason: 'circuit_breaker_active' };
+    }
+
+    if (!isManual && getEgressStats().percentUsed >= 95) {
+      console.warn('[AutoRefresh] Blocked at 95% Supabase egress usage (preserving remaining free-tier quota)');
+      return { success: true, throttled: true, reason: 'egress_quota_near_limit' };
+    }
+
     // If a cloud save is actively in progress, queue a pending refresh so it fires immediately upon save completion
     if (isSavingRef.current) {
       pendingRealtimeSyncRef.current = true;
@@ -2348,9 +2407,9 @@ export function useCloudSync({
 
     // Runaway protection & bandwidth egress defense:
     // 1. Manual user click: allow immediately.
-    // 2. Forced / realtime: enforce at least a 3000ms cooldown to avoid cascade storms.
-    // 3. Automatic / background: enforce a 15000ms cooldown.
-    const minCooldown = isManual ? 0 : (force ? 3000 : 15000);
+    // 2. Forced / realtime: enforce at least a 4000ms cooldown to avoid cascade storms.
+    // 3. Automatic / background: enforce a 20000ms cooldown.
+    const minCooldown = isManual ? 0 : (force ? 4000 : 20000);
     if (now - lastRefreshTimeRef.current < minCooldown) {
       if (tables) {
         tables.forEach(t => pendingRealtimeTablesRef.current.add(t));
@@ -2364,6 +2423,7 @@ export function useCloudSync({
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
+      setEgressRequestContext(!isManual);
       const success = await hydrateFromSupabase(tables, Boolean(force || isManual));
       if (!silent) {
         if (success) {
@@ -2380,6 +2440,7 @@ export function useCloudSync({
       }
       return { success: false, error: err.message };
     } finally {
+      setEgressRequestContext(false);
       setTimeout(() => {
         setIsAutoRefreshing(false);
       }, 300);
@@ -2713,7 +2774,10 @@ export function useCloudSync({
                 if (ev.data.payload?.period && setActivePeriod) {
                   setActivePeriod(ev.data.payload.period);
                 }
-                autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]` });
+                const targetTables = ['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)
+                  ? ['shipments', 'saved_records']
+                  : ['saved_records'];
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]`, tables: targetTables });
               }
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
@@ -2845,7 +2909,7 @@ export function useCloudSync({
               if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
                 triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
-                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]` });
+                autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records'] });
               }
             } else if (bType === 'STOCK_TRANSFERS_UPDATED') {
               autoRefreshData({ force: true, silent: true, isManual: false, reason: 'WebSocket Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
@@ -3056,23 +3120,25 @@ export function useCloudSync({
     }
   }, [currentUser?.id, autoRefreshData]);
 
-  // 2. Auto-Refresh on Page Navigation (Smart cache TTL: 15 mins since last sync)
+  // 2. Auto-Refresh on Page Navigation (Smart cache TTL: 30 mins, skipped when Realtime is active)
   useEffect(() => {
     if (currentUser?.id && activeTab) {
+      if (realtimeConnected) return;
       const now = Date.now();
-      if (now - lastRefreshTimeRef.current >= 900000) {
+      if (now - lastRefreshTimeRef.current >= 1800000) {
         autoRefreshData({ silent: true, force: false, reason: `Page visit: ${activeTab}` });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, currentUser?.id]);
+  }, [activeTab, currentUser?.id, realtimeConnected]);
 
-  // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection (Throttled to 15 mins)
+  // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection (Throttled to 30 mins, skipped when Realtime is active)
   useEffect(() => {
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible' && currentUser?.id) {
+        if (realtimeConnected) return;
         const now = Date.now();
-        if (now - lastRefreshTimeRef.current >= 900000) {
+        if (now - lastRefreshTimeRef.current >= 1800000) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
         }
       }
@@ -3195,10 +3261,13 @@ export function useCloudSync({
         };
 
         await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
-        cachedSystemDocsRef.current[LIVE_MASTER_RECORD_ID] = liveSnapshotPayload;
+        try {
+          localStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
+          dbStorage.setItem('mdc_live_master_updated_at', liveSnapshotPayload.updated_at);
+        } catch (e) {}
 
         if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
-          await supabase.from('saved_records').upsert({
+          const masterlistPayload = {
             id: 'master_masterlist_data_registry',
             record_type: 'masterlist_data_registry',
             period_label: `${resolvedActivePeriod.label || 'September 2026'} Masterlist Data Registry`,
@@ -3211,7 +3280,12 @@ export function useCloudSync({
               lastUpdated: new Date().toISOString()
             },
             updated_at: new Date().toISOString()
-          }, { onConflict: 'id' });
+          };
+          await supabase.from('saved_records').upsert(masterlistPayload, { onConflict: 'id' });
+          try {
+            localStorage.setItem('mdc_masterlist_updated_at', masterlistPayload.updated_at);
+            dbStorage.setItem('mdc_masterlist_updated_at', masterlistPayload.updated_at);
+          } catch (e) {}
         }
 
         if (currentUploadLogs && currentUploadLogs.length > 0) {

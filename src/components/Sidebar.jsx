@@ -80,7 +80,7 @@ export default function Sidebar() {
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
 
     // 4. Administration
-    { id: 'settings', label: 'Parts & Site Catalog', icon: Settings, section: 'Administration' },
+    { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' },
     { id: 'feedback', label: 'Feedback & Support', icon: MessageSquare, section: 'Administration' }
   ];
