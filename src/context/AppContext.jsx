@@ -182,10 +182,28 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [activeTab, setActiveTab]);
 
-  const showToast = (message, type = 'info') => {
-    setToast({ message, type, id: Date.now() });
-    setTimeout(() => setToast(null), 4000);
-  };
+  const lastToastRef = useRef({ message: '', time: 0 });
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = useCallback((message, type = 'info') => {
+    if (!message) return;
+    const now = Date.now();
+    // Anti-flicker / anti-loop: ignore identical messages within 2.5 seconds
+    if (lastToastRef.current.message === message && (now - lastToastRef.current.time) < 2500) {
+      return;
+    }
+    lastToastRef.current = { message, time: now };
+
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+
+    setToast({ message, type, id: now });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimeoutRef.current = null;
+    }, 3500);
+  }, []);
 
   // Keyboard shortcut for Command Palette (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -214,6 +232,7 @@ export function AppProvider({ children }) {
     currentUser: null,
     getCurrentUser: () => auth.currentUser,
     setCurrentUser: (...args) => auth.setCurrentUser(...args),
+    sites: catalogAndSites.sites,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
@@ -531,6 +550,8 @@ export function AppProvider({ children }) {
         setActivePackDraft: shipmentsDomain.setActivePackDraft,
         syncActivePackDraftToCloud: shipmentsDomain.syncActivePackDraftToCloud,
         deleteShipment: shipmentsDomain.deleteShipment,
+        safeArchiveDraft: shipmentsDomain.safeArchiveDraft,
+        reconcileCompletedDrafts: shipmentsDomain.reconcileCompletedDrafts,
         batchImportShipments: shipmentsDomain.batchImportShipments,
         clearAllShipmentsData: shipmentsDomain.clearAllShipmentsData,
         saveShipment: shipmentsDomain.saveShipment,

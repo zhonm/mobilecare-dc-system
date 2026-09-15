@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -31,7 +31,7 @@ import {
   Eye
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
-import { isLockedConfirmedShipment, resolveSite } from '../utils/appContextHelpers';
+import { isLockedConfirmedShipment, resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
   isShipmentMetroManila,
@@ -58,6 +58,7 @@ export default function Shipments() {
     saveShipment,
     updateShipmentStatus,
     deleteShipment,
+    reconcileCompletedDrafts,
     confirmSiteReceive,
     partsRequests,
     updatePartsRequestStatus,
@@ -264,7 +265,7 @@ export default function Shipments() {
   };
 
   // Helper to normalize status
-  const getNormalizedStatus = (sh) => {
+  const getNormalizedStatus = useCallback((sh) => {
     if (!sh) return 'pending_pickup';
     if (isLockedConfirmedShipment(sh) || sh.status === 'received_confirmed' || sh.status === 'delivered') {
       return 'received_confirmed';
@@ -272,11 +273,14 @@ export default function Shipments() {
     if (sh.status === 'shipped' || sh.status === 'in_transit') {
       return 'shipped';
     }
+    if (sh.is_superseded || sh.status === 'completed_superseded' || isDraftSupersededOrFulfilled(sh, shipments, sites)) {
+      return 'superseded';
+    }
     if (sh.status === 'draft' || sh.status === 'packing') {
       return 'draft';
     }
     return 'pending_pickup';
-  };
+  }, [shipments, sites]);
 
   // Regional Summary Counts
   const regionalCounts = useMemo(() => {
@@ -286,6 +290,7 @@ export default function Shipments() {
 
     (shipments || []).forEach(sh => {
       if (!sh.items || sh.items.length === 0) return;
+      if (getNormalizedStatus(sh) === 'superseded') return;
       all++;
       if (isShipmentMetroManila(sh, sites)) {
         mm++;
@@ -295,7 +300,7 @@ export default function Shipments() {
     });
 
     return { all, mm, prov };
-  }, [shipments, sites]);
+  }, [shipments, sites, getNormalizedStatus]);
 
   // Status Summary Counts (dynamically scoped by active regional tab)
   const statusCounts = useMemo(() => {
@@ -312,8 +317,10 @@ export default function Shipments() {
       if (regionTab === 'METRO_MANILA' && !isShipmentMetroManila(sh, sites)) return;
       if (regionTab === 'PROVINCE' && !isShipmentProvince(sh, sites)) return;
 
-      validTotal++;
       const norm = getNormalizedStatus(sh);
+      if (norm === 'superseded') return; // Exclude superseded drafts from tab metrics
+
+      validTotal++;
       if (norm === 'received_confirmed') received++;
       else if (norm === 'shipped') shipped++;
       else if (norm === 'draft') draft++;
@@ -321,7 +328,7 @@ export default function Shipments() {
     });
 
     return { total: validTotal, pending, shipped, received, draft };
-  }, [shipments, regionTab, sites]);
+  }, [shipments, regionTab, sites, getNormalizedStatus]);
 
   // Operational KPI metrics across active regional filter
   const kpiMetrics = useMemo(() => {
@@ -376,7 +383,7 @@ export default function Shipments() {
       draftManifests,
       draftUnits
     };
-  }, [shipments, regionTab, sites]);
+  }, [shipments, regionTab, sites, getNormalizedStatus]);
 
   // Filtered shipments list (regional tab + status pill + search query), chronologically sorted newest-first
   const filteredShipments = useMemo(() => {
@@ -419,7 +426,7 @@ export default function Shipments() {
     });
 
     return sortShipmentsChronological(list, 'desc');
-  }, [shipments, regionTab, filterStatus, search, sites]);
+  }, [shipments, regionTab, filterStatus, search, sites, getNormalizedStatus]);
 
   // Recency Partitioning: Recent & Active vs Older Historical Archive
   const { recentShipments, olderShipments } = useMemo(() => {
@@ -1604,6 +1611,32 @@ export default function Shipments() {
           >
             <Calendar size={12} />
             <span>Today ({kpiMetrics.todayManifests})</span>
+          </button>
+
+          <button
+            className="btn btn-sm"
+            onClick={async () => {
+              if (typeof reconcileCompletedDrafts === 'function') {
+                await reconcileCompletedDrafts(null, { silent: false });
+              }
+            }}
+            style={{
+              background: '#f0f9ff',
+              color: '#0369a1',
+              borderColor: '#bae6fd',
+              fontWeight: 600,
+              fontSize: '12px',
+              borderRadius: '20px',
+              padding: '4px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              marginLeft: 'auto'
+            }}
+            title="Reconcile and synchronize draft manifests with completed shipments"
+          >
+            <RefreshCw size={12} />
+            <span>Sync Drafts</span>
           </button>
         </div>
       </div>

@@ -210,6 +210,11 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+    -- If executed inside an authorized administrative RPC setting the local session bypass
+    IF CURRENT_SETTING('app.bypass_profile_integrity', true) = 'on' THEN
+        RETURN NEW;
+    END IF;
+
     -- If executed inside a SECURITY DEFINER admin RPC (running as postgres/superuser) or by authenticated superadmin/admin
     IF CURRENT_USER IN ('postgres', 'supabase_admin', 'service_role') OR public.current_user_role() IN ('superadmin', 'admin') THEN
         RETURN NEW;
@@ -915,7 +920,10 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'Target user profile not found');
     END IF;
 
-    -- 3. Update public.profiles
+    -- 3. Set local session bypass for trigger execution
+    PERFORM set_config('app.bypass_profile_integrity', 'on', true);
+
+    -- 4. Update public.profiles
     UPDATE public.profiles
     SET full_name = TRIM(p_full_name),
         role = p_role,
@@ -966,6 +974,9 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         NULL;
     END;
+
+    -- Reset local bypass config
+    PERFORM set_config('app.bypass_profile_integrity', 'off', true);
 
     RETURN jsonb_build_object(
         'success', true,

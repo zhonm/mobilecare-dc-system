@@ -20,7 +20,8 @@ import {
   consolidatePurchaseOrdersList,
   consolidateDcIntakeRecordsList,
   isExplicitlyCleared,
-  formatAuditEntityDisplay
+  formatAuditEntityDisplay,
+  reconcileShipmentsAndDrafts
 } from '../utils/appContextHelpers';
 import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
@@ -1331,7 +1332,7 @@ export function useCloudSync({
           }
         } catch (e) {}
 
-        effectiveShipments = Array.from(shipmentMap.values())
+        const mappedShipments = Array.from(shipmentMap.values())
           .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !isDeletedOrCorruptedShipment(s))
           .map(s => {
             if (!s) return s;
@@ -1351,6 +1352,20 @@ export function useCloudSync({
               shipment_date: s.shipment_date || s.pickup_date || ''
             };
           });
+
+        // Automatically reconcile drafts against completed/shipped shipments so stale drafts are pruned
+        const effectiveSitesList = (dbSites && dbSites.length > 0) ? dbSites : (sites && sites.length > 0 ? sites : []);
+        const { reconciledList: reconciledShipments, supersededDraftIds } = reconcileShipmentsAndDrafts(mappedShipments, { removeSuperseded: true }, effectiveSitesList);
+        effectiveShipments = reconciledShipments;
+
+        // Clean superseded draft records from cloud saved_records if any were pruned
+        if (supabase && supersededDraftIds && supersededDraftIds.length > 0) {
+          supersededDraftIds.forEach(async (draftId) => {
+            try {
+              await supabase.from('saved_records').delete().eq('id', draftId);
+            } catch (e) {}
+          });
+        }
 
         if (effectiveShipments.length > 0) {
           setShipments(effectiveShipments);

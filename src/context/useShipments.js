@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber, isDraftSupersededOrFulfilled, reconcileShipmentsAndDrafts } from '../utils/appContextHelpers';
 import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 
@@ -36,7 +36,7 @@ export function useShipments({
       if (saved !== null) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed
+          const mapped = parsed
             .filter(s => {
               if (!s) return false;
               const sId = String(s.id || '').trim().toUpperCase();
@@ -63,6 +63,10 @@ export function useShipments({
                 saved_by_name: cleanPreparedBy
               };
             });
+
+          // Auto-reconcile: prune drafts that have already been fulfilled in shipped/delivered shipments
+          const { reconciledList } = reconcileShipmentsAndDrafts(mapped, { removeSuperseded: true }, sites);
+          return reconciledList;
         }
       }
       return [];
@@ -656,9 +660,18 @@ export function useShipments({
     setShipments(prev => {
       const currentList = Array.isArray(prev) ? prev : [];
       const isUpd = newShipment.id && currentList.some(s => s.id === newShipment.id);
-      computedNextList = isUpd 
+      let mergedList = isUpd 
         ? currentList.map(s => s.id === newShipment.id ? newShipment : s)
         : [newShipment, ...currentList.filter(s => s.id !== newShipment.id)];
+
+      // Auto-reconcile superseded drafts when a shipment is saved as shipped or received
+      if (newShipment.status === 'shipped' || newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') {
+        const { reconciledList } = reconcileShipmentsAndDrafts(mergedList, { removeSuperseded: true }, sites);
+        computedNextList = reconciledList;
+      } else {
+        computedNextList = mergedList;
+      }
+
       try {
         localStorage.setItem('mdc_shipments', JSON.stringify(computedNextList));
       } catch (e) {}
@@ -1120,6 +1133,137 @@ export function useShipments({
     return updatedShipment;
   };
 
+  const reconcileCompletedDrafts = useCallback(async (explicitShipments = null, options = { silent: false }) => {
+    const isSilent = Boolean(options?.silent);
+    const listToReconcile = Array.isArray(explicitShipments) ? explicitShipments : (shipments || []);
+    const { reconciledList, supersededDraftIds, count } = reconcileShipmentsAndDrafts(listToReconcile, { removeSuperseded: true }, sites);
+
+    if (count === 0) {
+      if (!isSilent) {
+        showToast?.('All packing drafts and manifests are already fully synchronized with Shipments.', 'info');
+      }
+      return { success: true, count: 0 };
+    }
+
+    setShipments(reconciledList);
+    try {
+      localStorage.setItem('mdc_shipments', JSON.stringify(reconciledList));
+    } catch (e) {}
+    dbStorage.setItem('mdc_shipments', reconciledList);
+
+    // Also clean any user draft localStorage keys matching superseded drafts
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('mdc_pack_draft_') || k === 'mdc_active_pack_draft')) {
+            try {
+              const d = JSON.parse(localStorage.getItem(k) || '{}');
+              if (
+                d &&
+                (supersededDraftIds.includes(d.id) ||
+                 supersededDraftIds.includes(d.invoice_ref) ||
+                 supersededDraftIds.includes(d.shipment_number) ||
+                 isDraftSupersededOrFulfilled(d, reconciledList, sites))
+              ) {
+                keysToRemove.push(k);
+              }
+            } catch (e) {}
+          }
+        }
+        keysToRemove.forEach(k => localStorage.removeItem(k));
+      }
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        for (const draftId of supersededDraftIds) {
+          try {
+            await supabase.from('saved_records').delete().eq('id', draftId);
+          } catch (delErr) {
+            try {
+              await supabase.from('saved_records').update({
+                notes: '__SUPERSEDED_DRAFT__',
+                snapshot_data: { isDeleted: true, isSuperseded: true },
+                updated_at: new Date().toISOString()
+              }).eq('id', draftId);
+            } catch (innerE) {}
+          }
+        }
+
+        await queuedSavedRecordsUpsert(supabase, {
+          id: 'master_shipments_registry',
+          record_type: 'shipments_registry',
+          period_label: 'Master Shipments Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master DC Outbound Shipments & Packing Lists',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            shipments: reconciledList,
+            updatedAt: new Date().toISOString()
+          },
+          updated_at: new Date().toISOString()
+        }, { debounceMs: 500 });
+      } catch (err) {
+        console.warn('Draft cloud reconciliation error:', err.message);
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('DRAFTS_RECONCILED', { count, supersededDraftIds });
+    }
+
+    showToast?.(`Synchronized & cleared ${count} old draft manifest(s) whose packages are completed in Shipments!`, 'success');
+    return { success: true, count, supersededDraftIds };
+  }, [shipments, sites, currentUser, showToast, broadcastCloudEvent]);
+
+  const safeArchiveDraft = useCallback(async (draftId) => {
+    if (!draftId) return { success: false, error: 'Draft ID required' };
+    const target = (shipments || []).find(s => s.id === draftId || s.invoice_ref === draftId || s.shipment_number === draftId);
+    if (!target) return { success: false, error: 'Draft not found' };
+
+    const targetId = target.id || draftId;
+    const targetRef = target.invoice_ref || '';
+    const cleanNextList = (shipments || []).filter(s => s.id !== targetId && s.invoice_ref !== targetRef);
+
+    setShipments(cleanNextList);
+    try {
+      localStorage.setItem('mdc_shipments', JSON.stringify(cleanNextList));
+    } catch (e) {}
+    dbStorage.setItem('mdc_shipments', cleanNextList);
+
+    if (supabase) {
+      try {
+        await supabase.from('saved_records').delete().eq('id', targetId);
+        await queuedSavedRecordsUpsert(supabase, {
+          id: 'master_shipments_registry',
+          record_type: 'shipments_registry',
+          period_label: 'Master Shipments Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          notes: 'Master DC Outbound Shipments & Packing Lists',
+          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+          snapshot_data: {
+            shipments: cleanNextList,
+            updatedAt: new Date().toISOString()
+          },
+          updated_at: new Date().toISOString()
+        }, { debounceMs: 500 });
+      } catch (e) {
+        console.warn('Cloud archive draft note:', e.message);
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('DRAFT_ARCHIVED', { draftId: targetId });
+    }
+
+    showToast?.(`Removed draft manifest ${target.invoice_ref || target.shipment_number}. Preserved all active inventory units.`, 'info');
+    return { success: true };
+  }, [shipments, currentUser, showToast, broadcastCloudEvent]);
+
   return {
     shipments,
     setShipments,
@@ -1128,6 +1272,8 @@ export function useShipments({
     syncActivePackDraftToCloud,
     clearShipmentDraftItems,
     deleteShipment,
+    safeArchiveDraft,
+    reconcileCompletedDrafts,
     batchImportShipments,
     clearAllShipmentsData,
     saveShipment,

@@ -43,9 +43,9 @@
   --info-dark: #0369a1;
   
   --sidebar-bg: #0f172a;
-  --sidebar-text: #cbd5e1;
-  --sidebar-hover: #1e293b;
-  --sidebar-active: #3b82f6;
+  --sidebar-text: #94a3b8;
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+  --sidebar-active: #38bdf8;
   
   /* Radii & Shadows */
   --radius-sm: 6px;

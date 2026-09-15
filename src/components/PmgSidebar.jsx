@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite } from '../utils/appContextHelpers';
-import mobileCareLogo from '../assets/mobilecare_logo.png';
+import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
 import {
   Inbox,
   Barcode,
@@ -156,22 +156,24 @@ export default function PmgSidebar() {
       <aside className={`sidebar pmg-sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
         {/* Brand Header */}
         <div className="sidebar-header">
-          <div className="sidebar-logo-img-wrapper">
-            <img
-              src={mobileCareLogo}
-              alt="Mobile Care"
-              className="sidebar-logo-img"
-            />
-          </div>
-          <div className="sidebar-brand">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <h2>MobileCare</h2>
-              <span className="pmg-role-badge">PMG</span>
+          <div className="sidebar-brand-wrapper">
+            <div className="sidebar-logo-card">
+              <img
+                src={mobileCareLogo}
+                alt="Mobile Care"
+                className="sidebar-logo-img"
+              />
             </div>
-            <p className="sidebar-subtitle">
-              <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
-              Branch Operations Portal
-            </p>
+            <div className="sidebar-brand-info">
+              <div className="sidebar-brand-title-row">
+                <h2 className="sidebar-brand-title">MobileCare</h2>
+                <span className="pmg-role-badge">PMG</span>
+              </div>
+              <div className="sidebar-company-row">
+                <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
+                <span className="sidebar-company-name">Mobile Care Services Inc.</span>
+              </div>
+            </div>
           </div>
           <button
             type="button"

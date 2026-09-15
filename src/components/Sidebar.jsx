@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveSite } from '../utils/appContextHelpers';
-import mobileCareLogo from '../assets/mobilecare_logo.png';
+import { resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
+import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
 import {
   LayoutDashboard,
   UploadCloud,
@@ -43,7 +43,16 @@ export default function Sidebar() {
   const [navSearch, setNavSearch] = useState('');
 
   const openPOsCount = purchaseOrders.filter(p => p.status !== 'closed' && p.status !== 'received').length;
-  const pendingShipmentsCount = shipments.filter(s => s.status === 'draft' || s.status === 'packing').length;
+  const pendingShipmentsCount = useMemo(() => {
+    return (shipments || []).filter(s => {
+      if (!s || !Array.isArray(s.items) || s.items.length === 0) return false;
+      const st = String(s.status || '').toLowerCase().trim();
+      if (st !== 'draft' && st !== 'packing' && st !== 'pending_pickup') return false;
+      if (s.is_superseded || st === 'completed_superseded') return false;
+      if (isDraftSupersededOrFulfilled(s, shipments, sites)) return false;
+      return true;
+    }).length;
+  }, [shipments, sites]);
   const pendingRequestsCount = (partsRequests || []).filter(r => r.status === 'pending').length;
 
   const userSite = useMemo(() => {
@@ -103,19 +112,21 @@ export default function Sidebar() {
       <aside className={`sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
         {/* Brand Header */}
         <div className="sidebar-header">
-          <div className="sidebar-logo-img-wrapper">
-            <img
-              src={mobileCareLogo}
-              alt="Mobile Care"
-              className="sidebar-logo-img"
-            />
-          </div>
-          <div className="sidebar-brand">
-            <h2>DC System</h2>
-            <p className="sidebar-subtitle">
-              <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
-              Mobile Care Services Phils.
-            </p>
+          <div className="sidebar-brand-wrapper">
+            <div className="sidebar-logo-card">
+              <img
+                src={mobileCareLogo}
+                alt="Mobile Care"
+                className="sidebar-logo-img"
+              />
+            </div>
+            <div className="sidebar-brand-info">
+              <h2 className="sidebar-brand-title">DC System</h2>
+              <div className="sidebar-company-row">
+                <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
+                <span className="sidebar-company-name">Mobile Care Services Inc.</span>
+              </div>
+            </div>
           </div>
           <button
             type="button"

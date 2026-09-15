@@ -12,6 +12,10 @@ import {
 } from '../utils/pdfGenerator';
 import { resolvePartInfo } from '../utils/partResolver';
 import {
+  getPartCategory,
+  getCategoryBadgeStyle
+} from '../utils/categoryFilter';
+import {
   BarChart,
   Bar,
   XAxis,
@@ -65,7 +69,9 @@ const CHART_COLORS = [
 const COMMODITY_COLORS = {
   BATTERY: '#15803d',
   DISPLAY: '#0284c7',
-  CAMERA: '#7c3aed',
+  CAMERA: '#db2777',
+  BACK_GLASS: '#0d9488',
+  MID_REAR: '#7c3aed',
   OTHER: '#64748b'
 };
 
@@ -170,7 +176,9 @@ export default function StockTransferReports() {
     isAutoRefreshing,
     autoRefreshData,
     canEdit,
-    isReadOnly
+    isReadOnly,
+    selectedCategories,
+    isPartMatchingCategoryFilter
   } = useApp();
 
   const fileInputRef = useRef(null);
@@ -188,6 +196,12 @@ export default function StockTransferReports() {
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Synchronize local category filter when global header categories change
+  useEffect(() => {
+    setCategoryFilter('ALL');
+    setCurrentPage(1);
+  }, [selectedCategories]);
 
   // Unique lists for filter dropdowns
   const uniqueFromStocks = useMemo(() => {
@@ -270,22 +284,30 @@ export default function StockTransferReports() {
       }
       if (fromFilter !== 'ALL' && r.from_stock !== fromFilter) return false;
       if (toFilter !== 'ALL' && r.to_stock !== toFilter) return false;
+
+      const resolved = resolvePartInfo(r.product_code, parts);
+      const partObj = {
+        ...r,
+        description: r.product_name || resolved?.description || '',
+        category_id: resolved?.category_id || r.category_id || ''
+      };
+
       if (categoryFilter !== 'ALL') {
-        const d = (r.product_name || '').toLowerCase();
-        if (categoryFilter === 'BATTERY' && !d.includes('battery')) return false;
-        if (categoryFilter === 'DISPLAY' && !d.includes('display')) return false;
-        if (categoryFilter === 'CAMERA' && !d.includes('camera')) return false;
-        if (categoryFilter === 'OTHER' && (d.includes('battery') || d.includes('display') || d.includes('camera'))) return false;
+        const itemCat = getPartCategory(partObj);
+        if (categoryFilter !== itemCat) return false;
+      } else if (selectedCategories && selectedCategories.length > 0) {
+        if (!isPartMatchingCategoryFilter(partObj, selectedCategories)) return false;
       }
+
       return true;
     });
-  }, [stockTransferReports, searchQuery, fromFilter, toFilter, categoryFilter]);
+  }, [stockTransferReports, searchQuery, fromFilter, toFilter, categoryFilter, selectedCategories, parts, isPartMatchingCategoryFilter]);
 
   // ── Analytics ──────────────────────────────────────────────────────────────
   const analytics = useMemo(() => {
     let totalUnits = 0, totalVal = 0;
-    let battery = 0, display = 0, camera = 0, other = 0;
-    let batteryVal = 0, displayVal = 0, cameraVal = 0, otherVal = 0;
+    let battery = 0, display = 0, camera = 0, backGlass = 0, midRear = 0, other = 0;
+    let batteryVal = 0, displayVal = 0, cameraVal = 0, backGlassVal = 0, midRearVal = 0, otherVal = 0;
     const routeMap = {};
     const partMap = {};
     const originMap = {};
@@ -296,19 +318,32 @@ export default function StockTransferReports() {
     filteredRecords.forEach(r => {
       const q = Number(r.transfer_quantity) || 1;
       const v = getRecordValuation(r, parts);
-      const desc = (r.product_name || '').toLowerCase();
       totalUnits += q;
       totalVal += v;
 
-      if (desc.includes('battery')) {
+      const resolved = resolvePartInfo(r.product_code, parts);
+      const partObj = {
+        ...r,
+        description: r.product_name || resolved?.description || '',
+        category_id: resolved?.category_id || r.category_id || ''
+      };
+      const cat = getPartCategory(partObj);
+
+      if (cat === 'BATTERY') {
         battery += q;
         batteryVal += v;
-      } else if (desc.includes('display') || desc.includes('screen')) {
+      } else if (cat === 'DISPLAY') {
         display += q;
         displayVal += v;
-      } else if (desc.includes('camera')) {
+      } else if (cat === 'CAMERA') {
         camera += q;
         cameraVal += v;
+      } else if (cat === 'BACK_GLASS') {
+        backGlass += q;
+        backGlassVal += v;
+      } else if (cat === 'MID_REAR') {
+        midRear += q;
+        midRearVal += v;
       } else {
         other += q;
         otherVal += v;
@@ -332,7 +367,7 @@ export default function StockTransferReports() {
       if (!partMap[pk]) partMap[pk] = {
         code: pk,
         name: r.product_name || '',
-        category: desc.includes('battery') ? 'BATTERY' : (desc.includes('display') || desc.includes('screen')) ? 'DISPLAY' : desc.includes('camera') ? 'CAMERA' : 'OTHER',
+        category: cat,
         count: 0,
         qty: 0,
         val: 0
@@ -373,25 +408,24 @@ export default function StockTransferReports() {
     const provPct = totalTransfers > 0 ? (provShipments / totalTransfers) * 100 : 0;
 
     // Top N charts data
-    const topRoutesChart = allRoutes.slice(0, 10).map(rt => ({
-      name: formatRouteDisplayName(rt.from, rt.to),
-      fullName: `${rt.from} → ${rt.to}`,
-      from: rt.from,
-      to: rt.to,
-      qty: rt.qty,
-      val: rt.val,
-      count: rt.count,
-      pctOfTotal: totalUnits > 0 ? (rt.qty / totalUnits) * 100 : 0
+    const topRoutesChart = allRoutes.slice(0, 5).map(r => ({
+      name: formatRouteDisplayName(r.from, r.to),
+      fullName: `${r.from} → ${r.to}`,
+      from: r.from,
+      to: r.to,
+      qty: r.qty,
+      val: r.val,
+      count: r.count
     }));
 
-    const topPartsChart = allParts.slice(0, 10).map(p => ({
+    const topPartsChart = allParts.slice(0, 5).map(p => ({
       name: p.code,
-      label: p.name.length > 28 ? p.name.substring(0, 28) + '…' : p.name,
       fullName: p.name,
+      label: p.name ? `${p.code} - ${p.name.substring(0, 24)}…` : p.code,
       category: p.category,
       qty: p.qty,
       val: p.val,
-      pctOfTotal: totalUnits > 0 ? (p.qty / totalUnits) * 100 : 0
+      count: p.count
     }));
 
     const topOriginsChart = Object.entries(originMap)
@@ -411,6 +445,8 @@ export default function StockTransferReports() {
       { name: 'Battery', value: battery, val: batteryVal, color: COMMODITY_COLORS.BATTERY },
       { name: 'Display', value: display, val: displayVal, color: COMMODITY_COLORS.DISPLAY },
       { name: 'Camera', value: camera, val: cameraVal, color: COMMODITY_COLORS.CAMERA },
+      { name: 'Back Glass', value: backGlass, val: backGlassVal, color: COMMODITY_COLORS.BACK_GLASS },
+      { name: 'Mid/Rear', value: midRear, val: midRearVal, color: COMMODITY_COLORS.MID_REAR },
       { name: 'Other', value: other, val: otherVal, color: COMMODITY_COLORS.OTHER }
     ].filter(d => d.value > 0).map(d => ({
       ...d,
@@ -432,8 +468,8 @@ export default function StockTransferReports() {
       totalUnits,
       totalVal,
       totalValPHP,
-      battery, display, camera, other,
-      batteryVal, displayVal, cameraVal, otherVal,
+      battery, display, camera, backGlass, midRear, other,
+      batteryVal, displayVal, cameraVal, backGlassVal, midRearVal, otherVal,
       uniqueOrigins: Object.keys(originMap).length,
       uniqueDests: Object.keys(destMap).length,
       allRoutes,
@@ -715,10 +751,12 @@ function FilterBar({
             <div style={{ display: 'flex', background: '#f8fafc', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0', gap: '2px' }}>
               {[
                 { id: 'ALL', label: 'All Items' },
-                { id: 'BATTERY', label: `Battery (${analytics.battery})` },
-                { id: 'DISPLAY', label: `Display (${analytics.display})` },
-                { id: 'CAMERA', label: `Camera (${analytics.camera})` },
-                { id: 'OTHER', label: `Other (${analytics.other})` }
+                { id: 'BATTERY', label: `Battery (${analytics.battery || 0})` },
+                { id: 'DISPLAY', label: `Display (${analytics.display || 0})` },
+                { id: 'CAMERA', label: `Camera (${analytics.camera || 0})` },
+                ...((analytics.backGlass || 0) > 0 ? [{ id: 'BACK_GLASS', label: `Back Glass (${analytics.backGlass})` }] : []),
+                ...((analytics.midRear || 0) > 0 ? [{ id: 'MID_REAR', label: `Mid/Rear (${analytics.midRear})` }] : []),
+                { id: 'OTHER', label: `Other (${analytics.other || 0})` }
               ].map(cat => {
                 const isSelected = categoryFilter === cat.id;
                 return (
@@ -1120,8 +1158,8 @@ function KpiCards({ analytics }) {
 function ExecutiveSummaryView({ analytics, setViewMode }) {
   const {
     totalUnits,
-    battery, display, camera, other,
-    batteryVal, displayVal, cameraVal, otherVal,
+    battery, display, camera, backGlass = 0, midRear = 0, other,
+    batteryVal, displayVal, cameraVal, backGlassVal = 0, midRearVal = 0, otherVal,
     topRoutesChart,
     topPartsChart,
     mmShipments,
@@ -1142,6 +1180,8 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
   const bPct = totalUnits > 0 ? (battery / totalUnits) * 100 : 0;
   const dPct = totalUnits > 0 ? (display / totalUnits) * 100 : 0;
   const cPct = totalUnits > 0 ? (camera / totalUnits) * 100 : 0;
+  const bgPct = totalUnits > 0 ? (backGlass / totalUnits) * 100 : 0;
+  const mrPct = totalUnits > 0 ? (midRear / totalUnits) * 100 : 0;
   const oPct = totalUnits > 0 ? (other / totalUnits) * 100 : 0;
 
   return (
@@ -1205,6 +1245,28 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
               title={`Camera: ${camera.toLocaleString()} units (${cPct.toFixed(1)}%)`}
             />
           )}
+          {backGlass > 0 && (
+            <div
+              style={{
+                width: `${bgPct}%`,
+                background: COMMODITY_COLORS.BACK_GLASS,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Back Glass: ${backGlass.toLocaleString()} units (${bgPct.toFixed(1)}%)`}
+            />
+          )}
+          {midRear > 0 && (
+            <div
+              style={{
+                width: `${mrPct}%`,
+                background: COMMODITY_COLORS.MID_REAR,
+                height: '100%',
+                transition: 'width 0.4s ease'
+              }}
+              title={`Mid/Rear: ${midRear.toLocaleString()} units (${mrPct.toFixed(1)}%)`}
+            />
+          )}
           {other > 0 && (
             <div
               style={{
@@ -1218,7 +1280,7 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
           )}
         </div>
 
-        {/* 4 Commodity Legend / Stat Cards */}
+        {/* Commodity Legend / Stat Cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
           {[
             {
@@ -1248,6 +1310,24 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
               bg: '#faf5ff',
               border: '#e9d5ff'
             },
+            ...((backGlass > 0) ? [{
+              name: 'Back Glass Units',
+              count: backGlass,
+              pct: bgPct,
+              val: backGlassVal,
+              color: COMMODITY_COLORS.BACK_GLASS,
+              bg: '#f0fdfa',
+              border: '#99f6e4'
+            }] : []),
+            ...((midRear > 0) ? [{
+              name: 'Mid/Rear Systems',
+              count: midRear,
+              pct: mrPct,
+              val: midRearVal,
+              color: COMMODITY_COLORS.MID_REAR,
+              bg: '#f5f3ff',
+              border: '#ddd6fe'
+            }] : []),
             {
               name: 'Other Components',
               count: other,
@@ -1383,8 +1463,7 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {topPartsChart.slice(0, 5).map((p, idx) => {
-              const badgeColor = p.category === 'BATTERY' ? '#15803d' : p.category === 'DISPLAY' ? '#0284c7' : p.category === 'CAMERA' ? '#7c3aed' : '#64748b';
-              const badgeBg = p.category === 'BATTERY' ? '#dcfce7' : p.category === 'DISPLAY' ? '#e0f2fe' : p.category === 'CAMERA' ? '#faf5ff' : '#f1f5f9';
+              const badgeStyle = getCategoryBadgeStyle(p.category);
 
               return (
                 <div
@@ -1413,8 +1492,8 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
                         <span style={{ fontSize: '12.5px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
                           {p.name}
                         </span>
-                        <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: badgeBg, color: badgeColor }}>
-                          {p.category}
+                        <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: badgeStyle.bg, color: badgeStyle.color, border: `1px solid ${badgeStyle.border || 'transparent'}` }}>
+                          {badgeStyle.label || p.category}
                         </span>
                       </div>
                       <div style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
@@ -1580,8 +1659,14 @@ function LedgerView({ paginatedRecords, filteredRecords, analytics, parts, pageS
           <tbody>
             {paginatedRecords.map((r, idx) => {
               const absIdx = pageSize === 'ALL' ? idx + 1 : (currentPage - 1) * pageSize + idx + 1;
-              const isDisplay = (r.product_name || '').toLowerCase().includes('display');
-              const isBattery = (r.product_name || '').toLowerCase().includes('battery');
+              const resolved = resolvePartInfo(r.product_code, parts);
+              const partObj = {
+                ...r,
+                description: r.product_name || resolved?.description || '',
+                category_id: resolved?.category_id || r.category_id || ''
+              };
+              const itemCat = getPartCategory(partObj);
+              const badgeStyle = getCategoryBadgeStyle(itemCat);
               const rowVal = getRecordValuation(r, parts);
               return (
                 <tr key={r.id || idx} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
@@ -1596,10 +1681,16 @@ function LedgerView({ paginatedRecords, filteredRecords, analytics, parts, pageS
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '11.5px' }}>{r.product_code}</td>
                   <td style={{ textAlign: 'left', fontSize: '11.5px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <span style={{ fontSize: '9.5px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px',
-                        background: isDisplay ? '#e0f2fe' : isBattery ? '#dcfce7' : '#f1f5f9',
-                        color: isDisplay ? '#0369a1' : isBattery ? '#15803d' : '#64748b' }}>
-                        {isDisplay ? 'DISPLAY' : isBattery ? 'BATTERY' : 'PART'}
+                      <span style={{
+                        fontSize: '9.5px',
+                        fontWeight: 700,
+                        padding: '1px 5px',
+                        borderRadius: '3px',
+                        background: badgeStyle.bg,
+                        color: badgeStyle.color,
+                        border: `1px solid ${badgeStyle.border || 'transparent'}`
+                      }}>
+                        {badgeStyle.label || itemCat}
                       </span>
                       <span>{r.product_name}</span>
                     </div>

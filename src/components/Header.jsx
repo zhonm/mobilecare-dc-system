@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
@@ -9,8 +8,6 @@ export default function Header() {
   const {
     activeTab,
     setActiveTab,
-    searchQuery,
-    setSearchQuery,
     cloudSyncStatus,
     isAutoRefreshing,
     lastSyncedAt,
@@ -29,10 +26,7 @@ export default function Header() {
     pmgSubTab
   } = useApp();
 
-  const [isSyncing, setIsSyncing] = useState(false);
-
   const handleManualSync = async () => {
-    setIsSyncing(true);
     try {
       // Clear any stale local storage cache while keeping session
       await clearOperationalLocalStorage({ keepSession: true });
@@ -43,8 +37,6 @@ export default function Header() {
     } catch (err) {
       console.error('Manual sync error:', err);
       showToast('Error syncing with cloud database', 'error');
-    } finally {
-      setTimeout(() => setIsSyncing(false), 500);
     }
   };
 
@@ -63,7 +55,7 @@ export default function Header() {
     allocation: { title: 'Inventory Allocation Matrix', section: 'Planning', showCategories: true },
     'scan-out': { title: 'Pack Scan-Out & Manifest', section: 'Warehouse Operations', showCategories: false },
     shipments: { title: 'Outbound Shipments', section: 'Distribution', showCategories: false },
-    reports: { title: 'Stock Transfer Reports', section: 'Reports & Analytics', showCategories: false },
+    reports: { title: 'Stock Transfer Reports', section: 'Reports & Analytics', showCategories: true },
     'forecast-reports': { title: 'Forecasting Reports & Analytics', section: 'Reports & Analytics', showCategories: true },
     audit: { title: 'Serialized Audit Trail', section: 'Traceability', showCategories: false },
     settings: { title: 'Parts Master Catalog', section: 'Admin', showCategories: true },
@@ -174,8 +166,10 @@ export default function Header() {
               ? 'Synchronizing latest data from cloud database...'
               : cloudSyncStatus?.isSaving
               ? 'Saving changes to database...'
-              : `Connected to Supabase Realtime. Verified at ${formattedSyncTime}`
+              : `Connected to Supabase Realtime. Verified at ${formattedSyncTime}. Click to refresh.`
           }
+          onClick={handleManualSync}
+          style={{ cursor: 'pointer' }}
         >
           {!isSupabaseConfigured ? (
             <>
@@ -221,37 +215,22 @@ export default function Header() {
           title="Search parts, serials (Cmd+K)"
           aria-label="Search"
         >
-          <Search size={15} />
+          <Search size={16} />
         </button>
 
         {/* Global Command Palette / Search Trigger */}
-        <div
-          className="search-input-box"
-          onClick={() => setIsCommandPaletteOpen(true)}
-          style={{ cursor: 'pointer' }}
-          title="Open Command Palette & Global Search (Cmd+K / Ctrl+K)"
-        >
-          <Search size={14} />
-          <input
-            type="text"
-            placeholder="Search parts, serials..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onFocus={() => setIsCommandPaletteOpen(true)}
-            readOnly
-          />
-          <kbd className="search-shortcut-badge">⌘K</kbd>
-        </div>
-
-        {/* Force Manual Cloud Sync Button */}
         <button
-          className="header-icon-btn"
-          onClick={handleManualSync}
-          disabled={isSyncing || isAutoRefreshing}
-          title="Force refresh data from Cloud Database"
+          type="button"
+          className="header-search-btn search-input-box"
+          onClick={() => setIsCommandPaletteOpen(true)}
+          title="Open Command Palette & Global Search (Cmd+K / Ctrl+K)"
+          aria-label="Search parts, serials"
         >
-          <RefreshCw size={13} className={isSyncing || isAutoRefreshing ? 'spin' : ''} />
-          <span className="btn-label-responsive">Sync DB</span>
+          <div className="header-search-left">
+            <Search size={15} className="header-search-icon" />
+            <span className="header-search-placeholder">Search parts, serials...</span>
+          </div>
+          <kbd className="header-search-shortcut">⌘K</kbd>
         </button>
 
         {/* Quick Scan Switcher Group */}

@@ -36,7 +36,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
-import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
+import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import { cleanSerialNumberInput, extractSerialNumber } from '../utils/serialTracker';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
@@ -75,6 +75,8 @@ export default function ScanOutPacking() {
     saveShipment,
     updateShipmentStatus,
     deleteShipment,
+    safeArchiveDraft,
+    reconcileCompletedDrafts,
     addScanOutUnit,
     removeScanOutUnit,
     batchAddScanOutUnits,
@@ -260,6 +262,39 @@ export default function ScanOutPacking() {
     }
   }, [currentShipment, shipments, userDraftStorageKey]);
 
+  // If active workstation draft has already been fulfilled/shipped, reset workstation to fresh draft
+  useEffect(() => {
+    if (currentShipment && currentShipment.id && isDraftSupersededOrFulfilled(currentShipment, shipments, sites)) {
+      try {
+        localStorage.removeItem(userDraftStorageKey);
+        localStorage.removeItem('mdc_active_pack_draft');
+      } catch (e) {}
+      setCurrentShipment({
+        id: `ship-${Date.now()}`,
+        shipment_number: generateNextShipmentNumber(shipments),
+        invoice_ref: generateNextInvoiceRef(shipments),
+        site_id: '',
+        week_number: 1,
+        created_date: new Date().toLocaleDateString('en-US'),
+        shipment_date: '',
+        carrier: 'Lalamove',
+        courier: 'Lalamove',
+        shipping_mode: '',
+        tracking_number: '',
+        transfer_slip_number: '',
+        total_boxes: 1,
+        status: 'draft',
+        prepared_by_name: currentUser?.fullName || 'Zhon Manaois',
+        verified_by_name: 'Anjo Alcazar',
+        pickup_by_name: '',
+        receiving_signature: '',
+        remarks: 'KGB PARTS',
+        items: []
+      });
+      setSelectedSiteId('');
+    }
+  }, [shipments, sites, currentShipment, userDraftStorageKey, currentUser]);
+
   // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
   const currentItems = useMemo(() => currentShipment?.items || [], [currentShipment]);
   const currentItemsRef = useRef(currentItems);
@@ -277,6 +312,15 @@ export default function ScanOutPacking() {
       }
     } catch (e) {}
   }, []);
+
+  // Auto-synchronize and reconcile active drafts against completed shipments on initial mount (silent background operation)
+  const hasMountedSyncRef = useRef(false);
+  useEffect(() => {
+    if (!hasMountedSyncRef.current && typeof reconcileCompletedDrafts === 'function') {
+      hasMountedSyncRef.current = true;
+      reconcileCompletedDrafts(null, { silent: true });
+    }
+  }, [reconcileCompletedDrafts]);
 
   const sendPresence = useCallback((isPacking = true, explicitItems = null) => {
     if (!currentUser || !broadcastPackingPresence) return;
@@ -984,9 +1028,15 @@ export default function ScanOutPacking() {
     return (shipments || []).filter(s => {
       if (!s || !Array.isArray(s.items) || s.items.length === 0) return false;
       const st = String(s.status || '').toLowerCase().trim();
-      return st === 'draft' || st === 'pending_pickup' || st === 'packing' || st === 'in_progress' || st === 'saved' || !st;
+      if (st === 'shipped' || st === 'received_confirmed' || st === 'delivered' || s.is_superseded || st === 'completed_superseded') {
+        return false;
+      }
+      if (isDraftSupersededOrFulfilled(s, shipments, sites)) {
+        return false;
+      }
+      return st === 'draft' || st === 'pending_pickup' || st === 'ready_for_pickup' || st === 'packing' || st === 'in_progress' || st === 'saved' || !st;
     });
-  }, [shipments]);
+  }, [shipments, sites]);
 
   const handleSimulatePack = (unit, e) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
@@ -2959,6 +3009,30 @@ export default function ScanOutPacking() {
                 <span>Mark All Ready for Pickup</span>
               </button>
             )}
+            <button
+              className="btn btn-sm"
+              onClick={async () => {
+                if (typeof reconcileCompletedDrafts === 'function') {
+                  await reconcileCompletedDrafts(null, { silent: false });
+                }
+              }}
+              style={{
+                padding: '4px 10px',
+                fontSize: '11.5px',
+                background: '#f0f9ff',
+                color: '#0369a1',
+                borderColor: '#bae6fd',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              title="Synchronize and reconcile active drafts with completed shipments"
+            >
+              <RefreshCw size={13} />
+              <span>Sync with Shipments</span>
+            </button>
             <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
               <Database size={11} style={{ display: 'inline', marginRight: '4px' }} />
               {draftShipments.length} Active PL{draftShipments.length === 1 ? '' : 's'}
@@ -3174,25 +3248,43 @@ export default function ScanOutPacking() {
                           <FileSpreadsheet size={12} color="#16a34a" />
                           <span>XLSX</span>
                         </button>
-                        {canUserDeleteRecord(s, currentUser) ? (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={async () => {
+                            if (window.confirm(`Dismiss draft manifest "${s.invoice_ref || s.shipment_number}" from workstation? (Completed shipments and inventory stock remain preserved)`)) {
+                              if (typeof safeArchiveDraft === 'function') {
+                                await safeArchiveDraft(s.id);
+                              } else if (typeof deleteShipment === 'function') {
+                                await deleteShipment(s.id);
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '11.5px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            background: '#fef2f2',
+                            color: '#dc2626',
+                            borderColor: '#fecaca',
+                            fontWeight: 600
+                          }}
+                          title="Dismiss draft from active list (preserves inventory and completed shipments)"
+                        >
+                          <Trash2 size={12} />
+                          <span>Dismiss</span>
+                        </button>
+                        {canUserDeleteRecord(s, currentUser) && (
                           <button
                             className="btn btn-danger btn-sm"
                             onClick={() => {
-                              if (window.confirm(`Delete draft packing list "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
+                              if (window.confirm(`Permanently delete draft packing list "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
                                 deleteShipment(s.id);
                               }
                             }}
-                            title="Delete Draft"
+                            title="Delete Draft and Revert Units to Stock"
                             style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        ) : (
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            disabled
-                            style={{ padding: '4px 8px', fontSize: '11.5px', opacity: 0.4, cursor: 'not-allowed' }}
-                            title={`Only ${s.prepared_by_name || s.saved_by_name || 'the creator'} can delete this draft`}
                           >
                             <Trash2 size={12} />
                           </button>

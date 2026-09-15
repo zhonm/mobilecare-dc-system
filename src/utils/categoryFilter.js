@@ -66,7 +66,7 @@ export function getPartCategory(itemOrDesc) {
   if (!itemOrDesc) return 'OTHER';
   const desc = typeof itemOrDesc === 'string'
     ? itemOrDesc.toLowerCase().trim()
-    : String(itemOrDesc.description || itemOrDesc.part_name || itemOrDesc.name || '').toLowerCase().trim();
+    : String(itemOrDesc.description || itemOrDesc.part_name || itemOrDesc.name || itemOrDesc.product_name || itemOrDesc.part_description || '').toLowerCase().trim();
 
   const cat = typeof itemOrDesc === 'object'
     ? String(itemOrDesc.category_id || itemOrDesc.category || '').toLowerCase().trim()

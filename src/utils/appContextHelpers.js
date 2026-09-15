@@ -1669,3 +1669,335 @@ export function formatAuditEntityDisplay(log) {
   };
 }
 
+/**
+ * Checks if two shipment records are destined for the same service site.
+ */
+export function areShipmentSitesEquivalent(sh1, sh2, sitesList = []) {
+  if (!sh1 || !sh2) return false;
+
+  const effectiveSites = (Array.isArray(sitesList) && sitesList.length > 0)
+    ? sitesList
+    : (() => {
+        try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+      })();
+
+  const getSiteTokens = (sh) => {
+    if (!sh) return [];
+    const tokens = [];
+    const add = (v) => {
+      if (v && typeof v === 'string' && v.trim()) tokens.push(v.trim());
+    };
+    add(sh.site_id);
+    add(sh.siteId);
+    add(sh.destination_site_id);
+    add(sh.destinationSiteId);
+    add(sh.dest_site_id);
+    add(sh.to_site_id);
+    add(sh.site_code);
+    add(sh.siteCode);
+    add(sh.destination_site_code);
+    add(sh.destinationSiteCode);
+    add(sh.dest_site_code);
+    add(sh.site_name);
+    add(sh.siteName);
+    add(sh.destination_site_name);
+    add(sh.destinationSiteName);
+    add(sh.dest_site_name);
+    add(sh.destination);
+    add(sh.branch);
+    add(sh.branch_name);
+    add(sh.branch_code);
+
+    if (sh.destinationSite && typeof sh.destinationSite === 'object') {
+      add(sh.destinationSite.id);
+      add(sh.destinationSite.code);
+      add(sh.destinationSite.name);
+    }
+    if (sh.site && typeof sh.site === 'object') {
+      add(sh.site.id);
+      add(sh.site.code);
+      add(sh.site.name);
+    }
+    return tokens;
+  };
+
+  const tokens1 = getSiteTokens(sh1);
+  const tokens2 = getSiteTokens(sh2);
+
+  // 1. Direct exact match between any tokens
+  for (const t1 of tokens1) {
+    for (const t2 of tokens2) {
+      if (t1.toLowerCase() === t2.toLowerCase()) {
+        const clean = t1.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (!clean.includes('dc') && clean !== 'sitedc') {
+          return true;
+        }
+      }
+    }
+  }
+
+  // 2. Resolve with resolveSite
+  const resolvedList1 = tokens1.map(t => resolveSite(t, effectiveSites)).filter(Boolean);
+  const resolvedList2 = tokens2.map(t => resolveSite(t, effectiveSites)).filter(Boolean);
+
+  for (const r1 of resolvedList1) {
+    for (const r2 of resolvedList2) {
+      if (r1.id && r2.id && String(r1.id).toLowerCase() === String(r2.id).toLowerCase() && !isDcSite(r1.id, effectiveSites)) return true;
+      if (r1.code && r2.code && String(r1.code).toLowerCase() === String(r2.code).toLowerCase() && !isDcSite(r1.code, effectiveSites)) return true;
+    }
+  }
+
+  // 3. Normalized keyword match (e.g. 'gb3', 'bhs', 'ppm', 'gl5', 'moa', 'sms', 'fes', 'vn', 'lau')
+  const normalize = str => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const stopWords = new Set(['site', 'branch', 'mobilecare', 'dc', 'dcmdc', 'service', 'hub', 'ph', 'philippines', 'inc', 'app', 'asp']);
+
+  for (const t1 of tokens1) {
+    const n1 = normalize(t1);
+    if (!n1 || stopWords.has(n1) || n1.includes('dc') || n1.length < 2) continue;
+
+    for (const t2 of tokens2) {
+      const n2 = normalize(t2);
+      if (!n2 || stopWords.has(n2) || n2.includes('dc') || n2.length < 2) continue;
+
+      if (n1 === n2 || (n1.length >= 3 && n2.includes(n1)) || (n2.length >= 3 && n1.includes(n2))) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Extracts sequence suffix letter(s) from invoice ref or shipment number.
+ * e.g. DCOWNED#091026H -> 'H', DCOWNED#091226AA -> 'AA'
+ */
+export function extractInvoiceSequenceLetter(ref) {
+  if (!ref) return null;
+  const clean = String(ref).trim().toUpperCase();
+  const m = clean.match(/DCOWNED#?\d{6}([A-Z]+)/);
+  if (m) return m[1];
+  const m2 = clean.match(/([A-Z]+)$/);
+  if (m2) return m2[1];
+  return null;
+}
+
+/**
+ * Determines if a draft shipment record is superseded or already fulfilled
+ * by an active or completed outbound shipment (shipped, received_confirmed, delivered, in_transit).
+ */
+export function isDraftSupersededOrFulfilled(draft, allShipments = [], sitesList = []) {
+  if (!draft) return false;
+  const status = String(draft.status || '').toLowerCase().trim();
+  if (status === 'completed_superseded' || status === 'superseded' || draft.is_superseded === true) {
+    return true;
+  }
+  // Completed shipments themselves are not "superseded drafts", they are completed dispatches
+  if (
+    status === 'shipped' ||
+    status === 'in_transit' ||
+    status === 'in-transit' ||
+    status === 'received_confirmed' ||
+    status === 'delivered' ||
+    status === 'received' ||
+    status === 'completed' ||
+    isLockedConfirmedShipment(draft)
+  ) {
+    return false;
+  }
+
+  const effectiveSites = (Array.isArray(sitesList) && sitesList.length > 0)
+    ? sitesList
+    : (() => {
+        try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+      })();
+
+  const draftId = String(draft.id || '').trim();
+  const draftRef = String(draft.invoice_ref || draft.shipment_number || '').trim().toUpperCase();
+  const draftLetter = extractInvoiceSequenceLetter(draftRef);
+  const draftItems = Array.isArray(draft.items) ? draft.items : [];
+  const draftItemCount = draftItems.length;
+
+  // Identify all completed/dispatched shipments in the system
+  const completedShipments = (allShipments || []).filter(s => {
+    if (!s || s.id === draftId) return false;
+    const st = String(s.status || '').toLowerCase().trim();
+    return (
+      st === 'shipped' ||
+      st === 'in_transit' ||
+      st === 'in-transit' ||
+      st.includes('shipped') ||
+      st === 'received_confirmed' ||
+      st === 'delivered' ||
+      st === 'received' ||
+      st === 'completed' ||
+      isLockedConfirmedShipment(s)
+    );
+  });
+
+  if (completedShipments.length === 0) return false;
+
+  // Check 1: Serial number overlap
+  if (draftItems.length > 0) {
+    const draftSerials = draftItems
+      .map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase())
+      .filter(Boolean);
+
+    if (draftSerials.length > 0) {
+      for (const comp of completedShipments) {
+        const compItems = Array.isArray(comp.items) ? comp.items : (Array.isArray(comp.shipment_items) ? comp.shipment_items : []);
+        if (compItems.length === 0) continue;
+
+        const compSerialsSet = new Set(
+          compItems.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean)
+        );
+
+        const matchingCount = draftSerials.filter(sn => compSerialsSet.has(sn)).length;
+        if (matchingCount > 0 && (matchingCount === draftSerials.length || matchingCount / draftSerials.length >= 0.5)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  // Check 2: Same sequence letter and/or destination branch match
+  for (const comp of completedShipments) {
+    const compRef = String(comp.invoice_ref || comp.shipment_number || '').trim().toUpperCase();
+    const compLetter = extractInvoiceSequenceLetter(compRef);
+    const sitesMatch = areShipmentSitesEquivalent(draft, comp, effectiveSites);
+    const compItemCount = Array.isArray(comp.items) ? comp.items.length : (Array.isArray(comp.shipment_items) ? comp.shipment_items.length : 0);
+
+    // Rule A: If sequence letter matches AND destination branch matches
+    if (draftLetter && compLetter && draftLetter === compLetter && sitesMatch) {
+      return true;
+    }
+
+    // Rule B: If sequence letter matches AND item count matches
+    if (draftLetter && compLetter && draftLetter === compLetter && draftItemCount > 0 && compItemCount === draftItemCount) {
+      return true;
+    }
+
+    // Rule C: If destination branch matches AND item count matches
+    if (sitesMatch && draftItemCount > 0 && compItemCount === draftItemCount) {
+      return true;
+    }
+
+    // Rule D: If destination branch matches and the completed shipment is on a later/same date
+    if (sitesMatch) {
+      const draftDateStr = draft.created_date || draft.created_at || draft.shipment_date || '';
+      const compDateStr = comp.shipment_date || comp.created_at || comp.dispatched_at || '';
+      if (draftDateStr && compDateStr) {
+        const dDate = new Date(draftDateStr);
+        const cDate = new Date(compDateStr);
+        if (!isNaN(dDate.getTime()) && !isNaN(cDate.getTime()) && cDate >= dDate) {
+          return true;
+        }
+      }
+      const draftCodeM = draftRef.match(/DCOWNED#?(\d{6})/);
+      const compCodeM = compRef.match(/DCOWNED#?(\d{6})/);
+      if (draftCodeM && compCodeM) {
+        const toYymmdd = (code) => code.slice(4, 6) + code.slice(0, 2) + code.slice(2, 4);
+        if (toYymmdd(compCodeM[1]) >= toYymmdd(draftCodeM[1])) {
+          return true;
+        }
+      }
+    }
+
+    // Rule E: If sequence letter matches AND both invoice references follow DCOWNED# pattern and comp is later
+    if (draftLetter && compLetter && draftLetter === compLetter) {
+      const draftCodeM = draftRef.match(/DCOWNED#?(\d{6})/);
+      const compCodeM = compRef.match(/DCOWNED#?(\d{6})/);
+      if (draftCodeM && compCodeM) {
+        const toYymmdd = (code) => code.slice(4, 6) + code.slice(0, 2) + code.slice(2, 4);
+        if (toYymmdd(compCodeM[1]) >= toYymmdd(draftCodeM[1])) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Reconciles a list of shipments by identifying and marking or removing superseded drafts.
+ * Evaluates both drafts and pending pickup manifests that have been fulfilled by completed shipments.
+ * Returns { reconciledList, supersededDraftIds, count }
+ */
+export function reconcileShipmentsAndDrafts(shipmentsList = [], options = { removeSuperseded: true }, sitesList = []) {
+  if (!Array.isArray(shipmentsList) || shipmentsList.length === 0) {
+    return { reconciledList: [], supersededDraftIds: [], count: 0 };
+  }
+
+  const effectiveSites = (Array.isArray(sitesList) && sitesList.length > 0)
+    ? sitesList
+    : (() => {
+        try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+      })();
+
+  const supersededDraftIds = [];
+  const supersededSet = new Set();
+
+  shipmentsList.forEach(s => {
+    if (!s) return;
+    const st = String(s.status || '').toLowerCase().trim();
+    const isDraftOrPending = (
+      st === 'draft' ||
+      st === 'pending_pickup' ||
+      st === 'ready_for_pickup' ||
+      st === 'packing' ||
+      st === 'in_progress' ||
+      st === 'saved' ||
+      !st
+    );
+    if (isDraftOrPending && isDraftSupersededOrFulfilled(s, shipmentsList, effectiveSites)) {
+      const id = String(s.id || s.invoice_ref || '');
+      if (id) {
+        supersededDraftIds.push(id);
+        supersededSet.add(id);
+        supersededSet.add(String(s.id || ''));
+        supersededSet.add(String(s.invoice_ref || '').trim().toUpperCase());
+        supersededSet.add(String(s.shipment_number || '').trim().toUpperCase());
+      }
+    }
+  });
+
+  if (supersededDraftIds.length === 0) {
+    return { reconciledList: shipmentsList, supersededDraftIds: [], count: 0 };
+  }
+
+  let reconciledList;
+  if (options.removeSuperseded) {
+    reconciledList = shipmentsList.filter(s => {
+      if (!s) return false;
+      const sId = String(s.id || '');
+      const sRef = String(s.invoice_ref || '').trim().toUpperCase();
+      const sNum = String(s.shipment_number || '').trim().toUpperCase();
+      return !supersededSet.has(sId) && !supersededSet.has(sRef) && !supersededSet.has(sNum);
+    });
+  } else {
+    reconciledList = shipmentsList.map(s => {
+      if (!s) return s;
+      const sId = String(s.id || '');
+      const sRef = String(s.invoice_ref || '').trim().toUpperCase();
+      const sNum = String(s.shipment_number || '').trim().toUpperCase();
+      if (supersededSet.has(sId) || supersededSet.has(sRef) || supersededSet.has(sNum)) {
+        return {
+          ...s,
+          is_superseded: true,
+          status: 'completed_superseded',
+          updated_at: new Date().toISOString()
+        };
+      }
+      return s;
+    });
+  }
+
+  return {
+    reconciledList,
+    supersededDraftIds,
+    count: supersededDraftIds.length
+  };
+}
+
+

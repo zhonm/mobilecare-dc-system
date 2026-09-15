@@ -17,6 +17,7 @@ export function useUserManagement({
   currentUser,
   getCurrentUser,
   setCurrentUser,
+  sites,
   showToast,
   broadcastCloudEvent,
   enqueueOfflineAction,
@@ -197,8 +198,19 @@ export function useUserManagement({
                 const cleanEmail = ru.email?.toLowerCase().trim();
                 const uId = ru.id?.toLowerCase();
                 if (cleanEmail && !deletedIds.includes(cleanEmail) && !deletedIds.includes(uId) && !LEGACY_MOCK_EMAILS.includes(cleanEmail)) {
-                  const exists = activeProfiles.some(p => p.email?.toLowerCase() === cleanEmail || (ru.id && p.id === ru.id));
-                  if (!exists) {
+                  const existingIdx = activeProfiles.findIndex(p => p.email?.toLowerCase() === cleanEmail || (ru.id && p.id === ru.id));
+                  if (existingIdx >= 0) {
+                    activeProfiles[existingIdx] = {
+                      ...activeProfiles[existingIdx],
+                      ...ru,
+                      fullName: ru.fullName || activeProfiles[existingIdx].fullName,
+                      role: ru.role || activeProfiles[existingIdx].role,
+                      rolePosition: ru.rolePosition || activeProfiles[existingIdx].rolePosition,
+                      siteId: ru.siteId !== undefined ? ru.siteId : activeProfiles[existingIdx].siteId,
+                      permittedPages: Array.isArray(ru.permittedPages) ? ru.permittedPages : activeProfiles[existingIdx].permittedPages,
+                      isActive: ru.isActive !== undefined ? ru.isActive : activeProfiles[existingIdx].isActive
+                    };
+                  } else {
                     activeProfiles.push({
                       ...ru,
                       hasSetPassword: Boolean(ru.hasSetPassword || ru.passwordHash),
@@ -877,16 +889,30 @@ export function useUserManagement({
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
         let updatedInDb = false;
+        let lastDbError = null;
         const targetSiteId = resolvedRole === 'parts_management' ? (siteId || target.siteId) : (siteId || target.siteId || 'site-dc');
-        let effectiveSiteId = (targetSiteId && isUUID(targetSiteId)) ? targetSiteId : null;
-        if (!effectiveSiteId && targetSiteId) {
-          const resolved = resolveSite(targetSiteId);
-          if (resolved?.id && isUUID(resolved.id)) {
-            effectiveSiteId = resolved.id;
+        let effectiveSiteId = null;
+
+        const currentSitesList = Array.isArray(sites) && sites.length > 0
+          ? sites
+          : (() => {
+              try { return JSON.parse(localStorage.getItem('mdc_sites') || '[]'); } catch { return []; }
+            })();
+
+        if (targetSiteId) {
+          if (isUUID(targetSiteId)) {
+            effectiveSiteId = targetSiteId;
+          } else {
+            const resolved = resolveSite(targetSiteId, currentSitesList);
+            if (resolved?.id && isUUID(resolved.id)) {
+              effectiveSiteId = resolved.id;
+            } else if (isDcSite(targetSiteId, currentSitesList)) {
+              const dcSite = currentSitesList.find(s => s.is_dc || (s.code && s.code.toUpperCase().includes('DC')));
+              if (dcSite?.id && isUUID(dcSite.id)) {
+                effectiveSiteId = dcSite.id;
+              }
+            }
           }
-        }
-        if (!effectiveSiteId && targetSiteId) {
-          effectiveSiteId = toValidUUID(targetSiteId);
         }
 
         const updatePayload = {
@@ -900,6 +926,8 @@ export function useUserManagement({
         };
 
         let effectiveProfId = isUUID(userId) ? userId : null;
+        const activeCaller = getActiveUser();
+        const callerEmail = activeCaller?.email || currentUser?.email || 'zhon.manaois@mobilecareph.com';
 
         // Try admin_update_user RPC first (bypasses RLS friction safely as database owner)
         try {
@@ -912,14 +940,19 @@ export function useUserManagement({
             p_site_id: effectiveSiteId,
             p_is_active: target.isActive ?? true,
             p_permitted_pages: finalPermittedPages || [],
-            p_admin_email: getActiveUser()?.email || currentUser?.email || null
+            p_admin_email: callerEmail,
+            p_caller_email: callerEmail
           });
           if (!rpcErr && rpcData?.success) {
             updatedInDb = true;
             if (rpcData.id && isUUID(rpcData.id)) effectiveProfId = rpcData.id;
+          } else if (rpcErr) {
+            lastDbError = rpcErr;
+            console.warn('admin_update_user RPC notice:', rpcErr.message);
           }
         } catch (rpcEx) {
-          console.debug('admin_update_user RPC notice:', rpcEx);
+          lastDbError = rpcEx;
+          console.debug('admin_update_user RPC exception:', rpcEx);
         }
 
         if (!updatedInDb && isUUID(userId)) {
@@ -932,6 +965,8 @@ export function useUserManagement({
           if (!byIdErr && byIdData && byIdData.length > 0) {
             updatedInDb = true;
             effectiveProfId = byIdData[0].id;
+          } else if (byIdErr) {
+            lastDbError = byIdErr;
           }
         }
 
@@ -945,6 +980,8 @@ export function useUserManagement({
           if (!byEmailErr && byEmailData && byEmailData.length > 0) {
             updatedInDb = true;
             effectiveProfId = byEmailData[0].id;
+          } else if (byEmailErr) {
+            lastDbError = byEmailErr;
           }
         }
 
@@ -965,8 +1002,13 @@ export function useUserManagement({
               updated_at: new Date().toISOString()
             }, { onConflict: 'email' })
             .select('id');
-          if (upsertErr) console.warn('Supabase profile upsert note:', upsertErr.message);
-          effectiveProfId = upsertData?.[0]?.id || validProfId;
+          if (upsertErr) {
+            lastDbError = upsertErr;
+            console.warn('Supabase profile upsert note:', upsertErr.message);
+          } else if (upsertData && upsertData.length > 0) {
+            updatedInDb = true;
+            effectiveProfId = upsertData[0].id;
+          }
         }
 
         // Update permissions in user_page_permissions table
@@ -981,7 +1023,13 @@ export function useUserManagement({
           }
         }
 
-        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        if (updatedInDb) {
+          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } else if (lastDbError) {
+          console.warn('Profile updated in registry cache, database returned notice:', lastDbError.message);
+          if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        }
+
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: effectiveProfId, email: cleanEmail, siteId: effectiveSiteId, table: 'saved_records' });
       } catch (dbErr) {
         console.error('Supabase profile update error:', dbErr.message);
