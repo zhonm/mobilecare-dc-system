@@ -10,7 +10,9 @@ import {
   Search,
   X,
   CheckCircle,
-  Files
+  Files,
+  Clock,
+  Layers
 } from 'lucide-react';
 import { parseGsxInvoicePdf, parseGsxExcelOrCsv } from '../utils/gsxPdfParser';
 import { getBasePoNumber, normalizeDateToIso } from '../utils/appContextHelpers';
@@ -521,14 +523,15 @@ export default function PurchaseOrders() {
       <div className="card" style={{ marginBottom: '16px', padding: '12px 16px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           {/* Status Pills */}
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
             {[
-              { label: 'All POs', value: 'ALL' },
-              { label: 'Pending Arrival', value: 'pending' },
-              { label: 'Partially Received', value: 'partially_received' },
-              { label: 'Fully Received', value: 'received' }
+              { label: 'All POs', value: 'ALL', count: stats.totalPOs, icon: Layers },
+              { label: 'Pending Arrival', value: 'pending', count: stats.pendingPOs, icon: Clock },
+              { label: 'Partially Received', value: 'partially_received', count: stats.partialPOs, icon: Files },
+              { label: 'Fully Received', value: 'received', count: stats.receivedPOs, icon: CheckCircle }
             ].map(tab => {
               const isActive = statusFilter === tab.value;
+              const Icon = tab.icon;
               return (
                 <button
                   key={tab.value}
@@ -539,6 +542,9 @@ export default function PurchaseOrders() {
                     fontSize: '12.5px',
                     fontWeight: 600,
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
                     border: isActive ? '1px solid #2563eb' : '1px solid #e2e8f0',
                     background: isActive ? '#2563eb' : '#ffffff',
                     color: isActive ? '#ffffff' : '#64748b',
@@ -546,25 +552,42 @@ export default function PurchaseOrders() {
                     transition: 'all 0.15s ease'
                   }}
                 >
-                  {tab.label}
+                  <Icon size={13} style={{ opacity: isActive ? 1 : 0.7 }} />
+                  <span>{tab.label}</span>
+                  <span
+                    style={{
+                      padding: '1px 6px',
+                      borderRadius: '10px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: isActive ? 'rgba(255, 255, 255, 0.25)' : '#f1f5f9',
+                      color: isActive ? '#ffffff' : '#475569',
+                      marginLeft: '2px'
+                    }}
+                  >
+                    {tab.count}
+                  </span>
                 </button>
               );
             })}
           </div>
 
           {/* Search Box */}
-          <div style={{ position: 'relative', width: '320px', maxWidth: '100%' }}>
-            <Search size={15} style={{ position: 'absolute', left: '10px', top: '11px', color: '#94a3b8' }} />
+          <div style={{ position: 'relative', width: '340px', maxWidth: '100%', flexShrink: 0 }}>
+            <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none' }} />
             <input
               type="text"
               placeholder="Search PO, Invoice, Part No..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="form-control"
+              className="form-input"
               style={{
-                paddingLeft: '32px',
+                width: '100%',
+                boxSizing: 'border-box',
+                paddingLeft: '34px',
+                paddingRight: searchQuery ? '32px' : '12px',
                 height: '36px',
-                fontSize: '13px',
+                fontSize: '12.5px',
                 background: '#ffffff',
                 border: '1px solid #cbd5e1',
                 borderRadius: '8px',
@@ -573,8 +596,24 @@ export default function PurchaseOrders() {
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => setSearchQuery('')}
-                style={{ position: 'absolute', right: '8px', top: '8px', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+                style={{
+                  position: 'absolute',
+                  right: '8px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '50%'
+                }}
+                title="Clear search"
               >
                 <X size={14} />
               </button>

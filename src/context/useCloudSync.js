@@ -132,6 +132,19 @@ export function useCloudSync({
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
 
+  // Supabase Egress Defense: In-memory & IndexedDB cache for heavy system documents
+  const cachedSystemDocsRef = useRef({});
+  useEffect(() => {
+    (async () => {
+      try {
+        const cached = await dbStorage.getItem('mdc_cached_system_docs');
+        if (cached && typeof cached === 'object') {
+          cachedSystemDocsRef.current = cached;
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
   // Broadcast event across peers and browser tabs (Site-Isolated with Global Alert Routing)
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
     try {
@@ -403,8 +416,14 @@ export function useCloudSync({
             'master_auto_logout_settings_registry',
             'master_session_audit_logs_registry'
           ];
-          const [resSystem, resPeriods, resStockHeader, resShipments] = await Promise.all([
-            supabase.from('saved_records').select('*').in('id', SYSTEM_DOC_IDS),
+          // Supabase Free-Tier Egress Defense for SYSTEM_DOC_IDS:
+          // Instead of unconditionally downloading all 17 multi-megabyte documents (~2.5 MB),
+          // first fetch lightweight metadata header (~1 KB). Only download full snapshot_data
+          // for documents whose cloud updated_at is newer or missing locally!
+          const [resSystemHeader, resPeriods, resStockHeader, resShipments] = await Promise.all([
+            supabase.from('saved_records')
+              .select('id, record_type, period_label, period_year, period_month, period_week, notes, saved_by_name, saved_by_user_id, updated_at, created_at, is_deleted')
+              .in('id', SYSTEM_DOC_IDS),
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
               .order('created_at', { ascending: false })
@@ -421,7 +440,46 @@ export function useCloudSync({
               .order('created_at', { ascending: false })
               .limit(50)
           ]);
-          const systemRows = resSystem.data || [];
+
+          const headerRows = resSystemHeader?.data || [];
+          const dirtySystemDocIds = [];
+          for (const hRow of headerRows) {
+            const cachedDoc = cachedSystemDocsRef.current[hRow.id];
+            const isMissing = !cachedDoc || !cachedDoc.snapshot_data;
+            const isOutdated = Boolean(cachedDoc && hRow.updated_at && cachedDoc.updated_at !== hRow.updated_at);
+            if (isForce || isMissing || isOutdated) {
+              dirtySystemDocIds.push(hRow.id);
+            }
+          }
+
+          if (dirtySystemDocIds.length > 0) {
+            try {
+              const { data: freshDocs } = await supabase
+                .from('saved_records')
+                .select('*')
+                .in('id', dirtySystemDocIds);
+              if (freshDocs && Array.isArray(freshDocs)) {
+                freshDocs.forEach(d => {
+                  if (d && d.id) {
+                    cachedSystemDocsRef.current[d.id] = d;
+                  }
+                });
+                try {
+                  dbStorage.setItem('mdc_cached_system_docs', cachedSystemDocsRef.current);
+                } catch (e) {}
+              }
+            } catch (err) {
+              console.warn('[Egress Defense] Selective system docs fetch note:', err);
+            }
+          }
+
+          const systemRows = headerRows.map(hRow => {
+            const fullDoc = cachedSystemDocsRef.current[hRow.id];
+            if (fullDoc && fullDoc.snapshot_data) {
+              return { ...fullDoc, ...hRow, snapshot_data: fullDoc.snapshot_data };
+            }
+            return hRow;
+          });
           const shipmentRows = resShipments?.data || [];
           const shipmentIds = new Set(shipmentRows.map(r => r.id));
           const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry' && !shipmentIds.has(r.id));
@@ -3137,6 +3195,7 @@ export function useCloudSync({
         };
 
         await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
+        cachedSystemDocsRef.current[LIVE_MASTER_RECORD_ID] = liveSnapshotPayload;
 
         if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
           await supabase.from('saved_records').upsert({

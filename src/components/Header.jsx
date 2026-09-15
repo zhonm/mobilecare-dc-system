@@ -1,8 +1,11 @@
+import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
+import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu, Activity } from 'lucide-react';
 import HeaderCategoryFilter from './HeaderCategoryFilter';
 import { formatTo12HourTime } from '../utils/dateUtils';
+import { egressMonitor } from '../utils/egressMonitor';
+import EgressUsageModal from './EgressUsageModal';
 
 export default function Header() {
   const {
@@ -25,6 +28,16 @@ export default function Header() {
     currentUser,
     pmgSubTab
   } = useApp();
+
+  const [isEgressModalOpen, setIsEgressModalOpen] = useState(false);
+  const [egressStats, setEgressStats] = useState(() => egressMonitor.getStats());
+
+  useEffect(() => {
+    const unsub = egressMonitor.subscribe(newStats => {
+      setEgressStats(newStats);
+    });
+    return unsub;
+  }, []);
 
   const handleManualSync = async () => {
     try {
@@ -207,6 +220,29 @@ export default function Header() {
           )}
         </div>
 
+        {/* Supabase Free-Tier Egress Quota Indicator */}
+        {isSupabaseConfigured && (
+          <div
+            className="header-sync-badge"
+            onClick={() => setIsEgressModalOpen(true)}
+            style={{
+              cursor: 'pointer',
+              background: egressStats.usagePercent >= 80 ? 'rgba(239, 68, 68, 0.12)' : egressStats.usagePercent >= 60 ? 'rgba(245, 158, 11, 0.12)' : 'rgba(2, 132, 199, 0.1)',
+              color: egressStats.usagePercent >= 80 ? '#ef4444' : egressStats.usagePercent >= 60 ? '#d97706' : '#0284c7',
+              borderColor: egressStats.usagePercent >= 80 ? 'rgba(239, 68, 68, 0.3)' : egressStats.usagePercent >= 60 ? 'rgba(245, 158, 11, 0.3)' : 'rgba(2, 132, 199, 0.25)'
+            }}
+            title={`Supabase Egress Quota: ${egressMonitor.constructor.formatBytes(egressStats.totalEgressBytes, 2)} / 5.0 GB (${egressStats.usagePercent.toFixed(1)}%). Click to view details and burn-rate projections.`}
+          >
+            <Activity size={12} color={egressStats.usagePercent >= 80 ? '#ef4444' : egressStats.usagePercent >= 60 ? '#d97706' : '#0284c7'} />
+            <span className="sync-text-full">
+              {egressMonitor.constructor.formatBytes(egressStats.totalEgressBytes, 1)} / 5 GB ({egressStats.usagePercent.toFixed(0)}%)
+            </span>
+            <span className="sync-text-short">
+              {egressStats.usagePercent.toFixed(0)}% Egress
+            </span>
+          </div>
+        )}
+
         {/* Mobile Search Icon Button */}
         <button
           type="button"
@@ -261,6 +297,16 @@ export default function Header() {
           </div>
         )}
       </div>
+
+      {/* Supabase Free-Tier Egress Quota Modal */}
+      <EgressUsageModal
+        isOpen={isEgressModalOpen}
+        onClose={() => setIsEgressModalOpen(false)}
+        onNavigateToSettings={() => {
+          setIsEgressModalOpen(false);
+          setActiveTab('settings');
+        }}
+      />
     </header>
   );
 }
