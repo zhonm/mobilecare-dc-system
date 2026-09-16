@@ -94,7 +94,7 @@ function MainApp() {
       case 'user-access':
         return <UserAccessManagement />;
       case 'feedback':
-        return <Feedback />;
+        return currentUser?.role === 'parts_management' ? <Feedback /> : <SettingsCatalog defaultTab="feedback" />;
       default:
         return <Dashboard />;
     }

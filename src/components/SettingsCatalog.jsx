@@ -39,8 +39,10 @@ import {
   Activity,
   Clock,
   Sliders,
-  Download
+  Download,
+  MessageSquare
 } from 'lucide-react';
+import Feedback from './Feedback';
 import {
   formatBytes,
   getEgressStats,
@@ -98,7 +100,7 @@ const getCategoryBadgeStyle = (catName = '') => {
   return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
 };
 
-export default function SettingsCatalog() {
+export default function SettingsCatalog({ defaultTab = 'parts' }) {
   const {
     parts = [],
     categories = [],
@@ -133,9 +135,15 @@ export default function SettingsCatalog() {
     triggerTestWarning,
     triggerTestAutoLogout
   } = useApp();
-  const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'egress' | 'sql'
+  const [activeTab, setActiveTab] = useState(defaultTab); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'egress' | 'sql' | 'feedback'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
+
+  useEffect(() => {
+    if (defaultTab) {
+      setActiveTab(defaultTab);
+    }
+  }, [defaultTab]);
 
   // Supabase Cloud Database Window State
   const [isGlobalSyncing, setIsGlobalSyncing] = useState(false);
@@ -645,6 +653,16 @@ export default function SettingsCatalog() {
             />
             <span>{realtimeConnected ? 'Live' : 'Standby'}</span>
           </span>
+        </button>
+
+        <div className="settings-nav-group-label">Support &amp; Help</div>
+        <button
+          type="button"
+          className={`settings-nav-item ${activeTab === 'feedback' ? 'active' : ''}`}
+          onClick={() => setActiveTab('feedback')}
+        >
+          <MessageSquare size={17} />
+          <span>Feedback &amp; Support</span>
         </button>
 
       </div>
@@ -2999,6 +3017,11 @@ CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', '
           showToast={showToast}
           currentUser={currentUser}
         />
+      )}
+
+      {/* 6. Feedback & Support Tab */}
+      {activeTab === 'feedback' && (
+        <Feedback />
       )}
       </div>
     </div>

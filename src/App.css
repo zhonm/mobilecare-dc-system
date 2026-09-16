@@ -11,7 +11,7 @@
   height: 100vh;
   border-right: 1px solid #334155;
   flex-shrink: 0;
-  box-shadow: 4px 0 24px rgba(15, 23, 42, 0.4);
+  box-shadow: none;
   z-index: 20;
   position: relative;
   user-select: none;

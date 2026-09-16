@@ -21,8 +21,7 @@ import {
   LogOut,
   Search,
   X,
-  Inbox,
-  MessageSquare
+  Inbox
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -81,8 +80,7 @@ export default function Sidebar() {
 
     // 4. Administration
     { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },
-    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' },
-    { id: 'feedback', label: 'Feedback & Support', icon: MessageSquare, section: 'Administration' }
+    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
   ];
 
   // Filter items by permitted access & search query
