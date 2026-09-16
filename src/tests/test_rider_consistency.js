@@ -43,42 +43,73 @@ const s3 = {
 assert.strictEqual(getShipmentRiderName(s3), '');
 console.log('  ✓ PASS: getShipmentRiderName ignores company name and generic placeholders');
 
-// Test 4: Sibling fallback by tracking number or transfer slip
+// Test 4: Sibling fallback by tracking number (including whitespace differences)
 const sisterShipments = [
   {
     id: 's-parent',
     invoice_ref: 'DCOWNED#091226H',
-    tracking_number: '4548396878387',
+    tracking_number: '5483 9687 8387',
     transfer_slip_number: '20227500',
     pickup_by_name: 'Chrysnell Jon Hernandez'
   },
   {
     id: 's-child',
     invoice_ref: 'DCOWNED#091226I',
-    tracking_number: '4548396878387',
+    tracking_number: '548396878387',
     transfer_slip_number: '20227500',
     pickup_by_name: null,
     courier_name: null
   }
 ];
 assert.strictEqual(getShipmentRiderName(sisterShipments[1], sisterShipments), 'Chrysnell Jon Hernandez');
-console.log('  ✓ PASS: getShipmentRiderName inherits rider from sibling shipment in same dispatch batch');
+console.log('  ✓ PASS: getShipmentRiderName inherits rider from sibling shipment matching tracking number with whitespace normalization');
 
-// Test 5: Verify Shipments.jsx uses getShipmentRiderName in main view and Details modal
+// Test 5: Sibling fallback by dispatch batch (same carrier + same shipment date + shared invoice cycle prefix)
+const batchShipments = [
+  {
+    id: 'b-dispatched',
+    invoice_ref: 'DCOWNED#091226E',
+    carrier: 'Lite Express',
+    shipment_date: '2026-09-12',
+    pickup_by_name: 'Chrysnel jon Hernandez'
+  },
+  {
+    id: 'b-orphan',
+    invoice_ref: 'DCOWNED#091226A',
+    carrier: 'Lite Express',
+    shipment_date: '2026-09-12',
+    pickup_by_name: null,
+    courier_name: null
+  }
+];
+assert.strictEqual(getShipmentRiderName(batchShipments[1], batchShipments), 'Chrysnel jon Hernandez');
+console.log('  ✓ PASS: getShipmentRiderName inherits rider from batch sibling sharing carrier, date, and invoice cycle prefix');
+
+// Test 6: Verify Shipments.jsx uses getShipmentRiderName in main view and Details modal
 const shipmentsFile = fs.readFileSync(path.join(__dirname, '../components/Shipments.jsx'), 'utf8');
 assert(shipmentsFile.includes('getShipmentRiderName(sh, shipments)'), 'Main view table row must use getShipmentRiderName');
 assert(shipmentsFile.includes('getShipmentRiderName(viewPackageModalState.shipment, shipments)'), 'Details modal must use getShipmentRiderName');
 console.log('  ✓ PASS: Shipments.jsx consistently uses getShipmentRiderName in both main table and details modal');
 
-// Test 6: Verify ScanOutPacking.jsx and useCloudSync.js preserve courier_name and pickup_by_name
+// Test 7: Verify ScanOutPacking.jsx uses getShipmentRiderName
+const scanOutFile = fs.readFileSync(path.join(__dirname, '../components/ScanOutPacking.jsx'), 'utf8');
+assert(scanOutFile.includes('getShipmentRiderName(s, shipments)'), 'ScanOutPacking draft table must use getShipmentRiderName');
+console.log('  ✓ PASS: ScanOutPacking uses getShipmentRiderName');
+
+// Test 8: Verify pdfGenerator.js and excelParser.js use getShipmentRiderName
+const pdfFile = fs.readFileSync(path.join(__dirname, '../utils/pdfGenerator.js'), 'utf8');
+assert(pdfFile.includes('getShipmentRiderName(shipment)'), 'pdfGenerator.js must use getShipmentRiderName');
+const excelFile = fs.readFileSync(path.join(__dirname, '../utils/excelParser.js'), 'utf8');
+assert(excelFile.includes('getShipmentRiderName(shipment)'), 'excelParser.js must use getShipmentRiderName');
+console.log('  ✓ PASS: Corporate PDF and Excel exports consistently use getShipmentRiderName');
+
+// Test 9: Verify useCloudSync.js preserves dispatch details and has increased query limit
 const cloudSyncFile = fs.readFileSync(path.join(__dirname, '../context/useCloudSync.js'), 'utf8');
 assert(cloudSyncFile.includes('resolvedPickupByName'), 'useCloudSync must preserve resolvedPickupByName');
 assert(cloudSyncFile.includes('resolvedCourierName'), 'useCloudSync must preserve resolvedCourierName');
-
-const scanOutFile = fs.readFileSync(path.join(__dirname, '../components/ScanOutPacking.jsx'), 'utf8');
-assert(scanOutFile.includes('s.pickup_by_name || s.courier_name'), 'ScanOutPacking must display rider from both fields');
-console.log('  ✓ PASS: Cloud sync and Scan-Out preserve rider details bidirectionally');
+assert(cloudSyncFile.includes('limit(500)'), 'useCloudSync must query up to 500 saved_records shipments to prevent cutoff');
+console.log('  ✓ PASS: useCloudSync query limit increased to 500 and preserves non-destructive merge');
 
 console.log('====================================================');
-console.log('ALL RIDER CONSISTENCY TESTS PASSED (6/6)');
+console.log('ALL RIDER CONSISTENCY TESTS PASSED (9/9)');
 console.log('====================================================');

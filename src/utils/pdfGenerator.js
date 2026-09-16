@@ -1,10 +1,10 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
-import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
+import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
-import { getShipmentCourierDisplay } from './shipmentHelpers.js';
+import { getShipmentCourierDisplay, getShipmentRiderName } from './shipmentHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -47,7 +47,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const trackingNumberStr = (rawTrackingNum && rawTrackingNum.toUpperCase() !== 'N/A') ? rawTrackingNum : '___________________';
 
   const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
-  const pickupByName = shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+  const pickupByName = getShipmentRiderName(shipment) || shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
 
   // ══════════════════════════════════════════════════════════════════════════
   // RENDER PACKING LIST MANIFEST (50 items max per page)

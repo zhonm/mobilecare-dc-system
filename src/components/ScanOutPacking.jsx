@@ -45,7 +45,8 @@ import {
   hasBatteryItem,
   detectRecommendedShippingMode,
   formatCourierWithMode,
-  getShipmentCourierDisplay
+  getShipmentCourierDisplay,
+  getShipmentRiderName
 } from '../utils/shipmentHelpers';
 
 // Pure category & assignment classification helpers
@@ -3091,11 +3092,15 @@ export default function ScanOutPacking() {
                       <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
                         {s.tracking_number ? `#${s.tracking_number}` : 'Pending Tracking'}
                       </span>
-                      {(s.pickup_by_name || s.courier_name) && (
-                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
-                          Rider: {s.pickup_by_name || s.courier_name}
-                        </div>
-                      )}
+                      {(() => {
+                        const rider = getShipmentRiderName(s, shipments) || s.pickup_by_name || s.courier_name;
+                        if (!rider) return null;
+                        return (
+                          <div style={{ fontSize: '11px', color: '#64748b', marginTop: '1px' }}>
+                            Rider: {rider}
+                          </div>
+                        );
+                      })()}
                       {(s.transfer_slip_number || s.transfer_slip) && (
                         <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
                           TS: {s.transfer_slip_number || s.transfer_slip}

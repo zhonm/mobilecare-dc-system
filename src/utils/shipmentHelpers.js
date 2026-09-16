@@ -665,12 +665,9 @@ export const getShipmentCourierDisplay = (shipment, items = null) => {
 };
 
 /**
- * Resolves the Rider / Courier Handover Name consistently across all shipment objects.
- * Checks all possible fields (pickup_by_name, courier_name, rider_name, driver_name, pickup_by, handover_to, courier_rider)
- * while filtering out non-rider labels (e.g. carrier company name, 'N/A', 'Assigned Rider', etc.).
- * Supports optional fallback to sibling shipments dispatched together under the same tracking number or transfer slip.
+ * Resolves the direct rider candidate from the shipment object without recursion.
  */
-export const getShipmentRiderName = (sh, allShipments = []) => {
+const resolveDirectRiderCandidate = (sh) => {
   if (!sh) return '';
   const carrier = String(sh.carrier || sh.courier || '').toLowerCase();
   
@@ -700,22 +697,85 @@ export const getShipmentRiderName = (sh, allShipments = []) => {
       return trimmed;
     }
   }
+  return '';
+};
 
-  // Fallback: Check sibling shipments sharing the same tracking number or transfer slip
+/**
+ * Resolves the Rider / Courier Handover Name consistently across all shipment objects.
+ * Checks all possible fields (pickup_by_name, courier_name, rider_name, driver_name, pickup_by, handover_to, courier_rider)
+ * while filtering out non-rider labels (e.g. carrier company name, 'N/A', 'Assigned Rider', etc.).
+ * Supports optional fallback to sibling shipments dispatched together under the same tracking number, transfer slip, or dispatch batch.
+ */
+export const getShipmentRiderName = (sh, allShipments = []) => {
+  if (!sh) return '';
+  
+  const direct = resolveDirectRiderCandidate(sh);
+  if (direct) return direct;
+
+  // Fallback: Check sibling shipments sharing tracking number, transfer slip, or dispatch run
   if (Array.isArray(allShipments) && allShipments.length > 0) {
-    const trk = String(sh.tracking_number || '').trim();
-    const ts = String(sh.transfer_slip_number || sh.transfer_slip || '').trim();
-    
+    const cleanAlphanum = (val) => String(val || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    const trk = cleanAlphanum(sh.tracking_number || sh.booking_id);
+    const ts = cleanAlphanum(sh.transfer_slip_number || sh.transfer_slip);
+
+    // 1. Sibling match by normalized tracking number or transfer slip
     if (trk || ts) {
       const sibling = allShipments.find(s => {
         if (!s || s.id === sh.id) return false;
-        const matchTrk = trk && String(s.tracking_number || '').trim() === trk;
-        const matchTs = ts && String(s.transfer_slip_number || s.transfer_slip || '').trim() === ts;
-        return matchTrk || matchTs;
+        const sTrk = cleanAlphanum(s.tracking_number || s.booking_id);
+        const sTs = cleanAlphanum(s.transfer_slip_number || s.transfer_slip);
+        const matchTrk = trk && sTrk && trk === sTrk;
+        const matchTs = ts && sTs && ts === sTs;
+        return (matchTrk || matchTs) && Boolean(resolveDirectRiderCandidate(s));
       });
       if (sibling) {
-        const siblingRider = getShipmentRiderName(sibling);
+        const siblingRider = resolveDirectRiderCandidate(sibling);
         if (siblingRider) return siblingRider;
+      }
+    }
+
+    // 2. Dispatch batch fallback: same dispatch date, same carrier, and shared run context
+    const shDate = String(sh.pickup_date || sh.shipment_date || (sh.dispatched_at ? sh.dispatched_at.split('T')[0] : '')).trim();
+    const rawCarrier = String(sh.carrier || sh.courier || '').toLowerCase();
+    const isLite = rawCarrier.includes('lite express');
+    const isLalamove = rawCarrier.includes('lalamove');
+    const carrierKey = isLite ? 'lite' : (isLalamove ? 'lalamove' : rawCarrier.replace(/[^a-z0-9]/g, ''));
+
+    if (carrierKey && shDate) {
+      const extractDateCode = (val) => {
+        const m = String(val || '').match(/DCOWNED#?(\d{6})/i);
+        return m ? m[1] : '';
+      };
+      const shDateCode = extractDateCode(sh.invoice_ref || sh.shipment_number);
+      const shGuard = String(sh.guard_on_duty || '').trim().toLowerCase();
+
+      const batchSibling = allShipments.find(s => {
+        if (!s || s.id === sh.id) return false;
+        const sDate = String(s.pickup_date || s.shipment_date || (s.dispatched_at ? s.dispatched_at.split('T')[0] : '')).trim();
+        if (sDate !== shDate) return false;
+
+        const sRawCarrier = String(s.carrier || s.courier || '').toLowerCase();
+        const sCarrierKey = sRawCarrier.includes('lite express') ? 'lite' : (sRawCarrier.includes('lalamove') ? 'lalamove' : sRawCarrier.replace(/[^a-z0-9]/g, ''));
+        if (sCarrierKey !== carrierKey) return false;
+
+        const sGuard = String(s.guard_on_duty || '').trim().toLowerCase();
+        const sDateCode = extractDateCode(s.invoice_ref || s.shipment_number);
+
+        const matchGuard = Boolean(shGuard && sGuard && (shGuard === sGuard || shGuard.includes(sGuard) || sGuard.includes(shGuard)));
+        const matchDateCode = Boolean(shDateCode && sDateCode && shDateCode === sDateCode);
+
+        const sTrk = cleanAlphanum(s.tracking_number || s.booking_id);
+        const matchTrkPrefix = Boolean(trk && sTrk && trk.length >= 8 && sTrk.length >= 8 && trk.slice(0, 8) === sTrk.slice(0, 8));
+
+        if (matchGuard || matchDateCode || matchTrkPrefix) {
+          return Boolean(resolveDirectRiderCandidate(s));
+        }
+        return false;
+      });
+
+      if (batchSibling) {
+        const batchRider = resolveDirectRiderCandidate(batchSibling);
+        if (batchRider) return batchRider;
       }
     }
   }

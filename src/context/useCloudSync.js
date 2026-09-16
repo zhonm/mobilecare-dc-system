@@ -431,7 +431,7 @@ export function useCloudSync({
               .select('*')
               .eq('record_type', 'shipment')
               .order('created_at', { ascending: false })
-              .limit(10)
+              .limit(500)
           ]);
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];
@@ -1344,15 +1344,39 @@ export function useCloudSync({
           .filter(r => (r.record_type === 'shipment' || (r.snapshot_data && r.snapshot_data.shipment_number)) && !isDeletedOrCorruptedShipment(r) && !isDeletedOrCorruptedShipment(r.snapshot_data) && r.notes !== '__DELETED__' && r.snapshot_data?.isDeleted !== true)
           .map(r => r.snapshot_data || r);
 
+        // Sort chronologically ascending so newer updates/dispatched docs overlay earlier draft docs
+        shipmentRecords.sort((a, b) => {
+          const timeA = new Date(a.updated_at || a.created_at || a.shipment_date || 0).getTime();
+          const timeB = new Date(b.updated_at || b.created_at || b.shipment_date || 0).getTime();
+          return timeA - timeB;
+        });
+
         shipmentRecords.forEach(s => {
           const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
           if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
             const existing = shipmentMap.get(canonicalRef);
             const sourceItems = (s.items && s.items.length > 0) ? s.items : (existing?.items || []);
             const healedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+
+            // Merge dispatch and rider fields non-destructively so valid rider info is never wiped out by drafts
+            const mergedPickupBy = (s.pickup_by_name && String(s.pickup_by_name).trim()) || existing?.pickup_by_name || (s.courier_name && String(s.courier_name).trim()) || existing?.courier_name || '';
+            const mergedCourierName = (s.courier_name && String(s.courier_name).trim()) || existing?.courier_name || mergedPickupBy;
+            const mergedTs = s.transfer_slip_number || s.transfer_slip || existing?.transfer_slip_number || existing?.transfer_slip || '';
+            const mergedPhone = s.rider_phone || existing?.rider_phone || '';
+            const mergedPlate = s.vehicle_plate || existing?.vehicle_plate || '';
+            const mergedGuard = s.guard_on_duty || existing?.guard_on_duty || '';
+            const mergedCarrier = s.carrier || s.courier || existing?.carrier || existing?.courier || '';
+
             shipmentMap.set(canonicalRef, {
               ...(existing || {}),
               ...s,
+              pickup_by_name: mergedPickupBy,
+              courier_name: mergedCourierName,
+              transfer_slip_number: mergedTs,
+              rider_phone: mergedPhone,
+              vehicle_plate: mergedPlate,
+              guard_on_duty: mergedGuard,
+              carrier: mergedCarrier,
               items: healedItems
             });
           }
@@ -1403,14 +1427,24 @@ export function useCloudSync({
 
               const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
               const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
-              const resolvedPickupByName = dbS.pickup_by_name || existing?.pickup_by_name || dbS.courier_name || existing?.courier_name || '';
-              const resolvedCourierName = dbS.courier_name || existing?.courier_name || dbS.pickup_by_name || existing?.pickup_by_name || '';
+              const resolvedPickupByName = (dbS.pickup_by_name && String(dbS.pickup_by_name).trim()) || existing?.pickup_by_name || (dbS.courier_name && String(dbS.courier_name).trim()) || existing?.courier_name || '';
+              const resolvedCourierName = (dbS.courier_name && String(dbS.courier_name).trim()) || existing?.courier_name || resolvedPickupByName;
+              const resolvedTs = dbS.transfer_slip_number || dbS.transfer_slip || existing?.transfer_slip_number || existing?.transfer_slip || '';
+              const resolvedPhone = dbS.rider_phone || existing?.rider_phone || '';
+              const resolvedPlate = dbS.vehicle_plate || existing?.vehicle_plate || '';
+              const resolvedGuard = dbS.guard_on_duty || existing?.guard_on_duty || '';
+              const resolvedCarrier = dbS.carrier || dbS.courier || existing?.carrier || existing?.courier || '';
 
               shipmentMap.set(canonicalRef, {
                 ...(existing || {}),
                 ...dbS,
                 pickup_by_name: resolvedPickupByName,
                 courier_name: resolvedCourierName,
+                transfer_slip_number: resolvedTs,
+                rider_phone: resolvedPhone,
+                vehicle_plate: resolvedPlate,
+                guard_on_duty: resolvedGuard,
+                carrier: resolvedCarrier,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
                 items: formattedItems.length > 0 ? formattedItems : existingItems
@@ -1479,9 +1513,11 @@ export function useCloudSync({
           try { localStorage.setItem('mdc_shipments', JSON.stringify(effectiveShipments)); } catch (e) {}
           dbStorage.setItem('mdc_shipments', effectiveShipments);
 
-          // Self-heal / Auto-seed master_shipments_registry in cloud if missing or has fewer records than merged list
+          // Self-heal / Auto-seed master_shipments_registry in cloud if missing, has fewer records, or has enriched rider data
           if (supabase) {
-            if (!cloudShipmentsRegistryDoc || cloudShipmentsList.length < effectiveShipments.length) {
+            const hasRiderEnrichment = effectiveShipments.some(es => (es.pickup_by_name || es.courier_name)) &&
+              cloudShipmentsList.some(cs => (!cs.pickup_by_name && !cs.courier_name));
+            if (!cloudShipmentsRegistryDoc || cloudShipmentsList.length < effectiveShipments.length || hasRiderEnrichment) {
               queuedSavedRecordsUpsert({
                 id: 'master_shipments_registry',
                 record_type: 'shipments_registry',
@@ -2380,7 +2416,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, activePeriod, categories, currentUser, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites, _dcIntakeRecords, activePackingStations, masterlistData, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
+  }, [_shipments, _forecastingModel, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites, _dcIntakeRecords, activePackingStations, masterlistData, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {

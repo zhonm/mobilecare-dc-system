@@ -11,6 +11,7 @@ import {
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
+import { getShipmentRiderName } from './shipmentHelpers.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -5313,7 +5314,7 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
   ws.getCell(`D${sigRowNum}`).value = `Verified by: ${options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar'}`;
   ws.getCell(`D${sigRowNum}`).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF334155' } };
 
-  const pickupDisplay = shipment.pickup_by_name || shipment.courier_name || '';
+  const pickupDisplay = getShipmentRiderName(shipment) || shipment.pickup_by_name || shipment.courier_name || '';
   ws.getCell(`G${sigRowNum}`).value = `Pickup By: ${pickupDisplay || '—'}`;
   ws.getCell(`G${sigRowNum}`).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF334155' } };
 
