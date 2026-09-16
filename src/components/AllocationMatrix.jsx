@@ -33,9 +33,37 @@ import {
   TableProperties,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Eye,
   EyeOff
 } from 'lucide-react';
+
+// Helper for generating pagination number array with ellipsis (e.g. [1, 2, 3, 4, 5, '...', 9])
+function getPageNumbers(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const pages = [];
+  if (currentPage <= 4) {
+    for (let i = 1; i <= 5; i++) pages.push(i);
+    pages.push('...');
+    pages.push(totalPages);
+  } else if (currentPage >= totalPages - 3) {
+    pages.push(1);
+    pages.push('...');
+    for (let i = totalPages - 4; i <= totalPages; i++) pages.push(i);
+  } else {
+    pages.push(1);
+    pages.push('...');
+    pages.push(currentPage - 1);
+    pages.push(currentPage);
+    pages.push(currentPage + 1);
+    pages.push('...');
+    pages.push(totalPages);
+  }
+  return pages;
+}
 
 export default function AllocationMatrix() {
   const {
@@ -102,6 +130,8 @@ export default function AllocationMatrix() {
   const [tableSearch, setTableSearch] = useState('');
   const [localCategory, setLocalCategory] = useState('ALL');
   const [showKpiCards, setShowKpiCards] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   const isWeeklyView = activeViewMode.startsWith('week-');
   const selectedWeekNum = isWeeklyView ? parseInt(activeViewMode.replace('week-', ''), 10) : 1;
@@ -181,6 +211,58 @@ export default function AllocationMatrix() {
   const otherItems = useMemo(() => {
     return filteredAllocations.filter(item => !['DISPLAY', 'BATTERY'].includes(getPartCategory(item)));
   }, [filteredAllocations]);
+
+  // Canonical full ordered list of items: Displays first, Batteries second, Other third
+  const allOrderedItems = useMemo(() => {
+    return [...displayItems, ...batteryItems, ...otherItems];
+  }, [displayItems, batteryItems, otherItems]);
+
+  // Fast O(1) item index lookup map for global row indexing
+  const itemIndexMap = useMemo(() => {
+    const map = new Map();
+    allOrderedItems.forEach((it, idx) => {
+      const key = it.part_id || it.part_number;
+      if (key) map.set(key, idx);
+    });
+    return map;
+  }, [allOrderedItems]);
+
+  // Reset page to 1 when filters, search, or view modes change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [localCategory, tableSearch, activeViewMode, selectedCategories]);
+
+  // Calculate total pages based on selected page size
+  const totalPages = useMemo(() => {
+    if (pageSize === 'ALL') return 1;
+    return Math.max(1, Math.ceil(allOrderedItems.length / pageSize));
+  }, [allOrderedItems.length, pageSize]);
+
+  // Effective current page safely clamped within bounds
+  const effectiveCurrentPage = Math.min(currentPage, totalPages);
+
+  // Paginated subset of items for lightweight 60fps rendering
+  const paginatedItems = useMemo(() => {
+    if (pageSize === 'ALL') return allOrderedItems;
+    const start = (effectiveCurrentPage - 1) * pageSize;
+    return allOrderedItems.slice(start, start + pageSize);
+  }, [allOrderedItems, effectiveCurrentPage, pageSize]);
+
+  // Subsets on the active page
+  const pageDisplayItems = useMemo(() => {
+    return paginatedItems.filter(item => getPartCategory(item) === 'DISPLAY');
+  }, [paginatedItems]);
+
+  const pageBatteryItems = useMemo(() => {
+    return paginatedItems.filter(item => getPartCategory(item) === 'BATTERY');
+  }, [paginatedItems]);
+
+  const pageOtherItems = useMemo(() => {
+    return paginatedItems.filter(item => !['DISPLAY', 'BATTERY'].includes(getPartCategory(item)));
+  }, [paginatedItems]);
+
+  const startItem = allOrderedItems.length === 0 ? 0 : (effectiveCurrentPage - 1) * (pageSize === 'ALL' ? allOrderedItems.length : pageSize) + 1;
+  const endItem = pageSize === 'ALL' ? allOrderedItems.length : Math.min(effectiveCurrentPage * pageSize, allOrderedItems.length);
 
   // Calculate Group Summaries
   const calculateGroupTotals = useCallback((items, fallbackPrice = 150, rowOffset = 3) => {
@@ -443,7 +525,7 @@ export default function AllocationMatrix() {
         </td>
 
         {/* Sticky 2: Part # */}
-        <td className="matrix-col-sticky-2 font-mono" style={{ background: rowBg, fontWeight: 700, color: '#0f172a', fontSize: '11.5px' }}>
+        <td className="matrix-col-sticky-2 font-mono" style={{ background: rowBg, fontWeight: 700, color: '#0f172a', fontSize: '11.5px', whiteSpace: 'nowrap' }}>
           {item.part_number}
         </td>
 
@@ -973,6 +1055,52 @@ export default function AllocationMatrix() {
                 Totals
               </button>
             </div>
+
+            {/* Quick Page Navigator in Header */}
+            {totalPages > 1 && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '2px 6px', fontSize: '11px', color: '#334155' }}>
+                <span style={{ fontWeight: 600, color: '#64748b' }}>Page</span>
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage <= 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  title="Previous page"
+                  style={{
+                    padding: '2px 5px',
+                    borderRadius: '4px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage <= 1 ? '#f1f5f9' : '#ffffff',
+                    cursor: effectiveCurrentPage <= 1 ? 'not-allowed' : 'pointer',
+                    color: effectiveCurrentPage <= 1 ? '#94a3b8' : '#0f172a',
+                    display: 'inline-flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  <ChevronLeft size={12} />
+                </button>
+                <span style={{ fontWeight: 700, color: '#0284c7', minWidth: '38px', textAlign: 'center' }}>
+                  {effectiveCurrentPage} / {totalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage >= totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  title="Next page"
+                  style={{
+                    padding: '2px 5px',
+                    borderRadius: '4px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage >= totalPages ? '#f1f5f9' : '#ffffff',
+                    cursor: effectiveCurrentPage >= totalPages ? 'not-allowed' : 'pointer',
+                    color: effectiveCurrentPage >= totalPages ? '#94a3b8' : '#0f172a',
+                    display: 'inline-flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  <ChevronRight size={12} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1220,7 +1348,7 @@ export default function AllocationMatrix() {
 
               <tbody>
                 {/* DISPLAY SECTION */}
-                {displayItems.length > 0 && (
+                {pageDisplayItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
@@ -1228,55 +1356,60 @@ export default function AllocationMatrix() {
                           <Smartphone size={16} color="#0284c7" />
                           <span>DISPLAY COMMODITY {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>
-                            {displayItems.length} Parts
+                            {displayItems.length} Parts {pageSize !== 'ALL' && totalPages > 1 ? `(${pageDisplayItems.length} on page)` : ''}
                           </span>
                         </div>
                       </td>
                     </tr>
-                    {displayItems.map((item, idx) => renderItemRow(item, 'DISPLAY', idx, idx + 3))}
+                    {pageDisplayItems.map((item, idx) => {
+                      const gIdx = itemIndexMap.get(item.part_id || item.part_number) ?? idx;
+                      return renderItemRow(item, 'DISPLAY', idx, gIdx + 3);
+                    })}
                     
                     {/* DISPLAY SUB-TOTAL */}
-                    <tr style={{ background: '#f0f9ff', fontWeight: 700, borderTop: '2px solid #bae6fd', borderBottom: '2px solid #bae6fd' }}>
-                      <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0f9ff', textAlign: 'center' }}>
-                        <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>DISPLAY</span>
-                      </td>
-                      <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11px', fontWeight: 800 }}>
-                        SUB-TOTAL
-                      </td>
-                      <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11.5px', fontWeight: 700 }}>
-                        {displayItems.length} Parts Sub-Total {isWeeklyView ? `(Week ${selectedWeekNum})` : ''}
-                      </td>
-                      <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0f9ff' }}>—</td>
-                      {orderedServiceSites.map(s => (
-                        <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '11px', fontWeight: 700, background: '#f0f9ff' }}>
-                          {isWeeklyView ? (displayTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (displayTotals.perSite[s.id] || 0)}
+                    {(pageSize === 'ALL' || (displayItems.length > 0 && paginatedItems.some(it => (it.part_id || it.part_number) === (displayItems[displayItems.length - 1].part_id || displayItems[displayItems.length - 1].part_number)))) && (
+                      <tr style={{ background: '#f0f9ff', fontWeight: 700, borderTop: '2px solid #bae6fd', borderBottom: '2px solid #bae6fd' }}>
+                        <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0f9ff', textAlign: 'center' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>DISPLAY</span>
                         </td>
-                      ))}
-                      <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
-                        {isWeeklyView ? displayTotals[`totalW${selectedWeekNum}`] : displayTotals.totalQty}
-                      </td>
-                      <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
-                        ${(isWeeklyView ? displayTotals[`totalW${selectedWeekNum}Cost`] : displayTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      {!isWeeklyView && (
-                        <>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        </>
-                      )}
-                      <td style={{ background: '#f0f9ff' }}></td>
-                    </tr>
+                        <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11px', fontWeight: 800 }}>
+                          SUB-TOTAL
+                        </td>
+                        <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11.5px', fontWeight: 700 }}>
+                          {displayItems.length} Parts Sub-Total {isWeeklyView ? `(Week ${selectedWeekNum})` : ''}
+                        </td>
+                        <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0f9ff' }}>—</td>
+                        {orderedServiceSites.map(s => (
+                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '11px', fontWeight: 700, background: '#f0f9ff' }}>
+                            {isWeeklyView ? (displayTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (displayTotals.perSite[s.id] || 0)}
+                          </td>
+                        ))}
+                        <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                          {isWeeklyView ? displayTotals[`totalW${selectedWeekNum}`] : displayTotals.totalQty}
+                        </td>
+                        <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
+                          ${(isWeeklyView ? displayTotals[`totalW${selectedWeekNum}Cost`] : displayTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        {!isWeeklyView && (
+                          <>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0fdf4' }}>${displayTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          </>
+                        )}
+                        <td style={{ background: '#f0f9ff' }}></td>
+                      </tr>
+                    )}
                   </>
                 )}
 
                 {/* BATTERY SECTION */}
-                {batteryItems.length > 0 && (
+                {pageBatteryItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
@@ -1284,55 +1417,60 @@ export default function AllocationMatrix() {
                           <BatteryCharging size={16} color="#15803d" />
                           <span>BATTERY COMMODITY {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>
-                            {batteryItems.length} Parts
+                            {batteryItems.length} Parts {pageSize !== 'ALL' && totalPages > 1 ? `(${pageBatteryItems.length} on page)` : ''}
                           </span>
                         </div>
                       </td>
                     </tr>
-                    {batteryItems.map((item, idx) => renderItemRow(item, 'BATTERY', idx, idx + 25))}
+                    {pageBatteryItems.map((item, idx) => {
+                      const gIdx = itemIndexMap.get(item.part_id || item.part_number) ?? idx;
+                      return renderItemRow(item, 'BATTERY', idx, gIdx + 3);
+                    })}
                     
                     {/* BATTERY SUB-TOTAL */}
-                    <tr style={{ background: '#f0fdf4', fontWeight: 700, borderTop: '2px solid #bbf7d0', borderBottom: '2px solid #bbf7d0' }}>
-                      <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0fdf4', textAlign: 'center' }}>
-                        <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#16a34a', color: '#ffffff' }}>BATTERY</span>
-                      </td>
-                      <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11px', fontWeight: 800 }}>
-                        SUB-TOTAL
-                      </td>
-                      <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11.5px', fontWeight: 700 }}>
-                        {batteryItems.length} Parts Sub-Total {isWeeklyView ? `(Week ${selectedWeekNum})` : ''}
-                      </td>
-                      <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0fdf4' }}>—</td>
-                      {orderedServiceSites.map(s => (
-                        <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#15803d', fontSize: '11px', fontWeight: 700, background: '#f0fdf4' }}>
-                          {isWeeklyView ? (batteryTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (batteryTotals.perSite[s.id] || 0)}
+                    {(pageSize === 'ALL' || (batteryItems.length > 0 && paginatedItems.some(it => (it.part_id || it.part_number) === (batteryItems[batteryItems.length - 1].part_id || batteryItems[batteryItems.length - 1].part_number)))) && (
+                      <tr style={{ background: '#f0fdf4', fontWeight: 700, borderTop: '2px solid #bbf7d0', borderBottom: '2px solid #bbf7d0' }}>
+                        <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0fdf4', textAlign: 'center' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#16a34a', color: '#ffffff' }}>BATTERY</span>
                         </td>
-                      ))}
-                      <td style={{ textAlign: 'center', background: '#dcfce7', color: '#15803d', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
-                        {isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}`] : batteryTotals.totalQty}
-                      </td>
-                      <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0fdf4' }}>
-                        ${(isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}Cost`] : batteryTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      {!isWeeklyView && (
-                        <>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        </>
-                      )}
-                      <td style={{ background: '#f0fdf4' }}></td>
-                    </tr>
+                        <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11px', fontWeight: 800 }}>
+                          SUB-TOTAL
+                        </td>
+                        <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11.5px', fontWeight: 700 }}>
+                          {batteryItems.length} Parts Sub-Total {isWeeklyView ? `(Week ${selectedWeekNum})` : ''}
+                        </td>
+                        <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0fdf4' }}>—</td>
+                        {orderedServiceSites.map(s => (
+                          <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#15803d', fontSize: '11px', fontWeight: 700, background: '#f0fdf4' }}>
+                            {isWeeklyView ? (batteryTotals[`siteW${selectedWeekNum}Totals`]?.[s.id] || 0) : (batteryTotals.perSite[s.id] || 0)}
+                          </td>
+                        ))}
+                        <td style={{ textAlign: 'center', background: '#dcfce7', color: '#15803d', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                          {isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}`] : batteryTotals.totalQty}
+                        </td>
+                        <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0fdf4' }}>
+                          ${(isWeeklyView ? batteryTotals[`totalW${selectedWeekNum}Cost`] : batteryTotals.totalCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        {!isWeeklyView && (
+                          <>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          </>
+                        )}
+                        <td style={{ background: '#f0fdf4' }}></td>
+                      </tr>
+                    )}
                   </>
                 )}
 
                 {/* OTHER ITEMS */}
-                {otherItems.length > 0 && (
+                {pageOtherItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
@@ -1340,12 +1478,15 @@ export default function AllocationMatrix() {
                           <Layers size={16} color="#64748b" />
                           <span>OTHER COMMODITIES {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#f1f5f9', color: '#475569', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>
-                            {otherItems.length} Parts
+                            {otherItems.length} Parts {pageSize !== 'ALL' && totalPages > 1 ? `(${pageOtherItems.length} on page)` : ''}
                           </span>
                         </div>
                       </td>
                     </tr>
-                    {otherItems.map((item, idx) => renderItemRow(item, 'OTHER', idx, idx + displayItems.length + batteryItems.length + 3))}
+                    {pageOtherItems.map((item, idx) => {
+                      const gIdx = itemIndexMap.get(item.part_id || item.part_number) ?? idx;
+                      return renderItemRow(item, 'OTHER', idx, gIdx + 3);
+                    })}
                   </>
                 )}
               </tbody>
@@ -1433,6 +1574,213 @@ export default function AllocationMatrix() {
                 </tr>
               </tfoot>
             </table>
+          </div>
+
+          {/* Numbered Pagination Toolbar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 18px',
+            background: '#ffffff',
+            borderTop: '1px solid #e2e8f0',
+            flexWrap: 'wrap',
+            gap: '12px'
+          }}>
+            {/* Left: Summary & Page Size selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '12.5px', color: '#475569' }}>
+                Showing <strong style={{ color: '#0f172a' }}>{startItem}</strong> to <strong style={{ color: '#0f172a' }}>{endItem}</strong> of <strong style={{ color: '#0f172a' }}>{allOrderedItems.length}</strong> parts
+                {isMatrixFiltered && <span style={{ color: '#64748b', fontSize: '11.5px' }}> (filtered from {(effectiveAllocations || []).length})</span>}
+              </span>
+
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '12px', color: '#64748b' }}>Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    const val = e.target.value === 'ALL' ? 'ALL' : Number(e.target.value);
+                    setPageSize(val);
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    fontSize: '12px',
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value={25}>25 rows</option>
+                  <option value={50}>50 rows</option>
+                  <option value={100}>100 rows</option>
+                  <option value="ALL">All ({allOrderedItems.length})</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Right: Numbered Pagination Controls (1, 2, 3, 4, etc.) */}
+            {totalPages > 1 && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                {/* First Page */}
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage <= 1}
+                  onClick={() => {
+                    setCurrentPage(1);
+                    tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  title="First page"
+                  style={{
+                    minWidth: '30px',
+                    height: '30px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage <= 1 ? '#f8fafc' : '#ffffff',
+                    color: effectiveCurrentPage <= 1 ? '#cbd5e1' : '#334155',
+                    cursor: effectiveCurrentPage <= 1 ? 'not-allowed' : 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+
+                {/* Previous Page */}
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage <= 1}
+                  onClick={() => {
+                    setCurrentPage(p => Math.max(1, p - 1));
+                    tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  title="Previous page"
+                  style={{
+                    height: '30px',
+                    padding: '0 8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage <= 1 ? '#f8fafc' : '#ffffff',
+                    color: effectiveCurrentPage <= 1 ? '#cbd5e1' : '#334155',
+                    cursor: effectiveCurrentPage <= 1 ? 'not-allowed' : 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600
+                  }}
+                >
+                  <ChevronLeft size={14} />
+                  <span>Prev</span>
+                </button>
+
+                {/* Numbered Page Buttons: 1, 2, 3, 4, etc. */}
+                {getPageNumbers(effectiveCurrentPage, totalPages).map((p, pIdx) => {
+                  if (p === '...') {
+                    return (
+                      <span
+                        key={`dots-${pIdx}`}
+                        style={{
+                          minWidth: '24px',
+                          textAlign: 'center',
+                          color: '#94a3b8',
+                          fontSize: '13px',
+                          userSelect: 'none'
+                        }}
+                      >
+                        …
+                      </span>
+                    );
+                  }
+                  const isCurrent = p === effectiveCurrentPage;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => {
+                        setCurrentPage(p);
+                        tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      style={{
+                        minWidth: '32px',
+                        height: '30px',
+                        padding: '0 6px',
+                        borderRadius: '6px',
+                        border: isCurrent ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                        background: isCurrent ? '#0284c7' : '#ffffff',
+                        color: isCurrent ? '#ffffff' : '#1e293b',
+                        fontWeight: isCurrent ? 700 : 500,
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        boxShadow: isCurrent ? '0 1px 2px rgba(2, 132, 199, 0.25)' : 'none',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+
+                {/* Next Page */}
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage >= totalPages}
+                  onClick={() => {
+                    setCurrentPage(p => Math.min(totalPages, p + 1));
+                    tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  title="Next page"
+                  style={{
+                    height: '30px',
+                    padding: '0 8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage >= totalPages ? '#f8fafc' : '#ffffff',
+                    color: effectiveCurrentPage >= totalPages ? '#cbd5e1' : '#334155',
+                    cursor: effectiveCurrentPage >= totalPages ? 'not-allowed' : 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600
+                  }}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={14} />
+                </button>
+
+                {/* Last Page */}
+                <button
+                  type="button"
+                  disabled={effectiveCurrentPage >= totalPages}
+                  onClick={() => {
+                    setCurrentPage(totalPages);
+                    tableContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  title="Last page"
+                  style={{
+                    minWidth: '30px',
+                    height: '30px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    background: effectiveCurrentPage >= totalPages ? '#f8fafc' : '#ffffff',
+                    color: effectiveCurrentPage >= totalPages ? '#cbd5e1' : '#334155',
+                    cursor: effectiveCurrentPage >= totalPages ? 'not-allowed' : 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  <ChevronsRight size={14} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

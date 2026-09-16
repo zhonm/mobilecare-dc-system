@@ -3089,9 +3089,28 @@ export default function ScanOutPacking() {
                     </td>
                     <td style={{ fontSize: '12px' }}>
                       <div><strong>{s.carrier || s.courier || 'Lite Express'}</strong></div>
-                      <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
-                        {s.tracking_number ? `#${s.tracking_number}` : 'Pending Tracking'}
-                      </span>
+                      {s.tracking_number ? (
+                        <div
+                          className="font-mono select-all"
+                          style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            color: '#0f172a',
+                            marginTop: '1.5px',
+                            letterSpacing: '0.02em'
+                          }}
+                          title="Waybill Number"
+                        >
+                          <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', marginRight: '3px', textTransform: 'uppercase' }}>
+                            Waybill
+                          </span>
+                          #{s.tracking_number}
+                        </div>
+                      ) : (
+                        <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
+                          Pending Tracking
+                        </span>
+                      )}
                       {(() => {
                         const rider = getShipmentRiderName(s, shipments) || s.pickup_by_name || s.courier_name;
                         if (!rider) return null;

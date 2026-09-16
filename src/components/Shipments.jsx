@@ -945,9 +945,29 @@ export default function Shipments() {
         </td>
         <td>
           <div style={{ fontWeight: 600, color: '#0f172a' }}>{getShipmentCourierDisplay(sh)}</div>
-          <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
-            {sh.tracking_number ? `#${sh.tracking_number}` : <span style={{ fontStyle: 'italic', opacity: 0.7 }}>No Tracking #</span>}
-          </div>
+          {sh.tracking_number ? (
+            <div
+              className="font-mono select-all"
+              style={{
+                fontSize: '13.5px',
+                fontWeight: 700,
+                color: '#0f172a',
+                marginTop: '1.5px',
+                letterSpacing: '0.02em',
+                lineHeight: 1.3
+              }}
+              title="Waybill Number"
+            >
+              <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', marginRight: '3px', textTransform: 'uppercase' }}>
+                Waybill
+              </span>
+              #{sh.tracking_number}
+            </div>
+          ) : (
+            <div className="font-mono" style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontStyle: 'italic', opacity: 0.7 }}>
+              No Tracking #
+            </div>
+          )}
           {(() => {
             const rider = getShipmentRiderName(sh, shipments);
             if (!rider) return null;
@@ -2765,7 +2785,7 @@ export default function Shipments() {
                     </span>
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#047857' }}>
-                    Courier: <strong>{getShipmentCourierDisplay(receiveModalState.shipment)}</strong> • Tracking: <strong>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
+                    Courier: <strong>{getShipmentCourierDisplay(receiveModalState.shipment)}</strong> • Waybill: <strong className="font-mono select-all" style={{ fontSize: '13px', color: '#065f46' }}>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
                   </div>
                 </div>
 
@@ -3044,7 +3064,7 @@ export default function Shipments() {
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                     gap: '12px',
                     background: '#f8fafc',
                     border: '1px solid #e2e8f0',
@@ -3082,11 +3102,30 @@ export default function Shipments() {
                     <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
                       {getShipmentCourierDisplay(sh)}
                     </div>
-                    <div style={{ fontSize: '11.5px', color: '#475569', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
-                      {sh?.tracking_number
-                        ? `Waybill #${sh.tracking_number}`
-                        : 'Direct Transfer / Hand Carry'}
-                    </div>
+                    {sh?.tracking_number ? (
+                      <div
+                        className="font-mono select-all"
+                        style={{
+                          marginTop: '3px',
+                          fontSize: '13.5px',
+                          fontWeight: 700,
+                          color: '#0f172a',
+                          whiteSpace: 'nowrap',
+                          letterSpacing: '0.02em',
+                          lineHeight: 1.3
+                        }}
+                        title="Waybill Number (Click to copy/select)"
+                      >
+                        <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', marginRight: '4px', textTransform: 'uppercase' }}>
+                          Waybill
+                        </span>
+                        #{sh.tracking_number}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '11.5px', color: '#94a3b8', fontStyle: 'italic', marginTop: '2px' }}>
+                        Direct Transfer / Hand Carry
+                      </div>
+                    )}
                   </div>
 
                   <div>
