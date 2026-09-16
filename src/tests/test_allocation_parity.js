@@ -29,10 +29,9 @@ console.log('TEST SUITE: Master Allocation Matrix Parity & Model Switching');
 console.log('====================================================');
 
 // 1. Validate Canonical Sites Configuration
-assert(CANONICAL_SITE_CODES.length === 27, `CANONICAL_SITE_CODES contains exactly 27 active service branches (actual: ${CANONICAL_SITE_CODES.length})`);
-assert(CANONICAL_SITE_CODES.includes('APP ILO'), `CANONICAL_SITE_CODES includes 'APP ILO'`);
+assert(CANONICAL_SITE_CODES.length === 26, `CANONICAL_SITE_CODES contains exactly 26 active service branches (actual: ${CANONICAL_SITE_CODES.length})`);
+assert(!CANONICAL_SITE_CODES.includes('APP ILO'), `CANONICAL_SITE_CODES does not include decommissioned 'APP ILO'`);
 assert(!CANONICAL_SITE_CODES.includes('APPILO'), `CANONICAL_SITE_CODES does not contain malformed 'APPILO'`);
-assert(CANONICAL_SITE_CODES.indexOf('APP ILO') === 20, `'APP ILO' is at index 20 (between ASP ILO and ASP CEB)`);
 
 const mockActiveSites = CANONICAL_SITE_LIST.map((s, idx) => ({
   id: `site-${idx + 1}`,
@@ -43,7 +42,7 @@ const mockActiveSites = CANONICAL_SITE_LIST.map((s, idx) => ({
 }));
 
 const consistency = validateSiteSharesConsistency(mockActiveSites);
-assert(consistency.isValid === true, `validateSiteSharesConsistency passes for 27 active service branches`);
+assert(consistency.isValid === true, `validateSiteSharesConsistency passes for 26 active service branches`);
 
 // 2. Part 661-21988 (Display, iPhone 13) Linear Regression Forecast Validation
 const iphone13DispJanJul = [49, 44, 46, 33, 25, 34, 17];
@@ -76,7 +75,7 @@ const fesAlloc = sepLinearAlloc.find(s => s.siteId === 'site-13'); // APP FES
 const bhsAlloc = sepLinearAlloc.find(s => s.siteId === 'site-1');  // APP BHS
 
 assert(vnAlloc?.allocatedQty === 3, `ASP VN receives 3 units of iPhone 13 display (actual: ${vnAlloc?.allocatedQty})`);
-assert(nagAlloc?.allocatedQty === 3, `ASP NAG receives 3 units of iPhone 13 display (actual: ${nagAlloc?.allocatedQty})`);
+assert(nagAlloc?.allocatedQty === 2, `ASP NAG receives 2 units of iPhone 13 display (actual: ${nagAlloc?.allocatedQty})`);
 assert(fesAlloc?.allocatedQty === 2, `APP FES receives 2 units of iPhone 13 display (actual: ${fesAlloc?.allocatedQty})`);
 assert(bhsAlloc?.allocatedQty === 0, `APP BHS receives 0 units of iPhone 13 display (actual: ${bhsAlloc?.allocatedQty})`);
 

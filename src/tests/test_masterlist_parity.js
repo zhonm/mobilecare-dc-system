@@ -60,7 +60,7 @@ async function runSeptemberParityTests() {
   // 1. Ingestion & Filtering Validation
   assert(resultOptionA.records.length === 4660, `Step 2 Filter matched exactly 4,660 in-scope rows (actual: ${resultOptionA.records.length})`);
   assert(resultOptionA.summary.partsCount === 41, `Extracted exactly 41 iPhone parts: 21 Displays + 20 Batteries (actual: ${resultOptionA.summary.partsCount})`);
-  assert(resultOptionA.summary.sitesCount === 27, `Mapped across all 27 canonical service sites (actual: ${resultOptionA.summary.sitesCount})`);
+  assert(resultOptionA.summary.sitesCount === 26, `Mapped across all 26 canonical service sites (actual: ${resultOptionA.summary.sitesCount})`);
 
   // 2. Trailing Window & Forecasts Validation
   const wsF = wb.Sheets['Battery&Display Forecasting'];
@@ -307,6 +307,99 @@ async function runAugustParityTests() {
   assert(weeklySplitErrors === 0, `August 4-week splits strictly balance to monthly totals for all 41 parts (errors: ${weeklySplitErrors})`);
 }
 
+async function runOctoberParityTests() {
+  console.log('\n===============================================================');
+  console.log('TEST SUITE 3: October 2026 Masterlist Reference Validation');
+  console.log('===============================================================');
+
+  const filePath = 'Battery & Display (Allocation) - October 2026.xlsx';
+  const csvPath = 'october masterlist.csv';
+  if (!fs.existsSync(filePath) && !fs.existsSync(csvPath)) {
+    console.log(`Note: Neither '${filePath}' nor '${csvPath}' found. Skipping Suite 3.`);
+    return;
+  }
+
+  // 1. Validate Masterlist sheet in XLSX vs CSV
+  if (fs.existsSync(filePath) && fs.existsSync(csvPath)) {
+    const csvText = fs.readFileSync(csvPath, 'utf8');
+    const wbCsv = XLSX.read(csvText, { type: 'string' });
+    const csvRows = XLSX.utils.sheet_to_json(wbCsv.Sheets[wbCsv.SheetNames[0]], { header: 1 });
+
+    const wb = XLSX.readFile(filePath);
+    const wsM = wb.Sheets['Masterlist'];
+    const mRows = XLSX.utils.sheet_to_json(wsM, { header: 1 });
+
+    assert(csvRows.length === mRows.length - 1, `CSV rows (${csvRows.length}) match Excel Masterlist data rows (${mRows.length - 1})`);
+  }
+
+  // 2. Test Ingestion of October Masterlist (True October Forecast: Jan-Sep 9 months trailing, target x=10)
+  const rawRows = fs.existsSync(csvPath)
+    ? XLSX.utils.sheet_to_json(XLSX.read(fs.readFileSync(csvPath, 'utf8'), { type: 'string' }).Sheets[XLSX.read(fs.readFileSync(csvPath, 'utf8'), { type: 'string' }).SheetNames[0]], { header: 1, defval: '' })
+    : XLSX.utils.sheet_to_json(XLSX.readFile(filePath).Sheets['Masterlist'], { header: 1, defval: '' });
+
+  const resultOctoberOptionB = processRawUsageSheet(rawRows, CANONICAL_SITE_LIST, [], {
+    filterScope: 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+    selectedMonth: 'auto',
+    fileName: 'october masterlist.csv',
+    allocationMode: 'OPTION_B'
+  });
+
+  assert(resultOctoberOptionB.records.length === 5425, `Step 2 Filter matched exactly 5,425 in-scope rows (actual: ${resultOctoberOptionB.records.length})`);
+  assert(resultOctoberOptionB.forecastItems.length === 41, `Extracted exactly 41 canonical iPhone parts (21 Displays + 20 Batteries) (actual: ${resultOctoberOptionB.forecastItems.length})`);
+  assert(resultOctoberOptionB.sites.length === 26, `Mapped across all 26 canonical service sites with APP ILO removed (actual: ${resultOctoberOptionB.sites.length})`);
+  assert(resultOctoberOptionB.summary.totalForecastedUnits === 639, `True October 2026 forecast (Month 10 regression) equals 639 units (actual: ${resultOctoberOptionB.summary.totalForecastedUnits})`);
+  assert(resultOctoberOptionB.summary.totalAllocatedUnits === 639, `Option B strictly preserves 639 total allocated units with zero drift (actual: ${resultOctoberOptionB.summary.totalAllocatedUnits})`);
+  assert(resultOctoberOptionB.summary.totalValuation === 94001, `True October 2026 total valuation is $94,001.00 (actual: $${resultOctoberOptionB.summary.totalValuation})`);
+
+  // 3. Test Legacy Spreadsheet Parity (Jan-Aug 8 months trailing, target x=9)
+  const resultLegacyOptionA = processRawUsageSheet(rawRows, CANONICAL_SITE_LIST, [], {
+    filterScope: 'IPHONE_13_PLUS_BATTERY_DISPLAY',
+    selectedMonth: 8,
+    fileName: 'September 2026.xlsx',
+    allocationMode: 'OPTION_A'
+  });
+
+  assert(resultLegacyOptionA.summary.totalForecastedUnits === 777, `Legacy 8-month window forecast equals 777 units matching Google Sheet (actual: ${resultLegacyOptionA.summary.totalForecastedUnits})`);
+
+  if (fs.existsSync(filePath)) {
+    const wb = XLSX.readFile(filePath);
+    const wsF = wb.Sheets['Battery&Display Forecasting'];
+    const fRows = XLSX.utils.sheet_to_json(wsF, { header: 1, defval: '' });
+
+    let forecastMismatches = 0;
+    for (let r = 2; r <= 21; r++) {
+      const desc = fRows[r][1];
+      const refForecast = fRows[r][10];
+      const parsedItem = resultLegacyOptionA.forecastItems.find(f => f.description === desc);
+      if (!parsedItem || parsedItem.final_forecast !== refForecast) {
+        forecastMismatches++;
+      }
+    }
+    for (let r = 34; r <= 54; r++) {
+      const desc = fRows[r][1];
+      const refForecast = fRows[r][10];
+      const parsedItem = resultLegacyOptionA.forecastItems.find(f => f.description === desc);
+      if (!parsedItem || parsedItem.final_forecast !== refForecast) {
+        forecastMismatches++;
+      }
+    }
+    assert(forecastMismatches === 0, `Legacy forecasts match Google Sheet 100% across all 41 parts (mismatches: ${forecastMismatches})`);
+  }
+
+  // 4. Verify 4-Week splits balancing for October
+  let weeklySplitErrors = 0;
+  resultOctoberOptionB.allocations.forEach((alloc, idx) => {
+    const excelRow = idx < 21 ? idx + 3 : idx + 4;
+    const totalQty = alloc.total_allocated_qty;
+    const totalCost = alloc.total_stock_cost;
+    const split = calculateWeeklySplit(totalQty, totalCost, excelRow);
+
+    const sumQty = split.w1_qty + split.w2_qty + split.w3_qty + split.w4_qty;
+    if (sumQty !== totalQty) weeklySplitErrors++;
+  });
+  assert(weeklySplitErrors === 0, `October 4-week splits strictly balance to monthly totals for all 41 parts (errors: ${weeklySplitErrors})`);
+}
+
 async function main() {
   console.log('===============================================================');
   console.log('STARTING MDC SYSTEM 2 MASTERLIST PARITY VALIDATION');
@@ -314,6 +407,7 @@ async function main() {
 
   await runSeptemberParityTests();
   await runAugustParityTests();
+  await runOctoberParityTests();
 
   console.log('\n===============================================================');
   console.log(`TEST RESULTS: ${passedTests}/${totalTests} PASSED (${failedTests} FAILED)`);

@@ -4,6 +4,7 @@ import mobilecareNoBGLogo from '../assets/mobilecareNoBGLogo.png';
 import { getCategoryForPart } from '../utils/categoryFilter';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import { resolveSafeRegion } from '../constants/config';
+import { enrichSiteWithDirectory } from '../constants/branchDirectory';
 import {
   Settings,
   Plus,
@@ -292,10 +293,13 @@ export default function SettingsCatalog() {
   }, [sites, editingSite?.region, editingSite?.code, newSite.region, newSite.code]);
 
   const filteredSites = useMemo(() => {
-    const valid = (sites || []).filter(s =>
-      !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-      !String(s.address || '').toUpperCase().includes('SM ILOILO')
-    );
+    const valid = (sites || [])
+      .filter(s =>
+        !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+        !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+        (s.code || '').toUpperCase() !== 'APP ILO'
+      )
+      .map(s => enrichSiteWithDirectory(s));
     if (!siteSearch.trim()) return valid.sort((a, b) => (a.name || a.code || '').localeCompare(b.name || b.code || ''));
     const q = siteSearch.toLowerCase();
     return valid.filter(s =>
@@ -554,7 +558,7 @@ export default function SettingsCatalog() {
             <span>System configuration</span>
           </div>
         </div>
-        <div className="settings-nav-group-label">Catalog</div>
+        <div className="settings-nav-group-label">Catalog &amp; Network</div>
         <button
           type="button"
           className={`settings-nav-item ${activeTab === 'parts' ? 'active' : ''}`}
@@ -585,15 +589,17 @@ export default function SettingsCatalog() {
           <span className="settings-nav-count">{categories.length}</span>
         </button>
 
+        <div className="settings-nav-group-label">Operations &amp; Compliance</div>
         <button
           type="button"
           className={`settings-nav-item ${activeTab === 'supervisor' ? 'active' : ''}`}
           onClick={() => setActiveTab('supervisor')}
         >
           <FileText size={17} />
-          <span>Supervisor &amp; Declaration Form</span>
+          <span>Supervisor &amp; Declaration</span>
         </button>
 
+        <div className="settings-nav-group-label">System &amp; Security</div>
         <button
           type="button"
           className={`settings-nav-item ${activeTab === 'security' ? 'active' : ''}`}
@@ -601,14 +607,11 @@ export default function SettingsCatalog() {
         >
           <Clock size={17} />
           <span>Session &amp; Auto-Logout</span>
-          <span className="settings-nav-count"
+          <span
+            className="settings-nav-pill-badge"
             style={{
               background: autoLogoutConfig?.enabled ? '#dcfce7' : '#fee2e2',
-              color: autoLogoutConfig?.enabled ? '#15803d' : '#b91c1c',
-              padding: '2px 8px',
-              borderRadius: '12px',
-              fontSize: '11px',
-              fontWeight: 700
+              color: autoLogoutConfig?.enabled ? '#15803d' : '#b91c1c'
             }}
           >
             {autoLogoutConfig?.enabled ? '12:00 AM' : 'Off'}
@@ -621,17 +624,27 @@ export default function SettingsCatalog() {
           onClick={() => setActiveTab('egress')}
         >
           <Database size={17} />
-          <span>Supabase Cloud Database</span>
-          <span className="settings-nav-status"
+          <span>Supabase Cloud DB</span>
+          <span
+            className="settings-nav-pill-badge"
             style={{
-              width: '9px',
-              height: '9px',
-              borderRadius: '50%',
-              background: realtimeConnected ? '#10b981' : '#f59e0b',
-              display: 'inline-block',
-              boxShadow: realtimeConnected ? '0 0 8px #10b981' : 'none'
+              background: realtimeConnected ? '#ecfdf5' : '#fffbeb',
+              color: realtimeConnected ? '#047857' : '#b45309',
+              border: `1px solid ${realtimeConnected ? '#a7f3d0' : '#fde68a'}`
             }}
-          />
+          >
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                background: realtimeConnected ? '#10b981' : '#f59e0b',
+                display: 'inline-block',
+                boxShadow: realtimeConnected ? '0 0 6px #10b981' : 'none'
+              }}
+            />
+            <span>{realtimeConnected ? 'Live' : 'Standby'}</span>
+          </span>
         </button>
 
       </div>
@@ -728,49 +741,63 @@ export default function SettingsCatalog() {
                   </div>
                 </div>
 
-                {/* Row 2: Pricing & Action */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', alignItems: 'flex-end', background: '#f8fafc', padding: '16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
-                      Stocking Price ($)
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 700, fontSize: '14px' }}>$</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="form-input font-mono"
-                        placeholder="0.00"
-                        value={newStockPrice}
-                        onChange={(e) => setNewStockPrice(e.target.value)}
-                        style={{ paddingLeft: '28px', height: '42px', fontSize: '14px', fontWeight: 700, color: '#047857', borderRadius: '8px' }}
-                      />
+                {/* Row 2: Pricing & Action Bar */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '16px',
+                  background: '#f8fafc',
+                  padding: '16px 20px',
+                  borderRadius: '10px',
+                  border: '1px solid #e2e8f0'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+                    <div className="form-group" style={{ marginBottom: 0, minWidth: '180px' }}>
+                      <label className="form-label" style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#334155' }}>
+                        Stocking Price ($)
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', fontWeight: 700, fontSize: '14px' }}>$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          className="form-input font-mono"
+                          placeholder="0.00"
+                          value={newStockPrice}
+                          onChange={(e) => setNewStockPrice(e.target.value)}
+                          style={{ paddingLeft: '28px', height: '42px', fontSize: '14px', fontWeight: 700, color: '#047857', borderRadius: '8px', width: '160px' }}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '12.5px', color: '#64748b', maxWidth: '380px', lineHeight: 1.4 }}>
+                      <span style={{ fontWeight: 600, color: '#334155' }}>Realtime Cloud Sync:</span> Registered parts instantly update catalog master records and sync across all DC workstations.
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', height: '42px' }}>
-                    <button
-                      type="submit"
-                      className="btn btn-primary"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
-                        border: 'none',
-                        fontWeight: 700,
-                        fontSize: '13.5px',
-                        borderRadius: '8px',
-                        boxShadow: '0 2px 6px rgba(2,132,199,0.25)'
-                      }}
-                    >
-                      <Plus size={16} />
-                      <span>Add Part to Catalog</span>
-                    </button>
-                  </div>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    style={{
+                      height: '42px',
+                      padding: '0 24px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '13.5px',
+                      borderRadius: '8px',
+                      boxShadow: '0 2px 6px rgba(2,132,199,0.25)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Plus size={16} />
+                    <span>Add Part to Catalog</span>
+                  </button>
                 </div>
               </form>
             )}
@@ -792,11 +819,11 @@ export default function SettingsCatalog() {
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                <div style={{ background: '#f0f9ff', color: '#0284c7', width: '42px', height: '42px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ background: '#f0f9ff', color: '#0284c7', width: '42px', height: '42px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <Smartphone size={22} />
                 </div>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                     <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
                       Parts Master Catalog
                     </h3>
@@ -807,7 +834,8 @@ export default function SettingsCatalog() {
                         padding: '3px 10px',
                         borderRadius: '14px',
                         fontSize: '12px',
-                        fontWeight: 700
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap'
                       }}
                     >
                       {filteredParts.length} of {parts.length} Parts
@@ -819,9 +847,9 @@ export default function SettingsCatalog() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 320px', justifyContent: 'flex-end' }}>
                 {/* Search Bar */}
-                <div style={{ position: 'relative', width: '280px' }}>
+                <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: '300px' }}>
                   <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
@@ -845,7 +873,7 @@ export default function SettingsCatalog() {
                 {/* Category Filter */}
                 <select
                   className="form-select"
-                  style={{ height: '40px', fontSize: '13.5px', width: '220px', borderRadius: '8px' }}
+                  style={{ height: '40px', fontSize: '13.5px', flex: '1 1 180px', maxWidth: '240px', borderRadius: '8px' }}
                   value={selectedCategoryFilter}
                   onChange={(e) => setSelectedCategoryFilter(e.target.value)}
                 >
@@ -936,7 +964,22 @@ export default function SettingsCatalog() {
                             {p.description}
                           </td>
                           <td style={{ padding: '14px 14px', color: '#334155', fontSize: '13px' }}>
-                            <span style={{ background: '#f1f5f9', padding: '4px 10px', borderRadius: '6px', color: '#334155', fontWeight: 600 }}>
+                            <span
+                              style={{
+                                background: '#f1f5f9',
+                                padding: '4px 10px',
+                                borderRadius: '6px',
+                                color: '#334155',
+                                fontWeight: 600,
+                                display: 'inline-block',
+                                maxWidth: '180px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                verticalAlign: 'middle'
+                              }}
+                              title={p.iphone_model || 'iPhone'}
+                            >
                               {p.iphone_model || 'iPhone'}
                             </span>
                           </td>
@@ -1214,9 +1257,9 @@ export default function SettingsCatalog() {
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 320px', justifyContent: 'flex-end' }}>
                 {/* Search */}
-                <div style={{ position: 'relative' }}>
+                <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: '300px' }}>
                   <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                   <input
                     type="text"
@@ -1224,7 +1267,7 @@ export default function SettingsCatalog() {
                     value={siteSearch}
                     onChange={e => setSiteSearch(e.target.value)}
                     style={{ paddingLeft: '36px', paddingRight: '12px', height: '40px',
-                      fontSize: '13.5px', border: '1px solid #cbd5e1', borderRadius: '8px', width: '280px' }}
+                      fontSize: '13.5px', border: '1px solid #cbd5e1', borderRadius: '8px', width: '100%' }}
                   />
                 </div>
                 <button
@@ -1289,6 +1332,10 @@ export default function SettingsCatalog() {
                             <span className="badge badge-neutral font-mono" style={{ fontSize: '12px', letterSpacing: '0.4px', fontWeight: 600, padding: '3px 8px' }}>
                               {s.ship_to}
                             </span>
+                          ) : s.code === 'ASP COT' ? (
+                            <span className="badge badge-neutral" style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', padding: '2px 7px' }} title="GSX Ship-To awaiting Apple assignment">
+                              Pending GSX
+                            </span>
                           ) : (
                             <span style={{ color: '#cbd5e1', fontStyle: 'italic', fontSize: '12px' }}>—</span>
                           )}
@@ -1334,8 +1381,9 @@ export default function SettingsCatalog() {
                               className="btn btn-secondary btn-sm"
                               title="Edit branch"
                               onClick={() => {
-                                const safeReg = resolveSafeRegion(s.code, s.region);
-                                setEditingSite({ ...s, region: safeReg });
+                                const enriched = enrichSiteWithDirectory(s);
+                                const safeReg = resolveSafeRegion(enriched.code, enriched.region);
+                                setEditingSite({ ...enriched, region: safeReg });
                                 setCustomRegionEditMode(false);
                               }}
                               style={{ padding: '5px 9px', fontSize: '12px', borderRadius: '6px' }}

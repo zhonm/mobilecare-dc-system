@@ -3,7 +3,7 @@ export const LIVE_MASTER_RECORD_ID = '00000000-0000-0000-0000-000000000001';
 export const CANONICAL_SITE_CODES = [
   'APP BHS', 'APP GB3', 'APP PPM', 'ASP GL5', 'ASP SMS', 'APP MOA', 'ASP POD',
   'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP FES', 'ASP MRK',
-  'APP RM', 'ASP LIM', 'ASP NPM', 'ASP NAG', 'ASP LAU', 'ASP ILO', 'APP ILO', 'ASP CEB',
+  'APP RM', 'ASP LIM', 'ASP NPM', 'ASP NAG', 'ASP LAU', 'ASP ILO', 'ASP CEB',
   'ASP ZAM', 'ASP ABR', 'ASP COT', 'ASP CDO', 'APP LAN'
 ];
 
@@ -28,7 +28,6 @@ export const CANONICAL_SITE_LIST = [
   { code: 'ASP NAG', name: 'MOBILECARE - NAGA' },
   { code: 'ASP LAU', name: 'MOBILECARE - LA UNION' },
   { code: 'ASP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' },
-  { code: 'APP ILO', name: 'MOBILECARE - APP SM ILOILO' },
   { code: 'ASP CEB', name: 'MOBILECARE - CEBU' },
   { code: 'ASP ZAM', name: 'MOBILECARE - ZAMBOANGA' },
   { code: 'ASP ABR', name: 'MOBILECARE - DAVAO' },
@@ -46,7 +45,6 @@ export const CANONICAL_SITE_REGIONS = {
   'ASP LAU': 'La Union',
   'ASP NAG': 'Camarines Sur',
   'ASP ILO': 'Iloilo',
-  'APP ILO': 'Iloilo',
   'ASP CEB': 'Cebu',
   'ASP LIM': 'Batangas',
   'ASP NPM': 'Pampanga'
@@ -138,7 +136,7 @@ export const CANONICAL_SITE_WEIGHTS = {
   'NEWPOINT': 0.048, 'NPM': 0.048, 'NES': 0.048, 'GB3': 0.042, 'CEBU': 0.038,
   'CEB': 0.038, 'DAVAO': 0.032, 'DVO': 0.032, 'MEG': 0.030, 'TRI': 0.028,
   'PPM': 0.025, 'ANX': 0.022, 'MRK': 0.020, 'RM': 0.019, 'BACOLOD': 0.018,
-  'CDO': 0.016, 'GENSAN': 0.012, 'ILOILO': 0.010, 'ILO': 0.010, 'APP ILO': 0.010, 'LIMA': 0.008,
+  'CDO': 0.016, 'GENSAN': 0.012, 'ILOILO': 0.010, 'ILO': 0.010, 'LIMA': 0.008,
   'LIM': 0.008, 'ZAM': 0.007, 'ABR': 0.006, 'NAGA': 0.006, 'NAG': 0.006,
   'COT': 0.005, 'LAN': 0.005, 'LAUNION': 0.005, 'LAU': 0.005, 'TUGUE': 0.004
 };

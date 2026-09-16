@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
@@ -30,7 +30,11 @@ import {
   Search,
   X,
   Percent,
-  TableProperties
+  TableProperties,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 export default function AllocationMatrix() {
@@ -56,6 +60,8 @@ export default function AllocationMatrix() {
     isReadOnly
   } = useApp();
 
+  const tableContainerRef = useRef(null);
+
   // Dynamic fallback: if allocations state is empty but forecastItems exist, generate immediately
   const effectiveAllocations = useMemo(() => {
     if (allocations && allocations.length > 0) return allocations;
@@ -64,6 +70,19 @@ export default function AllocationMatrix() {
     }
     return [];
   }, [allocations, forecastItems, sites, forecastingModel]);
+
+  // Precompute forecast overrides map for instant O(1) row lookup
+  const forecastOverrideMap = useMemo(() => {
+    const map = new Map();
+    (forecastItems || []).forEach(fi => {
+      const hasOverride = fi.admin_override !== null && fi.admin_override !== undefined && fi.admin_override !== '';
+      if (hasOverride) {
+        if (fi.part_id) map.set(fi.part_id, true);
+        if (fi.part_number) map.set(fi.part_number, true);
+      }
+    });
+    return map;
+  }, [forecastItems]);
 
   // Auto-sync / generate initial allocations from forecastItems if allocations array is empty
   useEffect(() => {
@@ -82,6 +101,7 @@ export default function AllocationMatrix() {
   const [showClearModal, setShowClearModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [localCategory, setLocalCategory] = useState('ALL');
+  const [showKpiCards, setShowKpiCards] = useState(true);
 
   const isWeeklyView = activeViewMode.startsWith('week-');
   const selectedWeekNum = isWeeklyView ? parseInt(activeViewMode.replace('week-', ''), 10) : 1;
@@ -330,37 +350,41 @@ export default function AllocationMatrix() {
 
   const isMatrixFiltered = filteredAllocations.length < (effectiveAllocations || []).length;
 
-  const handleExport = (scope = 'all') => {
-    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
-      ? filteredAllocations
-      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
-    if (dataToExport.length === 0) {
+  const handleExport = (scope) => {
+    // If scope is explicitly 'all', export all effective allocations.
+    // By default (clicking the button, scope === 'filtered', or undefined/event), respect active filter state!
+    const dataToExport = (scope === 'all')
+      ? (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations)
+      : (filteredAllocations && filteredAllocations.length > 0 ? filteredAllocations : effectiveAllocations);
+    if (!dataToExport || dataToExport.length === 0) {
       showToast('No allocations available to export', 'warning');
       return;
     }
     const currentPeriodLabel = activePeriod?.label || 'September 2026';
     exportAllocationToExcel(dataToExport, orderedServiceSites, currentPeriodLabel);
-    showToast(`Exported Comprehensive Allocation Workbook (${dataToExport.length} parts, ${currentPeriodLabel}) to Excel`, 'success');
+    const filterNote = isMatrixFiltered && scope !== 'all' ? ` (${dataToExport.length} filtered parts)` : ` (${dataToExport.length} parts)`;
+    showToast(`Exported Comprehensive Allocation Workbook${filterNote} (${currentPeriodLabel}) to Excel`, 'success');
   };
 
-  const handleDownloadPDF = (scope = 'all') => {
-    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
-      ? filteredAllocations
-      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
-    if (dataToExport.length === 0) {
+  const handleDownloadPDF = (scope) => {
+    const dataToExport = (scope === 'all')
+      ? (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations)
+      : (filteredAllocations && filteredAllocations.length > 0 ? filteredAllocations : effectiveAllocations);
+    if (!dataToExport || dataToExport.length === 0) {
       showToast('No allocations available to export', 'warning');
       return;
     }
     const currentPeriodLabel = activePeriod?.label || 'September 2026';
     exportAllocationToPDF(dataToExport, orderedServiceSites, currentPeriodLabel);
-    showToast(`Exported Allocation Matrix (${dataToExport.length} parts, ${currentPeriodLabel}) to PDF`, 'success');
+    const filterNote = isMatrixFiltered && scope !== 'all' ? ` (${dataToExport.length} filtered parts)` : ` (${dataToExport.length} parts)`;
+    showToast(`Exported Allocation Matrix${filterNote} (${currentPeriodLabel}) to PDF`, 'success');
   };
 
-  const handlePrint = (scope = 'all') => {
-    const dataToExport = (scope === 'filtered' && isMatrixFiltered)
-      ? filteredAllocations
-      : (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations);
-    if (dataToExport.length === 0) {
+  const handlePrint = (scope) => {
+    const dataToExport = (scope === 'all')
+      ? (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations)
+      : (filteredAllocations && filteredAllocations.length > 0 ? filteredAllocations : effectiveAllocations);
+    if (!dataToExport || dataToExport.length === 0) {
       showToast('No allocations available to print', 'warning');
       return;
     }
@@ -430,8 +454,7 @@ export default function AllocationMatrix() {
               {item.description}
             </span>
             {(() => {
-              const matchingFi = (forecastItems || []).find(fi => fi.part_id === item.part_id || fi.part_number === item.part_number);
-              const hasOverride = matchingFi?.admin_override !== null && matchingFi?.admin_override !== undefined && matchingFi?.admin_override !== '';
+              const hasOverride = forecastOverrideMap.has(item.part_id) || forecastOverrideMap.has(item.part_number);
               if (!hasOverride) return null;
               return (
                 <button
@@ -692,9 +715,9 @@ export default function AllocationMatrix() {
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={handleExport}
-                disabled={effectiveAllocations.length === 0}
-                title="Download formatted Master Allocation Excel Spreadsheet (.xlsx)"
+                onClick={() => handleExport()}
+                disabled={filteredAllocations.length === 0 && effectiveAllocations.length === 0}
+                title={isMatrixFiltered ? `Download filtered Master Allocation Excel Spreadsheet (${filteredAllocations.length} parts)` : 'Download formatted Master Allocation Excel Spreadsheet (.xlsx)'}
                 style={{ fontWeight: 700, color: '#15803d', display: 'flex', alignItems: 'center', gap: '5px' }}
               >
                 <Download size={14} />
@@ -704,9 +727,9 @@ export default function AllocationMatrix() {
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={handleDownloadPDF}
-                disabled={effectiveAllocations.length === 0}
-                title="Download landscape corporate PDF of Allocation Matrix"
+                onClick={() => handleDownloadPDF()}
+                disabled={filteredAllocations.length === 0 && effectiveAllocations.length === 0}
+                title={isMatrixFiltered ? `Download filtered Allocation Matrix PDF (${filteredAllocations.length} parts)` : 'Download landscape corporate PDF of Allocation Matrix'}
                 style={{ fontWeight: 600, color: '#0284c7', display: 'flex', alignItems: 'center', gap: '5px' }}
               >
                 <FileText size={14} />
@@ -716,9 +739,9 @@ export default function AllocationMatrix() {
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={handlePrint}
-                disabled={effectiveAllocations.length === 0}
-                title="Print formatted Allocation Matrix directly"
+                onClick={() => handlePrint()}
+                disabled={filteredAllocations.length === 0 && effectiveAllocations.length === 0}
+                title={isMatrixFiltered ? `Print filtered Allocation Matrix (${filteredAllocations.length} parts)` : 'Print formatted Allocation Matrix directly'}
                 style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}
               >
                 <Printer size={14} />
@@ -902,10 +925,59 @@ export default function AllocationMatrix() {
               </button>
             )}
           </div>
+
+          {/* Quick Horizontal Scroll & Compact View Controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowKpiCards(prev => !prev)}
+              title={showKpiCards ? "Collapse summary KPI cards for more vertical spreadsheet room" : "Show summary KPI cards"}
+              style={{ fontSize: '11px', padding: '4px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+            >
+              {showKpiCards ? <EyeOff size={12} /> : <Eye size={12} />}
+              <span>{showKpiCards ? 'Compact View' : 'Show KPIs'}</span>
+            </button>
+
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '2px' }}>
+              <button
+                type="button"
+                onClick={() => tableContainerRef.current?.scrollTo({ left: 0, behavior: 'smooth' })}
+                title="Scroll to part info (Commodity & Description)"
+                style={{ fontSize: '10.5px', padding: '2px 7px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#334155' }}
+              >
+                Start
+              </button>
+              <button
+                type="button"
+                onClick={() => tableContainerRef.current?.scrollBy({ left: -260, behavior: 'smooth' })}
+                title="Scroll branches left"
+                style={{ fontSize: '10.5px', padding: '2px 5px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: '#334155' }}
+              >
+                <ChevronLeft size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={() => tableContainerRef.current?.scrollBy({ left: 260, behavior: 'smooth' })}
+                title="Scroll branches right"
+                style={{ fontSize: '10.5px', padding: '2px 5px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: '#334155' }}
+              >
+                <ChevronRight size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={() => tableContainerRef.current?.scrollTo({ left: 2500, behavior: 'smooth' })}
+                title="Scroll to Totals & Weekly Breakdown"
+                style={{ fontSize: '10.5px', padding: '2px 7px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#0369a1' }}
+              >
+                Totals
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* High Contrast KPI Summary Bar */}
-        {filteredAllocations.length > 0 && (
+        {showKpiCards && filteredAllocations.length > 0 && (
           <div className="matrix-kpi-grid" style={{ marginTop: '14px' }}>
             <div className="matrix-kpi-card">
               <div className="matrix-kpi-icon-wrap" style={{ background: '#e0f2fe', color: '#0284c7' }}>
@@ -1079,17 +1151,17 @@ export default function AllocationMatrix() {
         /* UNIFIED ALLOCATION MATRIX TABLE (Master Allocation + Week 1, 2, 3, 4)           */
         /* -------------------------------------------------------------------------------- */
         <div className="card" style={{ padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-md)', border: '1px solid #cbd5e1' }}>
-          <div className="allocation-matrix-container">
+          <div className="allocation-matrix-container" ref={tableContainerRef}>
             <table className="matrix-table">
               <thead>
                 <tr>
-                  <th className="matrix-th-sticky-1" style={{ width: '80px', minWidth: '80px', textAlign: 'center' }}>
+                  <th className="matrix-th-sticky-1" style={{ width: '80px', minWidth: '80px', maxWidth: '80px', textAlign: 'center' }}>
                     Commodity
                   </th>
-                  <th className="matrix-th-sticky-2" style={{ width: '100px', minWidth: '100px' }}>
+                  <th className="matrix-th-sticky-2" style={{ width: '100px', minWidth: '100px', maxWidth: '100px' }}>
                     Part #
                   </th>
-                  <th className="matrix-th-sticky-3" style={{ minWidth: '240px', maxWidth: '280px' }}>
+                  <th className="matrix-th-sticky-3" style={{ width: '240px', minWidth: '240px', maxWidth: '240px' }}>
                     Description
                   </th>
                   <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#f8fafc', textAlign: 'right', zIndex: 12, minWidth: '85px' }}>
@@ -1152,7 +1224,7 @@ export default function AllocationMatrix() {
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div className="matrix-category-header-title">
                           <Smartphone size={16} color="#0284c7" />
                           <span>DISPLAY COMMODITY {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>
@@ -1208,7 +1280,7 @@ export default function AllocationMatrix() {
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div className="matrix-category-header-title">
                           <BatteryCharging size={16} color="#15803d" />
                           <span>BATTERY COMMODITY {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>
@@ -1264,7 +1336,7 @@ export default function AllocationMatrix() {
                   <>
                     <tr className="matrix-category-header">
                       <td colSpan={orderedServiceSites.length + (isWeeklyView ? 6 : 14)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div className="matrix-category-header-title">
                           <Layers size={16} color="#64748b" />
                           <span>OTHER COMMODITIES {isWeeklyView ? `(WEEK ${selectedWeekNum})` : ''}</span>
                           <span style={{ fontSize: '11px', background: '#f1f5f9', color: '#475569', padding: '2px 8px', borderRadius: '999px', fontWeight: 700 }}>

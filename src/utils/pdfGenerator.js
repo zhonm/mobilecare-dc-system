@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/logoBase64.js';
 import { calculateWeeklySplit, getRowParityOffset, isDisplayCategoryOrDesc } from './allocationEngine.js';
+import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
 import { getShipmentCourierDisplay } from './shipmentHelpers.js';
 
@@ -597,23 +598,59 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
 
   const totalUnits = allocations.reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
   let totalCost = 0;
+  const resolveStockPrice = (it) => {
+    if (typeof it?.stocking_price === 'number' && it.stocking_price > 0) return it.stocking_price;
+    const cat = getPartCategory(it);
+    if (cat === 'DISPLAY') return 279;
+    if (cat === 'BATTERY') return 99;
+    if (cat === 'CAMERA') return 129;
+    if (cat === 'BACK_GLASS') return 99;
+    if (cat === 'MID_REAR') return 119;
+    return 100;
+  };
+
   allocations.forEach(it => {
-    const p = it.stocking_price || (it.description?.toLowerCase().includes('display') ? 279 : 99);
+    const p = resolveStockPrice(it);
     totalCost += (it.total_allocated_qty || 0) * p;
   });
 
-  const displayItems = allocations.filter(it => it.category_id === 'cat-display' || it.description?.toLowerCase().includes('display'));
-  const batteryItems = allocations.filter(it => it.category_id === 'cat-battery' || it.description?.toLowerCase().includes('battery') || !displayItems.includes(it));
+  const CATEGORY_ORDER = [
+    { code: 'DISPLAY', label: 'DISPLAY', color: '#e0f2fe', text: '#0369a1' },
+    { code: 'BATTERY', label: 'BATTERY', color: '#dcfce7', text: '#15803d' },
+    { code: 'CAMERA', label: 'CAMERA', color: '#fdf2f8', text: '#9d174d' },
+    { code: 'BACK_GLASS', label: 'BACK GLASS', color: '#f0fdfa', text: '#0f766e' },
+    { code: 'MID_REAR', label: 'MID/REAR', color: '#f5f3ff', text: '#6d28d9' },
+    { code: 'OTHER', label: 'OTHER', color: '#f1f5f9', text: '#475569' }
+  ];
 
-  const renderSectionRows = (items, catLabel) => {
+  const categoryGroups = [];
+  CATEGORY_ORDER.forEach(cfg => {
+    const items = allocations.filter(it => getPartCategory(it) === cfg.code);
+    if (items.length > 0) {
+      categoryGroups.push({ ...cfg, items });
+    }
+  });
+
+  const recognizedItems = new Set(categoryGroups.flatMap(g => g.items));
+  const remainingItems = allocations.filter(it => !recognizedItems.has(it));
+  if (remainingItems.length > 0) {
+    categoryGroups.push({
+      code: 'OTHER',
+      label: 'OTHER',
+      color: '#f1f5f9',
+      text: '#475569',
+      items: remainingItems
+    });
+  }
+
+  const renderSectionRows = (items, catLabel, badgeBg, badgeText) => {
     return items.map((it, idx) => {
-      const price = it.stocking_price || 0;
+      const price = resolveStockPrice(it);
       const q = it.total_allocated_qty || 0;
       const c = it.total_stock_cost || (q * price);
       const split = (it.w1_qty !== undefined && it.w1_cost !== undefined)
         ? { w1_qty: it.w1_qty, w2_qty: it.w2_qty, w3_qty: it.w3_qty, w4_qty: it.w4_qty, w1_cost: it.w1_cost, w2_cost: it.w2_cost, w3_cost: it.w3_cost, w4_cost: it.w4_cost }
         : calculateWeeklySplit(q, c, idx + getRowParityOffset(it));
-      const isDisplay = catLabel === 'DISPLAY';
 
       const siteCells = sites.map(s => {
         const sq = it.site_quantities?.[s.id] ?? it.site_quantities?.[s.code] ?? 0;
@@ -622,7 +659,7 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
 
       return `
         <tr>
-          <td style="text-align: center;"><span style="background: ${isDisplay ? '#e0f2fe' : '#dcfce7'}; color: ${isDisplay ? '#0369a1' : '#15803d'}; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 9.5px;">${catLabel}</span></td>
+          <td style="text-align: center;"><span style="background: ${badgeBg}; color: ${badgeText}; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 9.5px;">${catLabel}</span></td>
           <td style="font-weight: 700; font-family: monospace; font-size: 10.5px;">${it.part_number}</td>
           <td style="text-align: left; font-size: 10.5px;">${it.description}</td>
           <td style="text-align: right; font-size: 10px;">$${price.toFixed(2)}</td>
@@ -703,10 +740,12 @@ export function printAllocationMatrixDirect(allocations = [], sites = [], period
           </tr>
         </thead>
         <tbody>
-          <tr style="background: #f0f9ff; font-weight: 800; color: #0369a1;"><td colspan="${sites.length + 14}">DISPLAY COMMODITY (${displayItems.length} Parts)</td></tr>
-          ${renderSectionRows(displayItems, 'DISPLAY')}
-          <tr style="background: #f0fdf4; font-weight: 800; color: #15803d;"><td colspan="${sites.length + 14}">BATTERY COMMODITY (${batteryItems.length} Parts)</td></tr>
-          ${renderSectionRows(batteryItems, 'BATTERY')}
+          ${categoryGroups.map(grp => `
+            <tr style="background: ${grp.color}; font-weight: 800; color: ${grp.text};">
+              <td colspan="${sites.length + 14}">${grp.label} COMMODITY (${grp.items.length} Parts)</td>
+            </tr>
+            ${renderSectionRows(grp.items, grp.label, grp.color, grp.text)}
+          `).join('')}
         </tbody>
       </table>
       <script>
@@ -763,7 +802,8 @@ export function exportAllocationToPDF(allocations = [], sites = [], period = 'Au
   ];
 
   const tableData = allocations.map((item, idx) => {
-    const isDisplay = isDisplayCategoryOrDesc(item);
+    const catCode = getPartCategory(item);
+    const badge = getCategoryBadgeStyle(catCode);
     const price = item.stocking_price || 0;
     const qty = item.total_allocated_qty || 0;
     const cost = item.total_stock_cost || (qty * price);
@@ -772,7 +812,7 @@ export function exportAllocationToPDF(allocations = [], sites = [], period = 'Au
       : calculateWeeklySplit(qty, cost, idx + getRowParityOffset(item));
 
     const row = [
-      isDisplay ? 'DISPLAY' : 'BATTERY',
+      badge.label || catCode,
       item.part_number,
       item.description,
       `$${price.toFixed(0)}`

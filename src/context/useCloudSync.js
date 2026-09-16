@@ -4,6 +4,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { normalizeInventoryUnits, isProvincialSite } from '../utils/partResolver';
 import { resolveSafeRegion } from '../constants/config';
+import { enrichSiteWithDirectory } from '../constants/branchDirectory.js';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import {
   reconcileUnitsWithPackedDrafts,
@@ -876,9 +877,10 @@ export function useCloudSync({
         const cleanSites = dbSites
           .filter(s =>
             !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-            !String(s.address || '').toUpperCase().includes('SM ILOILO')
+            !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+            (s.code || '').toUpperCase() !== 'APP ILO'
           )
-          .map(s => ({
+          .map(s => enrichSiteWithDirectory({
             id: s.id,
             code: s.code,
             name: s.name,

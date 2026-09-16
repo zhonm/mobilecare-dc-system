@@ -92,7 +92,13 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
     let totalCanonicalShare = 0;
     const demands = activeServiceSites.map((s, sIdx) => {
       // Find matching column index in canonical site order (code match has highest priority)
-      let siteColIdx = CANONICAL_SITE_LIST.findIndex(cs => cs.code === s.code);
+      let siteColIdx = -1;
+      if (rowShares.length === 27) {
+        siteColIdx = HISTORICAL_MATRIX_COLUMNS.indexOf(s.code);
+      }
+      if (siteColIdx < 0) {
+        siteColIdx = CANONICAL_SITE_LIST.findIndex(cs => cs.code === s.code);
+      }
       if (siteColIdx < 0) {
         siteColIdx = CANONICAL_SITE_CODES.indexOf(s.code);
       }
@@ -139,6 +145,13 @@ export function allocatePartToSites(targetQty, partOrForecastItem, activeService
  * @param {Array} sitesList
  * @returns {{isValid: boolean, activeCount: number, expectedCount: number, message?: string}}
  */
+const HISTORICAL_MATRIX_COLUMNS = [
+  'APP BHS', 'APP GB3', 'APP PPM', 'ASP GL5', 'ASP SMS', 'APP MOA', 'ASP POD',
+  'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP FES', 'ASP MRK',
+  'APP RM', 'ASP LIM', 'ASP NPM', 'ASP NAG', 'ASP LAU', 'ASP ILO', 'APP ILO', 'ASP CEB',
+  'ASP ZAM', 'ASP ABR', 'ASP COT', 'ASP CDO', 'APP LAN'
+];
+
 export function validateSiteSharesConsistency(sitesList = []) {
   const activeServiceSites = (sitesList || []).filter(s =>
     !s.is_dc &&
@@ -147,7 +160,7 @@ export function validateSiteSharesConsistency(sitesList = []) {
     !s.name?.toLowerCase().includes('distribution') &&
     s.code !== 'DC-MDC'
   );
-  const expectedCount = displayShares?.[0]?.length || CANONICAL_SITE_CODES.length;
+  const expectedCount = CANONICAL_SITE_CODES.length;
   const activeCount = activeServiceSites.length;
   const isValid = activeCount === expectedCount;
   if (!isValid && typeof console !== 'undefined') {

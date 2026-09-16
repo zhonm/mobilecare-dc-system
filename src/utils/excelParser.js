@@ -77,7 +77,6 @@ export const CANONICAL_SITE_LIST = [
   { code: 'ASP NAG', name: 'MOBILECARE - NAGA' },
   { code: 'ASP LAU', name: 'MOBILECARE - LA UNION' },
   { code: 'ASP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' },
-  { code: 'APP ILO', name: 'MOBILECARE - APP SM ILOILO' },
   { code: 'ASP CEB', name: 'MOBILECARE - CEBU' },
   { code: 'ASP ZAM', name: 'MOBILECARE - ZAMBOANGA' },
   { code: 'ASP ABR', name: 'MOBILECARE - DAVAO' },
@@ -346,17 +345,24 @@ export const EXCLUDED_BATTERY_DISPLAY_DESCS = new Set([
   'battery, iphone se 3rd generation',
   'battery, iphone x',
   'battery, iphone xr',
-  // Display Exclusions (7 models)
+  // Display Exclusions
   'display, iphone 11',
+  'display, iphone 11 pro',
+  'display, iphone 11 pro max',
   'display, iphone 12',
   'display, iphone 12 mini',
   'display, iphone 12 pro',
   'display, iphone 12 pro max',
   'display, iphone 13 mini',
-  'display, iphone xr'
+  'display, iphone xr',
+  'display, iphone x',
+  'display, iphone 8',
+  'display, iphone 8 plus',
+  'display, iphone se 2nd gen',
+  'display, iphone se 3rd generation'
 ].map(s => s.toLowerCase().trim()));
 
-export const LEGACY_EXCLUDE_REGEX = /^((Battery, iPhone (11|8|11 Pro|11 Pro Max|12 and 12 Pro|12 mini|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR))|(Display, iPhone (11|12|12 mini|12 Pro|12 Pro Max|13 mini|XR)))$/i;
+export const LEGACY_EXCLUDE_REGEX = /^((Battery, iPhone (11|8|11 Pro|11 Pro Max|12 and 12 Pro|12 mini|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR))|(Display, iPhone (11|8|11 Pro|11 Pro Max|12|12 mini|12 Pro|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR)))$/i;
 
 /**
  * Predicate for genuine iPhone repair parts.
@@ -1459,6 +1465,11 @@ export function processRawUsageSheet(
       continue;
     }
 
+    if (rawSite.toUpperCase().includes('SM ILOILO') || rawSite.toUpperCase().includes('APP ILO')) {
+      filteredOutCount++;
+      continue;
+    }
+
     const cleanPn = rawPn ? rawPn.toUpperCase() : `PART-${r}`;
     const cleanDesc = rawDesc.trim();
 
@@ -1949,11 +1960,22 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     views: [{ state: 'frozen', xSplit: 3, ySplit: 4 }]
   });
 
+  const resolveStockPrice = (it) => {
+    if (typeof it?.stocking_price === 'number' && it.stocking_price > 0) return it.stocking_price;
+    const cat = getPartCategory(it);
+    if (cat === 'DISPLAY') return 279;
+    if (cat === 'BATTERY') return 99;
+    if (cat === 'CAMERA') return 129;
+    if (cat === 'BACK_GLASS') return 99;
+    if (cat === 'MID_REAR') return 119;
+    return 100;
+  };
+
   // Calculate high-level summary metrics
   const totalPartsAll = allocations.reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
   let totalValueAll = 0;
   allocations.forEach(it => {
-    const price = it.stocking_price || (it.description?.toLowerCase().includes('display') ? 279 : 99);
+    const price = resolveStockPrice(it);
     totalValueAll += (it.total_allocated_qty || 0) * price;
   });
 
@@ -2065,8 +2087,37 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     }
   });
 
-  const displayItems = allocations.filter(it => it.category_id === 'cat-display' || it.description?.toLowerCase().includes('display'));
-  const batteryItems = allocations.filter(it => it.category_id === 'cat-battery' || it.description?.toLowerCase().includes('battery') || !displayItems.includes(it));
+  const CATEGORY_ORDER = [
+    { code: 'DISPLAY', label: 'DISPLAY', color: 'FFE0F2FE', text: 'FF0369A1' },
+    { code: 'BATTERY', label: 'BATTERY', color: 'FFDCFCE7', text: 'FF15803D' },
+    { code: 'CAMERA', label: 'CAMERA', color: 'FFFDF2F8', text: 'FF9D174D' },
+    { code: 'BACK_GLASS', label: 'BACK GLASS', color: 'FFF0FDFA', text: 'FF0F766E' },
+    { code: 'MID_REAR', label: 'MID/REAR', color: 'FFF5F3FF', text: 'FF6D28D9' },
+    { code: 'OTHER', label: 'OTHER', color: 'FFF1F5F9', text: 'FF475569' }
+  ];
+
+  const categoryGroups = [];
+  CATEGORY_ORDER.forEach(cfg => {
+    const items = allocations.filter(it => getPartCategory(it) === cfg.code);
+    if (items.length > 0) {
+      categoryGroups.push({
+        ...cfg,
+        items
+      });
+    }
+  });
+
+  const recognizedItems = new Set(categoryGroups.flatMap(g => g.items));
+  const remainingItems = allocations.filter(it => !recognizedItems.has(it));
+  if (remainingItems.length > 0) {
+    categoryGroups.push({
+      code: 'OTHER',
+      label: 'OTHER',
+      color: 'FFF1F5F9',
+      text: 'FF475569',
+      items: remainingItems
+    });
+  }
 
   const addCategorySection = (items, catLabel, catColor, catText) => {
     let subtotalQty = 0;
@@ -2078,8 +2129,8 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     const subtotalSites = {};
 
     items.forEach((item, idx) => {
-      const stockPrice = item.stocking_price || 0;
-      const exchangePrice = item.exchange_price || 0;
+      const stockPrice = resolveStockPrice(item);
+      const exchangePrice = item.exchange_price || (stockPrice * 0.84);
       const totalQty = item.total_allocated_qty || 0;
       const totalCost = item.total_stock_cost || (totalQty * stockPrice);
       const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
@@ -2240,8 +2291,9 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     };
   };
 
-  const displaySummary = addCategorySection(displayItems, 'DISPLAY', 'FFE0F2FE', 'FF0369A1');
-  const batterySummary = addCategorySection(batteryItems, 'BATTERY', 'FFDCFCE7', 'FF15803D');
+  const categorySummaries = categoryGroups.map(grp => {
+    return addCategorySection(grp.items, grp.label, grp.color, grp.text);
+  });
 
   // 5. Grand Total Rows
   const grandUnits = [
@@ -2252,18 +2304,19 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     ''
   ];
   sites.forEach(s => {
-    grandUnits.push((displaySummary.sites[s.id] || 0) + (batterySummary.sites[s.id] || 0));
+    const siteSum = categorySummaries.reduce((sum, cs) => sum + (cs.sites[s.id] || 0), 0);
+    grandUnits.push(siteSum);
   });
   grandUnits.push(
     totalPartsAll,
     '',
-    displaySummary.w1 + batterySummary.w1,
+    categorySummaries.reduce((sum, cs) => sum + cs.w1, 0),
     '',
-    displaySummary.w2 + batterySummary.w2,
+    categorySummaries.reduce((sum, cs) => sum + cs.w2, 0),
     '',
-    displaySummary.w3 + batterySummary.w3,
+    categorySummaries.reduce((sum, cs) => sum + cs.w3, 0),
     '',
-    displaySummary.w4 + batterySummary.w4,
+    categorySummaries.reduce((sum, cs) => sum + cs.w4, 0),
     '',
     'TOTAL PLAN'
   );
@@ -2292,7 +2345,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   sites.forEach(s => {
     let siteCost = 0;
     allocations.forEach(item => {
-      const p = item.stocking_price || 0;
+      const p = resolveStockPrice(item);
       const q = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
       siteCost += q * p;
     });
@@ -2302,13 +2355,13 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
     '',
     totalValueAll,
     '',
-    displaySummary.w1Cost + batterySummary.w1Cost,
+    categorySummaries.reduce((sum, cs) => sum + cs.w1Cost, 0),
     '',
-    displaySummary.w2Cost + batterySummary.w2Cost,
+    categorySummaries.reduce((sum, cs) => sum + cs.w2Cost, 0),
     '',
-    displaySummary.w3Cost + batterySummary.w3Cost,
+    categorySummaries.reduce((sum, cs) => sum + cs.w3Cost, 0),
     '',
-    displaySummary.w4Cost + batterySummary.w4Cost,
+    categorySummaries.reduce((sum, cs) => sum + cs.w4Cost, 0),
     ''
   );
 
@@ -2411,7 +2464,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
       const subtotalWSites = {};
 
       items.forEach((item, rIdx) => {
-        const stockPrice = item.stocking_price || (catLabel === 'DISPLAY' ? 279 : 99);
+        const stockPrice = resolveStockPrice(item);
         const exchPrice = item.exchange_price || (stockPrice * 0.84);
         const offset = getRowParityOffset(item);
         const split = (item.w1_qty !== undefined && item.w1_cost !== undefined)
@@ -2491,20 +2544,21 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
       return { qty: subtotalWQty, sites: subtotalWSites };
     };
 
-    const dispW = addWeeklyCategorySection(displayItems, 'DISPLAY');
-    const battW = addWeeklyCategorySection(batteryItems, 'BATTERY');
+    const weeklySummaries = categoryGroups.map(grp => {
+      return addWeeklyCategorySection(grp.items, grp.label);
+    });
 
     // Grand Total Row
     const grandWRowValues = [
       'TOTAL',
-      dispW.qty + battW.qty,
+      weeklySummaries.reduce((sum, ws) => sum + ws.qty, 0),
       '',
       '',
       'GRAND TOTAL',
       `Week ${w} Total`
     ];
     sites.forEach(s => {
-      grandWRowValues.push((dispW.sites[s.id] || 0) + (battW.sites[s.id] || 0));
+      grandWRowValues.push(weeklySummaries.reduce((sum, ws) => sum + (ws.sites[s.id] || 0), 0));
     });
 
     const gRow = wSheet.addRow(grandWRowValues);
@@ -2531,15 +2585,18 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Master_Allocation_${period.replace(/\s+/g, '_')}.xlsx`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  if (typeof document !== 'undefined') {
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Master_Allocation_${period.replace(/\s+/g, '_')}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+  return { workbook, buffer };
 }
 
 export async function exportForecastToExcel(forecastItems, period = 'September 2026') {
@@ -2674,15 +2731,18 @@ export async function exportForecastToExcel(forecastItems, period = 'September 2
   worksheet.getColumn(fOffset + 2).width = 24;
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Demand_Forecast_${period.replace(/\s+/g, '_')}.xlsx`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  if (typeof document !== 'undefined') {
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Demand_Forecast_${period.replace(/\s+/g, '_')}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+  return { workbook, buffer };
 }
 
 export function downloadSampleGsxFixablyCsv() {

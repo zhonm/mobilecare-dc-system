@@ -1,0 +1,399 @@
+// Official MobileCare Branch Directory & GSX Ship-To Registry
+// Source: Official Apple GSX Directory and Supervisor Registry
+
+export const OFFICIAL_BRANCH_DIRECTORY = {
+  'DC-MDC': {
+    name: 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center',
+    address: '47 CONNECTICUT STREET NORTHEAST SAN JUAN 46 1503 Philippines',
+    full_address: 'Business and Distribution Center, 47 CONNECTICUT STREET NORTHEAST SAN JUAN 46 1503 Philippines',
+    contact_person: 'DC Operations',
+    contact_phone: '+63 (2) 8721-1234',
+    contact_email: 'dc.operations@mobilecareph.com',
+    invoice_prefix: 'DCSSR#',
+    ship_to: '0001029842',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: true
+  },
+  'APP BHS': {
+    name: 'MOBILECARE - APP BONIFACIO HIGH STREET',
+    address: 'BONIFACIO HIGH ST.,FORT BONIFACIO TAGUIG CITY 46 1634 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-BHS, BONIFACIO HIGH ST.,FORT BONIFACIO TAGUIG CITY 46 1634 Philippines',
+    contact_person: 'MA. PARTRICIA BAGARES',
+    contact_phone: '0966-9135692',
+    contact_email: 'patricia.bagares@mobilecareph.com',
+    invoice_prefix: 'BHSSSR#',
+    ship_to: '0001836095',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP GB3': {
+    name: 'MOBILECARE - APP GREENBELT 3',
+    address: 'GREENBELT 3, AYALA CENTER MAKATI 46 1224 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-GB3, GREENBELT 3, AYALA CENTER MAKATI 46 1224 Philippines',
+    contact_person: 'AILA CASSANDRA DE GALA',
+    contact_phone: '0917-9294265',
+    contact_email: 'cassandraaila.degala@mobilecareph.com',
+    invoice_prefix: 'GB3SSR#',
+    ship_to: '0001645879',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP PPM': {
+    name: 'MOBILECARE - APP POWER PLANT MALL',
+    address: 'ROCKWELL CENTER BRGY. POBLACION MAKATI 46 1210 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-PPM, ROCKWELL CENTER BRGY. POBLACION MAKATI 46 1210 Philippines',
+    contact_person: 'JOHN NITMARI ESPIRITU',
+    contact_phone: '0915-4520862',
+    contact_email: 'johnnitimari.espiritu@mobilecareph.com',
+    invoice_prefix: 'PPMSSR#',
+    ship_to: '0001603617',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP GL5': {
+    name: 'MOBILECARE - GLORIETTA 5',
+    address: 'AYALA CENTER, MAKATI CITY 46 1221 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., AYALA CENTER, MAKATI CITY 46 1221 Philippines',
+    contact_person: 'RAUL THOMAS CLOMA',
+    contact_phone: '0939-3365339',
+    contact_email: 'raulthomas.cloma@mobilecareph.com',
+    invoice_prefix: 'GL5SSR#',
+    ship_to: '0001102537',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP SMS': {
+    name: "MOBILECARE - S'MAISON",
+    address: 'UNIT NOS.272-274, SECOND FLOOR PASAY 46 1300 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., UNIT NOS.272-274, SECOND FLOOR PASAY 46 1300 Philippines',
+    contact_person: 'KEIRONE MCILVAINE BAUTISTA',
+    contact_phone: '0919-8281889',
+    contact_email: 'keironemcilvaine.bautista@mobilecareph.com',
+    invoice_prefix: 'SMSSSR#',
+    ship_to: '0001103790',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP MOA': {
+    name: 'MOBILECARE - APP MALL OF ASIA',
+    address: 'SM MALL OF ASIA BARANGAY 76 PASAY CITY 46 1300 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-MOA, SM MALL OF ASIA BARANGAY 76 PASAY CITY 46 1300 Philippines',
+    contact_person: 'JAY IAN DULAY',
+    contact_phone: '0995-4385493',
+    contact_email: 'jayian.dulay@mobilecareph.com',
+    invoice_prefix: 'MOASSR#',
+    ship_to: '0001645876',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP POD': {
+    name: 'MOBILECARE - THE PODIUM',
+    address: '410, 4L, THE PODIUM, 12 ADB AVENUE MANDALUYONG CITY 46 1550 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., 410, 4L, THE PODIUM, 12 ADB AVENUE MANDALUYONG CITY 46 1550 Philippines',
+    contact_person: 'JOHN PAUL REVILLA',
+    contact_phone: '0969-0120395',
+    contact_email: 'paulangelo.revilla@mobilecareph.com',
+    invoice_prefix: 'PODSSR#',
+    ship_to: '0001272226',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP MEG': {
+    name: 'MOBILECARE - APP MEGAMALL',
+    address: 'BLDG. B, CYBERZONE, SM MEGAMALL MANDALUYONG 46 1550 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-MEG, BLDG. B, CYBERZONE, SM MEGAMALL MANDALUYONG 46 1550 Philippines',
+    contact_person: 'LEANDRO LEE',
+    contact_phone: '0917-4761344',
+    contact_email: 'leandro.lee@mobilecareph.com',
+    invoice_prefix: 'MGSSR#',
+    ship_to: '0001745440',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP ANX': {
+    name: 'MOBILECARE - APP THE ANNEX',
+    address: 'SMCITY NORTH EDSA, BRGY. STO CRISTO QUEZON CITY 46 1105 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-ANX, SMCITY NORTH EDSA, BRGY. STO CRISTO QUEZON CITY 46 1105 Philippines',
+    contact_person: 'RANDAL ESGUERRA',
+    contact_phone: '0995-9201560',
+    contact_email: 'randallchristian.esguerra@mobilecareph.com',
+    invoice_prefix: 'ANSSR#',
+    ship_to: '0001764718',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP TRI': {
+    name: 'MOBILECARE - APP TRINOMA',
+    address: 'NORTH AVE., BRGY. BAGONG PAG-ASA, QUEZON CITY 46 1105 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-TRI, NORTH AVE., BRGY. BAGONG PAG-ASA, QUEZON CITY 46 1105 Philippines',
+    contact_person: 'JIMBOY TONDAG',
+    contact_phone: '0926-6975495',
+    contact_email: 'jimboy.tondag@mobilecareph.com',
+    invoice_prefix: 'TRSSR#',
+    ship_to: '0001764730',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP VN': {
+    name: 'MOBILECARE - VERTIS NORTH',
+    address: 'VERTIS NORTH BAGONG PAG-ASA QUEZON CITY 46 1105 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., VERTIS NORTH BAGONG PAG-ASA QUEZON CITY 46 1105 Philippines',
+    contact_person: 'MARC AARON LITAO',
+    contact_phone: '0961-2379121',
+    contact_email: 'marcaaron.litao@mobilecareph.com',
+    invoice_prefix: 'VNSSR#',
+    ship_to: '0001506282',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP NES': {
+    name: 'MOBILECARE - NORTHEAST SQUARE',
+    address: '47 CONNECTICUT ST. GREENHILLS SAN JUAN 46 1503 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., 47 CONNECTICUT ST. GREENHILLS SAN JUAN 46 1503 Philippines',
+    contact_person: 'JOHN JAMES SEGOVIA',
+    contact_phone: '0999-6684460',
+    contact_email: 'johnjames.segovia@mobilecareph.com',
+    invoice_prefix: 'NESSRR#',
+    ship_to: '0001102538',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP FES': {
+    name: 'MOBILECARE - APP FESTIVAL MALL',
+    address: 'SPACE NO.UGF-2274.2.1-UGF-2274.2.2, MUNTINLUPA CITY 46 1781 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-FES, SPACE NO.UGF-2274.2.1-UGF-2274.2.2, MUNTINLUPA CITY 46 1781 Philippines',
+    contact_person: 'FRANCHESCA MACALINAO',
+    contact_phone: '0915-2010819',
+    contact_email: 'franscesca.macalinao@mobilecareph.com',
+    invoice_prefix: 'FESSSR#',
+    ship_to: '0001815657',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP MRK': {
+    name: 'MOBILECARE - SM MARIKINA',
+    address: 'SM CITY MARIKINA, MARCOS HIGHWAY MARIKINA 46 1801 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., SM CITY MARIKINA, MARCOS HIGHWAY MARIKINA 46 1801 Philippines',
+    contact_person: 'JOHN FRANCIS MADRONIO',
+    contact_phone: '0927-6554756',
+    contact_email: 'john.madronio@mobilecareph.com',
+    invoice_prefix: 'MRKSSR#',
+    ship_to: '0001240088',
+    sold_to: '0001029842',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP RM': {
+    name: 'MOBILECARE - APP MAGNOLIA',
+    address: 'DOÑA HEMADY,NEW MANILA, QUEZON CITY 46 1111 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-MAG, DOÑA HEMADY,NEW MANILA, QUEZON CITY 46 1111 Philippines',
+    contact_person: 'EDWARD RUSSEL VISTAN',
+    contact_phone: '0968-7403586',
+    contact_email: 'edwardrussel.vistan@mobilecareph.com',
+    invoice_prefix: 'RMSSR#',
+    ship_to: '0001764735',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'ASP LIM': {
+    name: 'MOBILECARE - LIMA ESTATE',
+    address: 'SPECIAL ECONOMIC ZONE LIPA CITY, BATANGAS 4217 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS.INC.-LIMA, SPECIAL ECONOMIC ZONE LIPA CITY, BATANGAS 4217 Philippines',
+    contact_person: 'SHARMAINE ESPEJO',
+    contact_phone: '0917-1075392',
+    contact_email: 'sharmaine.espejo@mobilecareph.com',
+    invoice_prefix: 'LMSSR#',
+    ship_to: '0001754212',
+    sold_to: '0001029842',
+    region: 'Batangas',
+    is_dc: false
+  },
+  'ASP NPM': {
+    name: 'MOBILECARE - NEWPOINT MALL',
+    address: 'NEPO CENTER, ANGELES CITY, PAMPANGA 59 2009 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., NEPO CENTER, ANGELES CITY, PAMPANGA 59 2009 Philippines',
+    contact_person: 'ALLELLEY SUBA',
+    contact_phone: '0976-0409935',
+    contact_email: 'allelley.suba@mobilecareph.com',
+    invoice_prefix: 'NPMSSR#',
+    ship_to: '0001196666',
+    sold_to: '0001029842',
+    region: 'Pampanga',
+    is_dc: false
+  },
+  'ASP NAG': {
+    name: 'MOBILECARE - NAGA',
+    address: 'BRGY ROXAS AVENUE, COR ALMEDA HWY NAGA, CAMARINES SUR 4400 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS.INC.-NAGA, BRGY ROXAS AVENUE, COR ALMEDA HWY NAGA, CAMARINES SUR 4400 Philippines',
+    contact_person: 'CAROLINE DACER',
+    contact_phone: '0947-8716519',
+    contact_email: 'caroline.dacer@mobilecareph.com',
+    invoice_prefix: 'NGSSR#',
+    ship_to: '0001730389',
+    sold_to: '0001029842',
+    region: 'Camarines Sur',
+    is_dc: false
+  },
+  'ASP LAU': {
+    name: 'MOBILECARE - LA UNION',
+    address: 'SPACE NO.: 316, LEVEL 3, DIGIWORLD SAN FERNANDO, LA UNION 38 2500 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-LAU, SPACE NO.: 316, LEVEL 3, DIGIWORLD SAN FERNANDO, LA UNION 38 2500 Philippines',
+    contact_person: 'FELIX MENDORIO',
+    contact_phone: '0927-1664281',
+    contact_email: 'felix.mendiorojr@mobilecareph.com',
+    invoice_prefix: 'LUSSR#',
+    ship_to: '0001815649',
+    sold_to: '0001029842',
+    region: 'La Union',
+    is_dc: false
+  },
+  'ASP ILO': {
+    name: 'MOBILECARE - FESTIVE WALK ILOILO',
+    address: 'FESTIVE WALK MALL ILOILO CITY 35 5000 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., FESTIVE WALK MALL ILOILO CITY 35 5000 Philippines',
+    contact_person: 'CHARM PRINCESS ABILA',
+    contact_phone: '0962-1734658',
+    contact_email: 'princesscharm.abila@mobilecareph.com',
+    invoice_prefix: 'ILOSSR#',
+    ship_to: '0001229790',
+    sold_to: '0001029842',
+    region: 'Iloilo',
+    is_dc: false
+  },
+  'ASP CEB': {
+    name: 'MOBILECARE - CEBU',
+    address: '4033, 4/L ROBINSONS GALLERIA CEBU CEBU CITY 25 6000 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., 4033, 4/L ROBINSONS GALLERIA CEBU CEBU CITY 25 6000 Philippines',
+    contact_person: 'GLADYS SICAT (AM)',
+    contact_phone: '0997-4851174',
+    contact_email: 'gladys.sicat@mobilecareph.com',
+    invoice_prefix: 'CEBSSR#',
+    ship_to: '0001102534',
+    sold_to: '0001029842',
+    region: 'Cebu',
+    is_dc: false
+  },
+  'ASP ZAM': {
+    name: 'MOBILECARE - ZAMBOANGA',
+    address: 'GOV. CAMINS, CAMINO NUEVO, ZAMBOANGA 79 7000 Philippines',
+    full_address: 'MOBILECARE SVCS PHILS INC@ZAMBOANGA, GOV. CAMINS, CAMINO NUEVO, ZAMBOANGA 79 7000 Philippines',
+    contact_person: 'RONALD DIAZ',
+    contact_phone: '0908-8959684',
+    contact_email: 'ronald.diaz@mobilecareph.com',
+    invoice_prefix: 'ZAMSSR#',
+    ship_to: '0001128342',
+    sold_to: '0001029842',
+    region: 'Zamboanga',
+    is_dc: false
+  },
+  'ASP ABR': {
+    name: 'MOBILECARE - DAVAO',
+    address: 'J.P. LAUREL AVE. DAVAO CITY 27 8000 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., J.P. LAUREL AVE. DAVAO CITY 27 8000 Philippines',
+    contact_person: 'ROSHELL VANZUELA',
+    contact_phone: '0955-6020351',
+    contact_email: 'roshell.saballa@mobilecareph.com',
+    invoice_prefix: 'ABRSSR#',
+    ship_to: '0001102535',
+    sold_to: '0001029842',
+    region: 'Davao',
+    is_dc: false
+  },
+  'ASP COT': {
+    name: 'MOBILECARE SERVICES - COTABATO',
+    address: 'Space No. IL-226 2nd Floor, KCC Mall of Cotabato, 10 Quezon Ave, Rosary Heights 2, Cotabato City 9600 Philippines',
+    full_address: 'Space No. IL-226 2nd Floor, KCC Mall of Cotabato, 10 Quezon Ave., Rosary Heights 2, Cotabato City 9600 Philippines',
+    contact_person: 'ALLEN JOYCE AGUIT',
+    contact_phone: '0955-0271729',
+    contact_email: 'allynjoyce.aguit@mobilecareph.com',
+    invoice_prefix: 'CBOSSR#',
+    ship_to: null,
+    sold_to: null,
+    region: 'Cotabato',
+    is_dc: false
+  },
+  'ASP CDO': {
+    name: 'MOBILECARE - CAGAYAN DE ORO',
+    address: '2/L,EAST CONCOURSE LIMKETKAI MALL CAGAYAN DE ORO CITY 48 9000 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC., 2/L,EAST CONCOURSE LIMKETKAI MALL CAGAYAN DE ORO CITY 48 9000 Philippines',
+    contact_person: 'INAH CONTA',
+    contact_phone: '0936-4578411',
+    contact_email: 'inahmarie.conta@mobilecareph.com',
+    invoice_prefix: 'CDOSRR#',
+    ship_to: '0001218985',
+    sold_to: '0001029842',
+    region: 'Cagayan de Oro',
+    is_dc: false
+  },
+  'APP LAN': {
+    name: 'MOBILECARE - APP SM LANANG',
+    address: 'JP LAUREL AVE. DAVAO CITY 8000 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-LAN, JP LAUREL AVE. DAVAO CITY 8000 Philippines',
+    contact_person: 'ROSHELL VANZUELA',
+    contact_phone: '0955-6020351',
+    contact_email: 'roshell.saballa@mobilecareph.com',
+    invoice_prefix: 'LANSSR#',
+    ship_to: '0001836101',
+    sold_to: '0001597912',
+    region: 'Davao',
+    is_dc: false
+  }
+};
+
+/**
+ * Normalizes a raw site code (e.g. 'APPILO' -> 'APP ILO')
+ */
+export function normalizeSiteCode(rawCode) {
+  if (!rawCode) return '';
+  const clean = String(rawCode).trim().toUpperCase();
+  if (clean === 'APPILO') return 'APP ILO';
+  if (clean === 'DC') return 'DC-MDC';
+  return clean;
+}
+
+/**
+ * Enriches a site object with canonical GSX Ship-To, Supervisor contact, and full address.
+ * Preserves custom user modifications if already set.
+ */
+export function enrichSiteWithDirectory(site) {
+  if (!site) return site;
+  const normCode = normalizeSiteCode(site.code);
+  const dir = OFFICIAL_BRANCH_DIRECTORY[normCode]
+    || Object.values(OFFICIAL_BRANCH_DIRECTORY).find(d =>
+        (d.name && site.name && d.name.trim().toUpperCase() === site.name.trim().toUpperCase()) ||
+        (d.code && site.code && d.code.trim().toUpperCase() === site.code.trim().toUpperCase())
+      );
+
+  if (!dir) return site;
+
+  return {
+    ...site,
+    code: normCode || site.code,
+    name: site.name || dir.name,
+    ship_to: site.ship_to || dir.ship_to || null,
+    sold_to: site.sold_to || dir.sold_to || null,
+    contact_person: site.contact_person || dir.contact_person || '',
+    contact_phone: site.contact_phone || dir.contact_phone || '',
+    contact_email: site.contact_email || dir.contact_email || '',
+    address: site.address || dir.address || '',
+    full_address: site.full_address || dir.full_address || site.address || dir.address || '',
+    invoice_prefix: site.invoice_prefix || dir.invoice_prefix || '',
+    region: site.region || dir.region || 'Metro Manila',
+    is_dc: site.is_dc ?? dir.is_dc ?? false
+  };
+}

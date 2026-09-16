@@ -8,6 +8,8 @@ import {
   getPartCategory
 } from '../utils/categoryFilter.js';
 import { resolveSafeRegion } from '../constants/config.js';
+import { OFFICIAL_BRANCH_DIRECTORY, enrichSiteWithDirectory } from '../constants/branchDirectory.js';
+
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
   supervisor_title: 'MDC Supervisor of DC',
@@ -18,6 +20,7 @@ function normalizeSiteCode(rawCode) {
   if (!rawCode) return '';
   const clean = String(rawCode).trim().toUpperCase();
   if (clean === 'APPILO') return 'APP ILO';
+  if (clean === 'DC') return 'DC-MDC';
   return clean;
 }
 
@@ -68,38 +71,48 @@ export function useCatalogAndSites({
     try {
       const saved = localStorage.getItem('mdc_sites');
       const parsed = saved ? JSON.parse(saved) : [];
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const clean = parsed
-          .filter(s =>
-            !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-            !String(s.address || '').toUpperCase().includes('SM ILOILO')
-          )
-          .map(s => ({
-            ...s,
-            region: resolveSafeRegion(s.code, s.region)
+      const sourceList = Array.isArray(parsed) && parsed.length > 0
+        ? parsed
+        : Object.keys(OFFICIAL_BRANCH_DIRECTORY).map((code, idx) => ({
+            id: `site-${idx + 1}`,
+            code,
+            ...OFFICIAL_BRANCH_DIRECTORY[code]
           }));
-        if (clean.length !== parsed.length || clean.some((s, idx) => s.region !== parsed[idx]?.region)) {
-          try { localStorage.setItem('mdc_sites', JSON.stringify(clean)); } catch (e) {}
-          dbStorage.setItem('mdc_sites', clean);
-        }
-        return clean.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
-      }
-      return [];
+
+      const clean = sourceList
+        .filter(s =>
+          !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+          !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+          (s.code || '').toUpperCase() !== 'APP ILO'
+        )
+        .map(s => enrichSiteWithDirectory({
+          ...s,
+          region: resolveSafeRegion(s.code, s.region)
+        }));
+
+      try { localStorage.setItem('mdc_sites', JSON.stringify(clean)); } catch (e) {}
+      dbStorage.setItem('mdc_sites', clean);
+      return clean.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
     } catch {
-      return [];
+      return Object.keys(OFFICIAL_BRANCH_DIRECTORY).map((code, idx) => ({
+        id: `site-${idx + 1}`,
+        code,
+        ...OFFICIAL_BRANCH_DIRECTORY[code]
+      }));
     }
   });
 
   useEffect(() => {
     if (supabase) {
-      supabase.from('sites').select('*').then(({ data: dbSites, error }) => {
+      supabase.from('sites').select('*').then(async ({ data: dbSites, error }) => {
         if (!error && dbSites && dbSites.length > 0) {
           const authoritative = dbSites
             .filter(s =>
               !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-              !String(s.address || '').toUpperCase().includes('SM ILOILO')
+              !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+              (s.code || '').toUpperCase() !== 'APP ILO'
             )
-            .map(s => ({
+            .map(s => enrichSiteWithDirectory({
               id: s.id,
               code: normalizeSiteCode(s.code),
               name: s.name,
@@ -120,6 +133,31 @@ export function useCatalogAndSites({
           setSites(authoritative);
           try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
           dbStorage.setItem('mdc_sites', authoritative);
+
+          // Auto-heal / sync missing GSX Ship-To or supervisor contacts back to Supabase in background
+          const needsSync = authoritative.some(s => s.ship_to && !dbSites.find(d => d.code === s.code)?.ship_to);
+          if (needsSync) {
+            try {
+              const rowsToUpsert = authoritative.map(s => ({
+                code: s.code,
+                name: s.name,
+                region: s.region,
+                address: s.address,
+                full_address: s.full_address,
+                contact_person: s.contact_person,
+                contact_phone: s.contact_phone,
+                contact_email: s.contact_email,
+                ship_to: s.ship_to,
+                sold_to: s.sold_to,
+                invoice_prefix: s.invoice_prefix,
+                is_dc: Boolean(s.is_dc),
+                is_active: s.is_active !== false
+              }));
+              await supabase.from('sites').upsert(rowsToUpsert, { onConflict: 'code' });
+            } catch (syncErr) {
+              console.warn('Silent sites directory cloud enrichment note:', syncErr);
+            }
+          }
         }
       }).catch(() => {});
 
@@ -589,9 +627,10 @@ export function useCatalogAndSites({
         const authoritative = dbSites
           .filter(s =>
             !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
-            !String(s.address || '').toUpperCase().includes('SM ILOILO')
+            !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+            (s.code || '').toUpperCase() !== 'APP ILO'
           )
-          .map(s => ({
+          .map(s => enrichSiteWithDirectory({
             id: s.id,
             code: normalizeSiteCode(s.code),
             name: s.name,
@@ -612,6 +651,29 @@ export function useCatalogAndSites({
         setSites(authoritative);
         try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
         dbStorage.setItem('mdc_sites', authoritative);
+
+        // Sync complete directory details to Supabase Cloud
+        try {
+          const rowsToUpsert = authoritative.map(s => ({
+            code: s.code,
+            name: s.name,
+            region: s.region,
+            address: s.address,
+            full_address: s.full_address,
+            contact_person: s.contact_person,
+            contact_phone: s.contact_phone,
+            contact_email: s.contact_email,
+            ship_to: s.ship_to,
+            sold_to: s.sold_to,
+            invoice_prefix: s.invoice_prefix,
+            is_dc: Boolean(s.is_dc),
+            is_active: s.is_active !== false
+          }));
+          await supabase.from('sites').upsert(rowsToUpsert, { onConflict: 'code' });
+        } catch (syncErr) {
+          console.warn('Supabase site upsert notice:', syncErr);
+        }
+
         showToast(`Successfully refreshed ${authoritative.length} sites from cloud database!`, 'success');
       }
     } catch (err) {
