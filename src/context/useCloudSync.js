@@ -130,9 +130,26 @@ export function useCloudSync({
   const pendingRealtimeSyncRef = useRef(false);
   const pendingRealtimeTablesRef = useRef(new Set());
   const debounceRealtimeTimerRef = useRef(null);
+  const trailingRefreshTimerRef = useRef(null);
+  const autoRefreshDataRef = useRef(null);
 
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
+
+  const liveStateRef = useRef({});
+  liveStateRef.current = {
+    currentUser,
+    categories,
+    sites,
+    parts,
+    allocations,
+    forecastItems,
+    inventoryUnits,
+    _shipments,
+    _dcIntakeRecords,
+    masterlistData,
+    activePeriod
+  };
 
   // Broadcast event across peers and browser tabs (Site-Isolated with Global Alert Routing)
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
@@ -332,12 +349,15 @@ export function useCloudSync({
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
 
+    const liveState = liveStateRef.current || {};
+    const curUser = liveState.currentUser || currentUser;
+
     // Guard: Only hydrate cloud operational tables if an active authenticated session exists
     let session = null;
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       session = sessionData?.session;
-      if (!session && currentUser?.id) {
+      if (!session && curUser?.id) {
         const { data: refreshed } = await supabase.auth.refreshSession().catch(() => ({ data: {} }));
         session = refreshed?.session;
       }
@@ -345,14 +365,14 @@ export function useCloudSync({
       console.debug('[useCloudSync] Session verification note:', authErr?.message);
     }
 
-    if (!session && !currentUser?.id) {
+    if (!session && !curUser?.id) {
       console.debug('[CloudSync] No active authenticated session; skipping cloud database hydration');
       return false;
     }
 
     try {
-      const isPmgUser = currentUser?.role === 'parts_management';
-      const userSiteId = currentUser?.siteId;
+      const isPmgUser = curUser?.role === 'parts_management';
+      const userSiteId = curUser?.siteId;
       const isSiteRestrictedPmg = Boolean(isPmgUser && userSiteId && userSiteId !== 'site-dc');
 
       const shouldFetch = (tbl) => {
@@ -1499,72 +1519,11 @@ export function useCloudSync({
         const { reconciledList: reconciledShipments, supersededDraftIds } = reconcileShipmentsAndDrafts(mappedShipments, { removeSuperseded: true }, effectiveSitesList);
         effectiveShipments = reconciledShipments;
 
-        // Clean superseded draft records from cloud saved_records if any were pruned
-        if (supabase && supersededDraftIds && supersededDraftIds.length > 0) {
-          supersededDraftIds.forEach(async (draftId) => {
-            try {
-              await supabase.from('saved_records').delete().eq('id', draftId);
-            } catch (e) {}
-          });
-        }
-
         if (effectiveShipments.length > 0) {
           setShipments(effectiveShipments);
           try { localStorage.setItem('mdc_shipments', JSON.stringify(effectiveShipments)); } catch (e) {}
           dbStorage.setItem('mdc_shipments', effectiveShipments);
-
-          // Self-heal / Auto-seed master_shipments_registry in cloud if missing, has fewer records, or has enriched rider data
-          if (supabase) {
-            const hasRiderEnrichment = effectiveShipments.some(es => (es.pickup_by_name || es.courier_name)) &&
-              cloudShipmentsList.some(cs => (!cs.pickup_by_name && !cs.courier_name));
-            if (!cloudShipmentsRegistryDoc || cloudShipmentsList.length < effectiveShipments.length || hasRiderEnrichment) {
-              queuedSavedRecordsUpsert({
-                id: 'master_shipments_registry',
-                record_type: 'shipments_registry',
-                period_label: 'Master Shipments Registry',
-                period_year: new Date().getFullYear(),
-                period_month: new Date().getMonth() + 1,
-                notes: 'Master DC Outbound Shipments & Packing Lists',
-                saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-                snapshot_data: {
-                  shipments: effectiveShipments,
-                  deletedIds: deletedShipmentIds,
-                  updatedAt: new Date().toISOString()
-                },
-                updated_at: new Date().toISOString()
-              }, { debounceMs: 2000 });
-            }
-          }
-
-          // Backfill direct public.shipments table headers in Supabase if empty/missing (throttled to once every 60s)
-          if (supabase && (!dbShipments || dbShipments.length < effectiveShipments.length) && (Date.now() - lastShipmentsBackfillAttemptRef.current > 60000)) {
-            lastShipmentsBackfillAttemptRef.current = Date.now();
-            const shipmentRowsToInsert = effectiveShipments
-              .map(s => formatShipmentForDb(s, dbSites || []))
-              .filter(s => s && isUUID(s.site_id));
-            const uniqueShipmentRows = Array.from(new Map(shipmentRowsToInsert.map(r => [r.shipment_number, r])).values());
-
-            if (uniqueShipmentRows.length > 0) {
-              (async () => {
-                try {
-                  const { data: existingShpList } = await supabase.from('shipments').select('id, shipment_number');
-                  const existingMap = new Map((existingShpList || []).map(r => [r.shipment_number, r.id]));
-
-                  const rowsToUpsert = uniqueShipmentRows.map(r => {
-                    if (existingMap.has(r.shipment_number)) {
-                      return { ...r, id: existingMap.get(r.shipment_number) };
-                    }
-                    return r;
-                  });
-
-                  await supabase.from('shipments').upsert(rowsToUpsert, { onConflict: 'shipment_number' });
-                } catch (bErr) {
-                  console.warn('Shipments cloud header sync notice:', bErr.message);
-                }
-              })();
-            }
-          }
-        } else {
+        } else if (!selectiveTables || selectiveTables.includes('shipments') || selectiveTables.includes('saved_records')) {
           setShipments([]);
           try { localStorage.setItem('mdc_shipments', JSON.stringify([])); } catch (e) {}
           dbStorage.setItem('mdc_shipments', []);
@@ -1711,20 +1670,6 @@ export function useCloudSync({
             }
           }
         });
-
-        // Actively purge any deleted IDs and corrupted DIRECT RECEIVING rows from Supabase database in the background (batched)
-        if (supabase) {
-          supabase.from('dc_intake_records').delete().or('id.eq.DIRECT RECEIVING,record_name.eq.DIRECT RECEIVING').then(() => {}).catch(() => {});
-          supabase.from('saved_records').delete().eq('id', 'DIRECT RECEIVING').then(() => {}).catch(() => {});
-          if (deletedIntakeIdsSet.size > 0) {
-            const idsToPurge = Array.from(deletedIntakeIdsSet).filter(Boolean);
-            if (idsToPurge.length > 0) {
-              supabase.from('dc_intake_records').delete().in('id', idsToPurge).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().in('record_name', idsToPurge).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().in('id', idsToPurge).then(() => {}).catch(() => {});
-            }
-          }
-        }
 
         setDcIntakeRecords(prev => {
           const map = new Map();
@@ -1912,31 +1857,10 @@ export function useCloudSync({
             availableUnitsForIntakes
           );
 
-          if (supabase && obsoleteIdsToPurge.length > 0) {
-            const cleanObsolete = obsoleteIdsToPurge.filter(Boolean);
-            if (cleanObsolete.length > 0) {
-              supabase.from('dc_intake_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().in('record_name', cleanObsolete).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
-            }
-          }
-
           effectiveIntakeRecords = consolidatedRecords.sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
 
           try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(effectiveIntakeRecords)); } catch (e) {}
           dbStorage.setItem('mdc_dc_intake_records', effectiveIntakeRecords);
-
-          // If Supabase direct dc_intake_records table is empty or missing rows, backfill them with compliant schema (throttled to once every 60s)
-          if (supabase && effectiveIntakeRecords.length > 0 && (!dbIntakes || dbIntakes.length < effectiveIntakeRecords.length) && (Date.now() - lastIntakesBackfillAttemptRef.current > 60000)) {
-            lastIntakesBackfillAttemptRef.current = Date.now();
-            const rowsToInsert = effectiveIntakeRecords
-              .map(r => formatDcIntakeRecordForDb(r))
-              .filter(Boolean);
-            const uniqueIntakeRows = Array.from(new Map(rowsToInsert.map(r => [r.id, r])).values());
-            if (uniqueIntakeRows.length > 0) {
-              supabase.from('dc_intake_records').upsert(uniqueIntakeRows, { onConflict: 'id' }).then(() => {}).catch(() => {});
-            }
-          }
 
           return effectiveIntakeRecords;
         });
@@ -2416,7 +2340,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [_shipments, _forecastingModel, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, parts, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, sites, _dcIntakeRecords, activePackingStations, masterlistData, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
+  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -2429,31 +2353,38 @@ export function useCloudSync({
       return { success: true, throttled: true, reason: 'circuit_breaker_active' };
     }
 
-    if (!isManual && getEgressStats().percentUsed >= 95) {
-      console.warn('[AutoRefresh] Blocked at 95% Supabase egress usage (preserving remaining free-tier quota)');
+    if (!isManual && getEgressStats().percentUsed >= 92) {
+      console.warn('[AutoRefresh] Blocked at 92% Supabase egress usage (preserving remaining free-tier quota)');
       return { success: true, throttled: true, reason: 'egress_quota_near_limit' };
-    }
-
-    // If a cloud save is actively in progress, queue a pending refresh so it fires immediately upon save completion
-    if (isSavingRef.current) {
-      pendingRealtimeSyncRef.current = true;
-      if (tables) {
-        tables.forEach(t => pendingRealtimeTablesRef.current.add(t));
-      }
-      return { success: true, throttled: true, reason: 'save_in_progress' };
     }
 
     // Runaway protection & bandwidth egress defense:
     // 1. Manual user click: allow immediately.
-    // 2. Forced / realtime: enforce at least a 4000ms cooldown to avoid cascade storms.
-    // 3. Automatic / background: enforce a 20000ms cooldown.
-    const minCooldown = isManual ? 0 : (force ? 4000 : 20000);
+    // 2. All automatic / realtime / background refreshes: strictly enforce at least a 20000ms cooldown.
+    const minCooldown = isManual ? 0 : 20000;
     if (now - lastRefreshTimeRef.current < minCooldown) {
       if (tables) {
         tables.forEach(t => pendingRealtimeTablesRef.current.add(t));
-        pendingRealtimeSyncRef.current = true;
       }
-      return { success: true, throttled: true };
+      // Schedule a single coalesced trailing execution when the cooldown window expires
+      if (!trailingRefreshTimerRef.current && !isManual) {
+        const remainingWait = Math.max(1000, minCooldown - (now - lastRefreshTimeRef.current));
+        trailingRefreshTimerRef.current = setTimeout(() => {
+          trailingRefreshTimerRef.current = null;
+          const targetTables = pendingRealtimeTablesRef.current.size > 0
+            ? Array.from(pendingRealtimeTablesRef.current)
+            : null;
+          pendingRealtimeTablesRef.current.clear();
+          autoRefreshDataRef.current?.({
+            silent: true,
+            force: false,
+            reason: 'Trailing coalesced sync after cooldown',
+            tables: targetTables,
+            isManual: false
+          });
+        }, remainingWait);
+      }
+      return { success: true, throttled: true, reason: 'cooldown_active' };
     }
 
     lastRefreshTimeRef.current = now;
@@ -2485,29 +2416,15 @@ export function useCloudSync({
     }
   }, [hydrateFromSupabase, showToast]);
 
-  // Watch cloudSyncStatus.isSaving: when saving finishes, trigger any pending realtime sync that arrived during the save
   useEffect(() => {
-    if (!cloudSyncStatus.isSaving && pendingRealtimeSyncRef.current) {
-      pendingRealtimeSyncRef.current = false;
-      const targetTables = pendingRealtimeTablesRef.current.size > 0
-        ? Array.from(pendingRealtimeTablesRef.current)
-        : null;
-      pendingRealtimeTablesRef.current.clear();
-      autoRefreshData({
-        silent: true,
-        force: true,
-        reason: 'Pending realtime sync post-save',
-        tables: targetTables
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudSyncStatus.isSaving]);
+    autoRefreshDataRef.current = autoRefreshData;
+  }, [autoRefreshData]);
 
   const refreshDataFromCloud = async () => {
     return await autoRefreshData({ silent: false, force: true, isManual: true, reason: 'Manual sync trigger' });
   };
 
-  // Debounced burst handler for Realtime Postgres & WebSocket events with safe 1500ms cooldown
+  // Debounced burst handler for Realtime Postgres & WebSocket events with safe 5000ms cooldown
   const triggerDebouncedRealtimeSync = useCallback((reason, table = null) => {
     if (table) {
       pendingRealtimeTablesRef.current.add(table);
@@ -2520,14 +2437,14 @@ export function useCloudSync({
         ? Array.from(pendingRealtimeTablesRef.current)
         : null;
       pendingRealtimeTablesRef.current.clear();
-      autoRefreshData({
+      autoRefreshDataRef.current?.({
         silent: true,
-        force: true,
+        force: false,
         reason: `Debounced Realtime [${reason}]`,
-        tables: targetTables
+        tables: targetTables,
+        isManual: false
       });
-    }, 1500);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, 5000);
   }, []);
 
   // Instant zero-latency real-time inventory synchronizer across concurrent users
@@ -2794,7 +2711,7 @@ export function useCloudSync({
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
                 lastRefreshTimeRef.current = 0;
-                await autoRefreshData({ force: true, silent: false, isManual: true, reason: `Global Force Refresh from ${ev.data.payload?.syncedBy || 'Superadmin'}` });
+                await autoRefreshData({ force: true, silent: false, isManual: false, reason: `Global Force Refresh from ${ev.data.payload?.syncedBy || 'Superadmin'}` });
                 showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
               } else if (ev.data.type === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
@@ -3033,7 +2950,7 @@ export function useCloudSync({
               await clearOperationalLocalStorage({ keepSession: true });
               try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
               lastRefreshTimeRef.current = 0;
-              await autoRefreshData({ force: true, silent: false, isManual: true, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
+              await autoRefreshData({ force: true, silent: false, isManual: false, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
               showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
             } else if (bType === 'MASTER_DATA_CLEARED') {
               clearOperationalLocalStorage({
@@ -3103,6 +3020,8 @@ export function useCloudSync({
                   return next;
                 });
               }
+              // Instantaneously updated from Realtime event payload: skip redundant Supabase re-fetch
+              return;
             }
 
             triggerDebouncedRealtimeSync(`postgres_changes:${tbl}`, tbl);
@@ -3146,17 +3065,16 @@ export function useCloudSync({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id, currentUser?.role, currentUser?.siteId]);
 
-  // 1.5. Immediate forced auto-refresh when currentUser logs in or transitions
+  // 1.5. Immediate auto-refresh when currentUser transitions
   const prevUserIdRef = useRef(currentUser?.id);
   useEffect(() => {
     if (currentUser?.id && currentUser.id !== prevUserIdRef.current) {
       prevUserIdRef.current = currentUser.id;
-      lastRefreshTimeRef.current = 0; // reset cooldown so login hydration is never throttled
-      autoRefreshData({ silent: true, force: true, isManual: true, reason: 'User session active / login transition' });
+      autoRefreshDataRef.current?.({ silent: true, force: false, isManual: false, reason: 'User session active / login transition' });
     } else if (!currentUser?.id) {
       prevUserIdRef.current = null;
     }
-  }, [currentUser?.id, autoRefreshData]);
+  }, [currentUser?.id]);
 
   // 2. Auto-Refresh on Page Navigation (Smart cache TTL: 30 mins, skipped when Realtime is active)
   useEffect(() => {

@@ -692,7 +692,7 @@ export default function Forecasting() {
         /* Main Forward Demand Forecast Operational Grid */
         <div className="card" style={{ padding: 0, overflow: 'hidden', boxShadow: 'var(--shadow-md)', border: '1px solid #cbd5e1' }}>
           <div className="table-container" style={{ maxHeight: 'calc(100vh - 280px)', overflowY: 'auto' }}>
-            <table className="data-table" style={{ margin: 0, fontSize: '12px' }}>
+            <table className="data-table forecast-table" style={{ margin: 0, fontSize: '12px' }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#1e293b' }}>
                 <tr>
                   <th style={{ background: '#1e293b', color: '#f8fafc', width: '90px', textAlign: 'center' }}>Commodity</th>
@@ -746,7 +746,11 @@ export default function Forecasting() {
                   const badgeStyle = getCategoryBadgeStyle(catCode);
 
                   return (
-                    <tr key={item.part_id} style={{ background: item.hasOverride ? '#fffbeb' : '#ffffff' }}>
+                    <tr
+                      key={item.part_id}
+                      className={`forecast-row ${item.hasOverride ? 'has-override' : ''}`}
+                      style={{ background: item.hasOverride ? '#fffbeb' : '#ffffff' }}
+                    >
                       {/* Commodity Tag */}
                       <td style={{ textAlign: 'center' }}>
                         <span style={{
@@ -879,7 +883,10 @@ export default function Forecasting() {
                       )}
 
                       {/* Computed Linear Regression Forecast */}
-                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', background: '#f8fafc', color: '#0369a1', fontSize: '13px' }}>
+                      <td
+                        className="forecast-calc-cell"
+                        style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '13px' }}
+                      >
                         {item.computed}
                       </td>
 
@@ -947,27 +954,31 @@ export default function Forecasting() {
                       </td>
 
                       {/* Recommended Order */}
-                      <td style={{
-                        textAlign: 'center',
-                        fontWeight: 800,
-                        fontFamily: 'var(--font-mono)',
-                        background: '#f0fdf4',
-                        color: '#15803d',
-                        fontSize: '14px'
-                      }}>
+                      <td
+                        className="forecast-rec-cell"
+                        style={{
+                          textAlign: 'center',
+                          fontWeight: 800,
+                          fontFamily: 'var(--font-mono)',
+                          color: '#15803d',
+                          fontSize: '14px'
+                        }}
+                      >
                         {item.finalVal}
                       </td>
 
                       {/* Total Spend */}
                       {viewMode === 'detailed' && (
-                        <td style={{
-                          textAlign: 'right',
-                          fontFamily: 'var(--font-mono)',
-                          fontWeight: 700,
-                          color: '#0f172a',
-                          background: '#f0fdf4',
-                          fontSize: '12px'
-                        }}>
+                        <td
+                          className="forecast-spend-cell"
+                          style={{
+                            textAlign: 'right',
+                            fontFamily: 'var(--font-mono)',
+                            fontWeight: 700,
+                            color: '#0f172a',
+                            fontSize: '12px'
+                          }}
+                        >
                           ${item.lineCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
                       )}
@@ -977,17 +988,17 @@ export default function Forecasting() {
               </tbody>
 
               {/* Table Footer with Summary Subtotals */}
-              <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 10, background: '#0f172a', color: '#f8fafc', fontWeight: 700 }}>
+              <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 15, background: '#0f172a', color: '#f8fafc', fontWeight: 700 }}>
                 <tr>
                   <td colSpan={3} style={{ background: '#0f172a', color: '#f8fafc', padding: '10px 12px', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     GRAND TOTAL ({enrichedItems.length} Models)
                   </td>
-                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
+                  <td style={{ background: '#0f172a', textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
                   
                   {months.map((_, idx) => {
                     const colTotal = enrichedItems.reduce((sum, it) => sum + (it.counts[idx] || 0), 0);
                     return (
-                      <td key={idx} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#e2e8f0' }}>
+                      <td key={idx} style={{ background: '#0f172a', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#e2e8f0' }}>
                         {colTotal}
                       </td>
                     );
@@ -995,30 +1006,30 @@ export default function Forecasting() {
 
                   {viewMode === 'detailed' && (
                     <>
-                      <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
-                      <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
-                      <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '11px' }}>—</td>
+                      <td style={{ background: '#0f172a', textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
+                      <td style={{ background: '#0f172a', textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>—</td>
+                      <td style={{ background: '#0f172a', textAlign: 'right', color: '#94a3b8', fontSize: '11px' }}>—</td>
                     </>
                   )}
 
                   {/* Computed Base Total */}
-                  <td style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                  <td className="forecast-footer-highlight-blue" style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
                     {executiveSummary.totalBaseUnits.toLocaleString()}
                   </td>
 
                   {/* Overrides indicator */}
-                  <td style={{ textAlign: 'center', color: executiveSummary.overrideCount > 0 ? '#fb923c' : '#94a3b8', fontSize: '11px' }}>
+                  <td style={{ background: '#0f172a', textAlign: 'center', color: executiveSummary.overrideCount > 0 ? '#fb923c' : '#94a3b8', fontSize: '11px' }}>
                     {executiveSummary.overrideCount > 0 ? `${executiveSummary.overrideCount} active` : 'Exact'}
                   </td>
 
                   {/* Final Recommended Order Total */}
-                  <td style={{ textAlign: 'center', background: '#059669', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '15px', fontWeight: 800 }}>
+                  <td className="forecast-footer-highlight-green-rec" style={{ textAlign: 'center', background: '#059669', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '15px', fontWeight: 800 }}>
                     {executiveSummary.totalRecommendedUnits.toLocaleString()}
                   </td>
 
                   {/* Total Spend */}
                   {viewMode === 'detailed' && (
-                    <td style={{ textAlign: 'right', background: '#047857', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                    <td className="forecast-footer-highlight-green-spend" style={{ textAlign: 'right', background: '#047857', color: '#ffffff', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
                       ${executiveSummary.totalEstimatedSpend.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                   )}

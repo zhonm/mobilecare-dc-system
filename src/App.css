@@ -3624,6 +3624,110 @@
 }
 
 /* ==========================================================================
+   Demand Forecasting Table - Grid & Hover Experience
+   ========================================================================== */
+.forecast-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.forecast-table tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+.forecast-table tbody tr td {
+  transition: background-color 0.12s ease;
+}
+
+/* Default special column backgrounds */
+.forecast-table tbody tr td.forecast-calc-cell {
+  background-color: #f8fafc;
+}
+
+.forecast-table tbody tr td.forecast-rec-cell,
+.forecast-table tbody tr td.forecast-spend-cell {
+  background-color: #f0fdf4;
+}
+
+/* Hover on normal rows */
+.forecast-table tbody tr:hover td {
+  background-color: #f1f5f9;
+}
+
+.forecast-table tbody tr:hover td.forecast-calc-cell {
+  background-color: #e0f2fe;
+}
+
+.forecast-table tbody tr:hover td.forecast-rec-cell,
+.forecast-table tbody tr:hover td.forecast-spend-cell {
+  background-color: #dcfce7;
+}
+
+/* Overridden rows styling */
+.forecast-table tbody tr.has-override td {
+  background-color: #fffbeb;
+}
+
+.forecast-table tbody tr.has-override td.forecast-calc-cell {
+  background-color: #f8fafc;
+}
+
+.forecast-table tbody tr.has-override td.forecast-rec-cell,
+.forecast-table tbody tr.has-override td.forecast-spend-cell {
+  background-color: #f0fdf4;
+}
+
+/* Hover on overridden rows */
+.forecast-table tbody tr.has-override:hover td {
+  background-color: #fef3c7;
+}
+
+.forecast-table tbody tr.has-override:hover td.forecast-calc-cell {
+  background-color: #e0f2fe;
+}
+
+.forecast-table tbody tr.has-override:hover td.forecast-rec-cell,
+.forecast-table tbody tr.has-override:hover td.forecast-spend-cell {
+  background-color: #dcfce7;
+}
+
+/* Sticky Footer Protection: ensure hover or scrolling never washes out totals */
+.forecast-table tfoot {
+  position: sticky;
+  bottom: 0;
+  z-index: 15;
+  background-color: #0f172a !important;
+}
+
+.forecast-table tfoot tr td {
+  background-color: #0f172a !important;
+  color: #f8fafc;
+  border-top: 2px solid #38bdf8;
+}
+
+.forecast-table tfoot tr:hover td {
+  background-color: #0f172a !important;
+}
+
+.forecast-table tfoot tr td.forecast-footer-highlight-blue,
+.forecast-table tfoot tr:hover td.forecast-footer-highlight-blue {
+  background-color: #0369a1 !important;
+  color: #ffffff !important;
+}
+
+.forecast-table tfoot tr td.forecast-footer-highlight-green-rec,
+.forecast-table tfoot tr:hover td.forecast-footer-highlight-green-rec {
+  background-color: #059669 !important;
+  color: #ffffff !important;
+}
+
+.forecast-table tfoot tr td.forecast-footer-highlight-green-spend,
+.forecast-table tfoot tr:hover td.forecast-footer-highlight-green-spend {
+  background-color: #047857 !important;
+  color: #ffffff !important;
+}
+
+/* ==========================================================================
    Modern Auth / Login Screen Styles
    ========================================================================== */
 .auth-page {
@@ -3812,6 +3916,18 @@ input[type="password"]::-ms-clear {
   border-color: #0284c7;
   background: rgba(30, 41, 59, 0.95);
   box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.22);
+}
+
+/* Maintain dark theme aesthetic when browser / password manager autofills */
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:hover,
+.auth-input:-webkit-autofill:focus,
+.auth-input:-webkit-autofill:active {
+  -webkit-text-fill-color: #f8fafc !important;
+  -webkit-box-shadow: 0 0 0 1000px #1e293b inset !important;
+  box-shadow: 0 0 0 1000px #1e293b inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+  caret-color: #f8fafc;
 }
 
 .auth-input::placeholder {

@@ -191,10 +191,12 @@ export default function Login() {
         {step === 'email' ? (
           <form onSubmit={handleEmailSubmit}>
             <div className="auth-form-group">
-              <label className="auth-label">Company Email</label>
+              <label htmlFor="login-email" className="auth-label">Company Email</label>
               <div className="auth-input-wrapper">
                 <Mail size={18} className="auth-input-icon" />
                 <input
+                  id="login-email"
+                  name="username"
                   type="email"
                   className="auth-input"
                   placeholder="e.g. name@company.com"
@@ -203,6 +205,10 @@ export default function Login() {
                     setEmailInput(e.target.value);
                     if (errorMessage) setErrorMessage('');
                   }}
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
                   autoFocus
                   required
                 />
@@ -239,6 +245,14 @@ export default function Login() {
           </form>
         ) : (
           <form onSubmit={handlePasswordSubmit}>
+            {/* Hidden username input for password managers and Keychain context */}
+            <input
+              type="hidden"
+              name="username"
+              value={emailInput}
+              autoComplete="username"
+            />
+
             {/* User identification chip */}
             <div className="auth-user-chip">
               <div className="auth-user-info">
@@ -278,7 +292,7 @@ export default function Login() {
 
             <div className="auth-form-group">
               <div className="auth-label">
-                <span>Password</span>
+                <label htmlFor="login-password" style={{ margin: 0, cursor: 'pointer' }}>Password</label>
                 <button
                   type="button"
                   onClick={() => setShowForgotModal(true)}
@@ -299,6 +313,8 @@ export default function Login() {
               <div className="auth-input-wrapper">
                 <Lock size={18} className="auth-input-icon" />
                 <input
+                  id="login-password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
                   className="auth-input"
                   style={{ paddingRight: '48px' }}

@@ -5,8 +5,8 @@
 const STORAGE_KEY = 'mdc_egress_monitor_data';
 const FREE_TIER_LIMIT_BYTES = 5 * 1024 * 1024 * 1024; // 5.0 GB
 
-// Seed baseline from Supabase dashboard (3.415 GB recorded on Sep 15, 2026)
-const DEFAULT_BASELINE_BYTES = Math.round(3.415 * 1024 * 1024 * 1024);
+// Seed baseline from Supabase dashboard (4.506 GB recorded on Sep 17, 2026)
+const DEFAULT_BASELINE_BYTES = Math.round(4.506 * 1024 * 1024 * 1024);
 
 const getStoredData = () => {
   try {
@@ -17,7 +17,7 @@ const getStoredData = () => {
       return {
         billingCycleStart: parsed.billingCycleStart || '2026-09-05T00:00:00Z',
         billingCycleEnd: parsed.billingCycleEnd || '2026-10-05T23:59:59Z',
-        baselineBytes: typeof parsed.baselineBytes === 'number' ? parsed.baselineBytes : DEFAULT_BASELINE_BYTES,
+        baselineBytes: typeof parsed.baselineBytes === 'number' ? Math.max(parsed.baselineBytes, DEFAULT_BASELINE_BYTES) : DEFAULT_BASELINE_BYTES,
         sessionBytes: typeof parsed.sessionBytes === 'number' ? parsed.sessionBytes : 0,
         dailyRecords: parsed.dailyRecords || {},
         tableBreakdown: parsed.tableBreakdown || {},
@@ -147,12 +147,12 @@ export const recordRequest = ({
     while (recentAutoRequests.length > 0 && now - recentAutoRequests[0].timestamp > 120000) {
       recentAutoRequests.shift();
     }
-    // Trigger if > 35 auto requests in 2 mins OR > 40 MB in 2 mins
+    // Trigger if > 20 auto requests in 2 mins OR > 15 MB in 2 mins
     const recentBytes = recentAutoRequests.reduce((sum, r) => sum + r.bytes, 0);
-    if (recentAutoRequests.length > 35 || recentBytes > 40 * 1024 * 1024) {
+    if (recentAutoRequests.length > 20 || recentBytes > 15 * 1024 * 1024) {
       isCircuitBreakerTripped = true;
-      circuitBreakerCooldownUntil = now + 60000; // 60s cooldown
-      console.warn(`[EgressMonitor] Circuit breaker TRIPPED! Rate: ${recentAutoRequests.length} reqs / ${(recentBytes / 1024 / 1024).toFixed(2)} MB in 2 mins. Auto-refresh paused for 60s.`);
+      circuitBreakerCooldownUntil = now + 300000; // 5 mins cooldown
+      console.warn(`[EgressMonitor] Circuit breaker TRIPPED! Rate: ${recentAutoRequests.length} reqs / ${(recentBytes / 1024 / 1024).toFixed(2)} MB in 2 mins. Auto-refresh paused for 5 mins.`);
     }
   }
 

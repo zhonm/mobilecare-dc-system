@@ -134,12 +134,22 @@ export default function CreatePassword() {
         </div>
 
         <form onSubmit={handleSubmit}>
+          {/* Hidden username input so password managers associate credentials with the user */}
+          <input
+            type="hidden"
+            name="username"
+            value={pendingFirstTimeUser?.email || ''}
+            autoComplete="username"
+          />
+
           {/* New Password */}
           <div className="auth-form-group">
-            <label className="auth-label">New Password</label>
+            <label htmlFor="create-password" className="auth-label">New Password</label>
             <div className="auth-input-wrapper">
               <Lock size={18} className="auth-input-icon" />
               <input
+                id="create-password"
+                name="new-password"
                 type={showPassword ? 'text' : 'password'}
                 className="auth-input"
                 style={{ paddingRight: '48px' }}
@@ -180,10 +190,12 @@ export default function CreatePassword() {
 
           {/* Confirm Password */}
           <div className="auth-form-group">
-            <label className="auth-label">Confirm Password</label>
+            <label htmlFor="confirm-password" className="auth-label">Confirm Password</label>
             <div className="auth-input-wrapper">
               <Lock size={18} className="auth-input-icon" />
               <input
+                id="confirm-password"
+                name="confirm-password"
                 type={showConfirmPassword ? 'text' : 'password'}
                 className="auth-input"
                 style={{

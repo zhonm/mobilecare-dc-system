@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
 import { isUUID } from '../utils/appContextHelpers.js';
@@ -102,6 +102,8 @@ export function useCatalogAndSites({
     }
   });
 
+  const hasEnrichedSitesRef = useRef(false);
+
   useEffect(() => {
     if (supabase) {
       supabase.from('sites').select('*').then(async ({ data: dbSites, error }) => {
@@ -134,9 +136,10 @@ export function useCatalogAndSites({
           try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
           dbStorage.setItem('mdc_sites', authoritative);
 
-          // Auto-heal / sync missing GSX Ship-To or supervisor contacts back to Supabase in background
-          const needsSync = authoritative.some(s => s.ship_to && !dbSites.find(d => d.code === s.code)?.ship_to);
+          // Auto-heal / sync missing GSX Ship-To or supervisor contacts back to Supabase in background (at most once per app session)
+          const needsSync = !hasEnrichedSitesRef.current && authoritative.some(s => s.ship_to && !dbSites.find(d => d.code === s.code)?.ship_to);
           if (needsSync) {
+            hasEnrichedSitesRef.current = true;
             try {
               const rowsToUpsert = authoritative.map(s => ({
                 code: s.code,
