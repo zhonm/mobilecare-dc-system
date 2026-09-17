@@ -13,6 +13,21 @@ import {
 } from '../constants/roles';
 import { isUUID, toValidUUID, isDcSite, resolveSite } from '../utils/appContextHelpers';
 
+// Profile normalization helper (derives password status strictly from has_set_password boolean)
+export const mapProfileToUser = (p) => {
+  const isPasswordSet = Boolean(p.has_set_password);
+  return {
+    id: p.id,
+    email: p.email,
+    fullName: p.full_name,
+    role: p.role,
+    rolePosition: p.role_position,
+    siteId: p.site_id,
+    hasSetPassword: isPasswordSet,
+    isActive: p.is_active ?? true
+  };
+};
+
 export function useUserManagement({
   currentUser,
   getCurrentUser,
@@ -96,6 +111,11 @@ export function useUserManagement({
   // Lightweight IndexedDB recovery on startup if local cache was empty (pure read, zero cloud queries)
   useEffect(() => {
     let isMounted = true;
+    const activeUser = getActiveUser();
+    const isAuthenticated = Boolean(activeUser?.id && activeUser?.role);
+    if (isAuthenticated) {
+      // Authenticated session active: hydrate user cache from local storage without network egress
+    }
     dbStorage.getItem('mdc_users').then(cached => {
       if (isMounted && Array.isArray(cached) && cached.length > 0) {
         setUsersList(prev => (prev && prev.length > 0 ? prev : cached));
@@ -104,7 +124,7 @@ export function useUserManagement({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [getActiveUser]);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {
