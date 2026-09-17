@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { hashPassword, getStoredUserSession } from '../utils/security';
@@ -23,14 +23,20 @@ export function useUserManagement({
   enqueueOfflineAction,
   setCloudSyncStatus
 }) {
+  const getCurrentUserRef = useRef(getCurrentUser);
+  getCurrentUserRef.current = getCurrentUser;
+
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+
   const getActiveUser = useCallback(() => {
-    if (currentUser) return currentUser;
-    if (typeof getCurrentUser === 'function') {
-      const u = getCurrentUser();
+    if (currentUserRef.current) return currentUserRef.current;
+    if (typeof getCurrentUserRef.current === 'function') {
+      const u = getCurrentUserRef.current();
       if (u) return u;
     }
     return getStoredUserSession();
-  }, [currentUser, getCurrentUser]);
+  }, []);
 
   const [usersList, setUsersList] = useState(() => {
     try {
@@ -87,8 +93,12 @@ export function useUserManagement({
     return INITIAL_USERS;
   });
 
-  // Asynchronous recovery for usersList from Supabase PostgreSQL & storage on startup
+  const hasRecoveredUsersRef = useRef(false);
+
+  // Asynchronous recovery for usersList from Supabase PostgreSQL & storage on startup (runs at most once per session)
   useEffect(() => {
+    if (hasRecoveredUsersRef.current) return;
+    hasRecoveredUsersRef.current = true;
     let isMounted = true;
     const recoverUsersFromDb = async () => {
       try {
@@ -307,9 +317,7 @@ export function useUserManagement({
     return () => {
       isMounted = false;
     };
-  // The sync helper is intentionally recreated with current user state.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getActiveUser]);
+  }, []);
 
   // Helper to persist authoritative users registry to cloud
   const syncMasterUsersRegistry = async (usersListToSync, deletedIdsToSync = null) => {

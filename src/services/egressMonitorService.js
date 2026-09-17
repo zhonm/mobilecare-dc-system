@@ -5,8 +5,8 @@
 const STORAGE_KEY = 'mdc_egress_monitor_data';
 const FREE_TIER_LIMIT_BYTES = 5 * 1024 * 1024 * 1024; // 5.0 GB
 
-// Seed baseline from Supabase dashboard (4.506 GB recorded on Sep 17, 2026)
-const DEFAULT_BASELINE_BYTES = Math.round(4.506 * 1024 * 1024 * 1024);
+// Seed baseline from Supabase dashboard (4.630 GB recorded on Sep 17, 2026)
+const DEFAULT_BASELINE_BYTES = Math.round(4.630 * 1024 * 1024 * 1024);
 
 const getStoredData = () => {
   try {
