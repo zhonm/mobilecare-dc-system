@@ -88,21 +88,21 @@ assert.strictEqual(isCircuitBreakerActive(), true, 'Circuit breaker must trip wh
 console.log('  ✓ PASS: Circuit breaker trips and protects quota when automated query frequency spikes');
 
 // ----------------------------------------------------
-// 3. Supabase Client Egress Tracking Fetch Integration
+// 3. Supabase Client Native Pipeline Verification
 // ----------------------------------------------------
-console.log('\n--- 3. Supabase Client Egress Tracking Integration ---');
+console.log('\n--- 3. Supabase Client Native Pipeline Verification ---');
 
 const clientCode = fs.readFileSync(path.join(__dirname, '../supabase/client.js'), 'utf-8');
-assert.ok(clientCode.includes('createEgressTrackingFetch'), 'client.js must import createEgressTrackingFetch');
-assert.ok(clientCode.includes('global: { fetch: customFetch }'), 'client.js must pass customFetch to Supabase client');
+assert.ok(!clientCode.includes('createEgressTrackingFetch'), 'client.js must NOT import createEgressTrackingFetch');
+assert.ok(!clientCode.includes('global: { fetch: customFetch }'), 'client.js must use clean native fetch without interceptor');
 assert.ok(clientCode.includes('autoRefreshToken: true'), 'client.js must preserve autoRefreshToken: true');
 assert.ok(clientCode.includes('persistSession: true'), 'client.js must preserve persistSession: true');
-console.log('  ✓ PASS: client.js instruments fetch pipeline for egress tracking while preserving session integrity');
+console.log('  ✓ PASS: client.js uses native clean fetch pipeline without interceptors while preserving session integrity');
 
 // ----------------------------------------------------
-// 4. useCloudSync.js Conditional Hydration & Egress Defenses
+// 4. useCloudSync.js Conditional Hydration & Cooldown Defenses
 // ----------------------------------------------------
-console.log('\n--- 4. useCloudSync.js Conditional Hydration & Egress Defenses ---');
+console.log('\n--- 4. useCloudSync.js Conditional Hydration & Cooldown Defenses ---');
 
 const useCloudSyncCode = fs.readFileSync(path.join(__dirname, '../context/useCloudSync.js'), 'utf-8');
 
@@ -117,9 +117,9 @@ assert.ok(useCloudSyncCode.includes('mdc_live_master_updated_at'), 'useCloudSync
 assert.ok(useCloudSyncCode.includes('mdc_masterlist_updated_at'), 'useCloudSync.js must track mdc_masterlist_updated_at');
 console.log('  ✓ PASS: Multi-megabyte JSON trees (live state & masterlist) utilize conditional timestamp hydration');
 
-// 4c. Circuit breaker check in autoRefreshData
-assert.ok(useCloudSyncCode.includes('isCircuitBreakerActive()'), 'autoRefreshData must consult isCircuitBreakerActive');
-console.log('  ✓ PASS: autoRefreshData incorporates Circuit Breaker to prevent runaway egress depletion');
+// 4c. Safe cooldown in autoRefreshData
+assert.ok(useCloudSyncCode.includes('const minCooldown = isManual ? 0 : 20000;'), 'autoRefreshData must enforce a 20s cooldown');
+console.log('  ✓ PASS: autoRefreshData enforces 20s minimum cooldown to prevent rapid sync queries');
 
 // 4d. Selective table routing for Realtime broadcast events
 assert.ok(useCloudSyncCode.includes("tables: ['shipments', 'saved_records']"), 'Shipment broadcast events must target selective tables');
@@ -130,19 +130,18 @@ assert.ok(useCloudSyncCode.includes('if (realtimeConnected) return;'), 'Tab visi
 console.log('  ✓ PASS: Local tab visits and window refocus skip redundant background queries when Realtime is active');
 
 // ----------------------------------------------------
-// 5. UI Transparency: Settings Egress Monitor
+// 5. UI Transparency: Removal of Egress Tracker Widgets
 // ----------------------------------------------------
-console.log('\n--- 5. UI Transparency: Settings Egress Monitor ---');
+console.log('\n--- 5. UI Transparency: Removal of Egress Tracker Widgets ---');
 
 const headerCode = fs.readFileSync(path.join(__dirname, '../components/Header.jsx'), 'utf-8');
 assert.ok(!headerCode.includes('EgressUsageModal'), 'Header.jsx must not render the egress modal');
 assert.ok(!headerCode.includes('egress-badge'), 'Header.jsx must not render the egress badge');
 
 const settingsCode = fs.readFileSync(path.join(__dirname, '../components/SettingsCatalog.jsx'), 'utf-8');
-assert.ok(settingsCode.includes("setActiveTab('egress')"), 'SettingsCatalog must expose an egress tab');
-assert.ok(settingsCode.includes("activeTab === 'egress'"), 'SettingsCatalog must render the egress tab');
-assert.ok(settingsCode.includes('tableBreakdown'), 'SettingsCatalog must display table egress breakdown');
-console.log('  ✓ PASS: Settings provides complete egress visibility while the global header stays focused');
+assert.ok(!settingsCode.includes('egressStats'), 'SettingsCatalog must not maintain egress monitor state');
+assert.ok(!settingsCode.includes('Calibrate Baseline'), 'SettingsCatalog must remove calibration UI');
+console.log('  ✓ PASS: Settings and Header are free from intrusive egress monitoring widgets');
 
 console.log('\n====================================================');
 console.log('ALL SUPABASE EGRESS MONITORING & OPTIMIZATION TESTS PASSED');

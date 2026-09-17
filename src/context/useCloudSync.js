@@ -37,7 +37,6 @@ import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } f
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
-import { getEgressStats, isCircuitBreakerActive, setEgressRequestContext } from '../services/egressMonitorService';
 
 export function useCloudSync({
   currentUser,
@@ -2339,19 +2338,7 @@ export function useCloudSync({
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
     const now = Date.now();
 
-    // Bandwidth & Egress Quota Circuit Breaker:
-    // If circuit breaker is tripped due to excessive rate or volume, block non-manual background refreshes
-    if (!isManual && isCircuitBreakerActive()) {
-      console.warn('[AutoRefresh] Blocked by Egress Circuit Breaker (preserving Supabase free-tier quota)');
-      return { success: true, throttled: true, reason: 'circuit_breaker_active' };
-    }
-
-    if (!isManual && getEgressStats().percentUsed >= 92) {
-      console.warn('[AutoRefresh] Blocked at 92% Supabase egress usage (preserving remaining free-tier quota)');
-      return { success: true, throttled: true, reason: 'egress_quota_near_limit' };
-    }
-
-    // Runaway protection & bandwidth egress defense:
+    // Runaway protection & cooldown defense:
     // 1. Manual user click: allow immediately.
     // 2. All automatic / realtime / background refreshes: strictly enforce at least a 20000ms cooldown.
     const minCooldown = isManual ? 0 : 20000;
@@ -2385,7 +2372,6 @@ export function useCloudSync({
     console.debug('[AutoRefresh] Sync trigger:', reason, tables ? `(Tables: ${tables.join(', ')})` : '(Full)');
 
     try {
-      setEgressRequestContext(!isManual);
       const success = await hydrateFromSupabase(tables, Boolean(force || isManual));
       if (!silent) {
         if (success) {
@@ -2402,7 +2388,6 @@ export function useCloudSync({
       }
       return { success: false, error: err.message };
     } finally {
-      setEgressRequestContext(false);
       setTimeout(() => {
         setIsAutoRefreshing(false);
       }, 300);

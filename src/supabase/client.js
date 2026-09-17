@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { createEgressTrackingFetch } from '../services/egressMonitorService.js';
 
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (typeof process !== 'undefined' && process.env ? process.env : {});
 const supabaseUrl = env.VITE_SUPABASE_URL || '';
@@ -7,18 +6,13 @@ const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY || '';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-const customFetch = typeof window !== 'undefined' || typeof globalThis !== 'undefined'
-  ? createEgressTrackingFetch(typeof window !== 'undefined' ? window.fetch.bind(window) : globalThis.fetch)
-  : null;
-
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: true
-      },
-      ...(customFetch ? { global: { fetch: customFetch } } : {})
+      }
     })
   : null;
 
