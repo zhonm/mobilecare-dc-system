@@ -2711,8 +2711,10 @@ export function useCloudSync({
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
                 lastRefreshTimeRef.current = 0;
-                await autoRefreshData({ force: true, silent: false, isManual: false, reason: `Global Force Refresh from ${ev.data.payload?.syncedBy || 'Superadmin'}` });
-                showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
+                showToast(`🔄 Global Update: Clearing cache and reloading to latest version...`, 'info');
+                setTimeout(() => {
+                  window.location.reload();
+                }, 800);
               } else if (ev.data.type === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
@@ -2950,8 +2952,10 @@ export function useCloudSync({
               await clearOperationalLocalStorage({ keepSession: true });
               try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
               lastRefreshTimeRef.current = 0;
-              await autoRefreshData({ force: true, silent: false, isManual: false, reason: `WebSocket Global Refresh from ${bPayload?.syncedBy || 'Superadmin'}` });
-              showToast(`🔄 Global Cloud Sync from Superadmin: Outdated cache cleared & latest database state reloaded.`, 'info');
+              showToast(`🔄 Global Update: Clearing cache and reloading to latest version...`, 'info');
+              setTimeout(() => {
+                window.location.reload();
+              }, 800);
             } else if (bType === 'MASTER_DATA_CLEARED') {
               clearOperationalLocalStorage({
                 keepSession: true,

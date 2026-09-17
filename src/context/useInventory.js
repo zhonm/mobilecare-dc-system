@@ -383,24 +383,6 @@ export function useInventory({
           localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
         } catch (e) {}
         dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
-
-        if (supabase) {
-          if (obsoleteIdsToPurge.length > 0) {
-            const cleanObsolete = obsoleteIdsToPurge.filter(Boolean);
-            if (cleanObsolete.length > 0) {
-              supabase.from('dc_intake_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
-              supabase.from('dc_intake_records').delete().in('record_name', cleanObsolete).then(() => {}).catch(() => {});
-              supabase.from('saved_records').delete().in('id', cleanObsolete).then(() => {}).catch(() => {});
-            }
-          }
-
-          consolidatedRecords.forEach(cr => {
-            const formattedRow = formatDcIntakeRecordForDb(cr, currentUser);
-            if (formattedRow) {
-              supabase.from('dc_intake_records').upsert(formattedRow, { onConflict: 'id' }).then(() => {}).catch(() => {});
-            }
-          });
-        }
         return consolidatedRecords;
       }
 

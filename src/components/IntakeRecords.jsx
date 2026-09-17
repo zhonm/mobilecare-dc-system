@@ -1,8 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
-import dbStorage from '../utils/dbStorage';
-import { supabase } from '../supabase/client';
+
 import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
@@ -36,7 +35,7 @@ import {
   Clock
 } from 'lucide-react';
 import { normalizeInventoryUnits } from '../utils/partResolver';
-import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, formatDcIntakeRecordForDb, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
+import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
@@ -249,57 +248,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     return [...consolidatedRecords].sort(sortBatchesNewestFirst);
   }, [dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits]);
 
-  // Self-heal: persist consolidated records and purge obsolete suffixed records from local storage & Supabase
-  useEffect(() => {
-    if (!setDcIntakeRecords) return;
-    const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(dcIntakeRecords, purchaseOrders, currentUser, inventoryUnits);
-    const hasDiff = (dcIntakeRecords || []).length !== consolidatedRecords.length ||
-      obsoleteIdsToPurge.length > 0 ||
-      consolidatedRecords.some(cr => {
-        const orig = (dcIntakeRecords || []).find(r => r.id === cr.id);
-        return !orig || orig.expected_units !== cr.expected_units || orig.po_number !== cr.po_number || orig.total_units !== cr.total_units || orig.status !== cr.status || orig.saved_by_name !== cr.saved_by_name || orig.intake_date !== cr.intake_date;
-      });
 
-    if (hasDiff) {
-      setDcIntakeRecords(consolidatedRecords);
-      try {
-        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(consolidatedRecords));
-      } catch (e) {}
-      dbStorage.setItem('mdc_dc_intake_records', consolidatedRecords);
-
-      if (supabase) {
-        if (consolidatedRecords.length > 0) {
-          const rowsToUpsert = consolidatedRecords
-            .map(r => formatDcIntakeRecordForDb(r, currentUser))
-            .filter(Boolean);
-          if (rowsToUpsert.length > 0) {
-            supabase.from('dc_intake_records').upsert(rowsToUpsert, { onConflict: 'id' }).then(() => {}).catch(() => {});
-          }
-          const primaryAuthor = consolidatedRecords.find(r => r.saved_by_name && r.saved_by_name !== 'Superadmin' && r.saved_by_name !== 'Warehouse Staff')?.saved_by_name ||
-                                (currentUser?.fullName && currentUser.fullName !== 'Superadmin' ? currentUser.fullName : 'Zhon Manaois');
-          supabase.from('saved_records').upsert({
-            id: 'master_dc_intakes_registry',
-            record_type: 'intake_registry',
-            period_label: 'Master DC Intakes Registry',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            notes: 'Master operational intake batches synchronized across all users',
-            saved_by_name: primaryAuthor,
-            snapshot_data: { records: consolidatedRecords },
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'id' }).then(() => {}).catch(() => {});
-        }
-
-        if (obsoleteIdsToPurge.length > 0) {
-          obsoleteIdsToPurge.forEach(delId => {
-            supabase.from('dc_intake_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-            supabase.from('dc_intake_records').delete().eq('record_name', delId).then(() => {}).catch(() => {});
-            supabase.from('saved_records').delete().eq('id', delId).then(() => {}).catch(() => {});
-          });
-        }
-      }
-    }
-  }, [dcIntakeRecords, purchaseOrders, setDcIntakeRecords, currentUser, inventoryUnits]);
 
   const totalBatchesCount = allBatchRecords.length;
   const totalUnitsAcrossBatches = useMemo(() => {
