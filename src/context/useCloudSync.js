@@ -112,6 +112,9 @@ export function useCloudSync({
   const isSavingRef = useRef(false);
   const lastShipmentsBackfillAttemptRef = useRef(0);
   const lastIntakesBackfillAttemptRef = useRef(0);
+  // Session-scoped guard: track emails already scheduled for admin_delete_user purge
+  // Prevents repeated RPC calls on the same deleted profile across successive hydrateFromSupabase runs
+  const purgedDeletedProfileEmailsRef = useRef(new Set());
 
   useEffect(() => {
     isSavingRef.current = cloudSyncStatus.isSaving;
@@ -696,8 +699,11 @@ export function useCloudSync({
               );
 
               if (isMarkedDeleted) {
-                // If a deleted user still exists in Supabase profiles, actively trigger permanent RPC purge
-                if (cleanEmail && (currentUser?.role === 'superadmin' || currentUser?.role === 'admin')) {
+                // If a deleted user still exists in Supabase profiles, actively trigger permanent RPC purge.
+                // CRITICAL: Only call once per email per session — repeated calls cause a Realtime→sync feedback loop.
+                if (cleanEmail && (currentUser?.role === 'superadmin' || currentUser?.role === 'admin') &&
+                    !purgedDeletedProfileEmailsRef.current.has(cleanEmail)) {
+                  purgedDeletedProfileEmailsRef.current.add(cleanEmail);
                   supabase.rpc('admin_delete_user', {
                     p_email: cleanEmail,
                     p_user_id: isUUID(p.id) ? p.id : null,
@@ -2976,10 +2982,13 @@ export function useCloudSync({
 
         // 3. Row-filtered postgres_changes subscriptions
         // PMG branch users only subscribe to change events for their own site_id
+        // NOTE: 'profiles' and 'user_page_permissions' are intentionally excluded — subscribing to them
+        // creates a feedback loop: hydrateFromSupabase reads/writes these tables, which triggers
+        // postgres_changes events, which call triggerDebouncedRealtimeSync → autoRefreshData →
+        // hydrateFromSupabase again, resulting in an infinite API request storm.
+        // These admin tables are synced at login and on explicit user-management actions instead.
         const REALTIME_POSTGRES_TABLES = [
           'parts_requests',
-          'profiles',
-          'user_page_permissions',
           'sites',
           'shipments',
           'purchase_orders'
