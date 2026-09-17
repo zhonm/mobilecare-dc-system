@@ -375,6 +375,14 @@ export function useCloudSync({
       const isSiteRestrictedPmg = Boolean(isPmgUser && userSiteId && userSiteId !== 'site-dc');
 
       const shouldFetch = (tbl) => {
+        if (tbl === 'profiles' || tbl === 'user_page_permissions') {
+          // Scoping Defense: Only query user accounts & permissions when specifically requested or on user-access tab
+          const curTab = activeTabRef.current || (typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '') : '');
+          if (curTab === 'user-access' || (selectiveTables && selectiveTables.includes(tbl))) {
+            return true;
+          }
+          return false;
+        }
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
       };
