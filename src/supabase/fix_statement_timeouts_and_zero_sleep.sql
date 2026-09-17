@@ -71,3 +71,39 @@ DROP FUNCTION IF EXISTS block_runaway_endpoint();
 
 -- STEP 7: Reload PostgREST schema cache
 NOTIFY pgrst, 'reload schema';
+
+-- STEP 8: Install silent-drop triggers for unauthorized anonymous writes on profiles and saved_records
+-- Prevents RLS error code 42501 ('new row violates row-level security policy') from flooding Postgres logs
+-- while allowing the client to safely dequeue the items from its offline sync queue.
+
+CREATE OR REPLACE FUNCTION silent_ignore_anon_profile_writes()
+RETURNS trigger AS $$
+BEGIN
+    IF public.current_user_role() = 'anon' THEN
+        RETURN NULL; -- Silently skips row without raising 42501 exception
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_silent_ignore_anon_profile_writes ON public.profiles;
+CREATE TRIGGER trg_silent_ignore_anon_profile_writes
+BEFORE INSERT OR UPDATE ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION silent_ignore_anon_profile_writes();
+
+CREATE OR REPLACE FUNCTION silent_ignore_anon_saved_records_writes()
+RETURNS trigger AS $$
+BEGIN
+    IF public.current_user_role() = 'anon' OR NEW.id = 'master_users_registry' THEN
+        RETURN NULL; -- Silently skips row without raising 42501 exception
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_silent_ignore_anon_saved_records_writes ON public.saved_records;
+CREATE TRIGGER trg_silent_ignore_anon_saved_records_writes
+BEFORE INSERT OR UPDATE ON public.saved_records
+FOR EACH ROW
+EXECUTE FUNCTION silent_ignore_anon_saved_records_writes();
