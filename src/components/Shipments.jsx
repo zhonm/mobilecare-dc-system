@@ -49,6 +49,7 @@ import {
   hasBatteryItem,
   getShipmentRiderName
 } from '../utils/shipmentHelpers';
+import { isShipmentArchived } from '../utils/archiveManager';
 
 export default function Shipments() {
   const {
@@ -70,7 +71,9 @@ export default function Shipments() {
     inventoryUnits,
     dcIntakeRecords,
     masterlistData,
-    savedRecords
+    savedRecords,
+    loadArchivedShipments,
+    isLoadingArchivedShipments
   } = useApp();
 
   const { serialDict, partsMapByPn } = useMemo(() => {
@@ -308,6 +311,7 @@ export default function Shipments() {
     let shipped = 0;
     let received = 0;
     let draft = 0;
+    let archived = 0;
     let validTotal = 0;
 
     (shipments || []).forEach(sh => {
@@ -321,13 +325,14 @@ export default function Shipments() {
       if (norm === 'superseded') return; // Exclude superseded drafts from tab metrics
 
       validTotal++;
+      if (isShipmentArchived(sh)) archived++;
       if (norm === 'received_confirmed') received++;
       else if (norm === 'shipped') shipped++;
       else if (norm === 'draft') draft++;
       else pending++;
     });
 
-    return { total: validTotal, pending, shipped, received, draft };
+    return { total: validTotal, pending, shipped, received, draft, archived };
   }, [shipments, regionTab, sites, getNormalizedStatus]);
 
   // Operational KPI metrics across active regional filter
@@ -402,6 +407,7 @@ export default function Shipments() {
         if (filterStatus === 'received_confirmed' && norm !== 'received_confirmed') return false;
         if (filterStatus === 'draft' && norm !== 'draft') return false;
         if (filterStatus === 'today' && !isShipmentToday(s)) return false;
+        if (filterStatus === 'archived' && !isShipmentArchived(s)) return false;
       }
 
       // 3. Search Filter (searches Invoice Ref, TS#, Tracking, Site, Courier, Rider, and Serial Numbers)
@@ -836,6 +842,7 @@ export default function Shipments() {
   const renderShipmentRow = (sh, isOlder = false) => {
     const destSite = resolveSite(sh.site_id || sh.site_name, sites);
     const normStatus = getNormalizedStatus(sh);
+    const isReceivedConfirmed = normStatus === 'received_confirmed' || normStatus === 'delivered' || isLockedConfirmedShipment(sh);
     const isLatest = filteredShipments[0]?.id === sh.id;
     const isToday = todaysShipments.some(ts => ts.id === sh.id);
 
@@ -926,22 +933,54 @@ export default function Shipments() {
           </div>
         </td>
         <td>
-          <div>
-            {(sh.pickup_date || (normStatus !== 'pending_pickup' && sh.shipment_date)) ? (
-              <span style={{ fontWeight: 500, color: '#334155' }}>{sh.pickup_date || sh.shipment_date}</span>
-            ) : (
-              <span style={{ color: '#d97706', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <Clock size={11} />
-                Pending Dispatch
-              </span>
-            )}
-          </div>
-          {sh.received_date && (
-            <div style={{ fontSize: '11px', color: '#059669', marginTop: '1px', display: 'flex', alignItems: 'center', gap: '3px' }}>
-              <CheckCircle size={10} />
-              <span>Received: {sh.received_date}</span>
-            </div>
-          )}
+          {(() => {
+            const effectivePickup = sh.pickup_date || sh.shipment_date || '';
+            const isConfirmed = isReceivedConfirmed || normStatus === 'received_confirmed' || normStatus === 'delivered' || isLockedConfirmedShipment(sh);
+            const effectiveRecv = sh.received_date || (sh.received_at ? String(sh.received_at).substring(0, 10) : '') || (isConfirmed ? (sh.updated_at ? String(sh.updated_at).substring(0, 10) : effectivePickup) : '');
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: '#64748b', letterSpacing: '0.3px', minWidth: '42px' }}>
+                    Pickup:
+                  </span>
+                  {(effectivePickup && normStatus !== 'pending_pickup') ? (
+                    <span style={{ fontWeight: 600, color: '#1e293b', fontSize: '12px' }}>{effectivePickup}</span>
+                  ) : effectivePickup ? (
+                    <span style={{ fontWeight: 500, color: '#475569', fontSize: '12px' }}>{effectivePickup}</span>
+                  ) : (
+                    <span style={{ color: '#d97706', fontWeight: 600, fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock size={11} />
+                      Pending Dispatch
+                    </span>
+                  )}
+                </div>
+                {isConfirmed ? (
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    background: '#ecfdf5',
+                    border: '1px solid #a7f3d0',
+                    color: '#065f46',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    width: 'fit-content'
+                  }}>
+                    <CheckCircle size={11} color="#059669" />
+                    <span>Recv: <strong>{effectiveRecv || 'Confirmed'}</strong></span>
+                  </div>
+                ) : (normStatus === 'shipped' || normStatus === 'in_transit') ? (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10.5px', color: '#0284c7', fontWeight: 500 }}>
+                    <Truck size={10} />
+                    <span>In Transit</span>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
         </td>
         <td>
           <div style={{ fontWeight: 600, color: '#0f172a' }}>{getShipmentCourierDisplay(sh)}</div>
@@ -977,11 +1016,15 @@ export default function Shipments() {
               </div>
             );
           })()}
-          {sh.received_by_name && (
-            <div style={{ fontSize: '11px', color: '#047857' }}>
-              Recv: {sh.received_by_name}
-            </div>
-          )}
+          {(() => {
+            const receiver = sh.received_by_name || sh.receiving_signature;
+            if (!receiver || (!isReceivedConfirmed && normStatus !== 'received_confirmed' && normStatus !== 'delivered')) return null;
+            return (
+              <div style={{ fontSize: '11px', color: '#047857', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <span>Recv by: <strong>{receiver}</strong></span>
+              </div>
+            );
+          })()}
         </td>
         <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
           {sh.items?.length || 0}
@@ -1054,9 +1097,9 @@ export default function Shipments() {
             <span
               className="badge"
               style={{
-                background: '#ecfdf5',
-                color: '#047857',
-                border: '1px solid #a7f3d0',
+                background: isShipmentArchived(sh) ? '#f8fafc' : '#ecfdf5',
+                color: isShipmentArchived(sh) ? '#475569' : '#047857',
+                border: `1px solid ${isShipmentArchived(sh) ? '#cbd5e1' : '#a7f3d0'}`,
                 fontWeight: 700,
                 fontSize: '10.5px',
                 display: 'inline-flex',
@@ -1069,6 +1112,23 @@ export default function Shipments() {
             >
               <CheckCircle size={11} />
               <span>RECEIVED CONFIRMED</span>
+              {isShipmentArchived(sh) && (
+                <span
+                  style={{
+                    background: '#64748b',
+                    color: '#fff',
+                    fontSize: '9px',
+                    fontWeight: 800,
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    marginLeft: '3px',
+                    letterSpacing: '0.3px'
+                  }}
+                  title="Historical manifest older than 60 days archived to conserve system bandwidth"
+                >
+                  ARCHIVED
+                </span>
+              )}
             </span>
           )}
         </td>
@@ -1635,6 +1695,36 @@ export default function Shipments() {
 
           <button
             className="btn btn-sm"
+            onClick={() => {
+              if (filterStatus === 'archived') {
+                setFilterStatus('ALL');
+              } else {
+                setFilterStatus('archived');
+                if (statusCounts.archived === 0) {
+                  loadArchivedShipments?.();
+                }
+              }
+            }}
+            style={{
+              background: filterStatus === 'archived' ? '#334155' : '#f8fafc',
+              color: filterStatus === 'archived' ? '#fff' : '#475569',
+              borderColor: filterStatus === 'archived' ? '#334155' : '#cbd5e1',
+              fontWeight: 600,
+              fontSize: '12px',
+              borderRadius: '20px',
+              padding: '4px 12px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+            title="Filter historical closed shipments older than 60 days"
+          >
+            <Archive size={12} />
+            <span>Archived ({statusCounts.archived})</span>
+          </button>
+
+          <button
+            className="btn btn-sm"
             onClick={async () => {
               if (typeof reconcileCompletedDrafts === 'function') {
                 await reconcileCompletedDrafts(null, { silent: false });
@@ -1823,13 +1913,15 @@ export default function Shipments() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 700, fontSize: '13.5px', color: '#0f172a' }}>
-                    {viewArchiveMode === 'older_only'
-                      ? 'Older Shipments Archive'
-                      : (viewArchiveMode === 'all' ? 'All Outbound Manifests' : 'Active & Recent Shipments')}
+                    {filterStatus === 'archived'
+                      ? 'Archived Manifests (>60 Days)'
+                      : (viewArchiveMode === 'older_only'
+                        ? 'Older Shipments Archive'
+                        : (viewArchiveMode === 'all' ? 'All Outbound Manifests' : 'Active & Recent Shipments'))}
                   </span>
                   <span style={{
-                    background: '#dbeafe',
-                    color: '#1d4ed8',
+                    background: filterStatus === 'archived' ? '#f1f5f9' : '#dbeafe',
+                    color: filterStatus === 'archived' ? '#475569' : '#1d4ed8',
                     fontSize: '11px',
                     fontWeight: 700,
                     padding: '2px 8px',
@@ -1837,12 +1929,16 @@ export default function Shipments() {
                   }}>
                     {primaryDisplayShipments.length} manifest{primaryDisplayShipments.length !== 1 ? 's' : ''}
                   </span>
-                  {viewArchiveMode === 'recent_default' && (
+                  {filterStatus === 'archived' ? (
+                    <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                      · Closed shipments older than 60 days
+                    </span>
+                  ) : viewArchiveMode === 'recent_default' && (
                     <span style={{ fontSize: '11.5px', color: '#64748b' }}>
                       · Active queue &amp; recent dispatches
                     </span>
                   )}
-                  {todaysShipments.length > 0 && (
+                  {todaysShipments.length > 0 && filterStatus !== 'archived' && (
                     <span style={{
                       background: '#ecfdf5',
                       color: '#047857',
@@ -1858,7 +1954,32 @@ export default function Shipments() {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  {shouldRenderOlderDropdown && (
+                  {filterStatus === 'archived' && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => loadArchivedShipments?.()}
+                      disabled={isLoadingArchivedShipments}
+                      style={{
+                        background: '#ffffff',
+                        color: '#0f172a',
+                        borderColor: '#cbd5e1',
+                        fontWeight: 600,
+                        fontSize: '12px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '4px 12px',
+                        borderRadius: '6px',
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
+                      }}
+                      title="Fetch historical closed shipments older than 60 days from Supabase on demand"
+                    >
+                      <RefreshCw size={13} className={isLoadingArchivedShipments ? 'animate-spin' : ''} />
+                      <span>{isLoadingArchivedShipments ? 'Fetching Archives...' : 'Fetch Archived Shipments from Cloud'}</span>
+                    </button>
+                  )}
+                  {shouldRenderOlderDropdown && filterStatus !== 'archived' && (
                     <span style={{ fontSize: '12px', color: '#64748b' }}>
                       {olderShipments.length} older shipment{olderShipments.length !== 1 ? 's' : ''} archived below
                     </span>
@@ -1872,7 +1993,7 @@ export default function Shipments() {
                     <tr>
                       <th>Invoice Ref</th>
                       <th>Destination Site</th>
-                      <th>Shipment / Pickup Date</th>
+                      <th>Pickup &amp; Receive Dates</th>
                       <th>Courier &amp; Tracking</th>
                       <th style={{ textAlign: 'center' }}>Total Units</th>
                       <th style={{ textAlign: 'center' }}>Boxes</th>
@@ -1895,7 +2016,48 @@ export default function Shipments() {
                             </div>
                           ) : (
                             <div>
-                              {viewArchiveMode === 'recent_default' && olderShipments.length > 0 ? (
+                              {filterStatus === 'archived' ? (
+                                <div style={{ padding: '28px 16px', textAlign: 'center' }}>
+                                  <div style={{
+                                    width: '46px',
+                                    height: '46px',
+                                    borderRadius: '50%',
+                                    background: '#f1f5f9',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    margin: '0 auto 10px auto'
+                                  }}>
+                                    <Archive size={22} color="#64748b" />
+                                  </div>
+                                  <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '14px', marginBottom: '4px' }}>
+                                    {isLoadingArchivedShipments ? 'Retrieving Archived Shipments...' : 'No Archived Shipments in Local Session'}
+                                  </div>
+                                  <div style={{ fontSize: '12.5px', color: '#64748b', maxWidth: '440px', margin: '0 auto 16px auto', lineHeight: 1.45 }}>
+                                    {isLoadingArchivedShipments
+                                      ? 'Querying Supabase for historical closed manifests older than 60 days...'
+                                      : 'To conserve cloud bandwidth, closed shipments older than 60 days are not downloaded during active sync. Click below to load them on demand.'}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => loadArchivedShipments?.()}
+                                    disabled={isLoadingArchivedShipments}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      fontWeight: 600,
+                                      fontSize: '12.5px',
+                                      padding: '6px 16px',
+                                      borderRadius: '6px'
+                                    }}
+                                  >
+                                    <RefreshCw size={13} className={isLoadingArchivedShipments ? 'animate-spin' : ''} />
+                                    <span>{isLoadingArchivedShipments ? 'Fetching Archives...' : 'Fetch Archived Shipments from Cloud'}</span>
+                                  </button>
+                                </div>
+                              ) : viewArchiveMode === 'recent_default' && olderShipments.length > 0 ? (
                                 <div>
                                   <div style={{ fontWeight: 600, color: '#334155' }}>
                                     No active or recent shipments for this filter.
@@ -2049,7 +2211,7 @@ export default function Shipments() {
                           <tr>
                             <th>Invoice Ref</th>
                             <th>Destination Site</th>
-                            <th>Shipment / Pickup Date</th>
+                            <th>Pickup &amp; Receive Dates</th>
                             <th>Courier &amp; Tracking</th>
                             <th style={{ textAlign: 'center' }}>Total Units</th>
                             <th style={{ textAlign: 'center' }}>Boxes</th>
@@ -2934,7 +3096,10 @@ export default function Shipments() {
           ? 'Ready for Pickup Package Details'
           : 'Draft Manifest Package Details';
 
-        const statusBadgeStyle = isReceivedConfirmed
+        const isArchived = isShipmentArchived(sh);
+        const statusBadgeStyle = isArchived
+          ? { background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1' }
+          : isReceivedConfirmed
           ? { background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }
           : isShipped
           ? { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' }
@@ -2942,7 +3107,9 @@ export default function Shipments() {
           ? { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' }
           : { background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1' };
 
-        const statusBadgeLabel = isReceivedConfirmed
+        const statusBadgeLabel = isArchived
+          ? 'ARCHIVED (>60 DAYS)'
+          : isReceivedConfirmed
           ? 'DELIVERED & CONFIRMED'
           : isShipped
           ? 'SHIPPED / IN TRANSIT'
@@ -3205,7 +3372,7 @@ export default function Shipments() {
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                       gap: '12px'
                     }}
                   >
@@ -3225,15 +3392,35 @@ export default function Shipments() {
                     </div>
 
                     <div>
+                      <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
+                        Pickup / Dispatch Date
+                      </div>
+                      <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
+                        {sh?.pickup_date || sh?.shipment_date ? (
+                          <span>{sh.pickup_date || sh.shipment_date}</span>
+                        ) : (
+                          <span style={{ fontStyle: 'italic', fontWeight: 500, color: '#94a3b8' }}>
+                            Pending Dispatch
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
                       <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
                         Date &amp; Time of Receipt
                       </div>
                       <div style={{ fontWeight: 600, fontSize: '13px', color: isReceivedConfirmed ? '#14532d' : '#64748b', marginTop: '2px' }}>
                         {isReceivedConfirmed ? (
                           (() => {
-                            const raw = sh?.received_at || sh?.received_date;
+                            const raw = sh?.received_at || sh?.received_date || sh?.updated_at;
                             if (!raw) return 'Confirmed upon receipt';
                             try {
+                              if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+                                const parts = raw.trim().split('-');
+                                const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                              }
                               const d = new Date(raw);
                               if (isNaN(d.getTime())) return String(raw);
                               return d.toLocaleString('en-US', {
@@ -3256,7 +3443,7 @@ export default function Shipments() {
                       </div>
                     </div>
 
-                    <div style={{ gridColumn: 'span 2' }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
                       <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
                         Package &amp; Parts Condition
                       </div>
@@ -3271,7 +3458,7 @@ export default function Shipments() {
                       </div>
                     </div>
 
-                    <div style={{ gridColumn: 'span 2' }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
                       <div style={{ fontSize: '11px', color: isReceivedConfirmed ? '#15803d' : '#64748b', fontWeight: 600 }}>
                         Branch Remarks &amp; Notes
                       </div>

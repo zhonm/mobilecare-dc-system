@@ -3,6 +3,7 @@ import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
+import { isIntakeRecordArchived, fetchArchivedIntakesFromCloud } from '../utils/archiveManager';
 
 export function useIntakeRecords({
   currentUser,
@@ -40,6 +41,41 @@ export function useIntakeRecords({
       console.warn('LocalStorage save notice for dc_intake_records:', e);
     }
   }, [dcIntakeRecords]);
+
+  const [isLoadingArchivedIntakes, setIsLoadingArchivedIntakes] = useState(false);
+
+  const loadArchivedIntakes = async (options = {}) => {
+    setIsLoadingArchivedIntakes(true);
+    try {
+      const archivedRows = await fetchArchivedIntakesFromCloud(options);
+      if (archivedRows && archivedRows.length > 0) {
+        setDcIntakeRecords(prev => {
+          const map = new Map();
+          (prev || []).forEach(r => {
+            const id = String(r.id || '').trim().toUpperCase();
+            if (id) map.set(id, r);
+          });
+          archivedRows.forEach(r => {
+            const id = String(r.id || '').trim().toUpperCase();
+            if (id && !map.has(id)) {
+              map.set(id, { ...r, is_archived: true });
+            }
+          });
+          return Array.from(map.values());
+        });
+        showToast?.(`Loaded ${archivedRows.length} archived intake batches from cloud`, 'success');
+      } else {
+        showToast?.('No archived intake batches found older than 60 days', 'info');
+      }
+      return archivedRows;
+    } catch (err) {
+      console.error('Failed to load archived intake batches:', err);
+      showToast?.('Failed to load archived intake batches', 'error');
+      return [];
+    } finally {
+      setIsLoadingArchivedIntakes(false);
+    }
+  };
 
   const unmarkDeletedIntakeIds = async (idsToKeep) => {
     if (!idsToKeep || idsToKeep.length === 0) return;
@@ -387,6 +423,9 @@ export function useIntakeRecords({
     saveIntakeRecord,
     deleteIntakeRecord,
     unmarkDeletedIntakeIds,
-    registerDeletedIntakeId
+    registerDeletedIntakeId,
+    loadArchivedIntakes,
+    isLoadingArchivedIntakes,
+    isIntakeRecordArchived
   };
 }

@@ -4,6 +4,7 @@ import dbStorage from '../utils/dbStorage';
 import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber, isDraftSupersededOrFulfilled, reconcileShipmentsAndDrafts } from '../utils/appContextHelpers';
 import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
+import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
 
 export function useShipments({
   currentUser,
@@ -83,6 +84,41 @@ export function useShipments({
       return null;
     }
   });
+
+  const [isLoadingArchivedShipments, setIsLoadingArchivedShipments] = useState(false);
+
+  const loadArchivedShipments = useCallback(async (options = {}) => {
+    setIsLoadingArchivedShipments(true);
+    try {
+      const archivedRows = await fetchArchivedShipmentsFromCloud(options);
+      if (archivedRows && archivedRows.length > 0) {
+        setShipments(prev => {
+          const map = new Map();
+          (prev || []).forEach(s => {
+            const ref = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+            if (ref) map.set(ref, s);
+          });
+          archivedRows.forEach(s => {
+            const ref = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+            if (ref && !map.has(ref)) {
+              map.set(ref, { ...s, is_archived: true });
+            }
+          });
+          return Array.from(map.values());
+        });
+        showToast?.(`Loaded ${archivedRows.length} archived shipments from cloud`, 'success');
+      } else {
+        showToast?.('No archived shipments found older than 60 days', 'info');
+      }
+      return archivedRows;
+    } catch (err) {
+      console.error('Failed to load archived shipments:', err);
+      showToast?.('Failed to load archived shipments', 'error');
+      return [];
+    } finally {
+      setIsLoadingArchivedShipments(false);
+    }
+  }, [showToast]);
 
   const syncActivePackDraftToCloud = useCallback(async (draftObj) => {
     const hasItems = draftObj && Array.isArray(draftObj.items) && draftObj.items.length > 0;
@@ -638,6 +674,12 @@ export function useShipments({
       ? (shipmentData.shipment_date || '')
       : (shipmentData.shipment_date || shipmentData.pickup_date || '');
 
+    const cleanPickupDate = shipmentData.pickup_date || cleanShipmentDate || '';
+    const cleanReceivedDate = shipmentData.received_date || (shipmentData.received_at ? String(shipmentData.received_at).substring(0, 10) : '');
+    const cleanReceivedAt = shipmentData.received_at || (cleanReceivedDate ? `${cleanReceivedDate}T12:00:00.000Z` : '');
+    const cleanReceivedByName = shipmentData.received_by_name || shipmentData.receiving_signature || '';
+    const cleanReceivingSignature = shipmentData.receiving_signature || cleanReceivedByName || '';
+
     const newShipment = {
       ...shipmentData,
       id: shipmentData.id || `ship-${Date.now()}`,
@@ -648,7 +690,14 @@ export function useShipments({
       saved_by_name: resolvedPreparedBy,
       pickup_by_name: shipmentData.pickup_by_name || shipmentData.courier_name || '',
       courier_name: shipmentData.courier_name || shipmentData.pickup_by_name || '',
-      shipment_date: cleanShipmentDate,
+      pickup_date: cleanPickupDate,
+      shipment_date: cleanShipmentDate || cleanPickupDate,
+      received_date: cleanReceivedDate,
+      received_at: cleanReceivedAt,
+      received_by_name: cleanReceivedByName,
+      receiving_signature: cleanReceivingSignature,
+      receiving_condition: shipmentData.receiving_condition || '',
+      receiving_notes: shipmentData.receiving_notes || '',
       created_at: shipmentData.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -832,15 +881,36 @@ export function useShipments({
             const targetDbId = existingShp?.id || directShipmentRow.id;
             effectiveDbShipmentId = targetDbId;
 
-            const upsertPayload = {
+            // Prepare upsert payload. Attempt to store extended columns if available.
+            const extendedPayload = {
               ...directShipmentRow,
-              id: targetDbId
+              id: targetDbId,
+              ...(newShipment.pickup_date ? { pickup_date: newShipment.pickup_date } : {}),
+              ...(newShipment.received_date ? { received_date: newShipment.received_date } : {}),
+              ...(newShipment.received_at ? { received_at: newShipment.received_at } : {}),
+              ...(newShipment.received_by_name ? { received_by_name: newShipment.received_by_name } : {}),
+              ...(newShipment.receiving_condition ? { receiving_condition: newShipment.receiving_condition } : {}),
+              ...(newShipment.receiving_notes ? { receiving_notes: newShipment.receiving_notes } : {})
             };
 
-            const { data: upsertData, error: upsertErr } = await supabase
+            let { data: upsertData, error: upsertErr } = await supabase
               .from('shipments')
-              .upsert(upsertPayload, { onConflict: 'shipment_number' })
+              .upsert(extendedPayload, { onConflict: 'shipment_number' })
               .select('id');
+
+            if (upsertErr && upsertErr.message && (upsertErr.message.includes('column') || upsertErr.code === '42703')) {
+              // Table schema in Supabase does not have extended columns yet, upsert base schema payload
+              const basePayload = {
+                ...directShipmentRow,
+                id: targetDbId
+              };
+              const retryRes = await supabase
+                .from('shipments')
+                .upsert(basePayload, { onConflict: 'shipment_number' })
+                .select('id');
+              upsertData = retryRes.data;
+              upsertErr = retryRes.error;
+            }
 
             if (!upsertErr) {
               shipmentSavedInDb = true;
@@ -849,10 +919,11 @@ export function useShipments({
               }
             } else {
               console.warn('Direct shipments table upsert notice:', upsertErr.message);
-              // Fallback direct update by shipment_number
+              // Fallback direct update by shipment_number using base payload
+              const basePayload = { ...directShipmentRow, id: targetDbId };
               const { error: updErr } = await supabase
                 .from('shipments')
-                .update(upsertPayload)
+                .update(basePayload)
                 .eq('shipment_number', directShipmentRow.shipment_number);
               if (!updErr) {
                 shipmentSavedInDb = true;
@@ -1278,6 +1349,9 @@ export function useShipments({
     clearAllShipmentsData,
     saveShipment,
     updateShipmentStatus,
-    confirmSiteReceive
+    confirmSiteReceive,
+    loadArchivedShipments,
+    isLoadingArchivedShipments,
+    isShipmentArchived
   };
 }

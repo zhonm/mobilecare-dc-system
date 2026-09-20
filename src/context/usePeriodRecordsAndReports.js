@@ -66,14 +66,16 @@ export function usePeriodRecordsAndReports({
     }
   });
 
-  // IndexedDB startup hydration to withstand localStorage quota restrictions
+  // IndexedDB startup hydration to withstand localStorage quota restrictions & survive refreshes
   useEffect(() => {
     let isMounted = true;
     (async () => {
       try {
-        const [cachedReports, cachedMeta] = await Promise.all([
+        const [cachedReports, cachedMeta, cachedSavedRecords, cachedSavedArray] = await Promise.all([
           dbStorage.getItem('mdc_stock_transfer_reports'),
-          dbStorage.getItem('mdc_stock_transfer_metadata')
+          dbStorage.getItem('mdc_stock_transfer_metadata'),
+          dbStorage.getAllSavedRecords(),
+          dbStorage.getItem('mdc_saved_records')
         ]);
         if (isMounted) {
           if (Array.isArray(cachedReports) && cachedReports.length > 0) {
@@ -82,9 +84,30 @@ export function usePeriodRecordsAndReports({
           if (cachedMeta) {
             setStockTransferMetadata(prev => prev || cachedMeta);
           }
+          const allCached = Array.isArray(cachedSavedRecords) && cachedSavedRecords.length > 0
+            ? cachedSavedRecords
+            : (Array.isArray(cachedSavedArray) ? cachedSavedArray : []);
+          if (allCached.length > 0) {
+            setSavedRecords(prev => {
+              const existingMap = new Map((prev || []).map(r => [r.id, r]));
+              allCached.forEach(r => {
+                if (!existingMap.has(r.id)) {
+                  existingMap.set(r.id, r);
+                } else {
+                  const ex = existingMap.get(r.id);
+                  if ((!ex.snapshot_data || Object.keys(ex.snapshot_data).length === 0) && r.snapshot_data) {
+                    existingMap.set(r.id, { ...ex, snapshot_data: r.snapshot_data });
+                  }
+                }
+              });
+              const merged = Array.from(existingMap.values()).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+              try { localStorage.setItem('mdc_saved_records', JSON.stringify(merged.slice(0, 50))); } catch (e) {}
+              return merged;
+            });
+          }
         }
       } catch (err) {
-        console.warn('Error hydrating stock transfers from IndexedDB:', err);
+        console.warn('Error hydrating saved records/stock transfers from IndexedDB:', err);
       }
     })();
     return () => { isMounted = false; };
@@ -173,12 +196,13 @@ export function usePeriodRecordsAndReports({
       updated_at: new Date().toISOString()
     };
 
-    setSavedRecords(prev => [newRecord, ...prev]);
+    setSavedRecords(prev => [newRecord, ...(prev || []).filter(r => r.id !== newRecord.id)]);
     dbStorage.putSavedRecord(newRecord);
 
     try {
-      const currentSaved = [newRecord, ...savedRecords].slice(0, 50);
+      const currentSaved = [newRecord, ...(savedRecords || []).filter(r => r.id !== newRecord.id)].slice(0, 50);
       localStorage.setItem('mdc_saved_records', JSON.stringify(currentSaved));
+      dbStorage.setItem('mdc_saved_records', currentSaved);
     } catch (e) {
       console.warn('LocalStorage save notice for saved records:', e);
     }
@@ -202,7 +226,7 @@ export function usePeriodRecordsAndReports({
         }, { onConflict: 'id' });
         if (error) throw error;
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
+        if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label });
       } catch (dbErr) {
         console.error('Supabase saved_records cloud sync error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
@@ -215,10 +239,10 @@ export function usePeriodRecordsAndReports({
             updated_at: new Date().toISOString()
           });
         }
-        if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
+        if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label });
       }
     } else {
-      if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { recordId: newRecord.id, label: newRecord.period_label });
+      if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label });
     }
 
     showToast(`Saved period record: "${newRecord.period_label}" permanently to database`, 'success');

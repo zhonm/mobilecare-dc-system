@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { ALL_PAGES } from '../constants/navigation';
 import { ROLE_OPTIONS, ROLE_PRESETS, getDefaultRolePosition, sortUsersDeterministically } from '../constants/roles';
@@ -69,6 +69,13 @@ export default function UserAccessManagement() {
     setActiveTab,
     canAccess
   } = useApp();
+
+  // Auto-refresh registered users from database if list has 1 or fewer users on mount
+  useEffect(() => {
+    if (typeof autoRefreshData === 'function' && (!usersList || usersList.length <= 1)) {
+      autoRefreshData({ force: true, silent: true, reason: 'user_access_mount' });
+    }
+  }, []);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');

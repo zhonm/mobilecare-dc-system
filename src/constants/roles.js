@@ -42,7 +42,74 @@ export const getDefaultRolePosition = (role) => {
   }
 };
 
-export const INITIAL_USERS = [];
+export const INITIAL_USERS = [
+  {
+    id: '1b0e9f43-c2d5-4eb4-acef-2ea5d9d21280',
+    email: 'zhon.manaois@mobilecareph.com',
+    fullName: 'Zhon Manaois',
+    role: 'superadmin',
+    rolePosition: 'Parts Management Specialist',
+    siteId: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: '2541421a-3383-407a-a6c2-1264198940b6',
+    email: 'joshua.juvida@mobilecareph.com',
+    fullName: 'Joshua Juvida',
+    role: 'superadmin',
+    rolePosition: 'Inventory Planner',
+    siteId: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: '076a8481-2014-4aa1-a77e-5e221b40fea7',
+    email: 'anjo.alcazar@mobilecareph.com',
+    fullName: 'Anjo Alcazar',
+    role: 'superadmin',
+    rolePosition: 'Assistant Manager',
+    siteId: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: '7db37a36-73cd-4d0a-ae7e-c73c61a9935a',
+    email: 'daphneclaire.bascuguin@mobilecareph.com',
+    fullName: 'Daphne Bascuguin',
+    role: 'superadmin',
+    rolePosition: 'Area Manager',
+    siteId: '2cf62bf6-14cf-4d31-838e-9bff43fb9018',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.superadmin
+  },
+  {
+    id: '181ce98c-0cd9-476c-a4c5-2ee833c174f4',
+    email: 'andres@mobilecareph.com',
+    fullName: 'Andres Bonifacio',
+    role: 'parts_management',
+    rolePosition: 'Parts Management Analyst',
+    siteId: '1cebf73f-f511-47a5-a767-002709a42fab',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.parts_management
+  },
+  {
+    id: '3fa435cd-24bc-46ed-ab18-23222662477b',
+    email: 'joserizal@mobilecareph.com',
+    fullName: 'Jose Rizal',
+    role: 'parts_management',
+    rolePosition: 'Parts Management Specialist',
+    siteId: '61419aaa-da16-4075-9f40-a113be2620f9',
+    isActive: true,
+    hasSetPassword: true,
+    permittedPages: ROLE_PRESETS.parts_management
+  }
+];
 
 export const LEGACY_MOCK_EMAILS = [
   'warehouse@mobilecareph.com',

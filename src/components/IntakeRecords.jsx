@@ -32,16 +32,20 @@ import {
   Copy,
   Check,
   Filter,
-  Clock
+  Clock,
+  Archive
 } from 'lucide-react';
 import { normalizeInventoryUnits } from '../utils/partResolver';
 import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
+import { isIntakeRecordArchived } from '../utils/archiveManager';
 
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
     dcIntakeRecords,
     setDcIntakeRecords,
     deleteIntakeRecord,
+    loadArchivedIntakes,
+    isLoadingArchivedIntakes,
     purchaseOrders,
     inventoryUnits,
     deleteScanInUnit,
@@ -70,6 +74,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [assignmentFilter, setAssignmentFilter] = useState('ALL'); // 'ALL' | 'MDC - Forecasting' | 'DC - CRBR'
   const [yearFilter, setYearFilter] = useState('ALL');
+  const [batchArchiveFilter, setBatchArchiveFilter] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'ARCHIVED'
 
   // Modals & Inspectors
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
@@ -107,9 +112,10 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       assignmentFilter !== 'ALL' ||
       dateFilter !== 'ALL' ||
       categoryFilter !== 'ALL' ||
-      yearFilter !== 'ALL'
+      yearFilter !== 'ALL' ||
+      batchArchiveFilter !== 'ALL'
     );
-  }, [searchQuery, assignmentFilter, dateFilter, categoryFilter, yearFilter]);
+  }, [searchQuery, assignmentFilter, dateFilter, categoryFilter, yearFilter, batchArchiveFilter]);
 
   // Helper to clear all search queries and active filter dropdowns
   const handleClearAllFilters = () => {
@@ -118,6 +124,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     setDateFilter('ALL');
     setCategoryFilter('ALL');
     setYearFilter('ALL');
+    setBatchArchiveFilter('ALL');
     showToast('All filters cleared', 'info');
   };
 
@@ -385,6 +392,8 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         const y = new Date(rec.intake_date).getFullYear();
         if (String(y) !== String(yearFilter)) return false;
       }
+      if (batchArchiveFilter === 'ACTIVE' && isIntakeRecordArchived(rec)) return false;
+      if (batchArchiveFilter === 'ARCHIVED' && !isIntakeRecordArchived(rec)) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchId = rec.id?.toLowerCase().includes(q);
@@ -406,7 +415,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     });
 
     return [...list].sort(sortBatchesNewestFirst);
-  }, [allBatchRecords, yearFilter, searchQuery]);
+  }, [allBatchRecords, yearFilter, batchArchiveFilter, searchQuery]);
 
   // Export Date Group to Excel (.xlsx) with optimized layout and system UI styling
   const handleExportDateExcel = async (dateGroup) => {
@@ -1100,6 +1109,54 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
               </select>
             )}
 
+            {/* Operational Archiving Filter & On-Demand Cloud Fetcher */}
+            {activeView === 'batch_records' && (
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <select
+                  className="form-select"
+                  style={{ width: 'auto', height: '34px', fontSize: '12.5px', background: '#fff' }}
+                  value={batchArchiveFilter}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setBatchArchiveFilter(nextVal);
+                    if (nextVal === 'ARCHIVED') {
+                      const hasArchived = (allBatchRecords || []).some(r => isIntakeRecordArchived(r));
+                      if (!hasArchived) {
+                        loadArchivedIntakes?.();
+                      }
+                    }
+                  }}
+                >
+                  <option value="ALL">All Batches</option>
+                  <option value="ACTIVE">Active Batches (&lt;60d)</option>
+                  <option value="ARCHIVED">Archived Batches (&gt;60d)</option>
+                </select>
+
+                {batchArchiveFilter === 'ARCHIVED' && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => loadArchivedIntakes?.()}
+                    disabled={isLoadingArchivedIntakes}
+                    style={{
+                      height: '34px',
+                      fontSize: '12px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      background: '#fff',
+                      borderColor: '#cbd5e1',
+                      color: '#334155'
+                    }}
+                    title="Fetch historical completed DC intake batches older than 60 days from Supabase on demand"
+                  >
+                    <RefreshCw size={12} className={isLoadingArchivedIntakes ? 'animate-spin' : ''} />
+                    <span>{isLoadingArchivedIntakes ? 'Loading Archives...' : 'Fetch Archived Batches'}</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Clear All Filters Button */}
             {isAnyFilterActive && (
               <button
@@ -1514,46 +1571,83 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
           <div>
             {filteredBatchRecords.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
-                <BookmarkPlus size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
-                <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Parts Saved History Records Found</h4>
-                <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
-                  {isAnyFilterActive
-                    ? `No batch records matching your active filters. Click Clear Filters below to reset.`
-                    : 'Save currently scanned stock parts into permanent parts history records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
-                </p>
-                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {isAnyFilterActive && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={handleClearAllFilters}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        color: '#ef4444',
-                        borderColor: '#fca5a5',
-                        background: '#fff',
-                        fontWeight: 600
-                      }}
-                    >
-                      <X size={14} />
-                      <span>Clear Filters ({totalBatchesCount} available)</span>
-                    </button>
-                  )}
-                  {enrichedStockUnits.length > 0 && (
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => {
-                        setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
-                        setIsSaveModalOpen(true);
-                      }}
-                    >
-                      <Plus size={14} />
-                      <span>Save New Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
-                    </button>
-                  )}
-                </div>
+                {batchArchiveFilter === 'ARCHIVED' ? (
+                  <>
+                    <Archive size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
+                    <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>
+                      {isLoadingArchivedIntakes ? 'Retrieving Archived Intake Batches...' : 'No Archived Intake Batches in Local Session'}
+                    </h4>
+                    <p style={{ fontSize: '13px', maxWidth: '460px', margin: '0 auto 16px auto', lineHeight: 1.4 }}>
+                      {isLoadingArchivedIntakes
+                        ? 'Querying Supabase for historical completed intake batches older than 60 days...'
+                        : 'To reduce system cloud egress, completed intake batches older than 60 days are not downloaded automatically. Click below to load them on demand.'}
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => loadArchivedIntakes?.()}
+                        disabled={isLoadingArchivedIntakes}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+                      >
+                        <RefreshCw size={13} className={isLoadingArchivedIntakes ? 'animate-spin' : ''} />
+                        <span>{isLoadingArchivedIntakes ? 'Fetching Archives...' : 'Fetch Archived Batches from Cloud'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleClearAllFilters}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        <X size={14} />
+                        <span>Clear Filter</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <BookmarkPlus size={40} color="var(--border-strong)" style={{ marginBottom: '12px' }} />
+                    <h4 style={{ fontSize: '16px', color: 'var(--text-main)', marginBottom: '4px' }}>No Parts Saved History Records Found</h4>
+                    <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto 16px auto' }}>
+                      {isAnyFilterActive
+                        ? `No batch records matching your active filters. Click Clear Filters below to reset.`
+                        : 'Save currently scanned stock parts into permanent parts history records based on purchase orders (MDC[YYYY][00000]) for auditing.'}
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      {isAnyFilterActive && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleClearAllFilters}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            color: '#ef4444',
+                            borderColor: '#fca5a5',
+                            background: '#fff',
+                            fontWeight: 600
+                          }}
+                        >
+                          <X size={14} />
+                          <span>Clear Filters ({totalBatchesCount} available)</span>
+                        </button>
+                      )}
+                      {enrichedStockUnits.length > 0 && (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => {
+                            setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
+                            setIsSaveModalOpen(true);
+                          }}
+                        >
+                          <Plus size={14} />
+                          <span>Save New Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length} units)</span>
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="table-container" style={{ maxHeight: '560px', overflowY: 'auto' }}>
@@ -1654,13 +1748,30 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                             )}
                           </td>
                           <td>
-                            {effectiveExpectedUnits ? (
-                              <span className={`badge ${isDone ? 'badge-success' : effectiveDisplayUnits > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
-                                {isDone ? 'Fulfilled (Saved)' : `${effectiveDisplayUnits}/${effectiveExpectedUnits} Received`}
-                              </span>
-                            ) : (
-                              <span className="badge badge-success">Saved History</span>
-                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                              {effectiveExpectedUnits ? (
+                                <span className={`badge ${isDone ? 'badge-success' : effectiveDisplayUnits > 0 ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '11px' }}>
+                                  {isDone ? 'Fulfilled (Saved)' : `${effectiveDisplayUnits}/${effectiveExpectedUnits} Received`}
+                                </span>
+                              ) : (
+                                <span className="badge badge-success">Saved History</span>
+                              )}
+                              {isIntakeRecordArchived(rec) && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    background: '#f8fafc',
+                                    color: '#475569',
+                                    border: '1px solid #cbd5e1',
+                                    fontSize: '10px',
+                                    fontWeight: 700
+                                  }}
+                                  title="Historical intake batch older than 60 days archived to conserve bandwidth"
+                                >
+                                  ARCHIVED
+                                </span>
+                              )}
+                            </div>
                           </td>
                         <td style={{ textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>

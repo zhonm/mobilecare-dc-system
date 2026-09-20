@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { supabase } from '../supabase/client';
+import dbStorage from '../utils/dbStorage';
 import SaveRecordModal from './SaveRecordModal';
 import {
   BookmarkCheck,
@@ -137,6 +138,7 @@ export default function SavedRecords() {
           if (data?.snapshot_data) {
             const enriched = { ...record, snapshot_data: data.snapshot_data };
             setRecordToView(enriched);
+            dbStorage.putSavedRecord(enriched);
             setViewTab(data.snapshot_data?.forecastItems?.length > 0 ? 'forecast' : 'allocation');
           }
         }
@@ -161,6 +163,7 @@ export default function SavedRecords() {
             .maybeSingle();
           if (data?.snapshot_data) {
             enriched = { ...record, snapshot_data: data.snapshot_data };
+            dbStorage.putSavedRecord(enriched);
           }
         } catch (e) {}
       }

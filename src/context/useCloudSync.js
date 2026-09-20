@@ -24,7 +24,7 @@ import {
   formatAuditEntityDisplay,
   reconcileShipmentsAndDrafts
 } from '../utils/appContextHelpers';
-import { ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
+import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import {
   generateAllocationsFromForecasts,
@@ -37,6 +37,15 @@ import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } f
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
+import {
+  ARCHIVE_CUTOFF_DAYS,
+  getArchiveCutoffDate,
+  getArchiveCutoffIso,
+  isShipmentArchived,
+  isIntakeRecordArchived,
+  fetchArchivedShipmentsFromCloud,
+  fetchArchivedIntakesFromCloud
+} from '../utils/archiveManager';
 
 export function useCloudSync({
   currentUser,
@@ -377,9 +386,9 @@ export function useCloudSync({
 
       const shouldFetch = (tbl) => {
         if (tbl === 'profiles' || tbl === 'user_page_permissions') {
-          // Scoping Defense: Only query user accounts & permissions when specifically requested or on user-access tab
+          if (isSiteRestrictedPmg) return false;
           const curTab = activeTabRef.current || (typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '') : '');
-          if (curTab === 'user-access' || (selectiveTables && selectiveTables.includes(tbl))) {
+          if (curTab === 'user-access' || curUser?.role === 'superadmin' || curUser?.role === 'admin' || (selectiveTables && selectiveTables.includes(tbl))) {
             return true;
           }
           return false;
@@ -387,6 +396,10 @@ export function useCloudSync({
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
       };
+
+      // Archiving Rolling Window: Active queries only fetch records within the 60-day operational window
+      const archiveCutoffIsoDate = getArchiveCutoffIso(ARCHIVE_CUTOFF_DAYS);
+      const archiveCutoffIsoTimestamp = getArchiveCutoffDate(ARCHIVE_CUTOFF_DAYS).toISOString();
 
       const [
         resProfiles,
@@ -447,7 +460,7 @@ export function useCloudSync({
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .in('id', HEAVY_DOC_IDS),
             supabase.from('saved_records')
-              .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, created_at, updated_at')
+              .select('id, record_type, period_label, period_year, period_month, period_week, saved_by_name, saved_by_user_id, notes, created_at, updated_at')
               .order('created_at', { ascending: false })
               .limit(50),
             // Lightweight metadata check for master_stock_transfers_report_registry (~60 bytes)
@@ -455,12 +468,13 @@ export function useCloudSync({
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .eq('id', 'master_stock_transfers_report_registry')
               .maybeSingle(),
-            // Self-healing: load recent individual shipment documents with full snapshot_data
+            // Self-healing: load recent active operational shipment documents (<60 days) with full snapshot_data
             supabase.from('saved_records')
               .select('*')
               .eq('record_type', 'shipment')
+              .gte('created_at', archiveCutoffIsoTimestamp)
               .order('created_at', { ascending: false })
-              .limit(500)
+              .limit(60)
           ]);
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];
@@ -652,11 +666,15 @@ export function useCloudSync({
 
           return { data: [...systemRows, ...shipmentRows, ...periodRows] };
         })() : Promise.resolve({ data: null }),
-        // DC Intakes: PMG branch users do not manage Central DC intakes
+        // DC Intakes: PMG branch users do not manage Central DC intakes; Central DC pulls active rolling window (<60 days)
         shouldFetch('dc_intake_records') ? (
           isSiteRestrictedPmg
             ? Promise.resolve({ data: [] })
-            : supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(100)
+            : supabase.from('dc_intake_records')
+                .select('*')
+                .or(`intake_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
+                .order('created_at', { ascending: false })
+                .limit(60)
         ) : Promise.resolve({ data: null }),
         // In-Stock Inventory Units: PMG branch users have network-wide ASP branch visibility (Central DC excluded by RLS & UI)
         shouldFetch('inventory_units') ? (
@@ -665,11 +683,20 @@ export function useCloudSync({
         shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
-        // Egress optimization: Scope by site_id destination for PMG branch users
+        // Egress optimization: Scope by site_id destination for PMG branch users & filter active/open or recent manifests (<60 days)
         shouldFetch('shipments') ? (
           isSiteRestrictedPmg
-            ? supabase.from('shipments').select('*, shipment_items(*)').eq('site_id', userSiteId).order('created_at', { ascending: false }).limit(50)
-            : supabase.from('shipments').select('*, shipment_items(*)').order('created_at', { ascending: false }).limit(200)
+            ? supabase.from('shipments')
+                .select('*, shipment_items(*)')
+                .eq('site_id', userSiteId)
+                .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
+                .order('created_at', { ascending: false })
+                .limit(50)
+            : supabase.from('shipments')
+                .select('*, shipment_items(*)')
+                .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
+                .order('created_at', { ascending: false })
+                .limit(80)
         ) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id for PMG branch users
         shouldFetch('parts_requests') ? (
@@ -692,6 +719,15 @@ export function useCloudSync({
 
       // 1. Process Profiles & User Page Permissions & Master Users Registry
       if (shouldFetch('profiles') || shouldFetch('saved_records') || shouldFetch('user_page_permissions')) {
+        let effectiveDbProfiles = (dbProfiles && dbProfiles.length > 0) ? dbProfiles : [];
+        const permsMap = new Map();
+        if (dbPerms && dbPerms.length > 0) {
+          dbPerms.forEach(p => {
+            if (!permsMap.has(p.user_id)) permsMap.set(p.user_id, []);
+            permsMap.get(p.user_id).push(p.page_id);
+          });
+        }
+
         const cloudUsersRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_users_registry');
         const cloudUsersList = (cloudUsersRegistryDoc?.snapshot_data?.users && Array.isArray(cloudUsersRegistryDoc.snapshot_data.users))
           ? cloudUsersRegistryDoc.snapshot_data.users
@@ -699,11 +735,80 @@ export function useCloudSync({
         const cloudDeletedUserIds = Array.isArray(cloudUsersRegistryDoc?.snapshot_data?.deletedUserIds)
           ? cloudUsersRegistryDoc.snapshot_data.deletedUserIds
           : [];
+
+        // Fallback resolution: If public.profiles table query returned empty (e.g. due to RLS anon block),
+        // query provisioned database users via get_all_active_users RPC or verify_login_credentials RPC
+        if (shouldFetch('profiles') && effectiveDbProfiles.length === 0 && supabase) {
+          try {
+            // 1. Direct bulk retrieval via SECURITY DEFINER RPC (recovers all dynamically provisioned DB users)
+            try {
+              const { data: allActive, error: allErr } = await supabase.rpc('get_all_active_users');
+              if (!allErr && Array.isArray(allActive) && allActive.length > 0) {
+                effectiveDbProfiles = allActive.map(d => ({
+                  id: d.id || d.user_id,
+                  email: d.email,
+                  full_name: d.fullName || d.full_name,
+                  role: d.role,
+                  role_position: d.rolePosition || d.role_position,
+                  site_id: d.siteId || d.site_id,
+                  is_active: d.isActive ?? d.is_active ?? true,
+                  is_deleted: d.is_deleted ?? false,
+                  has_set_password: d.hasSetPassword ?? d.has_set_password,
+                  created_at: d.created_at || new Date().toISOString()
+                }));
+
+                allActive.forEach(u => {
+                  const uId = u.id || u.user_id;
+                  if (uId && Array.isArray(u.permittedPages) && u.permittedPages.length > 0) {
+                    permsMap.set(uId, u.permittedPages);
+                  }
+                });
+              }
+            } catch (allEx) {}
+
+            // 2. Individual verify_login_credentials RPC fallback across initial, active, and cloud registry accounts
+            if (effectiveDbProfiles.length === 0) {
+              const candidateEmails = Array.from(new Set([
+                ...INITIAL_USERS.map(u => u.email),
+                ...(currentUser?.email ? [currentUser.email] : []),
+                ...(Array.isArray(_usersList) ? _usersList.map(u => u.email) : []),
+                ...(Array.isArray(cloudUsersList) ? cloudUsersList.map(u => u.email) : [])
+              ].map(e => String(e).toLowerCase().trim()).filter(Boolean)));
+
+              const rpcResults = await Promise.all(
+                candidateEmails.map(email => supabase.rpc('verify_login_credentials', { p_email: email }))
+              );
+
+              const recoveredProfiles = rpcResults
+                .map(r => r?.data)
+                .filter(d => d && d.exists && d.email)
+                .map(d => ({
+                  id: d.id,
+                  email: d.email,
+                  full_name: d.fullName || d.full_name,
+                  role: d.role,
+                  role_position: d.rolePosition || d.role_position,
+                  site_id: d.siteId || d.site_id,
+                  is_active: d.isActive ?? true,
+                  is_deleted: d.is_deleted ?? false,
+                  has_set_password: d.hasSetPassword ?? d.has_set_password,
+                  created_at: new Date().toISOString()
+                }));
+
+              if (recoveredProfiles.length > 0) {
+                effectiveDbProfiles = recoveredProfiles;
+              }
+            }
+          } catch (recoverErr) {
+            console.debug('User profile fallback resolution notice:', recoverErr?.message);
+          }
+        }
+
         const activeProfileEmails = new Set(
-          (dbProfiles || []).filter(p => !p.is_deleted).map(p => p.email?.toLowerCase().trim()).filter(Boolean)
+          effectiveDbProfiles.filter(p => !p.is_deleted).map(p => p.email?.toLowerCase().trim()).filter(Boolean)
         );
         const activeProfileIds = new Set(
-          (dbProfiles || []).filter(p => !p.is_deleted).map(p => p.id?.toLowerCase().trim()).filter(Boolean)
+          effectiveDbProfiles.filter(p => !p.is_deleted).map(p => p.id?.toLowerCase().trim()).filter(Boolean)
         );
 
         let mergedDeletedUserIds = [];
@@ -723,20 +828,12 @@ export function useCloudSync({
             .filter(id => !activeProfileEmails.has(id) && !activeProfileIds.has(id));
         }
 
-        const permsMap = new Map();
-        if (dbPerms && dbPerms.length > 0) {
-          dbPerms.forEach(p => {
-            if (!permsMap.has(p.user_id)) permsMap.set(p.user_id, []);
-            permsMap.get(p.user_id).push(p.page_id);
-          });
-        }
-
         setUsersList(prev => {
           const profileMap = new Map();
 
           // 1. Overlay dbProfiles directly from PostgreSQL (Highest Authority)
-          if (dbProfiles && dbProfiles.length > 0) {
-            dbProfiles.forEach(p => {
+          if (effectiveDbProfiles && effectiveDbProfiles.length > 0) {
+            effectiveDbProfiles.forEach(p => {
               const cleanEmail = p.email?.toLowerCase()?.trim();
               const pId = p.id?.toLowerCase();
               const isMarkedDeleted = Boolean(
@@ -818,6 +915,27 @@ export function useCloudSync({
                 ...u,
                 hasSetPassword: Boolean(u.hasSetPassword || existing.hasSetPassword || u.passwordHash || existing.passwordHash),
                 passwordHash: u.passwordHash || existing.passwordHash || null
+              });
+            }
+          });
+
+          // 3.5. Overlay INITIAL_USERS (registered database company staff accounts) if not deleted
+          INITIAL_USERS.forEach(u => {
+            const cleanEmail = u.email?.toLowerCase();
+            const uId = u.id?.toLowerCase();
+            if (
+              cleanEmail &&
+              !mergedDeletedUserIds.includes(uId) &&
+              !mergedDeletedUserIds.includes(cleanEmail) &&
+              !LEGACY_MOCK_EMAILS.includes(cleanEmail) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            ) {
+              const existing = profileMap.get(cleanEmail) || {};
+              profileMap.set(cleanEmail, {
+                ...u,
+                ...existing,
+                hasSetPassword: Boolean(existing.hasSetPassword ?? u.hasSetPassword),
+                passwordHash: existing.passwordHash || null
               });
             }
           });
@@ -1255,9 +1373,39 @@ export function useCloudSync({
         );
 
         if (setSavedRecords) {
-          setSavedRecords(validSavedRecords);
-          try { localStorage.setItem('mdc_saved_records', JSON.stringify(validSavedRecords)); } catch (e) {}
-          dbStorage.setItem('mdc_saved_records', validSavedRecords);
+          setSavedRecords(prev => {
+            const prevList = Array.isArray(prev) ? prev : [];
+            const cloudMap = new Map((validSavedRecords || []).map(r => [r.id, r]));
+            const merged = [...(validSavedRecords || [])];
+
+            // Preserve local records that have not been deleted and are not yet returned by cloud query
+            prevList.forEach(localRec => {
+              if (!localRec || !localRec.id) return;
+              const cleanId = String(localRec.id).trim();
+              if (allDeletedPeriodIds.has(cleanId) || localRec.notes === '__DELETED__' || localRec.snapshot_data?.isDeleted) {
+                return;
+              }
+              const remote = cloudMap.get(localRec.id);
+              if (!remote) {
+                merged.push(localRec);
+              } else {
+                // If local record has full snapshot_data and remote only has lightweight header, preserve snapshot_data!
+                const idx = merged.findIndex(r => r.id === localRec.id);
+                if (idx !== -1 && localRec.snapshot_data && Object.keys(localRec.snapshot_data).length > 0) {
+                  if (!merged[idx].snapshot_data || Object.keys(merged[idx].snapshot_data).length === 0) {
+                    merged[idx] = { ...merged[idx], snapshot_data: localRec.snapshot_data };
+                  }
+                }
+              }
+            });
+
+            merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+            try { localStorage.setItem('mdc_saved_records', JSON.stringify(merged.slice(0, 50))); } catch (e) {}
+            dbStorage.setItem('mdc_saved_records', merged);
+            merged.forEach(r => dbStorage.putSavedRecord(r));
+            return merged;
+          });
         }
 
         // Hydrate Stock Transfer Reports & Metadata
@@ -1497,6 +1645,13 @@ export function useCloudSync({
               const resolvedPlate = dbS.vehicle_plate || existing?.vehicle_plate || '';
               const resolvedGuard = dbS.guard_on_duty || existing?.guard_on_duty || '';
               const resolvedCarrier = dbS.carrier || dbS.courier || existing?.carrier || existing?.courier || '';
+              const resolvedPickupDate = dbS.pickup_date || dbS.shipment_date || existing?.pickup_date || existing?.shipment_date || '';
+              const resolvedReceivedDate = dbS.received_date || existing?.received_date || (dbS.received_at ? String(dbS.received_at).substring(0, 10) : (existing?.received_at ? String(existing.received_at).substring(0, 10) : ''));
+              const resolvedReceivedAt = dbS.received_at || existing?.received_at || '';
+              const resolvedReceivedByName = dbS.received_by_name || existing?.received_by_name || dbS.receiving_signature || existing?.receiving_signature || '';
+              const resolvedReceivingSignature = dbS.receiving_signature || existing?.receiving_signature || resolvedReceivedByName || '';
+              const resolvedReceivingCondition = dbS.receiving_condition || existing?.receiving_condition || '';
+              const resolvedReceivingNotes = dbS.receiving_notes || existing?.receiving_notes || '';
 
               shipmentMap.set(canonicalRef, {
                 ...(existing || {}),
@@ -1510,6 +1665,14 @@ export function useCloudSync({
                 carrier: resolvedCarrier,
                 destination_site_name: resolvedSiteName,
                 destination_site_code: resolvedSiteCode,
+                pickup_date: resolvedPickupDate,
+                shipment_date: resolvedPickupDate || existing?.shipment_date || dbS.shipment_date || '',
+                received_date: resolvedReceivedDate,
+                received_at: resolvedReceivedAt,
+                received_by_name: resolvedReceivedByName,
+                receiving_signature: resolvedReceivingSignature,
+                receiving_condition: resolvedReceivingCondition,
+                receiving_notes: resolvedReceivingNotes,
                 items: formattedItems.length > 0 ? formattedItems : existingItems
               });
             }
@@ -1547,13 +1710,43 @@ export function useCloudSync({
 
             const isConfirmed = isLockedConfirmedShipment(s) || s.status === 'received_confirmed' || s.status === 'delivered';
             const resolvedStatus = isConfirmed ? 'received_confirmed' : (s.status || 'pending_pickup');
+            const isArchived = isShipmentArchived(s, ARCHIVE_CUTOFF_DAYS);
+
+            const effectivePickupDate = s.pickup_date || s.shipment_date || '';
+            let effectiveReceivedDate = s.received_date || (s.received_at ? String(s.received_at).substring(0, 10) : '');
+            let effectiveReceivedAt = s.received_at || '';
+
+            if (isConfirmed) {
+              if (!effectiveReceivedDate) {
+                if (s.updated_at) {
+                  effectiveReceivedDate = String(s.updated_at).substring(0, 10);
+                } else if (s.created_at) {
+                  effectiveReceivedDate = String(s.created_at).substring(0, 10);
+                } else if (effectivePickupDate) {
+                  effectiveReceivedDate = effectivePickupDate;
+                }
+              }
+              if (!effectiveReceivedAt) {
+                effectiveReceivedAt = s.updated_at || (effectiveReceivedDate ? `${effectiveReceivedDate}T12:00:00.000Z` : s.created_at) || '';
+              }
+            }
+
+            const effectiveReceivedByName = s.received_by_name || s.receiving_signature || (isConfirmed ? 'Authorized Staff' : '');
+            const effectiveReceivingSignature = s.receiving_signature || effectiveReceivedByName || '';
+
             return {
               ...s,
               status: resolvedStatus,
+              is_archived: isArchived,
               items: healedItems,
               prepared_by_name: cleanPrepBy,
               saved_by_name: cleanPrepBy,
-              shipment_date: s.shipment_date || s.pickup_date || ''
+              pickup_date: effectivePickupDate,
+              shipment_date: effectivePickupDate,
+              received_date: effectiveReceivedDate,
+              received_at: effectiveReceivedAt,
+              received_by_name: effectiveReceivedByName,
+              receiving_signature: effectiveReceivingSignature
             };
           });
 
@@ -1900,7 +2093,10 @@ export function useCloudSync({
             availableUnitsForIntakes
           );
 
-          effectiveIntakeRecords = consolidatedRecords.sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
+          effectiveIntakeRecords = consolidatedRecords.map(rec => ({
+            ...rec,
+            is_archived: isIntakeRecordArchived(rec, ARCHIVE_CUTOFF_DAYS)
+          })).sort((a, b) => new Date(b.created_at || b.intake_date || 0) - new Date(a.created_at || a.intake_date || 0));
 
           try { localStorage.setItem('mdc_dc_intake_records', JSON.stringify(effectiveIntakeRecords)); } catch (e) {}
           dbStorage.setItem('mdc_dc_intake_records', effectiveIntakeRecords);
@@ -2736,14 +2932,19 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (ev.data.type === 'PERIOD_RECORD_SAVED' && ev.data.payload?.record) {
-              const newRec = ev.data.payload.record;
+            } else if (ev.data.type === 'PERIOD_RECORD_SAVED' && (ev.data.payload?.record || ev.data.payload?.recordId)) {
+              const newRec = ev.data.payload.record || {
+                id: ev.data.payload.recordId,
+                period_label: ev.data.payload.label,
+                created_at: new Date().toISOString()
+              };
               if (setSavedRecords && newRec?.id) {
                 setSavedRecords(prev => {
                   const exists = (prev || []).some(r => r.id === newRec.id);
-                  const next = exists ? prev.map(r => r.id === newRec.id ? newRec : r) : [newRec, ...(prev || [])];
+                  const next = exists ? prev.map(r => r.id === newRec.id ? { ...r, ...newRec } : r) : [newRec, ...(prev || [])];
                   try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
                   dbStorage.setItem('mdc_saved_records', next);
+                  if (newRec.snapshot_data) dbStorage.putSavedRecord(newRec);
                   return next;
                 });
               }
@@ -2892,14 +3093,19 @@ export function useCloudSync({
                   return next;
                 });
               }
-            } else if (bType === 'PERIOD_RECORD_SAVED' && bPayload?.record) {
-              const newRec = bPayload.record;
+            } else if (bType === 'PERIOD_RECORD_SAVED' && (bPayload?.record || bPayload?.recordId)) {
+              const newRec = bPayload.record || {
+                id: bPayload.recordId,
+                period_label: bPayload.label,
+                created_at: new Date().toISOString()
+              };
               if (setSavedRecords && newRec?.id) {
                 setSavedRecords(prev => {
                   const exists = (prev || []).some(r => r.id === newRec.id);
-                  const next = exists ? prev.map(r => r.id === newRec.id ? newRec : r) : [newRec, ...(prev || [])];
+                  const next = exists ? prev.map(r => r.id === newRec.id ? { ...r, ...newRec } : r) : [newRec, ...(prev || [])];
                   try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
                   dbStorage.setItem('mdc_saved_records', next);
+                  if (newRec.snapshot_data) dbStorage.putSavedRecord(newRec);
                   return next;
                 });
               }
@@ -4132,6 +4338,8 @@ export function useCloudSync({
     clearAllData,
     applyParsedDataset,
     activePackingStations,
-    broadcastPackingPresence
+    broadcastPackingPresence,
+    fetchArchivedShipmentsFromCloud,
+    fetchArchivedIntakesFromCloud
   };
 }
