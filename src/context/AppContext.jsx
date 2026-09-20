@@ -353,22 +353,26 @@ export function AppProvider({ children }) {
   const autoLogoutRef = useRef(null);
   const cloudSyncRef = useRef(null);
 
+  const onInactivityPause = useCallback(() => {
+    console.info('[AppContext] 1-hour user inactivity reached: cloud data auto-loading paused.');
+  }, []);
+
+  const onResumeSync = useCallback(async () => {
+    if (cloudSyncRef.current?.autoRefreshData) {
+      await cloudSyncRef.current.autoRefreshData({
+        force: true,
+        silent: false,
+        reason: 'Resume live sync after 1-hour inactivity',
+        isManual: true
+      });
+    }
+  }, []);
+
   // 10.5. 1-Hour User Inactivity Watchdog for Cloud Data Sync
   const inactivityGuard = useInactivitySyncGuard({
     currentUser: auth.currentUser,
-    onInactivityPause: () => {
-      console.info('[AppContext] 1-hour user inactivity reached: cloud data auto-loading paused.');
-    },
-    onResumeSync: async () => {
-      if (cloudSyncRef.current?.autoRefreshData) {
-        await cloudSyncRef.current.autoRefreshData({
-          force: true,
-          silent: false,
-          reason: 'Resume live sync after 1-hour inactivity',
-          isManual: true
-        });
-      }
-    }
+    onInactivityPause,
+    onResumeSync
   });
 
   // 11. Central Cloud Sync & Realtime Engine

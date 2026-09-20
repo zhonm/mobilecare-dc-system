@@ -37,7 +37,15 @@ export function useInactivitySyncGuard({
   const [inactiveDurationMs, setInactiveDurationMs] = useState(0);
   const lastActivityTimeRef = useRef(Date.now());
   const lastEventThrottleTimeRef = useRef(0);
-  const checkIntervalRef = useRef(null);
+  const isDataSyncPausedRef = useRef(isDataSyncPaused);
+  isDataSyncPausedRef.current = isDataSyncPaused;
+
+  const onInactivityPauseRef = useRef(onInactivityPause);
+  const onResumeSyncRef = useRef(onResumeSync);
+  useEffect(() => {
+    onInactivityPauseRef.current = onInactivityPause;
+    onResumeSyncRef.current = onResumeSync;
+  });
 
   // Synchronize initial last activity timestamp from localStorage
   useEffect(() => {
@@ -71,20 +79,24 @@ export function useInactivitySyncGuard({
   }, []);
 
   // Pause data sync
-  const pauseDataSync = useCallback(() => {
+  const pauseDataSync = useCallback((duration = 0) => {
+    if (isDataSyncPausedRef.current) return;
     setIsDataSyncPaused(true);
+    if (duration > 0) {
+      setInactiveDurationMs(duration);
+    }
     try {
       localStorage.setItem(INACTIVITY_PAUSED_STORAGE_KEY, 'true');
     } catch {}
 
-    if (typeof onInactivityPause === 'function') {
+    if (typeof onInactivityPauseRef.current === 'function') {
       try {
-        onInactivityPause();
+        onInactivityPauseRef.current();
       } catch (err) {
         console.warn('[InactivityGuard] onInactivityPause note:', err);
       }
     }
-  }, [onInactivityPause]);
+  }, []);
 
   // Resume data sync & reset timer
   const resumeDataSync = useCallback(async () => {
@@ -99,14 +111,14 @@ export function useInactivitySyncGuard({
       localStorage.removeItem(INACTIVITY_PAUSED_STORAGE_KEY);
     } catch {}
 
-    if (typeof onResumeSync === 'function') {
+    if (typeof onResumeSyncRef.current === 'function') {
       try {
-        await onResumeSync();
+        await onResumeSyncRef.current();
       } catch (err) {
         console.warn('[InactivityGuard] onResumeSync note:', err);
       }
     }
-  }, [onResumeSync]);
+  }, []);
 
   // Reset timer without necessarily triggering onResumeSync
   const resetInactivityTimer = useCallback(() => {
@@ -129,16 +141,17 @@ export function useInactivitySyncGuard({
     try {
       localStorage.setItem(INACTIVITY_STORAGE_KEY, String(simulatedPastTime));
     } catch {}
-    pauseDataSync();
+    pauseDataSync(timeoutMs + 5000);
   }, [timeoutMs, pauseDataSync]);
+
+  const currentUserId = currentUser?.id || null;
 
   // DOM Event Listeners for User Activity
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUserId) return;
 
-    // Listen only when not already paused
     const handleActivity = () => {
-      if (!isDataSyncPaused) {
+      if (!isDataSyncPausedRef.current) {
         recordUserActivity();
       }
     };
@@ -149,14 +162,11 @@ export function useInactivitySyncGuard({
     return () => {
       events.forEach(ev => window.removeEventListener(ev, handleActivity));
     };
-  }, [currentUser, isDataSyncPaused, recordUserActivity]);
+  }, [currentUserId, recordUserActivity]);
 
   // Periodic Inactivity Checker (evaluates every 10 seconds)
   useEffect(() => {
-    if (!currentUser) {
-      if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
-      return;
-    }
+    if (!currentUserId) return;
 
     const checkInactivity = () => {
       const now = Date.now();
@@ -172,18 +182,17 @@ export function useInactivitySyncGuard({
       } catch {}
 
       const elapsed = Math.max(0, now - lastAct);
-      setInactiveDurationMs(elapsed);
 
-      if (elapsed >= timeoutMs && !isDataSyncPaused) {
+      if (elapsed >= timeoutMs && !isDataSyncPausedRef.current) {
         console.info(`[InactivityGuard] User inactive for ${Math.round(elapsed / 60000)} minutes (>= 60 mins). Pausing cloud auto-loading.`);
-        pauseDataSync();
+        pauseDataSync(elapsed);
       }
     };
 
-    // Check immediately on mount/focus
+    // Check on mount/setup
     checkInactivity();
 
-    checkIntervalRef.current = setInterval(checkInactivity, 10000);
+    const intervalId = setInterval(checkInactivity, 10000);
 
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -195,11 +204,11 @@ export function useInactivitySyncGuard({
     document.addEventListener('visibilitychange', handleFocusOrVisibility);
 
     return () => {
-      if (checkIntervalRef.current) clearInterval(checkIntervalRef.current);
+      clearInterval(intervalId);
       window.removeEventListener('focus', handleFocusOrVisibility);
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
     };
-  }, [currentUser, isDataSyncPaused, timeoutMs, pauseDataSync]);
+  }, [currentUserId, timeoutMs, pauseDataSync]);
 
   return {
     isDataSyncPaused,
