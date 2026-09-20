@@ -375,22 +375,28 @@ export function isPeriodMatching(datasetPeriodLabel, targetPeriod) {
   if (typeof targetPeriod === 'object') {
     const targetLabel = String(targetPeriod.label || '').toLowerCase().trim();
     if (cleanDataset === targetLabel) return true;
-    if (targetPeriod.month === 8 && (cleanDataset.includes('aug') || cleanDataset.includes('08'))) return true;
-    if (targetPeriod.month === 9 && (cleanDataset.includes('sep') || cleanDataset.includes('09'))) return true;
+    // Check all 12 months by number and abbreviation
+    if (targetPeriod.month === 1  && (cleanDataset.includes('jan') || cleanDataset.includes('01'))) return true;
+    if (targetPeriod.month === 2  && (cleanDataset.includes('feb') || cleanDataset.includes('02'))) return true;
+    if (targetPeriod.month === 3  && (cleanDataset.includes('mar') || cleanDataset.includes('03'))) return true;
+    if (targetPeriod.month === 4  && (cleanDataset.includes('apr') || cleanDataset.includes('04'))) return true;
+    if (targetPeriod.month === 5  && (cleanDataset.includes('may') || cleanDataset.includes('05'))) return true;
+    if (targetPeriod.month === 6  && (cleanDataset.includes('jun') || cleanDataset.includes('06'))) return true;
+    if (targetPeriod.month === 7  && (cleanDataset.includes('jul') || cleanDataset.includes('07'))) return true;
+    if (targetPeriod.month === 8  && (cleanDataset.includes('aug') || cleanDataset.includes('08'))) return true;
+    if (targetPeriod.month === 9  && (cleanDataset.includes('sep') || cleanDataset.includes('09'))) return true;
     if (targetPeriod.month === 10 && (cleanDataset.includes('oct') || cleanDataset.includes('10'))) return true;
     if (targetPeriod.month === 11 && (cleanDataset.includes('nov') || cleanDataset.includes('11'))) return true;
     if (targetPeriod.month === 12 && (cleanDataset.includes('dec') || cleanDataset.includes('12'))) return true;
-    if (targetPeriod.month === 1 && (cleanDataset.includes('jan') || cleanDataset.includes('01'))) return true;
-    if (targetPeriod.month === 2 && (cleanDataset.includes('feb') || cleanDataset.includes('02'))) return true;
     if (targetLabel && (cleanDataset.includes(targetLabel) || targetLabel.includes(cleanDataset))) return true;
   } else if (typeof targetPeriod === 'string') {
     const cleanTarget = targetPeriod.toLowerCase().trim();
     if (cleanDataset === cleanTarget) return true;
-    if (cleanTarget.includes('aug') && cleanDataset.includes('aug')) return true;
-    if (cleanTarget.includes('sep') && cleanDataset.includes('sep')) return true;
-    if (cleanTarget.includes('oct') && cleanDataset.includes('oct')) return true;
-    if (cleanTarget.includes('nov') && cleanDataset.includes('nov')) return true;
-    if (cleanTarget.includes('dec') && cleanDataset.includes('dec')) return true;
+    // Full set of month abbreviations for string-mode matching
+    const monthAbbrevs = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    for (const abbrev of monthAbbrevs) {
+      if (cleanTarget.includes(abbrev) && cleanDataset.includes(abbrev)) return true;
+    }
     if (cleanTarget.includes(cleanDataset) || cleanDataset.includes(cleanTarget)) return true;
   }
   return false;
@@ -415,10 +421,10 @@ export function getActiveMasterlist(customData = null, targetPeriod = null) {
     } catch (e) {}
   }
 
+  // If an explicit customData is provided (e.g. the user's uploaded masterlist passed by Dashboard),
+  // return it immediately without period-gating. The caller already resolved the correct dataset.
   if (customData && customData.totalUnits !== undefined && Array.isArray(customData.partsSummary)) {
-    if (!period || !customData.periodLabel || isPeriodMatching(customData.periodLabel, period)) {
-      return customData;
-    }
+    return customData;
   }
 
   if (activeScannedMasterlist && activeScannedMasterlist.totalUnits !== undefined) {

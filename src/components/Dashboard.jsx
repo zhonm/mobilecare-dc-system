@@ -158,19 +158,23 @@ export default function Dashboard() {
   // DYNAMIC IPHONE MASTERLIST SCANNED QUERIES (BASED ON USER UPLOADED MASTERLIST)
   // ─────────────────────────────────────────────────────────────────────────
   const activeMasterlist = useMemo(() => {
+    // Priority 1: User-uploaded masterlistData — always use it if it has valid data.
+    // We do NOT gate on period matching here because the user explicitly uploaded this file
+    // for the current session. Period mismatch can happen when the file covers multiple months
+    // or when the period label format differs slightly.
     if (masterlistData && masterlistData.totalUnits !== undefined && masterlistData.totalUnits > 0) {
-      if (!activePeriod || !masterlistData.periodLabel || isPeriodMatching(masterlistData.periodLabel, activePeriod)) {
-        return masterlistData;
-      }
+      return masterlistData;
     }
+    // Priority 2: Derived from in-memory repairUsageRecords (scanned on-the-fly)
     if (repairUsageRecords && repairUsageRecords.length > 0) {
       const scanned = scanMasterlistData(repairUsageRecords, {
         periodLabel: typeof activePeriod === 'string' ? activePeriod : (activePeriod?.label || 'Current Period')
       });
-      if (scanned && scanned.totalUnits > 0 && (!activePeriod || !scanned.periodLabel || isPeriodMatching(scanned.periodLabel, activePeriod))) {
+      if (scanned && scanned.totalUnits > 0) {
         return scanned;
       }
     }
+    // Priority 3: Fallback to localStorage / in-memory / seed resolution
     return getActiveMasterlist(null, activePeriod);
   }, [masterlistData, repairUsageRecords, activePeriod]);
 
