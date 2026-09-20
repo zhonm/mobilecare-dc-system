@@ -47,6 +47,7 @@ import {
   fetchArchivedIntakesFromCloud
 } from '../utils/archiveManager';
 
+
 export function useCloudSync({
   currentUser,
   setCurrentUser,
@@ -438,6 +439,7 @@ export function useCloudSync({
             'master_shipments_registry',
             'live_master_dc_inventory',
             'deleted_period_record_ids_registry',
+            'master_period_records_registry',
             'master_purchase_orders_registry',
             'master_dc_intakes_registry',
             'deleted_intake_ids_registry',
@@ -460,7 +462,8 @@ export function useCloudSync({
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .in('id', HEAVY_DOC_IDS),
             supabase.from('saved_records')
-              .select('id, record_type, period_label, period_year, period_month, period_week, saved_by_name, saved_by_user_id, notes, created_at, updated_at')
+              .select('id, record_type, period_label, period_year, period_month, period_week, saved_by_name, saved_by_user_id, notes, created_at, updated_at, snapshot_data')
+              .or('record_type.in.(both,forecast,allocation,period_record,historical_archive),id.like.rec-%')
               .order('created_at', { ascending: false })
               .limit(50),
             // Lightweight metadata check for master_stock_transfers_report_registry (~60 bytes)
@@ -481,6 +484,7 @@ export function useCloudSync({
           const shipmentRows = resShipments?.data || [];
           const shipmentIds = new Set(shipmentRows.map(r => r.id));
           const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry' && !shipmentIds.has(r.id));
+
 
           // 1. Conditional Egress Optimization for LIVE_MASTER_RECORD_ID:
           // Contains heavy forecasts, allocations, parts, and sites (~1-3 MB).
@@ -1330,47 +1334,60 @@ export function useCloudSync({
         let localDeletedPeriodIds = [];
         try { localDeletedPeriodIds = JSON.parse(localStorage.getItem('mdc_deleted_period_record_ids') || '[]'); } catch (e) {}
         const cloudDeletedPeriodIds = Array.isArray(deletedPeriodDoc?.snapshot_data?.deletedIds) ? deletedPeriodDoc.snapshot_data.deletedIds : [];
-        const allDeletedPeriodIds = new Set([...localDeletedPeriodIds, ...cloudDeletedPeriodIds].map(id => String(id).trim()));
+        if (deletedPeriodDoc) {
+          try { localStorage.setItem('mdc_deleted_period_record_ids', JSON.stringify(cloudDeletedPeriodIds)); } catch (e) {}
+        }
+        const allDeletedPeriodIds = new Set(cloudDeletedPeriodIds.map(id => String(id).trim()));
 
-        const validSavedRecords = dbSavedRecords.filter(r =>
-          r.id !== LIVE_MASTER_RECORD_ID &&
-          r.id !== 'live_master_state_v1' &&
-          r.id !== 'active_packing_manifest_draft' &&
-          r.id !== 'live_master_dc_inventory' &&
-          r.id !== 'master_dc_intakes_registry' &&
-          r.id !== 'deleted_unit_serials_registry' &&
-          r.id !== 'deleted_intake_ids_registry' &&
-          r.id !== 'deleted_shipment_ids_registry' &&
-          r.id !== 'deleted_period_record_ids_registry' &&
-          r.id !== 'master_upload_audit_logs_registry' &&
-          r.id !== 'master_deletion_audit_logs_registry' &&
-          r.id !== 'master_stock_transfers_report_registry' &&
-          r.id !== 'master_users_registry' &&
-          r.id !== 'master_supervisor_settings_registry' &&
-          r.id !== 'master_auto_logout_settings_registry' &&
-          r.id !== 'master_session_audit_logs_registry' &&
-          r.record_type !== 'live_master_state' &&
-          r.record_type !== 'users_registry' &&
-          r.record_type !== 'supervisor_settings' &&
-          r.record_type !== 'auto_logout_settings' &&
-          r.record_type !== 'session_audit_registry' &&
-          r.record_type !== 'stock_transfer_report' &&
-          r.record_type !== 'upload_audit_registry' &&
-          r.record_type !== 'deletion_audit_registry' &&
-          r.record_type !== 'deleted_snapshot' &&
-          r.record_type !== 'shipment' &&
-          r.record_type !== 'intake_batch' &&
-          r.record_type !== 'intake_record' &&
-          r.record_type !== 'inventory_master' &&
-          r.record_type !== 'intake_registry' &&
-          r.record_type !== 'deletion_registry' &&
-          !r.period_label?.includes('Live Master State') &&
-          !r.id.startsWith('MDC') &&
-          !r.id.startsWith('intake-') &&
-          r.notes !== '__DELETED__' &&
-          r.snapshot_data?.isDeleted !== true &&
-          !allDeletedPeriodIds.has(String(r.id).trim())
-        );
+        // Also extract records from master_period_records_registry
+        const periodRegistryDoc = dbSavedRecords.find(r => r.id === 'master_period_records_registry');
+        const registryPeriodRecords = Array.isArray(periodRegistryDoc?.snapshot_data?.records)
+          ? periodRegistryDoc.snapshot_data.records
+          : [];
+
+        const validSavedRecords = [
+          ...registryPeriodRecords,
+          ...dbSavedRecords.filter(r =>
+            r.id !== LIVE_MASTER_RECORD_ID &&
+            r.id !== 'live_master_state_v1' &&
+            r.id !== 'active_packing_manifest_draft' &&
+            r.id !== 'live_master_dc_inventory' &&
+            r.id !== 'master_dc_intakes_registry' &&
+            r.id !== 'deleted_unit_serials_registry' &&
+            r.id !== 'deleted_intake_ids_registry' &&
+            r.id !== 'deleted_shipment_ids_registry' &&
+            r.id !== 'deleted_period_record_ids_registry' &&
+            r.id !== 'master_period_records_registry' &&
+            r.id !== 'master_upload_audit_logs_registry' &&
+            r.id !== 'master_deletion_audit_logs_registry' &&
+            r.id !== 'master_stock_transfers_report_registry' &&
+            r.id !== 'master_users_registry' &&
+            r.id !== 'master_supervisor_settings_registry' &&
+            r.id !== 'master_auto_logout_settings_registry' &&
+            r.id !== 'master_session_audit_logs_registry' &&
+            r.record_type !== 'live_master_state' &&
+            r.record_type !== 'users_registry' &&
+            r.record_type !== 'supervisor_settings' &&
+            r.record_type !== 'auto_logout_settings' &&
+            r.record_type !== 'session_audit_registry' &&
+            r.record_type !== 'stock_transfer_report' &&
+            r.record_type !== 'upload_audit_registry' &&
+            r.record_type !== 'deletion_audit_registry' &&
+            r.record_type !== 'deleted_snapshot' &&
+            r.record_type !== 'shipment' &&
+            r.record_type !== 'intake_batch' &&
+            r.record_type !== 'intake_record' &&
+            r.record_type !== 'inventory_master' &&
+            r.record_type !== 'intake_registry' &&
+            r.record_type !== 'deletion_registry' &&
+            !r.period_label?.includes('Live Master State') &&
+            !r.id.startsWith('MDC') &&
+            !r.id.startsWith('intake-') &&
+            r.notes !== '__DELETED__' &&
+            r.snapshot_data?.isDeleted !== true &&
+            !allDeletedPeriodIds.has(String(r.id).trim())
+          )
+        ];
 
         if (setSavedRecords) {
           setSavedRecords(prev => {
@@ -2922,6 +2939,12 @@ export function useCloudSync({
                   };
                 });
               }
+            } else if (ev.data.type === 'ALL_PERIOD_RECORDS_CLEARED') {
+              if (setSavedRecords) {
+                setSavedRecords([]);
+                try { localStorage.setItem('mdc_saved_records', JSON.stringify([])); } catch (e) {}
+                dbStorage.setItem('mdc_saved_records', []);
+              }
             } else if (ev.data.type === 'PERIOD_RECORD_DELETED' && ev.data.payload?.recordId) {
               const delId = ev.data.payload.recordId;
               if (setSavedRecords) {
@@ -3082,6 +3105,12 @@ export function useCloudSync({
                     timestamp: Date.now()
                   });
                 }
+              }
+            } else if (bType === 'ALL_PERIOD_RECORDS_CLEARED') {
+              if (setSavedRecords) {
+                setSavedRecords([]);
+                try { localStorage.setItem('mdc_saved_records', JSON.stringify([])); } catch (e) {}
+                dbStorage.setItem('mdc_saved_records', []);
               }
             } else if (bType === 'PERIOD_RECORD_DELETED' && bPayload?.recordId) {
               const delId = bPayload.recordId;

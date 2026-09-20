@@ -569,6 +569,7 @@ export function AppProvider({ children }) {
         savePeriodRecord: periodRecords.savePeriodRecord,
         restorePeriodRecord: periodRecords.restorePeriodRecord,
         deletePeriodRecord: periodRecords.deletePeriodRecord,
+        clearAllPeriodRecords: periodRecords.clearAllPeriodRecords,
         addScanInUnit: inventory.addScanInUnit,
         deleteScanInUnit: inventory.deleteScanInUnit,
         updateUnitAssignment: inventory.updateUnitAssignment,

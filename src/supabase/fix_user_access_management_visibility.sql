@@ -39,9 +39,13 @@ GRANT SELECT ON public.profiles TO authenticated;
 -- STEP 2: Fix saved_records SELECT policy to allow master_users_registry
 DROP POLICY IF EXISTS saved_records_throttle ON public.saved_records;
 DROP POLICY IF EXISTS saved_records_select_anon ON public.saved_records;
+DROP POLICY IF EXISTS saved_records_select_authenticated ON public.saved_records;
+DROP POLICY IF EXISTS "saved_records_select_authenticated" ON public.saved_records;
 DROP POLICY IF EXISTS saved_records_authenticated_all ON public.saved_records;
+DROP POLICY IF EXISTS "saved_records_authenticated_all" ON public.saved_records;
 DROP POLICY IF EXISTS "saved_records_select_anon" ON public.saved_records;
 DROP POLICY IF EXISTS "saved_records_select_scoped" ON public.saved_records;
+
 
 CREATE POLICY saved_records_select_anon ON public.saved_records
 FOR SELECT TO anon
@@ -52,14 +56,61 @@ USING (
         'master_users_registry',
         'deleted_shipment_ids_registry',
         'deleted_intake_ids_registry',
-        'deleted_unit_serials_registry'
+        'deleted_unit_serials_registry',
+        'deleted_period_record_ids_registry',
+        'master_stock_transfers_report_registry',
+        'master_masterlist_data_registry',
+        'live_master_state_v1',
+        'live_master_dc_inventory'
     )
-    OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry')
+    OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry', 'both', 'forecast', 'allocation', 'period_record', 'historical_archive', 'live_master_state', 'masterlist_registry', 'stock_transfer_report')
+    OR id LIKE 'rec-%'
 );
 
 CREATE POLICY saved_records_select_authenticated ON public.saved_records
 FOR SELECT TO authenticated
 USING (true);
+
+-- Allow anonymous writes on operational records and period records (excluding master_users_registry which requires admin RPC)
+DROP POLICY IF EXISTS saved_records_insert_anon ON public.saved_records;
+CREATE POLICY saved_records_insert_anon ON public.saved_records
+FOR INSERT TO anon
+WITH CHECK (
+    id <> 'master_users_registry'
+    AND (
+        record_type IN ('both', 'forecast', 'allocation', 'period_record', 'historical_archive', 'shipment', 'intake_batch', 'intake_record', 'deletion_registry', 'live_master_state', 'masterlist_registry', 'stock_transfer_report')
+        OR id LIKE 'rec-%'
+    )
+);
+
+DROP POLICY IF EXISTS saved_records_update_anon ON public.saved_records;
+CREATE POLICY saved_records_update_anon ON public.saved_records
+FOR UPDATE TO anon
+USING (
+    id <> 'master_users_registry'
+    AND (
+        record_type IN ('both', 'forecast', 'allocation', 'period_record', 'historical_archive', 'shipment', 'intake_batch', 'intake_record', 'deletion_registry', 'live_master_state', 'masterlist_registry', 'stock_transfer_report')
+        OR id LIKE 'rec-%'
+    )
+)
+WITH CHECK (
+    id <> 'master_users_registry'
+    AND (
+        record_type IN ('both', 'forecast', 'allocation', 'period_record', 'historical_archive', 'shipment', 'intake_batch', 'intake_record', 'deletion_registry', 'live_master_state', 'masterlist_registry', 'stock_transfer_report')
+        OR id LIKE 'rec-%'
+    )
+);
+
+DROP POLICY IF EXISTS saved_records_delete_anon ON public.saved_records;
+CREATE POLICY saved_records_delete_anon ON public.saved_records
+FOR DELETE TO anon
+USING (
+    id <> 'master_users_registry'
+    AND (
+        record_type IN ('both', 'forecast', 'allocation', 'period_record', 'historical_archive', 'shipment', 'deleted_snapshot')
+        OR id LIKE 'rec-%'
+    )
+);
 
 -- STEP 3: Provide secure RPC function to get all active users with permissions
 CREATE OR REPLACE FUNCTION public.get_all_active_users()

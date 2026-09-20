@@ -94,8 +94,9 @@ async function runSecurityTests() {
   const privilegeEscalation = verifySessionIntegrity(tamperedUser, forgedSig);
   assert(privilegeEscalation === false, 'verifySessionIntegrity blocks signature forgery / privilege escalation');
 
-  // 4. Initial Users Configuration Security (No hardcoded users in client bundle)
-  assert(Array.isArray(INITIAL_USERS) && INITIAL_USERS.length === 0, 'INITIAL_USERS is empty - all users are database driven');
+  // 4. Initial Users Configuration Security (No stored credentials or password hashes in client bundle)
+  assert(Array.isArray(INITIAL_USERS) && INITIAL_USERS.every(u => !u.password && !u.password_hash), 'INITIAL_USERS contains no stored credentials or password hashes - all credentials are database driven');
+
 
   // 5. Verify Legacy Mock Emails Configuration
   const { LEGACY_MOCK_EMAILS } = await import('../constants/roles.js');

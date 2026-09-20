@@ -33,6 +33,7 @@ export default function SavedRecords() {
     savedRecords,
     restorePeriodRecord,
     deletePeriodRecord,
+    clearAllPeriodRecords,
     forecastItems,
     allocations,
     isAutoRefreshing,
@@ -57,6 +58,8 @@ export default function SavedRecords() {
   const [restoreForecast, setRestoreForecast] = useState(true);
   const [restoreAllocation, setRestoreAllocation] = useState(true);
   const [recordToDelete, setRecordToDelete] = useState(null);
+  const [showClearAllModal, setShowClearAllModal] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
 
   // Filter valid historical period snapshots (exclude system registries, live master states, and deleted records)
   const validSavedRecords = (savedRecords || []).filter(rec =>
@@ -190,6 +193,18 @@ export default function SavedRecords() {
     setRecordToDelete(null);
   };
 
+  const handleConfirmClearAll = async () => {
+    setIsClearingAll(true);
+    try {
+      if (clearAllPeriodRecords) {
+        await clearAllPeriodRecords();
+      }
+    } finally {
+      setIsClearingAll(false);
+      setShowClearAllModal(false);
+    }
+  };
+
   const formatDate = (isoString) => {
     if (!isoString) return '—';
     try {
@@ -286,6 +301,27 @@ export default function SavedRecords() {
                 <span>Save Current Working Data as Record</span>
               </button>
             )}
+
+            {canEdit && validSavedRecords.length > 0 && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowClearAllModal(true)}
+                style={{
+                  height: '36px',
+                  color: '#dc2626',
+                  borderColor: '#fca5a5',
+                  background: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                title="Permanently clear all saved period archives"
+              >
+                <Trash2 size={14} />
+                <span>Clear All Archives</span>
+              </button>
+            )}
+
 
             {isReadOnly && (
               <span
@@ -832,7 +868,73 @@ export default function SavedRecords() {
         </div>
       )}
 
-      {/* 4. Snapshot Details / Inspector Modal */}
+      {/* 4. Clear All Confirmation Modal */}
+      {showClearAllModal && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isClearingAll) setShowClearAllModal(false);
+          }}
+        >
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ background: '#7f1d1d' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: 'rgba(255, 255, 255, 0.2)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '17px', color: '#fff', fontWeight: 600 }}>
+                    Clear All Saved Archives
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#fecaca' }}>
+                    Permanent wipe of all historical snapshots.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isClearingAll && setShowClearAllModal(false)}
+                style={{ background: 'transparent', border: 'none', color: '#fecaca', cursor: 'pointer' }}
+                disabled={isClearingAll}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p style={{ fontSize: '13.5px', color: '#1e293b', lineHeight: 1.5, margin: 0 }}>
+                Are you sure you want to permanently delete <strong>ALL {validSavedRecords.length} saved period records</strong>?
+              </p>
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '10px 14px', borderRadius: '6px', fontSize: '12.5px', marginTop: '12px', lineHeight: 1.4 }}>
+                ⚠️ This will purge all saved snapshots from both your local browser storage and the Supabase cloud database, returning to a completely empty slate.
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowClearAllModal(false)}
+                disabled={isClearingAll}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: '#dc2626', borderColor: '#dc2626', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={handleConfirmClearAll}
+                disabled={isClearingAll}
+              >
+                <Trash2 size={14} />
+                <span>{isClearingAll ? 'Clearing...' : 'Yes, Delete All Records'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Snapshot Details / Inspector Modal */}
       {recordToView && (
         <div
           className="modal-backdrop"

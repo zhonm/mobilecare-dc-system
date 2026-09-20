@@ -40,7 +40,7 @@ export function usePeriodRecordsAndReports({
       const saved = localStorage.getItem('mdc_saved_records');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
       return [];
     } catch {
@@ -210,23 +210,108 @@ export function usePeriodRecordsAndReports({
     if (supabase) {
       if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
       try {
-        const { error } = await supabase.from('saved_records').upsert({
-          id: newRecord.id,
-          record_type: newRecord.record_type,
-          period_label: newRecord.period_label,
-          period_year: newRecord.period_year,
-          period_month: newRecord.period_month,
-          period_week: newRecord.period_week,
-          notes: newRecord.notes,
-          saved_by_name: newRecord.saved_by_name,
-          saved_by_user_id: newRecord.saved_by_user_id,
-          snapshot_data: newRecord.snapshot_data,
-          created_at: newRecord.created_at,
-          updated_at: newRecord.updated_at
-        }, { onConflict: 'id' });
-        if (error) throw error;
-        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label });
+        let saveSuccess = false;
+
+        // 1. Try save_period_record RPC first (SECURITY DEFINER bypasses RLS friction safely)
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('save_period_record', {
+            p_id: newRecord.id,
+            p_record_type: newRecord.record_type,
+            p_period_label: newRecord.period_label,
+            p_period_year: newRecord.period_year,
+            p_period_month: newRecord.period_month,
+            p_period_week: newRecord.period_week || null,
+            p_notes: newRecord.notes || '',
+            p_saved_by_name: newRecord.saved_by_name || 'Warehouse Operations',
+            p_saved_by_user_id: (newRecord.saved_by_user_id && !String(newRecord.saved_by_user_id).startsWith('usr-')) ? newRecord.saved_by_user_id : null,
+            p_snapshot_data: newRecord.snapshot_data || {}
+          });
+          if (!rpcErr && rpcRes && rpcRes.success !== false) {
+            saveSuccess = true;
+          }
+        } catch (rpcEx) {}
+
+        // 2. Direct insert fallback (clean insert avoids ON CONFLICT SELECT check)
+        if (!saveSuccess) {
+          const { error: insErr } = await supabase.from('saved_records').insert({
+            id: newRecord.id,
+            record_type: newRecord.record_type,
+            period_label: newRecord.period_label,
+            period_year: newRecord.period_year,
+            period_month: newRecord.period_month,
+            period_week: newRecord.period_week,
+            notes: newRecord.notes,
+            saved_by_name: newRecord.saved_by_name,
+            saved_by_user_id: (newRecord.saved_by_user_id && !String(newRecord.saved_by_user_id).startsWith('usr-')) ? newRecord.saved_by_user_id : null,
+            snapshot_data: newRecord.snapshot_data,
+            created_at: newRecord.created_at,
+            updated_at: newRecord.updated_at
+          });
+
+          if (!insErr) {
+            saveSuccess = true;
+          } else if (insErr.code === '23505') {
+            // Unique violation: row already exists, perform update
+            const { error: updErr } = await supabase.from('saved_records').update({
+              record_type: newRecord.record_type,
+              period_label: newRecord.period_label,
+              period_year: newRecord.period_year,
+              period_month: newRecord.period_month,
+              period_week: newRecord.period_week,
+              notes: newRecord.notes,
+              saved_by_name: newRecord.saved_by_name,
+              snapshot_data: newRecord.snapshot_data,
+              updated_at: newRecord.updated_at
+            }).eq('id', newRecord.id);
+            if (!updErr) saveSuccess = true;
+          } else {
+            // Standard upsert as last resort
+            const { error: upErr } = await supabase.from('saved_records').upsert({
+              id: newRecord.id,
+              record_type: newRecord.record_type,
+              period_label: newRecord.period_label,
+              period_year: newRecord.period_year,
+              period_month: newRecord.period_month,
+              period_week: newRecord.period_week,
+              notes: newRecord.notes,
+              saved_by_name: newRecord.saved_by_name,
+              saved_by_user_id: (newRecord.saved_by_user_id && !String(newRecord.saved_by_user_id).startsWith('usr-')) ? newRecord.saved_by_user_id : null,
+              snapshot_data: newRecord.snapshot_data,
+              created_at: newRecord.created_at,
+              updated_at: newRecord.updated_at
+            }, { onConflict: 'id' });
+            if (!upErr) saveSuccess = true;
+            else throw upErr;
+          }
+        }
+
+        // 3. Keep master_period_records_registry synchronized for immediate network-wide durability
+        try {
+          const { data: regDoc } = await supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', 'master_period_records_registry')
+            .maybeSingle();
+          const existingRecs = Array.isArray(regDoc?.snapshot_data?.records) ? regDoc.snapshot_data.records : [];
+          const updatedRecs = [newRecord, ...existingRecs.filter(r => r.id !== newRecord.id)];
+          await supabase.from('saved_records').upsert({
+            id: 'master_period_records_registry',
+            record_type: 'deletion_registry',
+            period_label: 'Master Period Records Registry',
+            period_year: 2026,
+            period_month: 9,
+            snapshot_data: { records: updatedRecs },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+          saveSuccess = true;
+        } catch (regErr) {
+          console.warn('Could not update master_period_records_registry:', regErr);
+        }
+
+        if (saveSuccess) {
+          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+          if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label });
+        }
       } catch (dbErr) {
         console.error('Supabase saved_records cloud sync error:', dbErr.message);
         if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false, isOnline: false }));
@@ -546,6 +631,27 @@ export function usePeriodRecordsAndReports({
             updated_at: new Date().toISOString()
           }, { onConflict: 'id' });
         }
+
+        // Synchronize deletion with master_period_records_registry
+        try {
+          const { data: regDoc } = await supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', 'master_period_records_registry')
+            .maybeSingle();
+          if (regDoc && Array.isArray(regDoc.snapshot_data?.records)) {
+            const updatedRecs = regDoc.snapshot_data.records.filter(r => r.id !== recordId);
+            await supabase.from('saved_records').upsert({
+              id: 'master_period_records_registry',
+              record_type: 'deletion_registry',
+              period_label: 'Master Period Records Registry',
+              period_year: 2026,
+              period_month: 9,
+              snapshot_data: { records: updatedRecs },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          }
+        } catch (e) {}
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         if (broadcastCloudEvent) broadcastCloudEvent('PERIOD_RECORD_DELETED', { recordId });
       } catch (dbErr) {
@@ -656,6 +762,77 @@ export function usePeriodRecordsAndReports({
     showToast('Cleared stock transfer reports data', 'info');
   };
 
+  const clearAllPeriodRecords = async () => {
+    const currentIds = (savedRecords || []).map(r => r.id).filter(Boolean);
+    const nowIso = new Date().toISOString();
+
+    // 1. Wipe local state & caches immediately
+    setSavedRecords([]);
+    try {
+      localStorage.removeItem('mdc_saved_records');
+      localStorage.setItem('mdc_saved_records', JSON.stringify([]));
+    } catch (e) {}
+    await Promise.all([
+      dbStorage.setItem('mdc_saved_records', []),
+      ...currentIds.map(id => dbStorage.deleteSavedRecord(id))
+    ]);
+
+    // 2. Wipe Supabase records
+    if (supabase) {
+      if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+      try {
+        // Purge individual records
+        for (const id of currentIds) {
+          await supabase.from('saved_records').delete().eq('id', id);
+        }
+
+        // Empty master registry
+        await supabase.from('saved_records').upsert({
+          id: 'master_period_records_registry',
+          record_type: 'deletion_registry',
+          period_label: 'Master Period Records Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { records: [] },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+
+        // Update tombstone registry with all deleted IDs and baseline IDs
+        const allDeleted = Array.from(new Set([
+          ...currentIds,
+          'rec-1788159614868-wapjlr',
+          'rec-1788159311497-j6bza1',
+          'rec-1787203380000-master'
+        ]));
+        await supabase.from('saved_records').upsert({
+          id: 'deleted_period_record_ids_registry',
+          record_type: 'deletion_registry',
+          period_label: 'Deleted Period Record IDs Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { deletedIds: allDeleted },
+          updated_at: nowIso
+        }, { onConflict: 'id' });
+
+        try {
+          localStorage.setItem('mdc_deleted_period_record_ids', JSON.stringify(allDeleted));
+        } catch (e) {}
+
+        if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+      } catch (err) {
+        console.warn('Error clearing period records from Supabase:', err);
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+      }
+    }
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('ALL_PERIOD_RECORDS_CLEARED', { table: 'saved_records', timestamp: nowIso });
+    }
+
+    showToast('All saved period records & archives cleared permanently', 'info');
+    return { success: true };
+  };
+
   return {
     savedRecords,
     setSavedRecords,
@@ -666,7 +843,9 @@ export function usePeriodRecordsAndReports({
     savePeriodRecord,
     restorePeriodRecord,
     deletePeriodRecord,
+    clearAllPeriodRecords,
     importStockTransfersReport,
     clearStockTransfersReport
   };
 }
+
