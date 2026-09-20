@@ -494,13 +494,21 @@ export default function Dashboard() {
         if (setActivePeriod) {
           setActivePeriod(detectedPeriod);
         }
+        // Write masterlist data AND timestamps so cloud sync guards correctly
+        // see local as the freshest copy (prevents reversion on refresh)
+        const uploadTimestamp = new Date().toISOString();
         try {
           localStorage.setItem('mdc_masterlist_data', JSON.stringify(scanned));
           localStorage.setItem('mdc_active_period', JSON.stringify(detectedPeriod));
+          // Mark when the masterlist was last locally updated (used by cloud sync egress guard)
+          localStorage.setItem('mdc_masterlist_updated_at', uploadTimestamp);
+          // Mark recent local override so hydration skips overwriting for 5 minutes
+          localStorage.setItem('mdc_last_override_time', Date.now().toString());
         } catch (_) {}
 
-        // If user is superadmin/admin and applyParsedDataset is available, also apply to pipeline
-        if (applyParsedDataset && (currentUser?.role === 'admin' || currentUser?.role === 'superadmin' || !currentUser?.role)) {
+        // Always sync to Supabase so all users get the updated masterlist on refresh
+        // (previously only synced for admin/superadmin — non-admin uploads were lost on refresh)
+        if (applyParsedDataset) {
           try {
             await applyParsedDataset(parsed, {
               period: periodLabel,

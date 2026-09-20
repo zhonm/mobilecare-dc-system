@@ -1166,9 +1166,24 @@ export function useCloudSync({
             dbStorage.removeItem('mdc_is_cleared');
 
             const lastLocalOverrideTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
-            const isRecentlyModifiedLocally = (Date.now() - lastLocalOverrideTime) < 2500;
+            // Protect local uploads for 5 minutes — long enough to survive a page refresh + cloud sync cycle
+            const isRecentlyModifiedLocally = (Date.now() - lastLocalOverrideTime) < 300000;
 
-            if (!isRecentlyModifiedLocally) {
+            if (isRecentlyModifiedLocally) {
+              // Local was recently uploaded — reload masterlist FROM localStorage (which has the new data)
+              // so other tabs that haven't updated yet (e.g. Dashboard watching a broadcast from Data Import)
+              // immediately reflect the fresh upload without waiting for cloud propagation.
+              try {
+                const localSavedRaw = localStorage.getItem('mdc_masterlist_data');
+                if (localSavedRaw && setMasterlistData) {
+                  const localSaved = JSON.parse(localSavedRaw);
+                  if (localSaved && localSaved.totalUnits !== undefined && localSaved.totalUnits > 0) {
+                    setMasterlistData(localSaved);
+                    setActiveScannedMasterlist(localSaved);
+                  }
+                }
+              } catch (e) {}
+            } else {
               const cloudPeriod = snap.activePeriod || (liveSnapshot.period_month && liveSnapshot.period_year ? {
                 month: liveSnapshot.period_month,
                 year: liveSnapshot.period_year,
@@ -1193,7 +1208,55 @@ export function useCloudSync({
               const targetPeriodToMatch = cloudPeriod || (typeof activePeriod === 'object' ? activePeriod : null);
               const resolvedMasterlist = getActiveMasterlist(cloudMasterlist, targetPeriodToMatch);
 
-              if (resolvedMasterlist && setMasterlistData) {
+              // Freshness guard: Protect local masterlist from cloud overwrite when local is newer.
+              // If the user just uploaded a file, mdc_masterlist_updated_at will be more recent
+              // than the cloud's updated_at. In that case, keep the local copy and let the
+              // background Supabase sync (applyParsedDataset) finish propagating the new data.
+              let localMasterlistFresher = false;
+              try {
+                const localMasterlistUpdatedAt = localStorage.getItem('mdc_masterlist_updated_at');
+                const remoteMasterlistHeader = heavyHeaders?.find?.(h => h.id === 'master_masterlist_data_registry');
+                const cloudUpdatedAt = remoteMasterlistHeader?.updated_at || masterlistRegistryDoc?.updated_at;
+
+                if (localMasterlistUpdatedAt && cloudUpdatedAt) {
+                  // Local is fresher if its timestamp is strictly newer than cloud
+                  localMasterlistFresher = localMasterlistUpdatedAt > cloudUpdatedAt;
+                } else if (localMasterlistUpdatedAt && !cloudUpdatedAt) {
+                  // No cloud record yet — local must be fresher (just uploaded before sync finished)
+                  localMasterlistFresher = true;
+                }
+
+                // Secondary check: if local localStorage data has more units than what cloud resolved,
+                // the local upload has not yet propagated — keep local
+                if (!localMasterlistFresher && resolvedMasterlist) {
+                  const localSavedRaw = localStorage.getItem('mdc_masterlist_data');
+                  if (localSavedRaw) {
+                    const localSaved = JSON.parse(localSavedRaw);
+                    if (localSaved && localSaved.totalUnits > 0 && localSaved.totalUnits !== resolvedMasterlist.totalUnits) {
+                      // The local data is different from what cloud resolved — if local also has a newer
+                      // mdc_masterlist_updated_at than what cloud has, trust local
+                      if (localMasterlistUpdatedAt) {
+                        localMasterlistFresher = true;
+                      }
+                    }
+                  }
+                }
+              } catch (e) {}
+
+              if (localMasterlistFresher) {
+                // Local was uploaded more recently than cloud — restore from local storage instead
+                // to prevent cloud hydration from rolling back the fresh upload
+                try {
+                  const localSavedRaw = localStorage.getItem('mdc_masterlist_data');
+                  if (localSavedRaw) {
+                    const localSaved = JSON.parse(localSavedRaw);
+                    if (localSaved && localSaved.totalUnits !== undefined && setMasterlistData) {
+                      setMasterlistData(localSaved);
+                      setActiveScannedMasterlist(localSaved);
+                    }
+                  }
+                } catch (e) {}
+              } else if (resolvedMasterlist && setMasterlistData) {
                 setMasterlistData(resolvedMasterlist);
                 setActiveScannedMasterlist(resolvedMasterlist);
                 try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(resolvedMasterlist)); } catch (e) {}
@@ -4150,6 +4213,15 @@ export function useCloudSync({
           setActiveScannedMasterlist(scannedMasterlist);
           dbStorage.setItem('mdc_masterlist_data', scannedMasterlist);
           try { localStorage.setItem('mdc_masterlist_data', JSON.stringify(scannedMasterlist)); } catch (e) {}
+          // Write timestamps IMMEDIATELY so the cloud sync freshness guards activate before
+          // the DATASET_UPLOADED broadcast reaches other tabs — preventing them from
+          // overwriting the freshly-uploaded masterlist with stale cloud data
+          const uploadNow = new Date().toISOString();
+          try {
+            localStorage.setItem('mdc_masterlist_updated_at', uploadNow);
+            localStorage.setItem('mdc_last_override_time', Date.now().toString());
+          } catch (e) {}
+          dbStorage.setItem('mdc_masterlist_updated_at', uploadNow);
         }
 
         appliedForecastItems = finalForecastItems;
