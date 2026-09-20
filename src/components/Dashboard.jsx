@@ -55,8 +55,7 @@ import {
   getActiveMasterlist,
   setActiveScannedMasterlist,
   IPHONE_CATEGORIES,
-  getCategoryBadge,
-  isPeriodMatching
+  getCategoryBadge
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
 import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';

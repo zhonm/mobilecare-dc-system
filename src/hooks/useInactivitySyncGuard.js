@@ -38,7 +38,9 @@ export function useInactivitySyncGuard({
   const lastActivityTimeRef = useRef(Date.now());
   const lastEventThrottleTimeRef = useRef(0);
   const isDataSyncPausedRef = useRef(isDataSyncPaused);
-  isDataSyncPausedRef.current = isDataSyncPaused;
+  useEffect(() => {
+    isDataSyncPausedRef.current = isDataSyncPaused;
+  }, [isDataSyncPaused]);
 
   const onInactivityPauseRef = useRef(onInactivityPause);
   const onResumeSyncRef = useRef(onResumeSync);

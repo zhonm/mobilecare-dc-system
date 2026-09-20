@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { INITIAL_USERS, sortUsersDeterministically, ROLE_PRESETS } from '../constants/roles.js';
+import { INITIAL_USERS, sortUsersDeterministically } from '../constants/roles.js';
 
 console.log('--- Running Test: User Access Management Visibility ---');
 
@@ -17,7 +17,6 @@ console.log('✓ Test 1 Passed: INITIAL_USERS contains all 6 registered staff ac
 // Test 2: Verify hydration resolution with empty dbProfiles (simulating anon RLS block)
 function simulateHydration(currentUser, dbProfiles, prevList = []) {
   const profileMap = new Map();
-  const mergedDeletedUserIds = [];
 
   // 1. Overlay dbProfiles
   (dbProfiles || []).forEach(p => {

@@ -11,8 +11,6 @@ import {
   toValidUUID,
   isUUID,
   safeUUID,
-  formatShipmentForDb,
-  formatDcIntakeRecordForDb,
   parseDcIntakeRecordFromDb,
   isLockedConfirmedShipment,
   getBasePoNumber,
@@ -35,7 +33,6 @@ import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
-import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
 import {
   ARCHIVE_CUTOFF_DAYS,
@@ -120,8 +117,6 @@ export function useCloudSync({
   const realtimeChannelRef = useRef(null);
   const alertsChannelRef = useRef(null);
   const isSavingRef = useRef(false);
-  const lastShipmentsBackfillAttemptRef = useRef(0);
-  const lastIntakesBackfillAttemptRef = useRef(0);
 
   useEffect(() => {
     isSavingRef.current = cloudSyncStatus.isSaving;
@@ -137,7 +132,6 @@ export function useCloudSync({
     stockTransferReportsRef.current = stockTransferReports;
   }, [stockTransferReports]);
 
-  const pendingRealtimeSyncRef = useRef(false);
   const pendingRealtimeTablesRef = useRef(new Set());
   const debounceRealtimeTimerRef = useRef(null);
   const trailingRefreshTimerRef = useRef(null);
@@ -147,19 +141,21 @@ export function useCloudSync({
   const activePackingStationsRef = useRef({});
 
   const liveStateRef = useRef({});
-  liveStateRef.current = {
-    currentUser,
-    categories,
-    sites,
-    parts,
-    allocations,
-    forecastItems,
-    inventoryUnits,
-    _shipments,
-    _dcIntakeRecords,
-    masterlistData,
-    activePeriod
-  };
+  useEffect(() => {
+    liveStateRef.current = {
+      currentUser,
+      categories,
+      sites,
+      parts,
+      allocations,
+      forecastItems,
+      inventoryUnits,
+      _shipments,
+      _dcIntakeRecords,
+      masterlistData,
+      activePeriod
+    };
+  }, [currentUser, categories, sites, parts, allocations, forecastItems, inventoryUnits, _shipments, _dcIntakeRecords, masterlistData, activePeriod]);
 
   // Broadcast event across peers and browser tabs (Site-Isolated with Global Alert Routing)
   const broadcastCloudEvent = useCallback((eventType, payload = {}) => {
@@ -1215,7 +1211,7 @@ export function useCloudSync({
               let localMasterlistFresher = false;
               try {
                 const localMasterlistUpdatedAt = localStorage.getItem('mdc_masterlist_updated_at');
-                const remoteMasterlistHeader = heavyHeaders?.find?.(h => h.id === 'master_masterlist_data_registry');
+                const remoteMasterlistHeader = dbSavedRecords.find(h => h.id === 'master_masterlist_data_registry');
                 const cloudUpdatedAt = remoteMasterlistHeader?.updated_at || masterlistRegistryDoc?.updated_at;
 
                 if (localMasterlistUpdatedAt && cloudUpdatedAt) {
@@ -1394,8 +1390,6 @@ export function useCloudSync({
 
         // Hydrate Deleted Period Records Registry
         const deletedPeriodDoc = dbSavedRecords.find(r => r.id === 'deleted_period_record_ids_registry');
-        let localDeletedPeriodIds = [];
-        try { localDeletedPeriodIds = JSON.parse(localStorage.getItem('mdc_deleted_period_record_ids') || '[]'); } catch (e) {}
         const cloudDeletedPeriodIds = Array.isArray(deletedPeriodDoc?.snapshot_data?.deletedIds) ? deletedPeriodDoc.snapshot_data.deletedIds : [];
         if (deletedPeriodDoc) {
           try { localStorage.setItem('mdc_deleted_period_record_ids', JSON.stringify(cloudDeletedPeriodIds)); } catch (e) {}
@@ -1832,7 +1826,7 @@ export function useCloudSync({
 
         // Automatically reconcile drafts against completed/shipped shipments so stale drafts are pruned
         const effectiveSitesList = (dbSites && dbSites.length > 0) ? dbSites : (sites && sites.length > 0 ? sites : []);
-        const { reconciledList: reconciledShipments, supersededDraftIds } = reconcileShipmentsAndDrafts(mappedShipments, { removeSuperseded: true }, effectiveSitesList);
+        const { reconciledList: reconciledShipments } = reconcileShipmentsAndDrafts(mappedShipments, { removeSuperseded: true }, effectiveSitesList);
         effectiveShipments = reconciledShipments;
 
         if (effectiveShipments.length > 0) {
@@ -2166,7 +2160,7 @@ export function useCloudSync({
             ...(Array.isArray(inventoryUnits) ? inventoryUnits : [])
           ];
 
-          const { consolidatedRecords, obsoleteIdsToPurge } = consolidateDcIntakeRecordsList(
+          const { consolidatedRecords } = consolidateDcIntakeRecordsList(
             rawIntakeList,
             activeCloudOrLocalPOs,
             currentUser,

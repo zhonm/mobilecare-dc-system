@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 
@@ -42,7 +42,6 @@ import { isIntakeRecordArchived } from '../utils/archiveManager';
 export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
   const {
     dcIntakeRecords,
-    setDcIntakeRecords,
     deleteIntakeRecord,
     loadArchivedIntakes,
     isLoadingArchivedIntakes,

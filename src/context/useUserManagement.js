@@ -39,10 +39,11 @@ export function useUserManagement({
   setCloudSyncStatus
 }) {
   const getCurrentUserRef = useRef(getCurrentUser);
-  getCurrentUserRef.current = getCurrentUser;
-
   const currentUserRef = useRef(currentUser);
-  currentUserRef.current = currentUser;
+  useEffect(() => {
+    getCurrentUserRef.current = getCurrentUser;
+    currentUserRef.current = currentUser;
+  }, [getCurrentUser, currentUser]);
 
   const getActiveUser = useCallback(() => {
     if (currentUserRef.current) return currentUserRef.current;
@@ -744,9 +745,10 @@ export function useUserManagement({
         const activeCaller = getActiveUser();
         const callerEmail = activeCaller?.email || currentUser?.email || 'zhon.manaois@mobilecareph.com';
 
-        // Try admin_update_user RPC first (bypasses RLS friction safely as database owner)
+        // Try the current RPC signature first, then retry without the newer alias
+        // so role edits continue to work while deployed migrations are catching up.
         try {
-          const { data: rpcData, error: rpcErr } = await supabase.rpc('admin_update_user', {
+          const rpcArgs = {
             p_user_id: isUUID(userId) ? userId : null,
             p_email: cleanEmail,
             p_full_name: fullName.trim(),
@@ -757,13 +759,23 @@ export function useUserManagement({
             p_permitted_pages: finalPermittedPages || [],
             p_admin_email: callerEmail,
             p_caller_email: callerEmail
-          });
+          };
+          let { data: rpcData, error: rpcErr } = await supabase.rpc('admin_update_user', rpcArgs);
+
+          if (rpcErr) {
+            const legacyArgs = { ...rpcArgs };
+            delete legacyArgs.p_caller_email;
+            const legacyResult = await supabase.rpc('admin_update_user', legacyArgs);
+            rpcData = legacyResult.data;
+            rpcErr = legacyResult.error;
+          }
+
           if (!rpcErr && rpcData?.success) {
             updatedInDb = true;
             if (rpcData.id && isUUID(rpcData.id)) effectiveProfId = rpcData.id;
-          } else if (rpcErr) {
+          } else if (rpcErr || rpcData?.error) {
             lastDbError = rpcErr;
-            console.warn('admin_update_user RPC notice:', rpcErr.message);
+            console.warn('admin_update_user RPC notice:', rpcErr?.message || rpcData?.error);
           }
         } catch (rpcEx) {
           lastDbError = rpcEx;
@@ -841,8 +853,7 @@ export function useUserManagement({
         if (updatedInDb) {
           if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } else if (lastDbError) {
-          console.warn('Profile updated in registry cache, database returned notice:', lastDbError.message);
-          if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+          throw new Error(`Profile was not saved to the database: ${lastDbError.message || lastDbError}`);
         }
 
         if (broadcastCloudEvent) broadcastCloudEvent('USER_REGISTRY_UPDATED', { userId: effectiveProfId, email: cleanEmail, siteId: effectiveSiteId, table: 'saved_records' });

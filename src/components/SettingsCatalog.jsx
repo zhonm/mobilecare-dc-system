@@ -38,8 +38,6 @@ import {
   Globe,
   Activity,
   Clock,
-  Sliders,
-  Download,
   MessageSquare
 } from 'lucide-react';
 import Feedback from './Feedback';
