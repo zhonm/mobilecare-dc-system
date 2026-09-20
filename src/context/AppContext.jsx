@@ -28,6 +28,8 @@ import { usePeriodRecordsAndReports } from './usePeriodRecordsAndReports';
 import { useCloudSync } from './useCloudSync';
 import { useAutoLogout } from '../hooks/useAutoLogout';
 import AutoLogoutWarningModal from '../components/AutoLogoutWarningModal';
+import { useInactivitySyncGuard } from '../hooks/useInactivitySyncGuard';
+import InactivityRefreshModal from '../components/InactivityRefreshModal';
 
 // Re-export constants and helpers for backward compatibility
 export {
@@ -349,6 +351,25 @@ export function AppProvider({ children }) {
   });
 
   const autoLogoutRef = useRef(null);
+  const cloudSyncRef = useRef(null);
+
+  // 10.5. 1-Hour User Inactivity Watchdog for Cloud Data Sync
+  const inactivityGuard = useInactivitySyncGuard({
+    currentUser: auth.currentUser,
+    onInactivityPause: () => {
+      console.info('[AppContext] 1-hour user inactivity reached: cloud data auto-loading paused.');
+    },
+    onResumeSync: async () => {
+      if (cloudSyncRef.current?.autoRefreshData) {
+        await cloudSyncRef.current.autoRefreshData({
+          force: true,
+          silent: false,
+          reason: 'Resume live sync after 1-hour inactivity',
+          isManual: true
+        });
+      }
+    }
+  });
 
   // 11. Central Cloud Sync & Realtime Engine
   const cloudSync = useCloudSync({
@@ -406,7 +427,12 @@ export function AppProvider({ children }) {
     setDeletionAuditLogs: auditLogs.setDeletionAuditLogs,
     logDeletionAudit: auditLogs.logDeletionAudit,
     setAutoLogoutConfig: (...args) => autoLogoutRef.current?.setAutoLogoutConfig?.(...args),
-    setSessionAuditLogs: auditLogs.setSessionAuditLogs
+    setSessionAuditLogs: auditLogs.setSessionAuditLogs,
+    isDataSyncPaused: inactivityGuard.isDataSyncPaused
+  });
+
+  useEffect(() => {
+    cloudSyncRef.current = cloudSync;
   });
 
   // 12. Automated Daily Session & Auto-Logout Engine (12:00 AM Default)
@@ -607,7 +633,14 @@ export function AppProvider({ children }) {
         triggerTestAutoLogout: autoLogout.triggerTestAutoLogout,
         sessionAuditLogs: auditLogs.sessionAuditLogs,
         setSessionAuditLogs: auditLogs.setSessionAuditLogs,
-        logSessionAudit: auditLogs.logSessionAudit
+        logSessionAudit: auditLogs.logSessionAudit,
+
+        // Inactivity Guard (1-Hour Auto-Load Cutoff)
+        isDataSyncPaused: inactivityGuard.isDataSyncPaused,
+        inactiveDurationMs: inactivityGuard.inactiveDurationMs,
+        resumeDataSync: inactivityGuard.resumeDataSync,
+        resetInactivityTimer: inactivityGuard.resetInactivityTimer,
+        triggerSimulatedInactivity: inactivityGuard.triggerSimulatedInactivity
       }}
     >
       {children}
@@ -619,6 +652,11 @@ export function AppProvider({ children }) {
         onRefreshSession={autoLogout.refreshSession}
         onLogoutNow={() => autoLogout.executeAutoLogout('USER_MANUAL_LOGOUT_FROM_WARNING')}
         onDismiss={autoLogout.dismissWarning}
+      />
+      <InactivityRefreshModal
+        isOpen={inactivityGuard.isDataSyncPaused}
+        onResumeSync={inactivityGuard.resumeDataSync}
+        inactiveDurationMs={inactivityGuard.inactiveDurationMs}
       />
     </AppContext.Provider>
   );

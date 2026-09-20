@@ -93,7 +93,8 @@ export function useCloudSync({
   setDeletionAuditLogs,
   logDeletionAudit,
   setAutoLogoutConfig,
-  setSessionAuditLogs
+  setSessionAuditLogs,
+  isDataSyncPaused = false
 }) {
   const [cloudSyncStatus, setCloudSyncStatus] = useState({
     isSaving: false,
@@ -434,7 +435,8 @@ export function useCloudSync({
           ];
           const HEAVY_DOC_IDS = [
             LIVE_MASTER_RECORD_ID,
-            'master_masterlist_data_registry'
+            'master_masterlist_data_registry',
+            'live_master_dc_inventory'
           ];
           const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
 
@@ -555,6 +557,47 @@ export function useCloudSync({
               systemRows.push({
                 ...remoteMasterlistHeader,
                 snapshot_data: masterlistData ? { masterlistData, lastUpdated: remoteMasterlistHeader.updated_at } : null
+              });
+            }
+          }
+
+          // 2.5. Conditional Egress Optimization for live_master_dc_inventory:
+          // Live inventory snapshots can contain thousands of serialized units (~1-2 MB).
+          // If remote updated_at matches local cache, skip payload download entirely.
+          const remoteLiveInvHeader = heavyHeaders.find(h => h.id === 'live_master_dc_inventory');
+          if (remoteLiveInvHeader) {
+            let localInvUpdatedAt = null;
+            try { localInvUpdatedAt = localStorage.getItem('mdc_live_inventory_updated_at'); } catch (e) {}
+            if (!localInvUpdatedAt) {
+              try { localInvUpdatedAt = await dbStorage.getItem('mdc_live_inventory_updated_at'); } catch (e) {}
+            }
+            const hasLocalUnits = Array.isArray(inventoryUnits) && inventoryUnits.length > 0;
+            const isTimestampMismatch = Boolean(remoteLiveInvHeader.updated_at && remoteLiveInvHeader.updated_at !== localInvUpdatedAt);
+            const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('inventory_units')));
+            const needsInvDownload = (isForce || !hasLocalUnits || isTimestampMismatch || isTargetedSync) && remoteLiveInvHeader.notes !== '__CLEARED__';
+
+            if (needsInvDownload) {
+              try {
+                const { data: fullInvDoc } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'live_master_dc_inventory')
+                  .maybeSingle();
+                if (fullInvDoc) {
+                  systemRows.push(fullInvDoc);
+                  if (fullInvDoc.updated_at) {
+                    try { localStorage.setItem('mdc_live_inventory_updated_at', fullInvDoc.updated_at); } catch (e) {}
+                    try { await dbStorage.setItem('mdc_live_inventory_updated_at', fullInvDoc.updated_at); } catch (e) {}
+                  }
+                }
+              } catch (err) {
+                console.warn('Full live inventory fetch note:', err);
+                systemRows.push(remoteLiveInvHeader);
+              }
+            } else {
+              systemRows.push({
+                ...remoteLiveInvHeader,
+                snapshot_data: { units: inventoryUnits || [] }
               });
             }
           }
@@ -2344,6 +2387,12 @@ export function useCloudSync({
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
+    // 1-Hour User Inactivity Guard: block automatic background queries if paused
+    if (isDataSyncPaused && !isManual) {
+      console.debug('[AutoRefresh] Blocked by 1-hour user inactivity guard to conserve egress');
+      return { success: false, paused: true, reason: 'inactivity_pause' };
+    }
+
     const now = Date.now();
 
     // Runaway protection & cooldown defense:
@@ -2400,7 +2449,7 @@ export function useCloudSync({
         setIsAutoRefreshing(false);
       }, 300);
     }
-  }, [hydrateFromSupabase, showToast]);
+  }, [hydrateFromSupabase, showToast, isDataSyncPaused]);
 
   useEffect(() => {
     autoRefreshDataRef.current = autoRefreshData;
@@ -2412,6 +2461,7 @@ export function useCloudSync({
 
   // Debounced burst handler for Realtime Postgres & WebSocket events with safe 5000ms cooldown
   const triggerDebouncedRealtimeSync = useCallback((reason, table = null) => {
+    if (isDataSyncPaused) return;
     if (table) {
       pendingRealtimeTablesRef.current.add(table);
     }
@@ -2431,7 +2481,7 @@ export function useCloudSync({
         isManual: false
       });
     }, 5000);
-  }, []);
+  }, [isDataSyncPaused]);
 
   // Instant zero-latency real-time inventory synchronizer across concurrent users
   const handleRealtimeInventoryEvent = useCallback((type, payload) => {
@@ -2639,6 +2689,11 @@ export function useCloudSync({
     let realtimeChannel = null;
     let alertsChannel = null;
     let broadcastBus = null;
+
+    if (isDataSyncPaused) {
+      setRealtimeConnected(false);
+      return;
+    }
 
     if (currentUser?.id) {
       autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
@@ -3054,7 +3109,7 @@ export function useCloudSync({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, currentUser?.role, currentUser?.siteId]);
+  }, [currentUser?.id, currentUser?.role, currentUser?.siteId, isDataSyncPaused]);
 
   // 1.5. Immediate auto-refresh when currentUser transitions
   const prevUserIdRef = useRef(currentUser?.id);
@@ -3110,11 +3165,12 @@ export function useCloudSync({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id, processOfflineSyncQueue]);
 
-  // 4. Periodic background safety-net heartbeat revalidation (every 10 mins, only if offline or disconnected)
+  // 4. Periodic background safety-net heartbeat revalidation (every 10 mins, only if offline or disconnected and active)
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || isDataSyncPaused) return;
     const intervalMs = 600000; // 10 minutes
     const heartbeatInterval = setInterval(async () => {
+      if (isDataSyncPaused) return;
       if (document.visibilityState === 'visible') {
         if (supabase) {
           try {
@@ -3124,15 +3180,23 @@ export function useCloudSync({
             return;
           }
         }
-        const hasQueuedItems = processOfflineSyncQueue();
-        if (hasQueuedItems || !realtimeConnected) {
+        let hasQueuedItems = false;
+        try {
+          const queue = JSON.parse(localStorage.getItem('mdc_offline_sync_queue') || '[]');
+          hasQueuedItems = Array.isArray(queue) && queue.length > 0;
+        } catch (e) {}
+
+        if (hasQueuedItems) {
+          await processOfflineSyncQueue();
+        }
+        if (!realtimeConnected) {
           autoRefreshData({ silent: true, force: false, reason: 'Background safety heartbeat' });
         }
       }
     }, intervalMs);
     return () => clearInterval(heartbeatInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, processOfflineSyncQueue, realtimeConnected]);
+  }, [currentUser?.id, isDataSyncPaused, processOfflineSyncQueue, realtimeConnected]);
 
   // Sync All Data to Supabase Cloud
   const syncAllDataToCloud = async (overrideData = null) => {
