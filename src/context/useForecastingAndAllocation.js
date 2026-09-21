@@ -305,15 +305,12 @@ export function useForecastingAndAllocation({
         const computed = (typeof item.computed_forecast === 'number' && Number.isFinite(item.computed_forecast))
           ? item.computed_forecast
           : calculateItemForecast(item, forecastingModel, (item.ytd_monthly_counts || []).length);
-        // If override matches computed baseline, clear override to null
-        const isBackToCalculated = override !== null && override === computed;
-        const effectiveOverride = isBackToCalculated ? null : override;
-        const finalForecast = effectiveOverride !== null ? effectiveOverride : computed;
+        const finalForecast = override !== null ? override : computed;
 
         return {
           ...item,
           computed_forecast: computed,
-          admin_override: effectiveOverride, // null when cancelled or matching calculation
+          admin_override: override, // strictly retained permanently until explicitly reset by user
           final_forecast: finalForecast,
           recommended_order: finalForecast
         };
@@ -423,8 +420,8 @@ export function useForecastingAndAllocation({
     if (matchIdx >= 0) {
       updatedAllocations = currentAllocations.map((alloc, idx) => {
         if (idx === matchIdx) {
-          const isReset = override === null;
-          const allocatedResults = allocatePartToSites(targetQty, alloc, activeServiceSites, isReset ? null : alloc);
+          const itemForAllocation = targetItem || targetPart || alloc;
+          const allocatedResults = allocatePartToSites(targetQty, itemForAllocation, activeServiceSites, null);
           const newSiteQuantities = {};
           let totalAlloc = 0;
           allocatedResults.forEach(res => {
@@ -913,7 +910,9 @@ export function useForecastingAndAllocation({
         alloc.id === partId ||
         (cleanTargetId && String(alloc.part_id || '').toLowerCase() === cleanTargetId) ||
         (cleanTargetId && String(alloc.part_number || '').toLowerCase() === cleanTargetId) ||
-        (cleanTargetId && String(alloc.id || '').toLowerCase() === cleanTargetId);
+        (cleanTargetId && String(alloc.id || '').toLowerCase() === cleanTargetId) ||
+        (targetFi?.part_number && alloc.part_number === targetFi.part_number) ||
+        (targetFi?.description && alloc.description && targetFi.description.trim().toLowerCase() === alloc.description.trim().toLowerCase());
 
       if (matches) {
         const totalCost = totalAlloc * targetPrice;

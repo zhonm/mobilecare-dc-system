@@ -44,15 +44,17 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
     return [];
   }
 
-  // Priority 1: Real empirical shares for this exact part from historical site_quantities / site_counts
-  const sources = [
+  // Priority 1: Real empirical shares for this exact part from historical repair usage (site_counts / siteDistribution)
+  const empiricalSources = [
     partOrForecastItem?.site_counts,
-    partOrForecastItem?.site_quantities,
+    partOrForecastItem?.siteDistribution,
+    partOrForecastItem?.site_distribution,
     existingAlloc?.site_counts,
-    existingAlloc?.site_quantities
+    existingAlloc?.siteDistribution,
+    existingAlloc?.site_distribution
   ];
 
-  for (const src of sources) {
+  for (const src of empiricalSources) {
     if (src && typeof src === 'object' && Object.keys(src).length > 0) {
       let totalCount = 0;
       const demands = activeServiceSites.map(s => {
@@ -121,7 +123,28 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
     }
   }
 
-  // Priority 3: Fall back to uniform split across active branches (demand = 1 for each active branch)
+  // Priority 3: Fall back to existingAlloc / partOrForecastItem site_quantities for custom non-canonical items
+  const fallbackSources = [
+    partOrForecastItem?.site_quantities,
+    existingAlloc?.site_quantities
+  ];
+  for (const src of fallbackSources) {
+    if (src && typeof src === 'object' && Object.keys(src).length > 0) {
+      let totalCount = 0;
+      const demands = activeServiceSites.map(s => {
+        const val = src[s.id] ?? src[s.code] ?? (s.name ? src[s.name] : undefined);
+        const count = typeof val === 'number' && Number.isFinite(val) && val > 0 ? val : 0;
+        totalCount += count;
+        return { siteId: s.id, historicalDemand: count };
+      });
+
+      if (totalCount > 0) {
+        return demands;
+      }
+    }
+  }
+
+  // Priority 4: Fall back to uniform split across active branches (demand = 1 for each active branch)
   return activeServiceSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
 }
 

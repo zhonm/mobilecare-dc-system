@@ -899,7 +899,7 @@ export default function Forecasting() {
                               className="forecast-override-input"
                               placeholder={String(item.computed)}
                               value={item.hasOverride ? item.admin_override : ''}
-                              onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
+                              onChange={(e) => updateForecastOverride(item.part_id || item.part_number || item.id, e.target.value)}
                               style={{
                                 width: '68px',
                                 textAlign: 'center',
@@ -914,7 +914,7 @@ export default function Forecasting() {
                             {item.hasOverride && (
                               <button
                                 type="button"
-                                onClick={() => updateForecastOverride(item.part_id, '')}
+                                onClick={() => updateForecastOverride(item.part_id || item.part_number || item.id, '')}
                                 title="Reset override to algorithmic calculation"
                                 style={{
                                   background: 'transparent',
