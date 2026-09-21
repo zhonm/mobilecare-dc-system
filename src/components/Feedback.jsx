@@ -102,7 +102,7 @@ export default function Feedback() {
       </div>
 
       {/* 2. Direct Contact Cards (Prominent & Clean) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px', marginBottom: '24px' }}>
         
         {/* Email Card */}
         <div

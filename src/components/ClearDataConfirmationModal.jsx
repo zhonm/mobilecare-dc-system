@@ -85,36 +85,29 @@ export default function ClearDataConfirmationModal({
 
   return (
     <div
-      className="modal-overlay"
+      className="modal-backdrop"
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(15, 23, 42, 0.75)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
+        zIndex: 10000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 1000,
-        padding: '20px'
+        padding: '16px'
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isDeleting) onClose();
       }}
     >
       <div
-        className="modal-card"
+        className="modal-content"
         style={{
           background: '#ffffff',
           borderRadius: '14px',
           width: '100%',
           maxWidth: '540px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
           boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1)',
           border: '1px solid #fecaca',
-          overflow: 'hidden',
           animation: 'fadeIn 0.2s ease-out'
         }}
       >
@@ -319,7 +312,7 @@ export default function ClearDataConfirmationModal({
           </div>
 
           {/* Modal Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
             <button
               type="button"
               className="btn btn-secondary"

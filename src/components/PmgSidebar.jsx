@@ -229,7 +229,10 @@ export default function PmgSidebar() {
                     <div
                       key={item.id}
                       className={`nav-item ${isActive ? 'active' : ''}`}
-                      onClick={item.onClick}
+                      onClick={() => {
+                        if (typeof item.onClick === 'function') item.onClick();
+                        setIsMobileNavOpen(false);
+                      }}
                     >
                       <div className="nav-item-left">
                         <Icon size={16} className={`nav-icon ${isActive ? 'active-icon' : ''}`} />

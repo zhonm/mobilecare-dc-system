@@ -180,7 +180,10 @@ export default function Sidebar() {
                     <div
                       key={item.id}
                       className={`nav-item ${isActive ? 'active' : ''}`}
-                      onClick={() => setActiveTab(item.id)}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setIsMobileNavOpen(false);
+                      }}
                     >
                       <div className="nav-item-left">
                         <Icon size={17} className={`nav-icon ${isActive ? 'active-icon' : ''}`} />

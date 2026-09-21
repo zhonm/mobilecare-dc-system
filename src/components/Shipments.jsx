@@ -2449,7 +2449,7 @@ export default function Shipments() {
                   </p>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '12px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label font-bold" style={{ fontSize: '12px' }}>
                       Booking ID / Airway Bill <span style={{ color: '#dc2626' }}>*</span>
@@ -2539,7 +2539,7 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '12px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label" style={{ fontSize: '12px' }}>
                       Courier / Rider Name (Optional)
@@ -2584,7 +2584,7 @@ export default function Shipments() {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '4px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '4px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label" style={{ fontSize: '12px' }}>
                       Rider Contact Phone (Optional)
@@ -2684,7 +2684,7 @@ export default function Shipments() {
                   </p>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label font-bold" style={{ fontSize: '12px' }}>
                       Courier / Carrier <span style={{ color: '#dc2626' }}>*</span>
@@ -2779,7 +2779,7 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label" style={{ fontSize: '12px' }}>
                       Rider / Driver Name
@@ -2809,7 +2809,7 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label" style={{ fontSize: '12px' }}>
                       Rider Phone Number (Optional)
@@ -2839,7 +2839,7 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="modal-form-grid-2">
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label font-bold" style={{ fontSize: '12px' }}>
                       Transfer Slip # (Optional)
@@ -2951,7 +2951,7 @@ export default function Shipments() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ margin: 0 }}>
                     <label className="form-label font-bold" style={{ fontSize: '12px' }}>
                       Received By (Staff Name) <span style={{ color: '#dc2626' }}>*</span>

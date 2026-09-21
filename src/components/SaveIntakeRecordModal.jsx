@@ -139,7 +139,7 @@ export default function SaveIntakeRecordModal({
         <form onSubmit={handleSave}>
           <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto' }}>
             {/* Record Name / ID Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '14px', marginBottom: '16px' }}>
+            <div className="modal-form-grid-2" style={{ marginBottom: '16px' }}>
               <div>
                 <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Tag size={13} color="var(--primary)" />
@@ -178,7 +178,7 @@ export default function SaveIntakeRecordModal({
             </div>
 
             {/* PO & Operator Row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '14px', marginBottom: '16px' }}>
+            <div className="modal-form-grid-2" style={{ marginBottom: '16px' }}>
               <div>
                 <label className="form-label">Linked Purchase Order (Optional)</label>
                 <select

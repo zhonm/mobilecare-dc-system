@@ -598,9 +598,8 @@ export default function StockTransferReports() {
 
       {/* Clear Confirm Modal */}
       {showClearConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px' }}>
-          <div className="card" style={{ maxWidth: '420px', width: '100%', padding: '26px', textAlign: 'center' }}>
+        <div className="modal-backdrop" style={{ zIndex: 9999 }}>
+          <div className="modal-content" style={{ maxWidth: '420px', width: '100%', padding: '26px', textAlign: 'center' }}>
             <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: '#fee2e2', color: '#ef4444',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
               <Trash2 size={24} />
@@ -609,7 +608,7 @@ export default function StockTransferReports() {
             <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.5, marginBottom: '22px' }}>
               This will remove all active stock transfer records from the database. You can re-upload any time.
             </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowClearConfirm(false)}>Cancel</button>
               <button className="btn btn-danger btn-sm" onClick={async () => { await clearStockTransfersReport(); setShowClearConfirm(false); }}>
                 Yes, Clear Report Data
@@ -1368,7 +1367,7 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
       </div>
 
       {/* ── Section B: Two-Column Operational Focus ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
 
         {/* Column 1: Top Movement Corridors (Lanes) */}
         <div className="card" style={{ padding: '22px' }}>
@@ -1519,7 +1518,7 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
       </div>
 
       {/* ── Section C: Regional Logistics Split & Executive Guidance ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
 
         {/* Regional Logistics & Courier Split Card */}
         <div className="card" style={{ padding: '22px' }}>
@@ -1545,7 +1544,7 @@ function ExecutiveSummaryView({ analytics, setViewMode }) {
             <div style={{ width: `${provPct}%`, background: '#15803d' }} title={`Provincial: ${provPct.toFixed(1)}%`} />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+          <div className="responsive-grid-2" style={{ gap: '12px', marginBottom: '14px' }}>
             <div style={{ padding: '12px', background: '#f0f9ff', borderRadius: '8px', border: '1px solid #bae6fd' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase' }}>
                 <MapPin size={13} /> Metro Manila Hubs
@@ -1786,7 +1785,7 @@ function RoutesView({ analytics }) {
       </div>
 
       {/* Row 2: Top Origins & Top Destinations */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
         {/* Top Sending Origins */}
         <div className="card" style={{ padding: '20px' }}>
           <ChartSectionHeading icon={Building2} title="Top Sending Origins (by Volume)"

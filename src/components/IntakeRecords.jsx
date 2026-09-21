@@ -858,7 +858,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
       </div>
 
       {/* KPI Stat Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+      <div className="responsive-grid-4" style={{ marginBottom: '24px' }}>
         <div className="card" style={{ padding: '16px 20px', borderLeft: '4px solid #0284c7' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '12.5px', color: '#0369a1', fontWeight: 600 }}>Total DC In-Stock Parts</span>

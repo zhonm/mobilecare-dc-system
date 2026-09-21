@@ -90,40 +90,28 @@ export default function EgressUsageModal({ isOpen, onClose, onForceSync }) {
 
   return (
     <div
+      className="modal-backdrop"
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(15, 23, 42, 0.75)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
+        zIndex: 2000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 2000,
-        padding: '20px'
+        padding: '16px'
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
+        className="modal-content"
         style={{
-          background: '#ffffff',
-          borderRadius: '16px',
           width: '100%',
           maxWidth: '680px',
           maxHeight: '90vh',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
-          border: '1px solid #e2e8f0',
-          overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          animation: 'fadeIn 0.2s ease-out',
-          color: '#1e293b',
-          fontFamily: 'inherit'
+          padding: 0,
+          animation: 'fadeIn 0.2s ease-out'
         }}
       >
         {/* Header */}
@@ -354,7 +342,7 @@ export default function EgressUsageModal({ isOpen, onClose, onForceSync }) {
               <ShieldCheck size={16} color="#10b981" />
               Active Egress Reduction Defenses
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '8px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '8px' }}>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '8px' }}>
                 <CheckCircle2 size={16} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
                 <div>
@@ -536,7 +524,9 @@ export default function EgressUsageModal({ isOpen, onClose, onForceSync }) {
             background: '#f8fafc',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between'
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '10px'
           }}
         >
           <button

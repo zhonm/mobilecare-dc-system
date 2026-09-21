@@ -830,7 +830,7 @@ export function useAuth({
         const authPayload = {
           email: user.email,
           password: cleanPassword,
-          ...(captchaToken ? { options: { captchaToken } } : {})
+          ...(captchaToken && captchaToken !== 'dev-bypass-token' ? { options: { captchaToken } } : {})
         };
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword(authPayload);
         if (!authError && authData?.session) {

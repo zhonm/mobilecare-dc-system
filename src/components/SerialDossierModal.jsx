@@ -56,17 +56,13 @@ export default function SerialDossierModal({
       }}
     >
       <div
-        className="card"
+        className="modal-content"
         style={{
           width: '100%',
           maxWidth: '680px',
           maxHeight: '90vh',
           overflowY: 'auto',
-          background: '#ffffff',
-          borderRadius: '14px',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
           padding: '24px',
-          border: '1px solid #e2e8f0',
           position: 'relative'
         }}
       >
@@ -135,7 +131,7 @@ export default function SerialDossierModal({
         </div>
 
         {/* 4 Essential Intelligence Highlights Requested by User */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px', marginBottom: '20px' }}>
           
           {/* 1. Stock Location: DC vs Site */}
           <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
@@ -315,7 +311,7 @@ export default function SerialDossierModal({
 
         {/* Modal Actions */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '14px', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', gap: '8px' }}>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {onNavigateTab && (
               <>
                 <button

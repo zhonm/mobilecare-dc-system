@@ -107,7 +107,14 @@ export default function HeaderCategoryFilter() {
       </button>
 
       {isOpen && (
-        <div className="category-popover-menu" role="dialog" aria-label="Hardware Category Filter">
+        <>
+          <div
+            className="mobile-nav-backdrop"
+            style={{ zIndex: 1001 }}
+            onClick={() => setIsOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="category-popover-menu" role="dialog" aria-label="Hardware Category Filter">
           {/* Popover Header */}
           <div className="category-popover-header">
             <div className="category-popover-title-row">
@@ -190,6 +197,7 @@ export default function HeaderCategoryFilter() {
             <span>Formula calculations update dynamically across the dashboard & reports.</span>
           </div>
         </div>
+        </>
       )}
     </div>
   );

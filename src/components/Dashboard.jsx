@@ -891,7 +891,21 @@ export default function Dashboard() {
           </div>
 
           {/* 3 Clean Report Views with Lucide Icons (No Emojis) */}
-          <div style={{ display: 'flex', background: '#f1f5f9', padding: '4px', borderRadius: '10px', border: '1px solid #e2e8f0', gap: '4px' }}>
+          <div
+            className="responsive-tabs-scroll"
+            style={{
+              display: 'flex',
+              background: '#f1f5f9',
+              padding: '4px',
+              borderRadius: '10px',
+              border: '1px solid #e2e8f0',
+              gap: '4px',
+              maxWidth: '100%',
+              overflowX: 'auto',
+              WebkitOverflowScrolling: 'touch',
+              flexShrink: 0
+            }}
+          >
             <button
               type="button"
               onClick={() => setReportTab('top-parts')}
@@ -907,6 +921,7 @@ export default function Dashboard() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
+                whiteSpace: 'nowrap',
                 transition: 'all 0.15s ease',
                 boxShadow: reportTab === 'top-parts' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
               }}
@@ -930,6 +945,7 @@ export default function Dashboard() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
+                whiteSpace: 'nowrap',
                 transition: 'all 0.15s ease',
                 boxShadow: reportTab === 'top-sites' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
               }}
@@ -953,6 +969,7 @@ export default function Dashboard() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '8px',
+                whiteSpace: 'nowrap',
                 transition: 'all 0.15s ease',
                 boxShadow: reportTab === 'site-parts' ? '0 2px 6px rgba(15, 23, 42, 0.25)' : 'none'
               }}
@@ -1018,7 +1035,7 @@ export default function Dashboard() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
           {/* Left Side: Search Box */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: '320px' }}>
               <Search size={15} style={{ position: 'absolute', left: '12px', top: '10px', color: '#94a3b8' }} />
               <input
                 type="text"
@@ -1030,7 +1047,7 @@ export default function Dashboard() {
                   borderRadius: '8px',
                   border: '1px solid #cbd5e1',
                   fontSize: '12.5px',
-                  width: '320px',
+                  width: '100%',
                   background: '#f8fafc',
                   color: '#0f172a'
                 }}
@@ -1199,7 +1216,7 @@ export default function Dashboard() {
                 <span className="badge badge-primary">{masterPartsReport.totalCount} Parts Found</span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12.5px', whiteSpace: 'nowrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12.5px', flexWrap: 'wrap' }}>
                 <div>
                   Total Demand: <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{masterPartsReport.totalFilteredUnits.toLocaleString()} units</strong>
                 </div>
@@ -1390,7 +1407,7 @@ export default function Dashboard() {
                 <span className="badge badge-primary">{masterSitesReport.totalSitesCount} Branches</span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12.5px', whiteSpace: 'nowrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12.5px', flexWrap: 'wrap' }}>
                 <div>
                   Top Branch: <strong style={{ color: '#0284c7' }}>{masterSitesReport.topSite?.shortName} ({masterSitesReport.topSite?.totalUnits} units)</strong>
                 </div>
@@ -1794,7 +1811,7 @@ export default function Dashboard() {
       {/* ───────────────────────────────────────────────────────────────── */}
       {/* 4. ANALYTICS ROW: CATEGORY DISTRIBUTION & TOP HUBS DEMAND BARS     */}
       {/* ───────────────────────────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.3fr', gap: '20px' }}>
+      <div className="dashboard-analytics-grid">
         {/* Left: Category Breakdown Donut */}
         <div className="card" style={{ padding: '22px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -2047,7 +2064,7 @@ export default function Dashboard() {
             </div>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
             {recentShipments.map(sh => {
               const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_id) || {};
               const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';

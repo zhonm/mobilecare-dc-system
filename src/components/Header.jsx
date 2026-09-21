@@ -17,7 +17,7 @@ export default function Header() {
     isSupabaseConfigured,
     realtimeConnected,
     offlineQueue,
-    processOfflineSyncQueue,
+    processOfflineSyncQueue: _processOfflineSyncQueue,
     activePeriod,
     canAccess,
     isMobileNavOpen,
@@ -150,12 +150,7 @@ export default function Header() {
               ? 'sync-saving'
               : 'sync-online'
           }`}
-          onClick={() => {
-            if (isSupabaseConfigured) {
-              autoRefreshData?.({ force: true, reason: 'Header badge manual sync' });
-              processOfflineSyncQueue?.();
-            }
-          }}
+          onClick={handleManualSync}
           style={{ cursor: 'pointer' }}
           title={
             !isSupabaseConfigured
@@ -168,8 +163,6 @@ export default function Header() {
               ? 'Saving changes to database...'
               : `Connected to Supabase Realtime. Verified at ${formattedSyncTime}. Click to refresh.`
           }
-          onClick={handleManualSync}
-          style={{ cursor: 'pointer' }}
         >
           {!isSupabaseConfigured ? (
             <>

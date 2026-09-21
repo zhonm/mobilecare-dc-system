@@ -1021,12 +1021,12 @@ export default function AllocationMatrix() {
               <span>{showKpiCards ? 'Compact View' : 'Show KPIs'}</span>
             </button>
 
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '2px' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '3px' }}>
               <button
                 type="button"
                 onClick={() => tableContainerRef.current?.scrollTo({ left: 0, behavior: 'smooth' })}
                 title="Scroll to part info (Commodity & Description)"
-                style={{ fontSize: '10.5px', padding: '2px 7px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#334155' }}
+                style={{ fontSize: '11px', minHeight: '32px', padding: '4px 10px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#334155', display: 'inline-flex', alignItems: 'center' }}
               >
                 Start
               </button>
@@ -1034,23 +1034,23 @@ export default function AllocationMatrix() {
                 type="button"
                 onClick={() => tableContainerRef.current?.scrollBy({ left: -260, behavior: 'smooth' })}
                 title="Scroll branches left"
-                style={{ fontSize: '10.5px', padding: '2px 5px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: '#334155' }}
+                style={{ fontSize: '11px', minHeight: '32px', minWidth: '32px', padding: '4px 6px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#334155' }}
               >
-                <ChevronLeft size={12} />
+                <ChevronLeft size={14} />
               </button>
               <button
                 type="button"
                 onClick={() => tableContainerRef.current?.scrollBy({ left: 260, behavior: 'smooth' })}
                 title="Scroll branches right"
-                style={{ fontSize: '10.5px', padding: '2px 5px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: '#334155' }}
+                style={{ fontSize: '11px', minHeight: '32px', minWidth: '32px', padding: '4px 6px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#334155' }}
               >
-                <ChevronRight size={12} />
+                <ChevronRight size={14} />
               </button>
               <button
                 type="button"
                 onClick={() => tableContainerRef.current?.scrollTo({ left: 2500, behavior: 'smooth' })}
                 title="Scroll to Totals & Weekly Breakdown"
-                style={{ fontSize: '10.5px', padding: '2px 7px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#0369a1' }}
+                style={{ fontSize: '11px', minHeight: '32px', padding: '4px 10px', background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer', fontWeight: 600, color: '#0369a1', display: 'inline-flex', alignItems: 'center' }}
               >
                 Totals
               </button>
@@ -1058,7 +1058,7 @@ export default function AllocationMatrix() {
 
             {/* Quick Page Navigator in Header */}
             {totalPages > 1 && (
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '2px 6px', fontSize: '11px', color: '#334155' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '3px 6px', fontSize: '11px', color: '#334155' }}>
                 <span style={{ fontWeight: 600, color: '#64748b' }}>Page</span>
                 <button
                   type="button"
@@ -1066,17 +1066,20 @@ export default function AllocationMatrix() {
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                   title="Previous page"
                   style={{
-                    padding: '2px 5px',
+                    padding: '4px 6px',
+                    minHeight: '32px',
+                    minWidth: '32px',
                     borderRadius: '4px',
                     border: '1px solid #cbd5e1',
                     background: effectiveCurrentPage <= 1 ? '#f1f5f9' : '#ffffff',
                     cursor: effectiveCurrentPage <= 1 ? 'not-allowed' : 'pointer',
                     color: effectiveCurrentPage <= 1 ? '#94a3b8' : '#0f172a',
                     display: 'inline-flex',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    justifyContent: 'center'
                   }}
                 >
-                  <ChevronLeft size={12} />
+                  <ChevronLeft size={14} />
                 </button>
                 <span style={{ fontWeight: 700, color: '#0284c7', minWidth: '38px', textAlign: 'center' }}>
                   {effectiveCurrentPage} / {totalPages}
@@ -1087,17 +1090,20 @@ export default function AllocationMatrix() {
                   onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                   title="Next page"
                   style={{
-                    padding: '2px 5px',
+                    padding: '4px 6px',
+                    minHeight: '32px',
+                    minWidth: '32px',
                     borderRadius: '4px',
                     border: '1px solid #cbd5e1',
                     background: effectiveCurrentPage >= totalPages ? '#f1f5f9' : '#ffffff',
                     cursor: effectiveCurrentPage >= totalPages ? 'not-allowed' : 'pointer',
                     color: effectiveCurrentPage >= totalPages ? '#94a3b8' : '#0f172a',
                     display: 'inline-flex',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    justifyContent: 'center'
                   }}
                 >
-                  <ChevronRight size={12} />
+                  <ChevronRight size={14} />
                 </button>
               </div>
             )}

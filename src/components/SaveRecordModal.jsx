@@ -212,7 +212,7 @@ export default function SaveRecordModal({
                 <Layers size={13} />
                 <span>Record Scope / Type</span>
               </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+              <div className="modal-form-grid-3" style={{ gap: '8px' }}>
                 <button
                   type="button"
                   onClick={() => setRecordType('both')}
@@ -241,14 +241,7 @@ export default function SaveRecordModal({
             </div>
 
             {/* Period Year, Month & Optional Week */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1.3fr 1fr',
-                gap: '12px',
-                marginBottom: '16px'
-              }}
-            >
+            <div className="modal-form-grid-3" style={{ marginBottom: '16px' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Year</label>
                 <select
@@ -360,7 +353,7 @@ export default function SaveRecordModal({
                 Data To Be Saved in Snapshot:
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div className="modal-form-grid-2" style={{ gap: '10px' }}>
                 {/* Forecast Stats */}
                 {(recordType === 'both' || recordType === 'forecast') && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

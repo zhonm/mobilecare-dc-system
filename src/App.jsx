@@ -24,6 +24,7 @@ import UserAccessManagement from './components/UserAccessManagement';
 import RequestParts from './components/RequestParts';
 import Feedback from './components/Feedback';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
+import MobileNoticeModal from './components/MobileNoticeModal';
 import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import './App.css';
 
@@ -102,6 +103,7 @@ function MainApp() {
 
   return (
     <div className="app-container">
+      <MobileNoticeModal isLoginScreen={false} />
       {currentUser?.role === 'parts_management' ? <PmgSidebar /> : <Sidebar />}
       <div className="main-content">
         <Header />

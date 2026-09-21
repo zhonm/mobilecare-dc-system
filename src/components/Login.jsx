@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X, Clock } from 'lucide-react';
+import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck, ArrowUp, Phone, Copy, Check, X, Clock, Smartphone } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
 import { loginRateLimiter } from '../utils/security';
 import { getStoredLogoutNotice, clearStoredLogoutNotice } from '../utils/autoLogoutManager';
+import MobileNoticeModal from './MobileNoticeModal';
 
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '';
 
@@ -19,12 +20,52 @@ export default function Login() {
   const [verifiedUser, setVerifiedUser] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [showForgotModal, setShowForgotModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [showMobileNoticeModal, setShowMobileNoticeModal] = useState(false);
   const [copyEmailSuccess, setCopyEmailSuccess] = useState(false);
   const [copyViberSuccess, setCopyViberSuccess] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileStatus, setTurnstileStatus] = useState('idle'); // 'idle' | 'success' | 'error' | 'expired'
+  const [isRetryingTurnstile, setIsRetryingTurnstile] = useState(false);
+  const [turnstileKey, setTurnstileKey] = useState(0);
   const [logoutNotice, setLogoutNotice] = useState(() => getStoredLogoutNotice());
+
+  // Cloudflare Turnstile Configuration & Stable Handlers
+  const turnstileOptions = useMemo(() => ({
+    theme: 'dark',
+    size: 'normal'
+  }), []);
+
+  const handleTurnstileSuccess = useCallback((token) => {
+    setTurnstileToken(token);
+    setTurnstileStatus('success');
+    setErrorMessage((prev) => (prev && prev.toLowerCase().includes('robot') ? '' : prev));
+  }, []);
+
+  const handleTurnstileExpire = useCallback(() => {
+    setTurnstileToken('');
+    setTurnstileStatus('expired');
+  }, []);
+
+  const handleTurnstileError = useCallback((code) => {
+    console.warn('[Cloudflare Turnstile] Challenge error code:', code);
+    setTurnstileToken('');
+    setTurnstileStatus('error');
+  }, []);
+
+  const handleResetTurnstile = useCallback(() => {
+    setIsRetryingTurnstile(true);
+    setTurnstileStatus('idle');
+    setTurnstileToken('');
+    setTurnstileKey((prev) => prev + 1);
+    setTimeout(() => setIsRetryingTurnstile(false), 500);
+  }, []);
+
+  const handleDevBypass = useCallback(() => {
+    setTurnstileToken('dev-bypass-token');
+    setTurnstileStatus('success');
+    setErrorMessage('');
+  }, []);
 
   const handleCapsLockCheck = (e) => {
     if (e?.getModifierState) {
@@ -89,7 +130,11 @@ export default function Login() {
     }
 
     if (TURNSTILE_SITE_KEY && !turnstileToken) {
-      setErrorMessage('Please verify that you are not a robot.');
+      if (turnstileStatus === 'error') {
+        setErrorMessage('Verification failed. Tap "Retry Verification" above.');
+      } else {
+        setErrorMessage('Please complete the verification check before signing in.');
+      }
       return;
     }
 
@@ -295,7 +340,7 @@ export default function Login() {
                 <label htmlFor="login-password" style={{ margin: 0, cursor: 'pointer' }}>Password</label>
                 <button
                   type="button"
-                  onClick={() => setShowForgotModal(true)}
+                  onClick={() => setShowReportModal(true)}
                   style={{
                     background: 'transparent',
                     border: 'none',
@@ -357,22 +402,132 @@ export default function Login() {
 
             {/* Cloudflare Turnstile Verification Widget */}
             {TURNSTILE_SITE_KEY ? (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
-                <Turnstile
-                  siteKey={TURNSTILE_SITE_KEY}
-                  options={{
-                    theme: 'dark',
-                    size: 'normal'
-                  }}
-                  onSuccess={(token) => {
-                    setTurnstileToken(token);
-                    if (errorMessage) setErrorMessage('');
-                  }}
-                  onExpire={() => setTurnstileToken('')}
-                  onError={() => {
-                    setErrorMessage('Verification check failed. Please refresh or retry.');
-                  }}
-                />
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginBottom: '18px', width: '100%' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', minHeight: '65px', width: '100%' }}>
+                  <Turnstile
+                    key={turnstileKey}
+                    siteKey={TURNSTILE_SITE_KEY}
+                    options={turnstileOptions}
+                    onSuccess={handleTurnstileSuccess}
+                    onExpire={handleTurnstileExpire}
+                    onError={handleTurnstileError}
+                  />
+                </div>
+
+                {/* Interactive Retry Banner when Turnstile fails */}
+                {turnstileStatus === 'error' && (
+                  <div
+                    style={{
+                      marginTop: '10px',
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      fontSize: '12px',
+                      color: '#fca5a5',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      textAlign: 'left',
+                      width: '100%',
+                      maxWidth: '300px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertCircle size={15} color="#ef4444" style={{ flexShrink: 0 }} />
+                      <span>Verification check failed. Troubleshoot or retry below.</span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '2px' }}>
+                      <button
+                        type="button"
+                        onClick={handleResetTurnstile}
+                        disabled={isRetryingTurnstile}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          background: '#334155',
+                          color: '#f8fafc',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <RefreshCw size={13} className={isRetryingTurnstile ? 'spin' : ''} />
+                        <span>Retry Verification</span>
+                      </button>
+
+                      {/* Developer bypass option when testing on localhost / dev mode */}
+                      {(import.meta.env.DEV || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))) && (
+                        <button
+                          type="button"
+                          onClick={handleDevBypass}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '6px 12px',
+                            borderRadius: '6px',
+                            background: 'rgba(56, 189, 248, 0.2)',
+                            color: '#38bdf8',
+                            border: '1px solid rgba(56, 189, 248, 0.4)',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <span>Bypass (Dev Mode)</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {(import.meta.env.DEV || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))) && (
+                      <span style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.35 }}>
+                        Tip: DevTools mobile emulation (iPhone User-Agent) is flagged by Cloudflare anti-bot heuristics. Real mobile devices pass normally.
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Expired Token Notice */}
+                {turnstileStatus === 'expired' && (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      background: 'rgba(234, 179, 8, 0.1)',
+                      border: '1px solid rgba(234, 179, 8, 0.3)',
+                      fontSize: '12px',
+                      color: '#fde047',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      maxWidth: '300px'
+                    }}
+                  >
+                    <span>Verification expired.</span>
+                    <button
+                      type="button"
+                      onClick={handleResetTurnstile}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#38bdf8',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        textDecoration: 'underline'
+                      }}
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                )}
               </div>
             ) : null}
 
@@ -412,8 +567,8 @@ export default function Login() {
           <span>Authorized Employees Only • Encrypted Session</span>
         </div>
 
-        {/* Report an Issue / Contact Developer Button */}
-        <div style={{ marginTop: '12px', textAlign: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '12px' }}>
+        {/* Report an Issue / Contact Developer & Device Notice Buttons */}
+        <div style={{ marginTop: '12px', textAlign: 'center', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setShowReportModal(true)}
@@ -427,53 +582,46 @@ export default function Login() {
               alignItems: 'center',
               gap: '6px',
               fontWeight: 600,
-              padding: '6px 12px',
+              padding: '6px 10px',
               borderRadius: '6px'
             }}
           >
             <Phone size={13} />
             <span>Report / Contact Developer</span>
           </button>
+
+          <span style={{ color: 'rgba(255, 255, 255, 0.2)', fontSize: '11px' }}>•</span>
+
+          <button
+            type="button"
+            onClick={() => setShowMobileNoticeModal(true)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#94a3b8',
+              fontSize: '12px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              fontWeight: 500,
+              padding: '6px 10px',
+              borderRadius: '6px'
+            }}
+            title="View system device recommendation"
+          >
+            <Smartphone size={13} />
+            <span>Device Notice</span>
+          </button>
         </div>
       </div>
 
-      {/* Forgot Password Modal */}
-      {showForgotModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '20px'
-          }}
-        >
-          <div className="card" style={{ maxWidth: '420px', width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px' }}>
-            <h3 style={{ color: '#fff', marginBottom: '8px' }}>Reset Password</h3>
-            <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px', lineHeight: 1.5 }}>
-              For security, password resets for authorized service staff are administered by your IT Superadmin.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button className="btn btn-secondary" onClick={() => setShowForgotModal(false)}>
-                Close
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  showToast('Password reset assistance notification logged for Superadmin.', 'info');
-                  setShowForgotModal(false);
-                }}
-              >
-                Request IT Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Mobile Screen Notice Popup */}
+      <MobileNoticeModal
+        forceOpen={showMobileNoticeModal}
+        onClose={() => setShowMobileNoticeModal(false)}
+        isLoginScreen={true}
+      />
 
       {/* Report an Issue / Developer Contact Modal */}
       {showReportModal && (

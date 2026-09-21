@@ -1206,11 +1206,13 @@ export default function UserAccessManagement() {
                               background: 'transparent',
                               border: 'none',
                               cursor: 'pointer',
-                              padding: '3px',
+                              padding: '8px',
+                              minWidth: '36px',
+                              minHeight: '36px',
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              borderRadius: '4px'
+                              borderRadius: '6px'
                             }}
                             title={`${isGranted ? 'Revoke' : 'Grant'} access to ${page.label}`}
                           >
@@ -1245,30 +1247,17 @@ export default function UserAccessManagement() {
       {/* Add User Creation / Edit Profile Modal */}
       {(showAddModal || editingUser) && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.65)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '16px'
-          }}
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModals();
           }}
         >
           <div
-            className="card"
+            className="modal-content"
             style={{
               maxWidth: '580px',
               width: '100%',
-              background: '#ffffff',
-              borderRadius: '16px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
-              border: '1px solid var(--border-light)',
               padding: '22px 24px',
               maxHeight: '90vh',
               overflowY: 'auto'
@@ -1323,7 +1312,7 @@ export default function UserAccessManagement() {
             <form onSubmit={editingUser ? handleUpdateUser : handleCreateUser}>
               
               {/* Row 1: Full Name & Company Email */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+              <div className="modal-form-grid-2" style={{ gap: '10px', marginBottom: '12px' }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}>
                     <User size={12} color="#0284c7" />
@@ -1362,7 +1351,7 @@ export default function UserAccessManagement() {
                   <Shield size={12} color="#0284c7" />
                   <span>Security Role</span>
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div className="modal-form-grid-2" style={{ gap: '8px' }}>
                   {ROLE_OPTIONS.map(opt => {
                     const isSelected = form.role === opt.value;
                     return (
@@ -1529,30 +1518,17 @@ export default function UserAccessManagement() {
       {/* Quick Edit Position Modal */}
       {positionEditUser && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.65)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '16px'
-          }}
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModals();
           }}
         >
           <div
-            className="card"
+            className="modal-content"
             style={{
               maxWidth: '460px',
               width: '100%',
-              background: '#ffffff',
-              borderRadius: '14px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              border: '1px solid var(--border-light)',
               padding: '20px 22px'
             }}
           >
@@ -1616,30 +1592,17 @@ export default function UserAccessManagement() {
       {/* Password Reset Modal */}
       {passwordResetUser && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.65)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '16px'
-          }}
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModals();
           }}
         >
           <div
-            className="card"
+            className="modal-content"
             style={{
               maxWidth: '500px',
               width: '100%',
-              background: '#ffffff',
-              borderRadius: '14px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              border: '1px solid var(--border-light)',
               padding: '22px 24px'
             }}
           >
@@ -1870,30 +1833,17 @@ export default function UserAccessManagement() {
       {/* Delete Confirmation Modal */}
       {deletingUser && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.65)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '16px'
-          }}
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModals();
           }}
         >
           <div
-            className="card"
+            className="modal-content"
             style={{
               maxWidth: '420px',
               width: '100%',
-              background: '#ffffff',
-              borderRadius: '14px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              border: '1px solid var(--border-light)',
               padding: '20px 22px'
             }}
           >
@@ -1906,7 +1856,7 @@ export default function UserAccessManagement() {
             <p style={{ fontSize: '12.5px', color: '#64748b', marginBottom: '16px', lineHeight: 1.4 }}>
               Are you sure you want to permanently delete <strong>{deletingUser.fullName}</strong> ({deletingUser.email}) from PostgreSQL?
             </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
               <button type="button" className="btn btn-secondary" onClick={closeModals} disabled={isDeletingSubmitting}>
                 Cancel
               </button>

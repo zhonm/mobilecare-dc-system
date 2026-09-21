@@ -1391,7 +1391,7 @@ export default function ForecastingReports() {
         ) : (
           <div>
             {/* Row 1: Historical Demand vs Forecast Curve & Commodity Share Pie */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: '20px', marginBottom: '20px' }}>
+            <div className="forecasting-analytics-grid">
               <div className="card" style={{ padding: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
                 <SectionHeader
                   icon={TrendingUp}
@@ -1457,7 +1457,7 @@ export default function ForecastingReports() {
           </div>
 
           {/* Row 2: Top 10 High-Demand Parts & Top iPhone Models */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '20px' }}>
+          <div className="forecasting-secondary-grid">
             <div className="card" style={{ padding: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
                 <SectionHeader
@@ -2379,7 +2379,7 @@ export default function ForecastingReports() {
           </div>
 
           {/* Interactive Visual Graphs Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1.1fr)', gap: '16px' }}>
+          <div className="forecasting-comparison-grid">
             {/* Chart 1: Top 10 Service Sites Horizontal Bar Chart */}
             <div className="card" style={{ padding: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -2574,7 +2574,7 @@ export default function ForecastingReports() {
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', marginTop: '14px' }}>
                 {/* Directive 1 */}
                 <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>

@@ -1026,7 +1026,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
 
             <form onSubmit={handleSaveEditPart}>
               <div className="modal-body" style={{ padding: '20px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">Part Number (P/N) *</label>
                     <input
@@ -1060,7 +1060,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                   <div className="form-group" style={{ marginBottom: 0 }}>
                     <label className="form-label">Category</label>
                     <select
@@ -1446,7 +1446,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                 <form onSubmit={handleAddSite}>
                   <div className="modal-body" style={{ padding: '20px' }}>
                     {/* Code + Name */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px', marginBottom: '14px' }}>
+                    <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Branch Code *</label>
                         <input type="text" className="form-input font-mono"
@@ -1467,7 +1467,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     </div>
 
                     {/* Region + Type + GSX Ship-To */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                    <div className="modal-form-grid-3" style={{ marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <label className="form-label" style={{ marginBottom: 0 }}>Region</label>
@@ -1545,7 +1545,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     </div>
 
                     {/* Contact */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
+                    <div className="modal-form-grid-3">
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Supervisor / Contact</label>
                         <input type="text" className="form-input"
@@ -1606,7 +1606,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                 <form onSubmit={handleSaveEditSite}>
                   <div className="modal-body" style={{ padding: '20px' }}>
                     {/* Code (read-only) + Name */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '14px', marginBottom: '14px' }}>
+                    <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label">Branch Code</label>
                         <input type="text" className="form-input font-mono"
@@ -1624,7 +1624,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     </div>
 
                     {/* Region + Type + GSX Ship-To */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                    <div className="modal-form-grid-3" style={{ marginBottom: '14px' }}>
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <label className="form-label" style={{ marginBottom: 0 }}>Region</label>
@@ -1702,7 +1702,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     </div>
 
                     {/* Contact */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px' }}>
+                    <div className="modal-form-grid-3">
                       <div className="form-group" style={{ marginBottom: 0 }}>
                         <label className="form-label"><User size={12} style={{ display: 'inline', marginRight: '4px' }} />Supervisor / Contact</label>
                         <input type="text" className="form-input"
@@ -1823,7 +1823,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '24px' }}>
               {/* Supervisor Info Card */}
               <div style={{ background: '#f8fafc', padding: '20px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
                 <h4 style={{ margin: '0 0 16px 0', fontSize: '14.5px', color: '#0f172a', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1903,7 +1903,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
           </div>
 
           {/* Live Declaration Form Mockup Preview */}
-          <div className="card" style={{ background: '#ffffff', border: '1px solid #cbd5e1' }}>
+          <div className="card" style={{ background: '#ffffff', border: '1px solid #cbd5e1', overflowX: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
               <FileText size={16} color="var(--primary)" />
               <h4 style={{ margin: 0, fontSize: '13px', color: '#0f172a' }}>
