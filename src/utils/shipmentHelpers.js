@@ -426,23 +426,47 @@ export const formatSerialsForExport = (shipment, format = 'lines', serialDict = 
 };
 
 /**
+ * Formats a Date object or timestamp into local YYYY-MM-DD date string.
+ */
+export const getTodayDateString = (date = new Date()) => {
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+/**
  * Extracts a normalized Date object from a shipment.
- * Tries pickup_date, shipment_date, created_at, received_date, dispatched_at,
- * and falls back to extracting the MMDDYY date code from invoice_ref / shipment_number.
+ * Prioritizes current status milestones (received/confirmed date for received shipments,
+ * dispatch/pickup date for active shipments), and falls back to invoice reference date code.
  */
 export const parseShipmentDate = (sh) => {
   if (!sh) return null;
 
-  // 1. Try explicit date fields
-  const candidates = [
-    sh.pickup_date,
-    sh.shipment_date,
-    sh.created_at,
-    sh.dispatched_at,
-    sh.received_date,
-    sh.received_at,
-    sh.updated_at
-  ];
+  // 1. Try explicit date fields based on shipment lifecycle status
+  const isRecv = isShipmentReceived(sh);
+  const candidates = isRecv
+    ? [
+        sh.received_at,
+        sh.received_confirmed_at,
+        sh.received_date,
+        sh.updated_at,
+        sh.dispatched_at,
+        sh.pickup_date,
+        sh.shipment_date,
+        sh.created_at
+      ]
+    : [
+        sh.dispatched_at,
+        sh.pickup_date,
+        sh.shipment_date,
+        sh.created_at,
+        sh.updated_at,
+        sh.received_date,
+        sh.received_at
+      ];
 
   for (const val of candidates) {
     if (val && typeof val === 'string' && val.trim().length >= 8) {
@@ -472,6 +496,8 @@ export const parseShipmentDate = (sh) => {
 
 /**
  * Sorts shipments chronologically (default: newest to oldest).
+ * Uses receipt/confirmation timestamp for confirmed shipments and includes
+ * tie-breakers for recently confirmed or updated shipments.
  */
 export const sortShipmentsChronological = (shipments = [], order = 'desc') => {
   if (!Array.isArray(shipments)) return [];
@@ -485,6 +511,27 @@ export const sortShipmentsChronological = (shipments = [], order = 'desc') => {
 
     if (timeA !== timeB) {
       return (timeA - timeB) * multiplier;
+    }
+
+    // Tie-breaker 1: For received/confirmed shipments, compare receipt timestamps
+    const recvA = a.received_at ? new Date(a.received_at).getTime() : 0;
+    const recvB = b.received_at ? new Date(b.received_at).getTime() : 0;
+    if (recvA && recvB && recvA !== recvB && !isNaN(recvA) && !isNaN(recvB)) {
+      return (recvA - recvB) * multiplier;
+    }
+
+    // Tie-breaker 2: Compare updated_at timestamps
+    const updA = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const updB = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    if (updA && updB && updA !== updB && !isNaN(updA) && !isNaN(updB)) {
+      return (updA - updB) * multiplier;
+    }
+
+    // Tie-breaker 3: Compare created_at timestamps
+    const createdA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const createdB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    if (createdA && createdB && createdA !== createdB && !isNaN(createdA) && !isNaN(createdB)) {
+      return (createdA - createdB) * multiplier;
     }
 
     // Secondary sort: invoice reference or id
@@ -576,17 +623,16 @@ export const partitionShipmentsByRecency = (shipments = [], daysThreshold = 7, m
  */
 export const isShipmentToday = (sh, referenceDate = new Date()) => {
   if (!sh) return false;
-  const ref = referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
-  const refIsoDate = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}-${String(ref.getDate()).padStart(2, '0')}`;
+  const refIsoDate = getTodayDateString(referenceDate);
 
-  const rawCandidates = [sh.shipment_date, sh.pickup_date, sh.created_at, sh.dispatched_at, sh.received_date]
+  const rawCandidates = [sh.shipment_date, sh.pickup_date, sh.created_at, sh.dispatched_at, sh.received_date, sh.received_at, sh.received_confirmed_at]
     .filter(Boolean)
     .map(v => String(v).slice(0, 10));
   if (rawCandidates.includes(refIsoDate)) return true;
 
   const d = parseShipmentDate(sh);
   if (!d) return false;
-  const dIsoDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dIsoDate = getTodayDateString(d);
   return dIsoDate === refIsoDate;
 };
 

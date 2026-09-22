@@ -5,6 +5,7 @@ import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord
 import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
+import { getTodayDateString } from '../utils/shipmentHelpers';
 
 export function useShipments({
   currentUser,
@@ -675,8 +676,9 @@ export function useShipments({
       : (shipmentData.shipment_date || shipmentData.pickup_date || '');
 
     const cleanPickupDate = shipmentData.pickup_date || cleanShipmentDate || '';
-    const cleanReceivedDate = shipmentData.received_date || (shipmentData.received_at ? String(shipmentData.received_at).substring(0, 10) : '');
-    const cleanReceivedAt = shipmentData.received_at || (cleanReceivedDate ? `${cleanReceivedDate}T12:00:00.000Z` : '');
+    const isConfirmedStatus = shipmentData.status === 'received_confirmed' || shipmentData.status === 'delivered';
+    const cleanReceivedDate = shipmentData.received_date || (shipmentData.received_at ? String(shipmentData.received_at).substring(0, 10) : (isConfirmedStatus ? getTodayDateString() : ''));
+    const cleanReceivedAt = shipmentData.received_at || (cleanReceivedDate ? `${cleanReceivedDate}T12:00:00.000Z` : (isConfirmedStatus ? new Date().toISOString() : ''));
     const cleanReceivedByName = shipmentData.received_by_name || shipmentData.receiving_signature || '';
     const cleanReceivingSignature = shipmentData.receiving_signature || cleanReceivedByName || '';
 
@@ -1114,7 +1116,7 @@ export function useShipments({
     }
 
     const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Branch Staff');
-    const cleanDate = String(receiveDetails.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
+    const cleanDate = String(receiveDetails.receivedDate || '').trim() || getTodayDateString();
     const cleanCondition = receiveDetails.receivedCondition || 'Good Condition (All parts intact & verified)';
     const cleanNotes = receiveDetails.receivingNotes || 'Confirmed physical receipt of package and parts at branch.';
 
@@ -1181,10 +1183,15 @@ export function useShipments({
       resolvedStatus = 'draft';
     }
 
+    const isNowConfirmed = resolvedStatus === 'received_confirmed' || resolvedStatus === 'delivered';
     const updatedShipment = {
       ...target,
       ...extraData,
       status: resolvedStatus,
+      ...(isNowConfirmed ? {
+        received_at: extraData.received_at || target.received_at || new Date().toISOString(),
+        received_date: extraData.received_date || target.received_date || getTodayDateString()
+      } : {}),
       updated_at: new Date().toISOString()
     };
 

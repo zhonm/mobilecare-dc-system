@@ -47,7 +47,8 @@ import {
   formatCourierWithMode,
   detectRecommendedShippingMode,
   hasBatteryItem,
-  getShipmentRiderName
+  getShipmentRiderName,
+  getTodayDateString
 } from '../utils/shipmentHelpers';
 import { isShipmentArchived } from '../utils/archiveManager';
 
@@ -553,7 +554,7 @@ export default function Shipments() {
       riderPhone: shipment.rider_phone || '',
       vehiclePlate: shipment.vehicle_plate || '',
       guardOnDuty: shipment.guard_on_duty || supervisorSettings?.guard_on_duty || 'Anjo Alcazar / MDC DC Guard',
-      pickupDate: shipment.pickup_date || new Date().toISOString().split('T')[0]
+      pickupDate: shipment.pickup_date || getTodayDateString()
     });
   };
 
@@ -574,7 +575,7 @@ export default function Shipments() {
     const shippingMode = isLite ? (pickupModalState.shippingMode || detectRecommendedShippingMode(targetShipment?.items)) : '';
     const cleanCarrier = isLite ? formatCourierWithMode('Lite Express', shippingMode) : (String(pickupModalState.carrier || '').trim() || 'Lite Express');
     const cleanRider = String(pickupModalState.riderName || '').trim();
-    const cleanPickupDate = String(pickupModalState.pickupDate || '').trim() || new Date().toISOString().split('T')[0];
+    const cleanPickupDate = String(pickupModalState.pickupDate || '').trim() || getTodayDateString();
     const cleanTS = String(pickupModalState.transferSlip || '').trim();
 
     isSubmittingPickupRef.current = true;
@@ -644,7 +645,7 @@ export default function Shipments() {
       shipment,
       site: destSite,
       receivedByName: currentUser?.fullName || `${destSite.code || 'Branch'} Staff`,
-      receivedDate: new Date().toISOString().split('T')[0],
+      receivedDate: getTodayDateString(),
       receivedCondition: 'Good Condition (All parts intact & verified)',
       receivingNotes: 'Confirmed physical receipt of package and parts at branch.'
     });
@@ -684,7 +685,7 @@ export default function Shipments() {
         );
       } else {
         const cleanReceiver = String(receiveModalState.receivedByName || '').trim() || currentUser?.fullName || 'Branch Staff';
-        const cleanDate = String(receiveModalState.receivedDate || '').trim() || new Date().toISOString().split('T')[0];
+        const cleanDate = String(receiveModalState.receivedDate || '').trim() || getTodayDateString();
 
         const updatedShipment = {
           ...targetShipment,
@@ -699,7 +700,7 @@ export default function Shipments() {
         };
 
         await saveShipment(updatedShipment);
-        showToast(`Confirmed Receipt! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} is now marked RECEIVED CONFIRMED and archived.`, 'success');
+        showToast(`Confirmed Receipt! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} is now marked RECEIVED CONFIRMED.`, 'success');
       }
 
       const elapsed = Date.now() - startTime;

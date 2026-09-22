@@ -2064,7 +2064,7 @@ export default function Dashboard() {
             </div>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
             {recentShipments.map(sh => {
               const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_id) || {};
               const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
@@ -2075,25 +2075,35 @@ export default function Dashboard() {
                   key={sh.id}
                   style={{
                     display: 'flex',
-                    alignItems: 'center',
+                    flexDirection: 'column',
                     justifyContent: 'space-between',
+                    gap: '10px',
                     padding: '12px 14px',
                     border: '1px solid #e2e8f0',
                     borderRadius: '8px',
                     background: '#ffffff',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+                    minWidth: 0,
+                    overflow: 'hidden'
                   }}
                 >
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                  {/* Top Row: Shipment Identifier and Status Badge */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: '13px',
+                        color: '#0f172a',
+                        fontFamily: 'var(--font-mono)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0
+                      }}
+                      title={sh.invoice_ref || sh.shipment_number}
+                    >
                       {sh.invoice_ref || sh.shipment_number}
                     </div>
-                    <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                      To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || sh.total_units || 0} units
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span
                       className="badge"
                       style={{
@@ -2101,14 +2111,45 @@ export default function Dashboard() {
                         fontWeight: 600,
                         background: isShipped ? '#f0f9ff' : (isPending ? '#fffbeb' : '#f1f5f9'),
                         color: isShipped ? '#0369a1' : (isPending ? '#b45309' : '#475569'),
-                        border: isShipped ? '1px solid #bae6fd' : (isPending ? '1px solid #fde68a' : '1px solid #e2e8f0')
+                        border: isShipped ? '1px solid #bae6fd' : (isPending ? '1px solid #fde68a' : '1px solid #e2e8f0'),
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap'
                       }}
                     >
                       {badgeLabel}
                     </span>
+                  </div>
+
+                  {/* Bottom Row: Destination Details & Contained PDF Download Button */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: '11.5px',
+                        color: '#64748b',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0,
+                        flex: 1
+                      }}
+                      title={`To: ${destSite.name || sh.site_name || 'Service Hub'} • ${sh.items?.length || sh.total_units || 0} units`}
+                    >
+                      To: <strong>{destSite.name || sh.site_name || 'Service Hub'}</strong> • {sh.items?.length || sh.total_units || 0} units
+                    </div>
+
                     <button
                       className="btn btn-secondary btn-sm"
-                      style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        flexShrink: 0,
+                        borderRadius: '6px',
+                        lineHeight: 1.2
+                      }}
                       onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
                         supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
                         supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
@@ -2117,7 +2158,8 @@ export default function Dashboard() {
                       })}
                       title="Download Outbound Shipment Manifest PDF"
                     >
-                      PDF
+                      <Download size={11} />
+                      <span>PDF</span>
                     </button>
                   </div>
                 </div>

@@ -49,7 +49,7 @@ export function isShipmentArchived(shipment, cutoffDays = ARCHIVE_CUTOFF_DAYS) {
   // Open / active in-transit shipments are NEVER archived
   if (!isClosed) return false;
 
-  const rawDate = shipment.shipment_date || shipment.shipmentDate || shipment.created_at;
+  const rawDate = shipment.received_at || shipment.received_confirmed_at || shipment.received_date || shipment.updated_at || shipment.shipment_date || shipment.shipmentDate || shipment.created_at;
   if (!rawDate) return false;
 
   const targetTime = new Date(rawDate).getTime();
