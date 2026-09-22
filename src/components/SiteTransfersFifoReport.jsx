@@ -727,24 +727,6 @@ export default function SiteTransfersFifoReport() {
             )}
           </button>
 
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setAppPage('reports')}
-            style={{
-              background: '#334155',
-              border: '1px solid #475569',
-              color: '#f1f5f9',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <Compass size={14} />
-            <span>DC Transfers Analytics</span>
-          </button>
-
           {records.length > 0 && (
             <>
               <button

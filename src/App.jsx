@@ -15,7 +15,6 @@ import ScanInReceiving from './components/ScanInReceiving';
 import AllocationMatrix from './components/AllocationMatrix';
 import ScanOutPacking from './components/ScanOutPacking';
 import Shipments from './components/Shipments';
-import StockTransferReports from './components/StockTransferReports';
 import SiteTransfersFifoReport from './components/SiteTransfersFifoReport';
 import ForecastingReports from './components/ForecastingReports';
 import AuditTrail from './components/AuditTrail';
@@ -83,7 +82,6 @@ function MainApp() {
       case 'all-stocks':
         return <RequestParts defaultTab="all_stocks" />;
       case 'reports':
-        return <StockTransferReports />;
       case 'site-transfers-fifo':
         return <SiteTransfersFifoReport />;
       case 'forecast-reports':

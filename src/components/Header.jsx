@@ -55,7 +55,6 @@ export default function Header() {
     allocation: { title: 'Inventory Allocation Matrix', section: 'Planning', showCategories: true },
     'scan-out': { title: 'Pack Scan-Out & Manifest', section: 'Warehouse Operations', showCategories: false },
     shipments: { title: 'Outbound Shipments', section: 'Distribution', showCategories: false },
-    reports: { title: 'Stock Transfer Reports', section: 'Reports & Analytics', showCategories: true },
     'site-transfers-fifo': { title: 'Site Transfers & FIFO Audit', section: 'Reports & Analytics', showCategories: false },
     'forecast-reports': { title: 'Forecasting Reports & Analytics', section: 'Reports & Analytics', showCategories: true },
     audit: { title: 'Serialized Audit Trail', section: 'Traceability', showCategories: false },

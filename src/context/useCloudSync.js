@@ -461,11 +461,7 @@ export function useCloudSync({
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .in('id', HEAVY_DOC_IDS),
-            // Lightweight metadata check for master_stock_transfers_report_registry (~60 bytes)
-            supabase.from('saved_records')
-              .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
-              .eq('id', 'master_stock_transfers_report_registry')
-              .maybeSingle(),
+            Promise.resolve({ data: null }),
             // Self-healing: load recent active operational shipment documents (<60 days) with full snapshot_data
             supabase.from('saved_records')
               .select('*')
@@ -1385,61 +1381,15 @@ export function useCloudSync({
           dbStorage.setItem('mdc_deletion_audit_logs', mergedDeletions);
         }
 
-        // Hydrate Stock Transfer Reports & Metadata
-        const stockTransferDoc = dbSavedRecords.find(r => r.id === 'master_stock_transfers_report_registry');
-        if (stockTransferDoc && stockTransferDoc.snapshot_data) {
-          const cloudReports = Array.isArray(stockTransferDoc.snapshot_data.records)
-            ? stockTransferDoc.snapshot_data.records
-            : [];
-          const cloudMetadata = stockTransferDoc.snapshot_data.metadata || null;
-          if (cloudReports.length > 0) {
-            if (setStockTransferReports) setStockTransferReports(cloudReports);
-            if (setStockTransferMetadata) setStockTransferMetadata(cloudMetadata);
-            dbStorage.setItem('mdc_stock_transfer_reports', cloudReports);
-            dbStorage.setItem('mdc_stock_transfer_metadata', cloudMetadata);
-            if (stockTransferDoc.updated_at) {
-              dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-            }
-            try {
-              if (stockTransferDoc.updated_at) {
-                localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-              }
-              localStorage.setItem('mdc_stock_transfer_metadata', JSON.stringify(cloudMetadata));
-              localStorage.setItem('mdc_stock_transfer_reports', JSON.stringify(cloudReports));
-            } catch (e) {}
-          } else if (stockTransferDoc.notes === '__CLEARED__') {
-            if (setStockTransferReports) setStockTransferReports([]);
-            if (setStockTransferMetadata) setStockTransferMetadata(null);
-            try {
-              localStorage.removeItem('mdc_stock_transfer_reports');
-              localStorage.removeItem('mdc_stock_transfer_metadata');
-              if (stockTransferDoc.updated_at) {
-                localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-              }
-            } catch (e) {}
-            dbStorage.setItem('mdc_stock_transfer_reports', []);
-            dbStorage.setItem('mdc_stock_transfer_metadata', null);
-            if (stockTransferDoc.updated_at) {
-              dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-            }
-          }
-        } else if (stockTransferDoc && stockTransferDoc.notes === '__CLEARED__') {
-          if (setStockTransferReports) setStockTransferReports([]);
-          if (setStockTransferMetadata) setStockTransferMetadata(null);
-          try {
-            localStorage.removeItem('mdc_stock_transfer_reports');
-            localStorage.removeItem('mdc_stock_transfer_metadata');
-            if (stockTransferDoc.updated_at) {
-              localStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-            }
-          } catch (e) {}
-          dbStorage.setItem('mdc_stock_transfer_reports', []);
-          dbStorage.setItem('mdc_stock_transfer_metadata', null);
-          if (stockTransferDoc.updated_at) {
-            dbStorage.setItem('mdc_stock_transfer_updated_at', stockTransferDoc.updated_at);
-          }
-        }
-        // End of stock transfer hydration (pure read - zero database writes during hydration)
+        // Purge deprecated stock transfer reports local cache
+        try {
+          localStorage.removeItem('mdc_stock_transfer_reports');
+          localStorage.removeItem('mdc_stock_transfer_metadata');
+          localStorage.removeItem('mdc_stock_transfer_updated_at');
+        } catch (e) {}
+        dbStorage.removeItem('mdc_stock_transfer_reports');
+        dbStorage.removeItem('mdc_stock_transfer_metadata');
+        dbStorage.removeItem('mdc_stock_transfer_updated_at');
 
         let localDraftSnapshot = null;
         try {
