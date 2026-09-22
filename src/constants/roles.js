@@ -1,12 +1,12 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'feedback'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'orders', 'records', 'audit', 'request-parts', 'all-stocks', 'feedback'],
-  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'reports', 'orders', 'records', 'audit', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'feedback'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'orders', 'audit', 'request-parts', 'all-stocks', 'feedback'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'reports', 'orders', 'audit', 'feedback'],
   parts_management: ['request-parts', 'scan-in', 'all-stocks', 'feedback'],
   // Legacy aliases
   warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'request-parts', 'all-stocks', 'feedback'],
   site_staff: ['request-parts', 'scan-in', 'all-stocks', 'dashboard', 'forecast', 'allocation', 'shipments', 'reports', 'forecast-reports', 'feedback'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'reports', 'forecast-reports', 'audit', 'feedback']
+  management_viewer: ['dashboard', 'forecast', 'allocation', 'reports', 'forecast-reports', 'audit', 'feedback']
 };
 
 export const ROLE_OPTIONS = [
@@ -28,7 +28,7 @@ export const ROLE_OPTIONS = [
   {
     value: 'user',
     label: 'User (View & Export Only)',
-    description: 'View-only access to Demand Forecasting, Allocation Matrix, Reports, Saved Period Records, and POs with full XLSX/PDF export capabilities.'
+    description: 'View-only access to Demand Forecasting, Allocation Matrix, Reports, and POs with full XLSX/PDF export capabilities.'
   }
 ];
 

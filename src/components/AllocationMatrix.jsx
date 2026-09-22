@@ -6,7 +6,6 @@ import { calculateWeeklySplit, generateAllocationsFromForecasts } from '../utils
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { CANONICAL_SITE_CODES } from '../constants/config';
 import { formatTo12HourTime } from '../utils/dateUtils';
-import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Split,
@@ -21,7 +20,6 @@ import {
   CheckCircle2,
   Smartphone,
   BatteryCharging,
-  BookmarkPlus,
   RefreshCw,
   Calendar,
   CalendarDays,
@@ -125,7 +123,6 @@ export default function AllocationMatrix() {
 
   // View Mode: 'sheet' (Master) | 'week-1' | 'week-2' | 'week-3' | 'week-4' | 'shares'
   const [activeViewMode, setActiveViewMode] = useState('sheet');
-  const [showSaveModal, setShowSaveModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [localCategory, setLocalCategory] = useState('ALL');
@@ -776,21 +773,6 @@ export default function AllocationMatrix() {
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
             </button>
-
-            {/* Save as Record (Primary) */}
-            {canEdit && (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={() => setShowSaveModal(true)}
-                disabled={effectiveAllocations.length === 0}
-                title="Save current allocation matrix as a dated historical record"
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
-              >
-                <BookmarkPlus size={14} />
-                <span>Save as Record</span>
-              </button>
-            )}
 
             {/* Export Actions Group */}
             <div className="matrix-btn-group">
@@ -1789,15 +1771,6 @@ export default function AllocationMatrix() {
             )}
           </div>
         </div>
-      )}
-
-      {/* Save Record Modal Dialog */}
-      {showSaveModal && (
-        <SaveRecordModal
-          isOpen={showSaveModal}
-          onClose={() => setShowSaveModal(false)}
-          defaultType="allocation"
-        />
       )}
 
       {/* High-Security Clear Data Confirmation Modal */}

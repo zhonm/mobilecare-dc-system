@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   UploadCloud,
   TrendingUp,
-  BookmarkCheck,
   ShoppingCart,
   Barcode,
   Split,
@@ -64,7 +63,6 @@ export default function Sidebar() {
     { id: 'forecast', label: 'Demand Forecasting', icon: TrendingUp, section: 'Planning & Allocation' },
     { id: 'allocation', label: 'Allocation Matrix', icon: Split, section: 'Planning & Allocation' },
     { id: 'import', label: 'Fixably / GSX Data Import', icon: UploadCloud, section: 'Planning & Allocation' },
-    { id: 'records', label: 'Saved Period Records', icon: BookmarkCheck, section: 'Planning & Allocation' },
     { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning & Allocation' },
 
     // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)

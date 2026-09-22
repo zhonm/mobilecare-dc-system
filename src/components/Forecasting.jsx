@@ -8,7 +8,6 @@ import {
 import { exportForecastToExcel } from '../utils/excelParser';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import SaveRecordModal from './SaveRecordModal';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Download,
@@ -16,7 +15,6 @@ import {
   TrendingDown,
   Minus,
   UploadCloud,
-  BookmarkPlus,
   RefreshCw,
   XCircle,
   RotateCcw,
@@ -48,7 +46,6 @@ export default function Forecasting() {
     isReadOnly
   } = useApp();
 
-  const [showSaveModal, setShowSaveModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [viewMode, setViewMode] = useState('detailed'); // 'standard' | 'detailed'
@@ -287,18 +284,6 @@ export default function Forecasting() {
               <RefreshCw size={13} className={isAutoRefreshing ? 'spin-animation' : ''} />
               <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud'}</span>
             </button>
-
-            {canEdit && (
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={() => setShowSaveModal(true)}
-                disabled={filteredItems.length === 0}
-                title="Save current state to permanent period archive"
-              >
-                <BookmarkPlus size={14} />
-                <span>Save Period Record</span>
-              </button>
-            )}
 
             <button
               className="btn btn-secondary btn-sm"
@@ -634,15 +619,6 @@ export default function Forecasting() {
           </div>
         </div>
       </div>
-
-      {/* Save Record Modal Dialog */}
-      {showSaveModal && (
-        <SaveRecordModal
-          isOpen={showSaveModal}
-          onClose={() => setShowSaveModal(false)}
-          defaultType="forecast"
-        />
-      )}
 
       {/* High-Security Clear Data Confirmation Modal */}
       {showClearModal && (

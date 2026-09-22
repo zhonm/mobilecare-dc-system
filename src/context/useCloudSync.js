@@ -82,8 +82,6 @@ export function useCloudSync({
   setScanLogs,
   _repairUsageRecords,
   setRepairUsageRecords,
-  _savedRecords,
-  setSavedRecords,
   stockTransferReports,
   setStockTransferReports,
   _stockTransferMetadata,
@@ -440,8 +438,6 @@ export function useCloudSync({
             'master_deleted_intakes_registry',
             'master_shipments_registry',
             'live_master_dc_inventory',
-            'deleted_period_record_ids_registry',
-            'master_period_records_registry',
             'master_purchase_orders_registry',
             'master_dc_intakes_registry',
             'deleted_intake_ids_registry',
@@ -457,17 +453,12 @@ export function useCloudSync({
           ];
           const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
 
-          const [resSystem, resHeavyHeaders, resPeriods, resStockHeader, resShipments] = await Promise.all([
+          const [resSystem, resHeavyHeaders, resStockHeader, resShipments] = await Promise.all([
             supabase.from('saved_records').select('*').in('id', LIGHTWEIGHT_SYSTEM_DOC_IDS),
             // Bandwidth Egress Defense: Check updated_at timestamps first for multi-megabyte JSON trees
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
               .in('id', HEAVY_DOC_IDS),
-            supabase.from('saved_records')
-              .select('id, record_type, period_label, period_year, period_month, period_week, saved_by_name, saved_by_user_id, notes, created_at, updated_at, snapshot_data')
-              .or('record_type.in.(both,forecast,allocation,period_record,historical_archive),id.like.rec-%')
-              .order('created_at', { ascending: false })
-              .limit(50),
             // Lightweight metadata check for master_stock_transfers_report_registry (~60 bytes)
             supabase.from('saved_records')
               .select('id, record_type, period_label, period_year, period_month, saved_by_name, notes, updated_at')
@@ -484,8 +475,6 @@ export function useCloudSync({
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];
           const shipmentRows = resShipments?.data || [];
-          const shipmentIds = new Set(shipmentRows.map(r => r.id));
-          const periodRows = (resPeriods.data || []).filter(r => !SYSTEM_DOC_IDS.includes(r.id) && r.id !== 'master_stock_transfers_report_registry' && !shipmentIds.has(r.id));
 
 
           // 1. Conditional Egress Optimization for LIVE_MASTER_RECORD_ID:
@@ -670,7 +659,7 @@ export function useCloudSync({
             systemRows.push(stockTransferRow);
           }
 
-          return { data: [...systemRows, ...shipmentRows, ...periodRows] };
+          return { data: [...systemRows, ...shipmentRows] };
         })() : Promise.resolve({ data: null }),
         // DC Intakes: PMG branch users do not manage Central DC intakes; Central DC pulls active rolling window (<60 days)
         shouldFetch('dc_intake_records') ? (
@@ -1392,100 +1381,6 @@ export function useCloudSync({
           setDeletionAuditLogs(mergedDeletions);
           try { localStorage.setItem('mdc_deletion_audit_logs', JSON.stringify(mergedDeletions)); } catch (e) {}
           dbStorage.setItem('mdc_deletion_audit_logs', mergedDeletions);
-        }
-
-        // Hydrate Deleted Period Records Registry
-        const deletedPeriodDoc = dbSavedRecords.find(r => r.id === 'deleted_period_record_ids_registry');
-        const cloudDeletedPeriodIds = Array.isArray(deletedPeriodDoc?.snapshot_data?.deletedIds) ? deletedPeriodDoc.snapshot_data.deletedIds : [];
-        if (deletedPeriodDoc) {
-          try { localStorage.setItem('mdc_deleted_period_record_ids', JSON.stringify(cloudDeletedPeriodIds)); } catch (e) {}
-        }
-        const allDeletedPeriodIds = new Set(cloudDeletedPeriodIds.map(id => String(id).trim()));
-
-        // Also extract records from master_period_records_registry
-        const periodRegistryDoc = dbSavedRecords.find(r => r.id === 'master_period_records_registry');
-        const registryPeriodRecords = Array.isArray(periodRegistryDoc?.snapshot_data?.records)
-          ? periodRegistryDoc.snapshot_data.records
-          : [];
-
-        const validSavedRecords = [
-          ...registryPeriodRecords,
-          ...dbSavedRecords.filter(r =>
-            r.id !== LIVE_MASTER_RECORD_ID &&
-            r.id !== 'live_master_state_v1' &&
-            r.id !== 'active_packing_manifest_draft' &&
-            r.id !== 'live_master_dc_inventory' &&
-            r.id !== 'master_dc_intakes_registry' &&
-            r.id !== 'deleted_unit_serials_registry' &&
-            r.id !== 'deleted_intake_ids_registry' &&
-            r.id !== 'deleted_shipment_ids_registry' &&
-            r.id !== 'deleted_period_record_ids_registry' &&
-            r.id !== 'master_period_records_registry' &&
-            r.id !== 'master_upload_audit_logs_registry' &&
-            r.id !== 'master_deletion_audit_logs_registry' &&
-            r.id !== 'master_stock_transfers_report_registry' &&
-            r.id !== 'master_users_registry' &&
-            r.id !== 'master_supervisor_settings_registry' &&
-            r.id !== 'master_auto_logout_settings_registry' &&
-            r.id !== 'master_session_audit_logs_registry' &&
-            r.record_type !== 'live_master_state' &&
-            r.record_type !== 'users_registry' &&
-            r.record_type !== 'supervisor_settings' &&
-            r.record_type !== 'auto_logout_settings' &&
-            r.record_type !== 'session_audit_registry' &&
-            r.record_type !== 'stock_transfer_report' &&
-            r.record_type !== 'upload_audit_registry' &&
-            r.record_type !== 'deletion_audit_registry' &&
-            r.record_type !== 'deleted_snapshot' &&
-            r.record_type !== 'shipment' &&
-            r.record_type !== 'intake_batch' &&
-            r.record_type !== 'intake_record' &&
-            r.record_type !== 'inventory_master' &&
-            r.record_type !== 'intake_registry' &&
-            r.record_type !== 'deletion_registry' &&
-            !r.period_label?.includes('Live Master State') &&
-            !r.id.startsWith('MDC') &&
-            !r.id.startsWith('intake-') &&
-            r.notes !== '__DELETED__' &&
-            r.snapshot_data?.isDeleted !== true &&
-            !allDeletedPeriodIds.has(String(r.id).trim())
-          )
-        ];
-
-        if (setSavedRecords) {
-          setSavedRecords(prev => {
-            const prevList = Array.isArray(prev) ? prev : [];
-            const cloudMap = new Map((validSavedRecords || []).map(r => [r.id, r]));
-            const merged = [...(validSavedRecords || [])];
-
-            // Preserve local records that have not been deleted and are not yet returned by cloud query
-            prevList.forEach(localRec => {
-              if (!localRec || !localRec.id) return;
-              const cleanId = String(localRec.id).trim();
-              if (allDeletedPeriodIds.has(cleanId) || localRec.notes === '__DELETED__' || localRec.snapshot_data?.isDeleted) {
-                return;
-              }
-              const remote = cloudMap.get(localRec.id);
-              if (!remote) {
-                merged.push(localRec);
-              } else {
-                // If local record has full snapshot_data and remote only has lightweight header, preserve snapshot_data!
-                const idx = merged.findIndex(r => r.id === localRec.id);
-                if (idx !== -1 && localRec.snapshot_data && Object.keys(localRec.snapshot_data).length > 0) {
-                  if (!merged[idx].snapshot_data || Object.keys(merged[idx].snapshot_data).length === 0) {
-                    merged[idx] = { ...merged[idx], snapshot_data: localRec.snapshot_data };
-                  }
-                }
-              }
-            });
-
-            merged.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-
-            try { localStorage.setItem('mdc_saved_records', JSON.stringify(merged.slice(0, 50))); } catch (e) {}
-            dbStorage.setItem('mdc_saved_records', merged);
-            merged.forEach(r => dbStorage.putSavedRecord(r));
-            return merged;
-          });
         }
 
         // Hydrate Stock Transfer Reports & Metadata
@@ -2659,7 +2554,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, _dcIntakeRecords, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
+  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, _dcIntakeRecords, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -3002,38 +2897,6 @@ export function useCloudSync({
                   };
                 });
               }
-            } else if (ev.data.type === 'ALL_PERIOD_RECORDS_CLEARED') {
-              if (setSavedRecords) {
-                setSavedRecords([]);
-                try { localStorage.setItem('mdc_saved_records', JSON.stringify([])); } catch (e) {}
-                dbStorage.setItem('mdc_saved_records', []);
-              }
-            } else if (ev.data.type === 'PERIOD_RECORD_DELETED' && ev.data.payload?.recordId) {
-              const delId = ev.data.payload.recordId;
-              if (setSavedRecords) {
-                setSavedRecords(prev => {
-                  const next = (prev || []).filter(r => r.id !== delId);
-                  try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
-                  dbStorage.setItem('mdc_saved_records', next);
-                  return next;
-                });
-              }
-            } else if (ev.data.type === 'PERIOD_RECORD_SAVED' && (ev.data.payload?.record || ev.data.payload?.recordId)) {
-              const newRec = ev.data.payload.record || {
-                id: ev.data.payload.recordId,
-                period_label: ev.data.payload.label,
-                created_at: new Date().toISOString()
-              };
-              if (setSavedRecords && newRec?.id) {
-                setSavedRecords(prev => {
-                  const exists = (prev || []).some(r => r.id === newRec.id);
-                  const next = exists ? prev.map(r => r.id === newRec.id ? { ...r, ...newRec } : r) : [newRec, ...(prev || [])];
-                  try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
-                  dbStorage.setItem('mdc_saved_records', next);
-                  if (newRec.snapshot_data) dbStorage.putSavedRecord(newRec);
-                  return next;
-                });
-              }
             } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
               if (ev.data.type === 'GLOBAL_FORCE_CACHE_REFRESH') {
                 await clearOperationalLocalStorage({ keepSession: true });
@@ -3168,38 +3031,6 @@ export function useCloudSync({
                     timestamp: Date.now()
                   });
                 }
-              }
-            } else if (bType === 'ALL_PERIOD_RECORDS_CLEARED') {
-              if (setSavedRecords) {
-                setSavedRecords([]);
-                try { localStorage.setItem('mdc_saved_records', JSON.stringify([])); } catch (e) {}
-                dbStorage.setItem('mdc_saved_records', []);
-              }
-            } else if (bType === 'PERIOD_RECORD_DELETED' && bPayload?.recordId) {
-              const delId = bPayload.recordId;
-              if (setSavedRecords) {
-                setSavedRecords(prev => {
-                  const next = (prev || []).filter(r => r.id !== delId);
-                  try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
-                  dbStorage.setItem('mdc_saved_records', next);
-                  return next;
-                });
-              }
-            } else if (bType === 'PERIOD_RECORD_SAVED' && (bPayload?.record || bPayload?.recordId)) {
-              const newRec = bPayload.record || {
-                id: bPayload.recordId,
-                period_label: bPayload.label,
-                created_at: new Date().toISOString()
-              };
-              if (setSavedRecords && newRec?.id) {
-                setSavedRecords(prev => {
-                  const exists = (prev || []).some(r => r.id === newRec.id);
-                  const next = exists ? prev.map(r => r.id === newRec.id ? { ...r, ...newRec } : r) : [newRec, ...(prev || [])];
-                  try { localStorage.setItem('mdc_saved_records', JSON.stringify(next)); } catch (e) {}
-                  dbStorage.setItem('mdc_saved_records', next);
-                  if (newRec.snapshot_data) dbStorage.putSavedRecord(newRec);
-                  return next;
-                });
               }
             } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
               if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
@@ -3899,12 +3730,6 @@ export function useCloudSync({
     try {
       dbStorage.putSavedRecord(clearedSnapshot);
       dbStorage.deleteSavedRecord('master_masterlist_data_registry');
-      if (setSavedRecords) {
-        setSavedRecords(prev => {
-          const next = (prev || []).filter(r => r.id !== LIVE_MASTER_RECORD_ID && r.id !== 'master_masterlist_data_registry');
-          return [clearedSnapshot, ...next];
-        });
-      }
     } catch (localStoreErr) {
       console.warn('Local saved records store error:', localStoreErr);
     }

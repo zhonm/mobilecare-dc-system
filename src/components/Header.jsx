@@ -45,7 +45,6 @@ export default function Header() {
     dashboard: { title: 'DC Overview & Analytics', section: 'Core', showCategories: true },
     import: { title: 'Fixably & GSX Data Import', section: 'Planning', showCategories: false },
     forecast: { title: 'Demand Forecasting & POs', section: 'Planning', showCategories: true },
-    records: { title: 'Saved Period Records', section: 'Planning', showCategories: false },
     orders: { title: 'Purchase Orders', section: 'Planning', showCategories: false },
     'scan-in': { 
       title: 'Receive Scan-In', 

@@ -10,8 +10,11 @@ import {
   Split,
   Calendar,
   CheckCircle2,
-  Lock
+  Lock,
+  Download,
+  FileSpreadsheet
 } from 'lucide-react';
+import { exportForecastToExcel, exportAllocationToExcel } from '../utils/excelParser';
 
 export default function ClearDataConfirmationModal({
   isOpen,
@@ -22,6 +25,7 @@ export default function ClearDataConfirmationModal({
   const {
     forecastItems,
     allocations,
+    sites,
     activePeriod,
     currentUser,
     clearAllData,
@@ -34,6 +38,8 @@ export default function ClearDataConfirmationModal({
   const [reason, setReason] = useState(customReason || 'User initialized clean slate for new forecasting & allocation ingestion');
   const [isDeleting, setIsDeleting] = useState(false);
   const [inputError, setInputError] = useState('');
+  const [isExportingForecast, setIsExportingForecast] = useState(false);
+  const [isExportingAllocation, setIsExportingAllocation] = useState(false);
 
   // Reset state when opening modal
   useEffect(() => {
@@ -42,16 +48,50 @@ export default function ClearDataConfirmationModal({
       setReason(customReason || 'User initialized clean slate for new forecasting & allocation ingestion');
       setIsDeleting(false);
       setInputError('');
+      setIsExportingForecast(false);
+      setIsExportingAllocation(false);
     }
   }, [isOpen, customReason]);
-
-  if (!isOpen) return null;
 
   const totalForecastCount = forecastItems?.length || 0;
   const totalAllocCount = allocations?.length || 0;
   const totalForecastUnits = (forecastItems || []).reduce((sum, it) => sum + (it.final_forecast || it.computed_forecast || 0), 0);
   const totalAllocUnits = (allocations || []).reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
   const currentPeriodLabel = activePeriod?.label || 'September 2026';
+
+  const handleExportForecast = async () => {
+    if (!forecastItems || forecastItems.length === 0) {
+      showToast('No forecasting data available to export', 'warning');
+      return;
+    }
+    setIsExportingForecast(true);
+    try {
+      await exportForecastToExcel(forecastItems, currentPeriodLabel);
+      showToast(`Exported ${currentPeriodLabel} Forecasting XLSX successfully.`, 'success');
+    } catch (err) {
+      console.error('Error exporting forecast:', err);
+      showToast('Failed to export forecasting XLSX', 'error');
+    } finally {
+      setIsExportingForecast(false);
+    }
+  };
+
+  const handleExportAllocation = async () => {
+    if (!allocations || allocations.length === 0) {
+      showToast('No allocation data available to export', 'warning');
+      return;
+    }
+    setIsExportingAllocation(true);
+    try {
+      await exportAllocationToExcel(allocations, sites || [], currentPeriodLabel);
+      showToast(`Exported ${currentPeriodLabel} Allocation Matrix XLSX successfully.`, 'success');
+    } catch (err) {
+      console.error('Error exporting allocation:', err);
+      showToast('Failed to export allocation XLSX', 'error');
+    } finally {
+      setIsExportingAllocation(false);
+    }
+  };
 
   const isPhraseMatched = confirmationInput.trim().toLowerCase() === REQUIRED_PHRASE.toLowerCase();
 
@@ -214,6 +254,72 @@ export default function ClearDataConfirmationModal({
                 <span style={{ color: '#64748b' }}>Active Period:</span>
                 <strong style={{ color: '#0f172a' }}>{currentPeriodLabel}</strong>
               </div>
+            </div>
+          </div>
+
+          {/* Optional Pre-Deletion Backup Card */}
+          <div
+            style={{
+              background: '#f0fdf4',
+              border: '1px solid #bbf7d0',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              marginBottom: '18px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <FileSpreadsheet size={16} color="#16a34a" />
+              <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#15803d' }}>
+                Optional Backup: Export Current Data (XLSX)
+              </span>
+            </div>
+            <p style={{ fontSize: '11.5px', color: '#166534', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              Before clearing the masterlist, you may optionally download a backup spreadsheet of the current forecasting models and allocation matrices. This export is completely optional, but recommended if you need an external record before deletion.
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={handleExportForecast}
+                disabled={isDeleting || isExportingForecast || totalForecastCount === 0}
+                className="btn btn-secondary btn-sm"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11.5px',
+                  padding: '6px 10px',
+                  background: '#ffffff',
+                  borderColor: '#86efac',
+                  color: '#15803d',
+                  cursor: (isDeleting || isExportingForecast || totalForecastCount === 0) ? 'not-allowed' : 'pointer'
+                }}
+                title={totalForecastCount === 0 ? 'No forecasting data to export' : 'Export current forecasting to Excel'}
+              >
+                <Download size={13} className={isExportingForecast ? 'animate-spin' : ''} />
+                <span>{isExportingForecast ? 'Exporting Forecasting...' : 'Export Forecasting (.xlsx)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportAllocation}
+                disabled={isDeleting || isExportingAllocation || totalAllocCount === 0}
+                className="btn btn-secondary btn-sm"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11.5px',
+                  padding: '6px 10px',
+                  background: '#ffffff',
+                  borderColor: '#86efac',
+                  color: '#15803d',
+                  cursor: (isDeleting || isExportingAllocation || totalAllocCount === 0) ? 'not-allowed' : 'pointer'
+                }}
+                title={totalAllocCount === 0 ? 'No allocation data to export' : 'Export current allocation matrix to Excel'}
+              >
+                <Download size={13} className={isExportingAllocation ? 'animate-spin' : ''} />
+                <span>{isExportingAllocation ? 'Exporting Allocation...' : 'Export Allocation (.xlsx)'}</span>
+              </button>
             </div>
           </div>
 

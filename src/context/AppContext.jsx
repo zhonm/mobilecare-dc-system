@@ -269,29 +269,12 @@ export function AppProvider({ children }) {
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
 
-  // 6. Period Records & Historical Snapshots Domain
+  // 6. Reports & Stock Transfers Domain
   const periodRecords = usePeriodRecordsAndReports({
     currentUser: auth.currentUser,
-    forecastItems: forecastingAndAllocation.forecastItems,
-    setForecastItems: forecastingAndAllocation.setForecastItems,
-    allocations: forecastingAndAllocation.allocations,
-    setAllocations: forecastingAndAllocation.setAllocations,
-    parts: catalogAndSites.parts,
-    setParts: catalogAndSites.setParts,
-    sites: catalogAndSites.sites,
-    setSites: catalogAndSites.setSites,
-    forecastingModel: forecastingAndAllocation.forecastingModel,
-    setForecastingModel: forecastingAndAllocation.setForecastingModel,
-    activePeriod,
-    setActivePeriod,
-    setActiveTab,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
-    logDeletionAudit: auditLogs.logDeletionAudit,
-    enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
-    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
-    getMasterlistData: () => inventory?.masterlistData,
-    setMasterlistData: (...args) => inventory?.setMasterlistData?.(...args)
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
   });
 
   // 7. Intake Records Domain
@@ -415,8 +398,6 @@ export function AppProvider({ children }) {
     setRepairUsageRecords: inventory.setRepairUsageRecords,
     masterlistData: inventory.masterlistData,
     setMasterlistData: inventory.setMasterlistData,
-    savedRecords: periodRecords.savedRecords,
-    setSavedRecords: periodRecords.setSavedRecords,
     stockTransferReports: periodRecords.stockTransferReports,
     setStockTransferReports: periodRecords.setStockTransferReports,
     stockTransferMetadata: periodRecords.stockTransferMetadata,
@@ -529,7 +510,6 @@ export function AppProvider({ children }) {
         repairUsageRecords: inventory.repairUsageRecords,
         masterlistData: inventory.masterlistData,
         setMasterlistData: inventory.setMasterlistData,
-        savedRecords: periodRecords.savedRecords,
         dcIntakeRecords: intakeRecords.dcIntakeRecords,
         setDcIntakeRecords: intakeRecords.setDcIntakeRecords,
         generateNextIntakeRecordId: intakeRecords.generateNextIntakeRecordId,
@@ -566,10 +546,6 @@ export function AppProvider({ children }) {
         deleteAllAuditLogs: auditLogs.deleteAllAuditLogs,
         importStockTransfersReport: periodRecords.importStockTransfersReport,
         clearStockTransfersReport: periodRecords.clearStockTransfersReport,
-        savePeriodRecord: periodRecords.savePeriodRecord,
-        restorePeriodRecord: periodRecords.restorePeriodRecord,
-        deletePeriodRecord: periodRecords.deletePeriodRecord,
-        clearAllPeriodRecords: periodRecords.clearAllPeriodRecords,
         addScanInUnit: inventory.addScanInUnit,
         deleteScanInUnit: inventory.deleteScanInUnit,
         updateUnitAssignment: inventory.updateUnitAssignment,
