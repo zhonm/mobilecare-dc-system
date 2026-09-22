@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
@@ -85,7 +86,65 @@ export default function Header() {
     ? formatTo12HourTime(lastSyncedAt)
     : 'Just now';
 
-  // Dynamic Month & Auto-Updating System Year Display (e.g. August 2026, September 2026)
+  const [networkOnline, setNetworkOnline] = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [probeOnline, setProbeOnline] = useState(null);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setNetworkOnline(true);
+      setProbeOnline(true);
+    };
+    const handleOffline = () => {
+      setNetworkOnline(false);
+      checkConnectivity();
+    };
+
+    const checkConnectivity = async () => {
+      if (typeof window === 'undefined') return;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(`${window.location.origin}/favicon.ico?_t=${Date.now()}`, {
+          method: 'HEAD',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        setProbeOnline(res.ok || res.status < 500);
+      } catch (e) {
+        setProbeOnline(false);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // If browser navigator reports offline on mount, verify with probe to bypass Chromium false negatives
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      checkConnectivity();
+    }
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Multi-tier resilient online status:
+  // 1. Supabase Realtime WebSocket connected -> 100% Online
+  // 2. Cloud DB reported online -> 100% Online
+  // 3. Active HTTP probe succeeded -> 100% Online
+  // 4. Browser reports online and cloud sync has not failed -> Online
+  const isEffectivelyOnline = Boolean(
+    realtimeConnected ||
+    cloudSyncStatus?.isOnline === true ||
+    probeOnline === true ||
+    (networkOnline && cloudSyncStatus?.isOnline !== false)
+  );
+  const isOffline = !isEffectivelyOnline;
+
   const currentSystemYear = new Date().getFullYear();
   const currentMonthName = new Date().toLocaleString('en-US', { month: 'long' });
   const displayPeriod = (() => {
@@ -142,7 +201,7 @@ export default function Header() {
           className={`header-sync-badge ${
             !isSupabaseConfigured
               ? 'sync-local'
-              : !navigator.onLine
+              : isOffline
               ? 'sync-offline'
               : isAutoRefreshing
               ? 'sync-refreshing'
@@ -155,7 +214,7 @@ export default function Header() {
           title={
             !isSupabaseConfigured
               ? 'Supabase credentials missing — local fallback mode active'
-              : !navigator.onLine
+              : isOffline
               ? `Offline mode active. ${offlineQueue?.length || 0} change(s) queued for sync.`
               : isAutoRefreshing
               ? 'Synchronizing latest data from cloud database...'
@@ -169,7 +228,7 @@ export default function Header() {
               <span className="status-dot dot-red" />
               <span>Local Mode</span>
             </>
-          ) : !navigator.onLine ? (
+          ) : isOffline ? (
             <>
               <RefreshCw size={12} className="spin" color="#d97706" />
               <span>Offline {offlineQueue && offlineQueue.length > 0 ? `(${offlineQueue.length})` : ''}</span>

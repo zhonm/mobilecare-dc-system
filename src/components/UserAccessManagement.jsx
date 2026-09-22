@@ -75,7 +75,7 @@ export default function UserAccessManagement() {
     if (typeof autoRefreshData === 'function' && (!usersList || usersList.length <= 1)) {
       autoRefreshData({ force: true, silent: true, reason: 'user_access_mount' });
     }
-  }, []);
+  }, [autoRefreshData, usersList]);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');

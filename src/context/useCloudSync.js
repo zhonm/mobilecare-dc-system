@@ -106,11 +106,16 @@ export function useCloudSync({
   const [cloudSyncStatus, setCloudSyncStatus] = useState({
     isSaving: false,
     lastSaved: null,
-    isOnline: navigator.onLine
+    isOnline: true
   });
 
   const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date());
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const realtimeConnectedRef = useRef(realtimeConnected);
+  useEffect(() => {
+    realtimeConnectedRef.current = realtimeConnected;
+  }, [realtimeConnected]);
+
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
 
   const lastRefreshTimeRef = useRef(0);
@@ -285,7 +290,8 @@ export function useCloudSync({
   }, []);
 
   const processOfflineSyncQueue = useCallback(async () => {
-    if (!supabase || !navigator.onLine) return;
+    if (!supabase) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine && !realtimeConnectedRef.current && cloudSyncStatus?.isOnline === false) return;
     try {
       const queue = JSON.parse(localStorage.getItem('mdc_offline_sync_queue') || '[]');
       if (queue.length === 0) return;
@@ -349,7 +355,7 @@ export function useCloudSync({
     } catch (e) {
       console.warn('processOfflineSyncQueue error:', e);
     }
-  }, []);
+  }, [cloudSyncStatus.isOnline]);
 
   // Main Database Hydration
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
@@ -2653,7 +2659,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings]);
+  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setSavedRecords, setShipments, setSites, setStockTransferMetadata, setStockTransferReports, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, _dcIntakeRecords, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -3439,20 +3445,29 @@ export function useCloudSync({
     };
 
     const handleOnline = () => {
+      setCloudSyncStatus(prev => ({ ...prev, isOnline: true }));
       if (currentUser?.id) {
         processOfflineSyncQueue();
         autoRefreshData({ silent: false, force: true, isManual: true, reason: 'Network reconnected' });
       }
     };
 
+    const handleOffline = () => {
+      if (!realtimeConnectedRef.current) {
+        setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
+      }
+    };
+
     window.addEventListener('focus', handleFocusOrVisibility);
     document.addEventListener('visibilitychange', handleFocusOrVisibility);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     return () => {
       window.removeEventListener('focus', handleFocusOrVisibility);
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id, processOfflineSyncQueue]);

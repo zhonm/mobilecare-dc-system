@@ -3,7 +3,6 @@ import {
   parseShipmentDate,
   sortShipmentsChronological,
   partitionShipmentsByRecency,
-  isShipmentToday,
   isShipmentOlderArchive
 } from '../utils/shipmentHelpers.js';
 

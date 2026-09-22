@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import {
   allocatePartToSites,
   generateAllocationsFromForecasts,
-  calculateWeeklySplit,
-  resolvePartSiteDemands
+  calculateWeeklySplit
 } from '../utils/allocationEngine.js';
 import { CANONICAL_SITE_CODES, CANONICAL_SITE_LIST } from '../constants/config.js';
 
@@ -44,17 +43,6 @@ console.log(`  ✓ PASS: Initial base forecast 290 distributed across ${initialA
 
 // 2. User modifies calculation to 200 (as reported by user)
 // Simulate existing row having an old or partial distribution
-const existingAllocRowWithPartial = {
-  part_id: 'part-661-21991',
-  part_number: '661-21991',
-  description: 'Battery, iPhone 13',
-  category_id: 'cat-battery',
-  site_quantities: {
-    'ASP POD': 100,
-    'APP TRI': 100
-  }
-};
-
 // Re-allocating with new forecast calculation: 200 units
 // Must use authoritative demand shares and NOT get trapped in old site_quantities
 const reallocated200 = allocatePartToSites(200, battery13, mockActiveSites, null);
