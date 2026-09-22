@@ -65,35 +65,58 @@ export function normalizeSite(input = '') {
 
 /**
  * Parses a date value from Excel number or date string into standard ISO YYYY-MM-DD.
+ * Handles Excel serial floats (e.g. 46181.333333333336, "46181.333333333336"),
+ * ISO strings, and slash formats (M/D/YYYY, YYYY/MM/DD).
  */
 export function normalizeDate(val) {
-  if (!val) return '';
-  if (typeof val === 'number') {
-    // Excel serial date conversion
-    const utcDays = Math.floor(val - 25569);
-    const utcValue = utcDays * 86400;
-    const dateInfo = new Date(utcValue * 1000);
-    return dateInfo.toISOString().split('T')[0];
+  if (!val && val !== 0) return '';
+
+  // 1. Excel serial date (number or numeric string like 46181 or "46181.333333333336")
+  const num = typeof val === 'number' ? val : (typeof val === 'string' && /^\d+(\.\d+)?$/.test(val.trim()) ? Number(val.trim()) : NaN);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    const utcDays = Math.floor(num - 25569);
+    const dateInfo = new Date(utcDays * 86400 * 1000);
+    if (!isNaN(dateInfo.getTime())) {
+      return dateInfo.toISOString().split('T')[0];
+    }
   }
+
   const str = String(val).trim();
   if (!str) return '';
-  // Check YYYY-MM-DD
+
+  // 2. Check standard YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  // Check M/D/YYYY or D/M/YYYY
+
+  // 3. Check ISO string with timestamp (e.g. "2026-06-08T08:00:00.000Z")
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+    return str.split('T')[0];
+  }
+
+  // 4. Check M/D/YYYY or D/M/YYYY or YYYY/MM/DD
   const parts = str.split(/[-/]/);
   if (parts.length === 3) {
     let year = parts[2];
-    if (year.length === 2) year = '20' + year;
-    const month = parts[0].padStart(2, '0');
-    const day = parts[1].padStart(2, '0');
+    let month = parts[0];
+    let day = parts[1];
+    if (parts[0].length === 4) {
+      year = parts[0];
+      month = parts[1];
+      day = parts[2];
+    } else if (year.length === 2) {
+      year = '20' + year;
+    }
+    month = month.padStart(2, '0');
+    day = day.padStart(2, '0');
     if (year.length === 4) {
       return `${year}-${month}-${day}`;
     }
   }
+
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
     return parsed.toISOString().split('T')[0];
   }
+
   return str;
 }
 
@@ -352,10 +375,24 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
     }
 
     // Days in stock calculation (aging)
-    const recDate = new Date(latestTransfer.transfer_received_date || now);
-    const daysInStock = isUsed
-      ? Math.max(0, Math.floor((new Date(gsxMatch.repair_closed_date) - recDate) / (1000 * 60 * 60 * 24)))
-      : Math.max(0, Math.floor((now - recDate) / (1000 * 60 * 60 * 24)));
+    const normalizedRecStr = normalizeDate(latestTransfer.transfer_received_date);
+    const recDate = normalizedRecStr ? new Date(normalizedRecStr + 'T00:00:00') : null;
+
+    let daysInStock = 0;
+    if (recDate && !isNaN(recDate.getTime())) {
+      if (isUsed && gsxMatch?.repair_closed_date) {
+        const normalizedClosedStr = normalizeDate(gsxMatch.repair_closed_date);
+        const closedDate = normalizedClosedStr ? new Date(normalizedClosedStr + 'T00:00:00') : null;
+        if (closedDate && !isNaN(closedDate.getTime())) {
+          daysInStock = Math.max(0, Math.floor((closedDate.getTime() - recDate.getTime()) / (1000 * 60 * 60 * 24)));
+        } else {
+          daysInStock = Math.max(0, Math.floor((now.getTime() - recDate.getTime()) / (1000 * 60 * 60 * 24)));
+        }
+      } else {
+        daysInStock = Math.max(0, Math.floor((now.getTime() - recDate.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+    }
+    if (isNaN(daysInStock)) daysInStock = 0;
 
     let agingBucket = '< 15 days';
     if (daysInStock > 90) agingBucket = '90+ days';
@@ -383,11 +420,11 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
       product_code: latestTransfer.product_code,
       product_name: latestTransfer.product_name || resolvedPart?.description || '',
       category_id: resolvedPart?.category_id || '',
-      transfer_received_date: latestTransfer.transfer_received_date,
-      first_received_date: initialTransfer.transfer_received_date,
+      transfer_received_date: normalizedRecStr || latestTransfer.transfer_received_date,
+      first_received_date: normalizeDate(initialTransfer.transfer_received_date),
       transfer_count: transfers.length,
       transfer_trail: transfers.map(t => ({
-        date: t.transfer_received_date,
+        date: normalizeDate(t.transfer_received_date),
         from: t.from_stock,
         to: t.to_stock,
         qty: t.transfer_quantity

@@ -3715,8 +3715,9 @@ export async function parseStockTransfersReportFile(file) {
 
       let dateRaw = row[dateCol];
       let formattedDate = '';
-      if (typeof dateRaw === 'number') {
-        const d = new Date((dateRaw - 25569) * 86400 * 1000);
+      const dateNum = typeof dateRaw === 'number' ? dateRaw : (typeof dateRaw === 'string' && /^\d+(\.\d+)?$/.test(dateRaw.trim()) ? Number(dateRaw.trim()) : NaN);
+      if (!isNaN(dateNum) && dateNum > 1000 && dateNum < 100000) {
+        const d = new Date((dateNum - 25569) * 86400 * 1000);
         formattedDate = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : String(dateRaw);
       } else if (dateRaw) {
         const d = new Date(dateRaw);

@@ -48,6 +48,7 @@ console.log('Test 2: Date Normalization');
 assert.strictEqual(normalizeDate('2026-03-21'), '2026-03-21');
 assert.strictEqual(normalizeDate('3/21/2026'), '2026-03-21');
 assert.strictEqual(normalizeDate(46066), '2026-02-13');
+assert.strictEqual(normalizeDate('46181.333333333336'), '2026-06-08');
 console.log('  ✓ PASS: Dates normalize from ISO string, slash format, and Excel serial numbers\n');
 
 // 3. Test Full Dataset Reconciliation

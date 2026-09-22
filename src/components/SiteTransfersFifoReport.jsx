@@ -6,7 +6,8 @@ import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import {
   parseGsxKbbKgbsUsedFile,
   reconcileSiteTransfers,
-  isIPhone13AndUp
+  isIPhone13AndUp,
+  normalizeDate
 } from '../utils/siteTransfersReconciler';
 import {
   parseStockTransfersReportFile,
@@ -29,15 +30,13 @@ import {
   ShieldCheck,
   Activity,
   Package,
-  Boxes,
-  Compass
+  Boxes
 } from 'lucide-react';
 
 export default function SiteTransfersFifoReport() {
   const {
     parts,
     showToast,
-    setCurrentPage: setAppPage,
     canEdit,
     broadcastCloudEvent
   } = useApp();
@@ -77,7 +76,7 @@ export default function SiteTransfersFifoReport() {
   const sanitizeTransfersForCloud = useCallback((records) => {
     return (records || [])
       .map(r => ({
-        transfer_received_date: r.transfer_received_date || '',
+        transfer_received_date: normalizeDate(r.transfer_received_date) || '',
         from_stock: r.from_stock || '',
         to_stock: r.to_stock || '',
         product_code: r.product_code || '',
@@ -96,7 +95,7 @@ export default function SiteTransfersFifoReport() {
       .map(r => ({
         order_id: String(r.order_id || '').trim(),
         location_name: String(r.location_name || '').trim(),
-        repair_closed_date: String(r.repair_closed_date || '').trim(),
+        repair_closed_date: normalizeDate(r.repair_closed_date) || '',
         product_code: String(r.product_code || '').trim(),
         product_description: String(r.product_description || '').trim(),
         product_kgb: String(r.product_kgb || '').trim().toUpperCase()

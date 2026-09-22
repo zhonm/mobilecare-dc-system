@@ -11,7 +11,6 @@ import {
   Split,
   PackageCheck,
   Truck,
-  FileSpreadsheet,
   BarChart3,
   History,
   Settings,
