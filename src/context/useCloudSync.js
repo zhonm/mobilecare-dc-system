@@ -175,7 +175,9 @@ export function useCloudSync({
       'SUPERVISOR_SETTINGS_UPDATED',
       'GLOBAL_FORCE_CACHE_REFRESH',
       'MASTER_DATA_UPDATED',
-      'MASTER_DATA_CLEARED'
+      'MASTER_DATA_CLEARED',
+      'FIFO_AUDIT_UPDATED',
+      'FIFO_AUDIT_CLEARED'
     ].includes(eventType);
 
     if (supabase) {

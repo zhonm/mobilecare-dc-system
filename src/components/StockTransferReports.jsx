@@ -56,7 +56,8 @@ import {
   Boxes,
   ArrowUpRight,
   ShieldCheck,
-  Zap
+  Zap,
+  GitCompare
 } from 'lucide-react';
 
 // ── Colour palette ──────────────────────────────────────────────────────────
@@ -178,7 +179,8 @@ export default function StockTransferReports() {
     canEdit,
     isReadOnly,
     selectedCategories,
-    isPartMatchingCategoryFilter
+    isPartMatchingCategoryFilter,
+    setActiveTab
   } = useApp();
 
   const fileInputRef = useRef(null);
@@ -640,6 +642,7 @@ export default function StockTransferReports() {
         pageSize={pageSize}
         setPageSize={setPageSize}
         filteredRecords={filteredRecords}
+        setActiveTab={setActiveTab}
       />
 
       {/* ── 1. EXECUTIVE SUMMARY VIEW (DEFAULT) ── */}
@@ -688,45 +691,74 @@ function FilterBar({
   analytics,
   pageSize,
   setPageSize,
-  filteredRecords
+  filteredRecords,
+  setActiveTab
 }) {
   return (
     <div className="card" style={{ padding: '12px 16px', marginBottom: '18px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-        {/* Primary Row: Tab Pills & Quick Search */}
+        {/* Primary Row: Tab Pills, FIFO Link & Quick Search */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           {/* View Tabs */}
-          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', border: '1px solid #e2e8f0', gap: '2px' }}>
-            {[
-              { id: 'overview', label: 'Executive Summary', icon: Sparkles },
-              { id: 'ledger',   label: 'Transfers Ledger', icon: FileText },
-              { id: 'routes',   label: 'Route Analytics', icon: TrendingUp },
-              { id: 'matrix',   label: 'Branch Matrix & Couriers', icon: Building2 }
-            ].map(tab => {
-              const Icon = tab.icon;
-              const isActive = viewMode === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
-                  style={{
-                    border: 'none',
-                    fontSize: '12px',
-                    padding: '6px 14px',
-                    fontWeight: isActive ? 700 : 500,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    borderRadius: '6px'
-                  }}
-                >
-                  <Icon size={14} />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', border: '1px solid #e2e8f0', gap: '2px' }}>
+              {[
+                { id: 'overview', label: 'Executive Summary', icon: Sparkles },
+                { id: 'ledger',   label: 'Transfers Ledger', icon: FileText },
+                { id: 'routes',   label: 'Route Analytics', icon: TrendingUp },
+                { id: 'matrix',   label: 'Branch Matrix & Couriers', icon: Building2 }
+              ].map(tab => {
+                const Icon = tab.icon;
+                const isActive = viewMode === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => { setViewMode(tab.id); setCurrentPage(1); }}
+                    style={{
+                      border: 'none',
+                      fontSize: '12px',
+                      padding: '6px 14px',
+                      fontWeight: isActive ? 700 : 500,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      borderRadius: '6px'
+                    }}
+                  >
+                    <Icon size={14} />
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {setActiveTab && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setActiveTab('site-transfers-fifo')}
+                style={{
+                  background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                  color: '#fff',
+                  border: 'none',
+                  fontSize: '12px',
+                  padding: '6px 14px',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  borderRadius: '6px',
+                  boxShadow: '0 2px 8px rgba(2, 132, 199, 0.25)'
+                }}
+                title="Audit multi-site transfers, verify FIFO adherence, and monitor unused stocks with GSX report"
+              >
+                <GitCompare size={14} />
+                <span>Site Transfers & FIFO Audit</span>
+                <ArrowRight size={12} />
+              </button>
+            )}
           </div>
 
           {/* Quick Search */}

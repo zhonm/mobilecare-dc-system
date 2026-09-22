@@ -1,12 +1,12 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'feedback'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'orders', 'audit', 'request-parts', 'all-stocks', 'feedback'],
-  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'reports', 'orders', 'audit', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'feedback'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'reports', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'all-stocks', 'feedback'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'reports', 'site-transfers-fifo', 'orders', 'audit', 'feedback'],
   parts_management: ['request-parts', 'scan-in', 'all-stocks', 'feedback'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports', 'request-parts', 'all-stocks', 'feedback'],
-  site_staff: ['request-parts', 'scan-in', 'all-stocks', 'dashboard', 'forecast', 'allocation', 'shipments', 'reports', 'forecast-reports', 'feedback'],
-  management_viewer: ['dashboard', 'forecast', 'allocation', 'reports', 'forecast-reports', 'audit', 'feedback']
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'all-stocks', 'feedback'],
+  site_staff: ['request-parts', 'scan-in', 'all-stocks', 'dashboard', 'forecast', 'allocation', 'shipments', 'reports', 'site-transfers-fifo', 'forecast-reports', 'feedback'],
+  management_viewer: ['dashboard', 'forecast', 'allocation', 'reports', 'site-transfers-fifo', 'forecast-reports', 'audit', 'feedback']
 };
 
 export const ROLE_OPTIONS = [

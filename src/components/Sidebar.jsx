@@ -20,7 +20,8 @@ import {
   LogOut,
   Search,
   X,
-  Inbox
+  Inbox,
+  GitCompare
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -74,6 +75,7 @@ export default function Sidebar() {
     // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
     { id: 'reports', label: 'Stock Transfer Reports', icon: FileSpreadsheet, section: 'Reports & Traceability' },
+    { id: 'site-transfers-fifo', label: 'Site Transfers & FIFO Audit', icon: GitCompare, section: 'Reports & Traceability' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
 
     // 4. Administration

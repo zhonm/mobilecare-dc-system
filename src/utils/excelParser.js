@@ -4241,6 +4241,465 @@ export async function exportStockTransfersToExcel(records = [], metadata = {}) {
 }
 
 /**
+ * Exports Site Transfers & FIFO Audit Package to a multi-sheet formatted Excel workbook
+ */
+export async function exportSiteTransfersFifoAuditToExcel({
+  records = [],
+  sitesScorecard = [],
+  kpis = {},
+  fileName = 'MDC_Site_Transfers_FIFO_Audit_Package'
+}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'MDC DC System 2';
+  workbook.created = new Date();
+
+  const borderThin = {
+    top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+    left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+    bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+    right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+  };
+
+  // ── Sheet 1: Executive Summary & Site Scorecard ─────────────────────────────
+  const ws1 = workbook.addWorksheet('Branch FIFO Scorecard', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws1.mergeCells('A1:J1');
+  const t1 = ws1.getCell('A1');
+  t1.value = 'MOBILE CARE SERVICES PHILS. INC. — Multi-Site Stock Transfers & FIFO Compliance Audit';
+  t1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  t1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  t1.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(1).height = 28;
+
+  // KPI Summary Row
+  ws1.mergeCells('A2:B2');
+  ws1.getCell('A2').value = `TOTAL SERIALS: ${(kpis.totalSerials || 0).toLocaleString()}`;
+  ws1.getCell('A2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+  ws1.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('C2:D2');
+  ws1.getCell('C2').value = `USED IN REPAIRS: ${(kpis.usedCount || 0).toLocaleString()} (${kpis.usedRate || 0}%)`;
+  ws1.getCell('C2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('C2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15803D' } };
+  ws1.getCell('C2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('E2:F2');
+  ws1.getCell('E2').value = `IN STOCK (UNUSED): ${(kpis.inStockCount || 0).toLocaleString()} ($${(kpis.inStockValue || 0).toLocaleString()})`;
+  ws1.getCell('E2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('E2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
+  ws1.getCell('E2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('G2:H2');
+  ws1.getCell('G2').value = `FIFO COMPLIANCE: ${kpis.fifoComplianceRate || 100}% (${kpis.fifoViolationsCount || 0} Violations)`;
+  ws1.getCell('G2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('G2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: (kpis.fifoComplianceRate || 100) >= 90 ? 'FF16A34A' : 'FFDC2626' } };
+  ws1.getCell('G2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('I2:J2');
+  ws1.getCell('I2').value = `CROSS-SITE LEAKAGE: ${(kpis.crossSiteDiscrepanciesCount || 0).toLocaleString()}`;
+  ws1.getCell('I2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('I2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7C3AED' } };
+  ws1.getCell('I2').alignment = { horizontal: 'center', vertical: 'middle' };
+  ws1.getRow(2).height = 22;
+
+  const scoreHeaders = [
+    'Branch Code', 'Branch Full Name', 'Total Received', 'Used in Repairs',
+    'In Stock (Unused)', 'FIFO Compliant', 'FIFO Violations', 'Compliance Rate (%)',
+    'Cross-Site Usages', 'In-Stock Value ($)'
+  ];
+  const sHeadRow = ws1.addRow(scoreHeaders);
+  sHeadRow.height = 24;
+  sHeadRow.eachCell(c => {
+    c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  sitesScorecard.forEach((s, idx) => {
+    const row = ws1.addRow([
+      sanitizeForSpreadsheet(s.code),
+      sanitizeForSpreadsheet(s.name),
+      s.totalReceived,
+      s.usedCount,
+      s.inStockCount,
+      s.fifoCompliantCount,
+      s.fifoViolationsCount,
+      `${s.complianceRate}%`,
+      s.crossSiteCount,
+      s.inStockValue
+    ]);
+    row.height = 20;
+    const isAlt = idx % 2 === 1;
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = borderThin;
+      if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      if (cNum === 1 || cNum === 8) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        if (cNum === 8) {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: s.complianceRate >= 90 ? 'FF15803D' : s.complianceRate >= 75 ? 'FFB45309' : 'FFDC2626' } };
+        }
+      } else if (cNum === 2) {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      } else if (cNum === 10) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+  });
+
+  ws1.columns = [
+    { width: 14 }, { width: 38 }, { width: 15 }, { width: 16 },
+    { width: 18 }, { width: 16 }, { width: 16 }, { width: 20 },
+    { width: 18 }, { width: 18 }
+  ];
+
+  // ── Sheet 2: Master Reconciliation Ledger ───────────────────────────────────
+  const ws2 = workbook.addWorksheet('Reconciliation Master', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws2.mergeCells('A1:L1');
+  const t2 = ws2.getCell('A1');
+  t2.value = 'MOBILE CARE SERVICES PHILS. INC. — Complete Stock Transfers & GSX Usage Reconciliation Ledger';
+  t2.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  t2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  t2.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws2.getRow(1).height = 28;
+
+  const mHeaders = [
+    'Serial Number', 'Part Number', 'Part Description', 'Received Date',
+    'From Stock', 'Current Site', 'Usage Status', 'Repair Closed Date',
+    'GSX Location', 'GSX Order #', 'FIFO Status', 'Days in Stock'
+  ];
+  const mHeadRow = ws2.addRow(mHeaders);
+  mHeadRow.height = 24;
+  mHeadRow.eachCell(c => {
+    c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  records.forEach((r, idx) => {
+    const row = ws2.addRow([
+      sanitizeForSpreadsheet(r.serial_number),
+      sanitizeForSpreadsheet(r.product_code),
+      sanitizeForSpreadsheet(r.product_name),
+      sanitizeForSpreadsheet(r.transfer_received_date),
+      sanitizeForSpreadsheet(r.from_stock),
+      sanitizeForSpreadsheet(r.current_site.name),
+      r.is_used ? 'Used in GSX' : 'In Stock (Unused)',
+      sanitizeForSpreadsheet(r.repair_closed_date || '—'),
+      sanitizeForSpreadsheet(r.gsx_location_name || '—'),
+      sanitizeForSpreadsheet(r.gsx_order_id || '—'),
+      r.fifo_status.replace(/_/g, ' '),
+      r.days_in_stock
+    ]);
+    row.height = 20;
+    const isAlt = idx % 2 === 1;
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = borderThin;
+      if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      if (cNum === 1) {
+        cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      }
+      if (cNum === 7) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: r.is_used ? 'FF15803D' : 'FFD97706' } };
+      }
+      if (cNum === 11) {
+        const isVio = r.fifo_status.includes('VIOLATION');
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: isVio ? 'FFDC2626' : r.is_used ? 'FF15803D' : 'FF64748B' } };
+      }
+    });
+  });
+
+  ws2.columns = [
+    { width: 22 }, { width: 14 }, { width: 32 }, { width: 14 },
+    { width: 20 }, { width: 32 }, { width: 16 }, { width: 18 },
+    { width: 32 }, { width: 14 }, { width: 26 }, { width: 14 }
+  ];
+
+  // ── Sheet 3: Unused Stocks (In-Stock Site by Site) ──────────────────────────
+  const unusedList = records.filter(r => !r.is_used);
+  const ws3 = workbook.addWorksheet('Unused Stocks (In-Stock)', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws3.mergeCells('A1:I1');
+  const t3 = ws3.getCell('A1');
+  t3.value = `MOBILE CARE SERVICES PHILS. INC. — Active In-Stock & Idle Parts Audit (${unusedList.length.toLocaleString()} Units)`;
+  t3.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  t3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
+  t3.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws3.getRow(1).height = 28;
+
+  const uHeaders = [
+    'Holding Site', 'Part Number', 'Part Description', 'Serial Number',
+    'Received Date', 'Days In Stock', 'Aging Category', 'Transfer Origin', 'Unit Valuation ($)'
+  ];
+  const uHeadRow = ws3.addRow(uHeaders);
+  uHeadRow.height = 24;
+  uHeadRow.eachCell(c => {
+    c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  unusedList.forEach((r, idx) => {
+    const row = ws3.addRow([
+      sanitizeForSpreadsheet(r.current_site.name),
+      sanitizeForSpreadsheet(r.product_code),
+      sanitizeForSpreadsheet(r.product_name),
+      sanitizeForSpreadsheet(r.serial_number),
+      sanitizeForSpreadsheet(r.transfer_received_date),
+      r.days_in_stock,
+      r.aging_bucket,
+      sanitizeForSpreadsheet(r.from_stock),
+      r.unit_price
+    ]);
+    row.height = 20;
+    const isAlt = idx % 2 === 1;
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = borderThin;
+      if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      if (cNum === 4) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 7 && (r.days_in_stock > 60)) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+      }
+      if (cNum === 9) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      }
+    });
+  });
+
+  ws3.columns = [
+    { width: 32 }, { width: 14 }, { width: 32 }, { width: 22 },
+    { width: 14 }, { width: 14 }, { width: 18 }, { width: 20 }, { width: 18 }
+  ];
+
+  // ── Sheet 4: FIFO Violations Audit ──────────────────────────────────────────
+  const violationList = records.filter(r => r.fifo_status.includes('VIOLATION'));
+  const ws4 = workbook.addWorksheet('FIFO Violations Audit', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws4.mergeCells('A1:J1');
+  const t4 = ws4.getCell('A1');
+  t4.value = `MOBILE CARE SERVICES PHILS. INC. — Out-of-Order FIFO Violations Log (${violationList.length.toLocaleString()} Violations)`;
+  t4.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  t4.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDC2626' } };
+  t4.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws4.getRow(1).height = 28;
+
+  const fHeaders = [
+    'Site Location', 'Part Number', 'Part Description', 'Consumed Serial',
+    'Received Date', 'Repair Closed Date', 'Violation Type', 'Bypassed Older Serial(s)', 'Older Received Date', 'Older Idle Days'
+  ];
+  const fHeadRow = ws4.addRow(fHeaders);
+  fHeadRow.height = 24;
+  fHeadRow.eachCell(c => {
+    c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  violationList.forEach((r, idx) => {
+    const firstReason = (r.fifo_violation_reasons && r.fifo_violation_reasons[0]) || {};
+    const olderSerialsStr = (r.fifo_violation_reasons || []).map(o => o.olderSerial).join(', ');
+    const row = ws4.addRow([
+      sanitizeForSpreadsheet(r.current_site.name),
+      sanitizeForSpreadsheet(r.product_code),
+      sanitizeForSpreadsheet(r.product_name),
+      sanitizeForSpreadsheet(r.serial_number),
+      sanitizeForSpreadsheet(r.transfer_received_date),
+      sanitizeForSpreadsheet(r.repair_closed_date),
+      r.fifo_status === 'FIFO_VIOLATION_OLDER_IN_STOCK' ? 'Older Stock Left Idle' : 'Used Out of Sequence',
+      sanitizeForSpreadsheet(olderSerialsStr || '—'),
+      sanitizeForSpreadsheet(firstReason.olderArrival || '—'),
+      firstReason.olderDaysInStock || '—'
+    ]);
+    row.height = 20;
+    const isAlt = idx % 2 === 1;
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = borderThin;
+      if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      if (cNum === 4 || cNum === 8) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 7) cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+    });
+  });
+
+  ws4.columns = [
+    { width: 32 }, { width: 14 }, { width: 32 }, { width: 22 },
+    { width: 14 }, { width: 18 }, { width: 24 }, { width: 26 }, { width: 18 }, { width: 16 }
+  ];
+
+  // ── Sheet 5: Cross-Site Usage Discrepancies ─────────────────────────────────
+  const crossSiteList = records.filter(r => r.is_cross_site_discrepancy);
+  const ws5 = workbook.addWorksheet('Cross-Site Discrepancies', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  ws5.mergeCells('A1:H1');
+  const t5 = ws5.getCell('A1');
+  t5.value = `MOBILE CARE SERVICES PHILS. INC. — Cross-Site Consumption Discrepancies (${crossSiteList.length.toLocaleString()} Records)`;
+  t5.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  t5.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7C3AED' } };
+  t5.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws5.getRow(1).height = 28;
+
+  const dHeaders = [
+    'Serial Number', 'Part Number', 'Part Description', 'Transferred Destination',
+    'Actual GSX Consuming Site', 'Transfer Received Date', 'Repair Closed Date', 'GSX Order #'
+  ];
+  const dHeadRow = ws5.addRow(dHeaders);
+  dHeadRow.height = 24;
+  dHeadRow.eachCell(c => {
+    c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    c.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  crossSiteList.forEach((r, idx) => {
+    const row = ws5.addRow([
+      sanitizeForSpreadsheet(r.serial_number),
+      sanitizeForSpreadsheet(r.product_code),
+      sanitizeForSpreadsheet(r.product_name),
+      sanitizeForSpreadsheet(r.current_site.name),
+      sanitizeForSpreadsheet(r.gsx_location_name),
+      sanitizeForSpreadsheet(r.transfer_received_date),
+      sanitizeForSpreadsheet(r.repair_closed_date),
+      sanitizeForSpreadsheet(r.gsx_order_id)
+    ]);
+    row.height = 20;
+    const isAlt = idx % 2 === 1;
+    row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = borderThin;
+      if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      if (cNum === 1) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+      if (cNum === 5) cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF7C3AED' } };
+    });
+  });
+
+  ws5.columns = [
+    { width: 22 }, { width: 14 }, { width: 32 }, { width: 32 },
+    { width: 32 }, { width: 16 }, { width: 18 }, { width: 16 }
+  ];
+
+  // ── Sheets 6+: Individual PMG Branch Monitoring Sheets (GL5, GB3, BHS, etc.) ──
+  // Matches the exact schema of 'Used_ Unused Stocks from DC.xlsx' so each site can monitor & input data
+  sitesScorecard.forEach(site => {
+    const siteRecords = records.filter(r => r.current_site.code === site.code);
+    if (!siteRecords.length) return;
+
+    // Excel worksheet names have a 31-char limit
+    const safeSheetName = site.code.substring(0, 31);
+    const wsSite = workbook.addWorksheet(safeSheetName, {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+    });
+
+    const bHeaders = [
+      'Transfer Received Date', 'To Stock', 'Serial Used by:', 'Part Number',
+      'Part Description', 'Tranferred Serial', 'Repair Closed Date', 'Order Number',
+      'Remarks', 'Status'
+    ];
+    const bHeadRow = wsSite.addRow(bHeaders);
+    bHeadRow.height = 24;
+    bHeadRow.eachCell(c => {
+      c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    siteRecords.forEach((r, idx) => {
+      let remarks = 'In Stock';
+      if (r.is_used) {
+        if (r.fifo_status === 'FIFO_VIOLATION_OLDER_IN_STOCK') {
+          remarks = 'FIFO Violation (Older Stock Exists)';
+        } else if (r.fifo_status === 'FIFO_VIOLATION_OUT_OF_SEQUENCE') {
+          remarks = 'FIFO Violation (Used Out of Sequence)';
+        } else {
+          remarks = 'FIFO Compliant';
+        }
+      }
+
+      let status = '';
+      if (!r.is_used) {
+        status = r.days_in_stock >= 30 ? `Non-Moving (${r.days_in_stock} days)` : `Active (${r.days_in_stock} days)`;
+      }
+
+      const row = wsSite.addRow([
+        sanitizeForSpreadsheet(r.transfer_received_date),
+        sanitizeForSpreadsheet(r.to_stock),
+        sanitizeForSpreadsheet(r.gsx_location_name || ''),
+        sanitizeForSpreadsheet(r.product_code),
+        sanitizeForSpreadsheet(r.product_name),
+        sanitizeForSpreadsheet(r.serial_number),
+        sanitizeForSpreadsheet(r.repair_closed_date || ''),
+        sanitizeForSpreadsheet(r.gsx_order_id || ''),
+        remarks,
+        status
+      ]);
+      row.height = 20;
+      const isAlt = idx % 2 === 1;
+      row.eachCell({ includeEmpty: true }, (cell, cNum) => {
+        cell.font = { name: 'Arial', size: 9 };
+        cell.border = borderThin;
+        if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        if (cNum === 6) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
+        if (cNum === 9) {
+          const isVio = remarks.includes('Violation');
+          cell.font = {
+            name: 'Arial',
+            size: 9,
+            bold: true,
+            color: { argb: isVio ? 'FFDC2626' : r.is_used ? 'FF15803D' : 'FFD97706' }
+          };
+        }
+        if (cNum === 10 && status.startsWith('Non-Moving')) {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+        }
+      });
+    });
+
+    wsSite.columns = [
+      { width: 18 }, { width: 20 }, { width: 34 }, { width: 16 },
+      { width: 32 }, { width: 24 }, { width: 18 }, { width: 16 },
+      { width: 28 }, { width: 24 }
+    ];
+  });
+
+  // Write and download
+  if (typeof document !== 'undefined') {
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const safeBaseName = fileName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    link.download = `${safeBaseName}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  } else {
+    const safeBaseName = fileName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const outPath = `${safeBaseName}.xlsx`;
+    await workbook.xlsx.writeFile(outPath);
+  }
+}
+
+/**
  * Downloads a sample template for Fixably Stock Transfers
  */
 export function downloadSampleStockTransfersTemplate(format = 'xlsx') {
