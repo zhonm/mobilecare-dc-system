@@ -11,7 +11,8 @@ export default function HeaderCategoryFilter() {
       { code: 'DISPLAY', name: 'Display', color: '#0284c7', bg: '#f0f9ff', border: '#bae6fd' },
       { code: 'CAMERA', name: 'Camera', color: '#db2777', bg: '#fdf2f8', border: '#fbcfe8' },
       { code: 'BACK_GLASS', name: 'Back Glass', color: '#0d9488', bg: '#f0fdfa', border: '#99f6e4' },
-      { code: 'MID_REAR', name: 'Mid/Rear System', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' }
+      { code: 'MID_REAR', name: 'Mid/Rear System', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
+      { code: 'OTHER', name: 'Other Components', color: '#475569', bg: '#f1f5f9', border: '#e2e8f0' }
     ],
     DEFAULT_SELECTED_CATEGORIES = ['BATTERY', 'DISPLAY']
   } = useApp();
@@ -109,12 +110,16 @@ export default function HeaderCategoryFilter() {
       {isOpen && (
         <>
           <div
-            className="mobile-nav-backdrop"
-            style={{ zIndex: 1001 }}
+            className="category-popover-mobile-backdrop"
             onClick={() => setIsOpen(false)}
             aria-hidden="true"
           />
-          <div className="category-popover-menu" role="dialog" aria-label="Hardware Category Filter">
+          <div
+            className="category-popover-menu"
+            role="dialog"
+            aria-label="Hardware Category Filter"
+            onClick={(e) => e.stopPropagation()}
+          >
           {/* Popover Header */}
           <div className="category-popover-header">
             <div className="category-popover-title-row">
