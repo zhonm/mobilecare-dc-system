@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { resolvePartInfo } from './partResolver.js';
 
 // Standard site mapping rules matching Google Sheet and Official Branch Directory
@@ -81,7 +80,7 @@ export function normalizeDate(val) {
   // Check YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
   // Check M/D/YYYY or D/M/YYYY
-  const parts = str.split(/[\/\-]/);
+  const parts = str.split(/[-/]/);
   if (parts.length === 3) {
     let year = parts[2];
     if (year.length === 2) year = '20' + year;

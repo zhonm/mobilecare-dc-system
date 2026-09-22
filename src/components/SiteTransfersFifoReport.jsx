@@ -6,7 +6,6 @@ import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import {
   parseGsxKbbKgbsUsedFile,
   reconcileSiteTransfers,
-  SITE_CODE_MAPPINGS,
   isIPhone13AndUp
 } from '../utils/siteTransfersReconciler';
 import {
@@ -22,24 +21,13 @@ import {
   Search,
   CheckCircle2,
   AlertTriangle,
-  XCircle,
-  HelpCircle,
-  Clock,
   RefreshCw,
   Building2,
   ChevronLeft,
   ChevronRight,
-  Sparkles,
-  ArrowRight,
-  ExternalLink,
   ShieldAlert,
   ShieldCheck,
-  Zap,
   Activity,
-  ArrowUpRight,
-  Calendar,
-  Layers,
-  TrendingUp,
   Package,
   Boxes,
   Compass
@@ -47,7 +35,6 @@ import {
 
 export default function SiteTransfersFifoReport() {
   const {
-    stockTransferReports,
     parts,
     showToast,
     setCurrentPage: setAppPage,
