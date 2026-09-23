@@ -892,6 +892,10 @@ export function useCloudSync({
           });
 
           // 3. Overlay previous local state (if not deleted)
+          // IMPORTANT: Cloud/DB data (existing) must win over stale local state for authoritative
+          // fields (siteId, role, email, fullName). Local state only contributes credential fields
+          // (passwordHash, hasSetPassword) and fills in gaps for fields not yet set by cloud/DB.
+          // Using { ...u, ...existing } ensures cloud/DB always takes precedence.
           (prev || []).forEach(u => {
             const cleanEmail = u.email?.toLowerCase();
             const uId = u.id?.toLowerCase();
@@ -904,8 +908,8 @@ export function useCloudSync({
             ) {
               const existing = profileMap.get(cleanEmail) || {};
               profileMap.set(cleanEmail, {
-                ...existing,
                 ...u,
+                ...existing,
                 hasSetPassword: Boolean(u.hasSetPassword || existing.hasSetPassword || u.passwordHash || existing.passwordHash),
                 passwordHash: u.passwordHash || existing.passwordHash || null
               });
@@ -3370,7 +3374,7 @@ export function useCloudSync({
         if (currentMasterlistData && currentMasterlistData.totalUnits > 0) {
           const masterlistPayload = {
             id: 'master_masterlist_data_registry',
-            record_type: 'masterlist_data_registry',
+            record_type: 'masterlist_registry',
             period_label: `${resolvedActivePeriod.label || 'September 2026'} Masterlist Data Registry`,
             period_year: resolvedActivePeriod?.year || 2026,
             period_month: resolvedActivePeriod?.month || 9,

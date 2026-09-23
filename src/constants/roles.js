@@ -93,7 +93,8 @@ export const INITIAL_USERS = [
     fullName: 'Andres Bonifacio',
     role: 'parts_management',
     rolePosition: 'Parts Management Analyst',
-    siteId: '1cebf73f-f511-47a5-a767-002709a42fab',
+    // siteId intentionally omitted — dynamically assigned by admin and stored in Supabase.
+    // Hardcoding this causes stale values to persist on the live server after site reassignment.
     isActive: true,
     hasSetPassword: true,
     permittedPages: ROLE_PRESETS.parts_management
@@ -104,7 +105,7 @@ export const INITIAL_USERS = [
     fullName: 'Jose Rizal',
     role: 'parts_management',
     rolePosition: 'Parts Management Specialist',
-    siteId: '61419aaa-da16-4075-9f40-a113be2620f9',
+    // siteId intentionally omitted — dynamically assigned by admin and stored in Supabase.
     isActive: true,
     hasSetPassword: true,
     permittedPages: ROLE_PRESETS.parts_management

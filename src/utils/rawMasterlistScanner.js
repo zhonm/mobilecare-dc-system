@@ -1,5 +1,6 @@
 import rawDataAugust from '../data/rawMasterlistData_august.json' with { type: 'json' };
 import rawDataSeptember from '../data/rawMasterlistData_september.json' with { type: 'json' };
+import rawDataOctober from '../data/rawMasterlistData_october.json' with { type: 'json' };
 import rawData from '../data/rawMasterlistData.json' with { type: 'json' };
 import { isPartMatchingCategoryFilter } from './categoryFilter.js';
 
@@ -41,7 +42,7 @@ export function getCategoryBadge(categoryName) {
 export const KNOWN_PART_PRICES = {};
 export const KNOWN_PART_CATEGORIES = {};
 
-[rawDataSeptember, rawDataAugust, rawData].forEach(ds => {
+[rawDataOctober, rawDataSeptember, rawDataAugust, rawData].forEach(ds => {
   if (ds?.partsSummary) {
     ds.partsSummary.forEach(p => {
       if (p.part_number) {
@@ -422,9 +423,11 @@ export function getActiveMasterlist(customData = null, targetPeriod = null) {
   }
 
   // If an explicit customData is provided (e.g. the user's uploaded masterlist passed by Dashboard),
-  // return it immediately without period-gating. The caller already resolved the correct dataset.
+  // return it if no specific period was requested OR if its period matches the requested targetPeriod.
   if (customData && customData.totalUnits !== undefined && Array.isArray(customData.partsSummary)) {
-    return customData;
+    if (!period || !customData.periodLabel || isPeriodMatching(customData.periodLabel, period)) {
+      return customData;
+    }
   }
 
   if (activeScannedMasterlist && activeScannedMasterlist.totalUnits !== undefined) {
@@ -469,8 +472,11 @@ export function getActiveMasterlist(customData = null, targetPeriod = null) {
   if (isPeriodMonth(period, 9, 'sep')) {
     return rawDataSeptember;
   }
+  if (isPeriodMonth(period, 10, 'oct')) {
+    return rawDataOctober;
+  }
 
-  return rawDataSeptember || rawDataAugust || rawData;
+  return rawDataSeptember || rawDataOctober || rawDataAugust || rawData;
 }
 
 /**
