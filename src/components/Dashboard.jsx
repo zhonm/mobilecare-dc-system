@@ -86,6 +86,7 @@ export default function Dashboard() {
     activePeriod,
     setActivePeriod,
     setActiveTab,
+    setShipmentsFilterStatus,
     isAutoRefreshing,
     autoRefreshData,
     activePackDraft,
@@ -813,8 +814,11 @@ export default function Dashboard() {
             borderLeft: `4px solid ${activeShipments.length > 0 ? '#f59e0b' : '#10b981'}`,
             cursor: 'pointer'
           }}
-          onClick={() => setActiveTab('shipments')}
-          title="Click to view Outbound Shipments"
+          onClick={() => {
+            if (setShipmentsFilterStatus) setShipmentsFilterStatus('shipped');
+            setActiveTab('shipments');
+          }}
+          title="Click to view In-Transit Outbound Shipments"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <span className="kpi-title">Outbound Shipments</span>
@@ -1976,7 +1980,10 @@ export default function Dashboard() {
           </div>
 
           <div
-            onClick={() => setActiveTab('shipments')}
+            onClick={() => {
+              if (setShipmentsFilterStatus) setShipmentsFilterStatus('shipped');
+              setActiveTab('shipments');
+            }}
             className="card"
             style={{
               padding: '16px',

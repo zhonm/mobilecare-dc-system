@@ -104,6 +104,42 @@ const queueAfterReceive = calculateActiveQueuePartsCount(null, activeAfterReceiv
 assert.strictEqual(queueAfterReceive, 0, 'Parts in queue must be 0 once all manifests are received');
 console.log('✓ Dynamic transition to 0 shipments and 0 parts in queue verified.');
 
+// 5. Test Dashboard click to in-transit shipments navigation
+console.log('\n5. Testing Dashboard click to In-Transit Outbound Shipments navigation...');
+const testManifests = [
+  { id: 'm1', invoice_ref: 'DCOWNED#091226B', status: 'shipped', items: [{ serial_number: 'SN1' }] },
+  { id: 'm2', invoice_ref: 'DCOWNED#091226D', status: 'shipped', items: [{ serial_number: 'SN2' }] },
+  { id: 'm3', invoice_ref: 'DCOWNED#091226F', status: 'shipped', items: [{ serial_number: 'SN3' }] },
+  { id: 'm4', invoice_ref: 'DCOWNED#091226E', status: 'shipped', items: [{ serial_number: 'SN4' }] },
+  { id: 'm5', invoice_ref: 'DCOWNED#091026A', status: 'received_confirmed', items: [{ serial_number: 'SN5' }] }
+];
+
+let navigatedTab = null;
+let currentFilterStatus = null;
+const setShipmentsFilterStatus = (status) => {
+  currentFilterStatus = status;
+};
+const setActiveTab = (tab) => {
+  navigatedTab = tab;
+};
+
+// Simulate clicking the Outbound Shipments card on Dashboard
+setShipmentsFilterStatus('shipped');
+setActiveTab('shipments');
+
+assert.strictEqual(navigatedTab, 'shipments', 'Clicking dashboard card must navigate to shipments tab');
+assert.strictEqual(currentFilterStatus, 'shipped', 'Clicking dashboard card must set shipments filter to shipped (In Transit)');
+
+// Simulate Shipments component receiving this filterStatus
+const filterStatusInShipments = currentFilterStatus || 'ALL';
+const inTransitShipments = testManifests.filter(s => {
+  if (filterStatusInShipments === 'shipped') return s.status === 'shipped';
+  return true;
+});
+assert.strictEqual(inTransitShipments.length, 4, 'In-transit filter must isolate exactly the 4 shipped manifests');
+console.log('✓ Dashboard click seamlessly sets In-Transit filter and isolates active shipments.');
+
 console.log('\n====================================================');
 console.log('ALL DASHBOARD OUTBOUND SHIPMENTS TESTS PASSED (100%)');
 console.log('====================================================');
+

@@ -130,6 +130,7 @@ export function AppProvider({ children }) {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [pmgSubTab, setPmgSubTab] = useState('requests_table');
+  const [shipmentsFilterStatus, setShipmentsFilterStatus] = useState(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
@@ -608,6 +609,8 @@ export function AppProvider({ children }) {
         setIsMobileNavOpen,
         pmgSubTab,
         setPmgSubTab,
+        shipmentsFilterStatus,
+        setShipmentsFilterStatus,
 
         // Automated Daily Session & Auto-Logout Management
         autoLogoutConfig: autoLogout.autoLogoutConfig,

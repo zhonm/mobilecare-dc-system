@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import {
@@ -72,7 +72,9 @@ export default function Shipments() {
     masterlistData,
     savedRecords,
     loadArchivedShipments,
-    isLoadingArchivedShipments
+    isLoadingArchivedShipments,
+    shipmentsFilterStatus,
+    setShipmentsFilterStatus
   } = useApp();
 
   const { serialDict, partsMapByPn } = useMemo(() => {
@@ -88,8 +90,18 @@ export default function Shipments() {
 
   // Regional Tab State: 'ALL' | 'METRO_MANILA' | 'PROVINCE'
   const [regionTab, setRegionTab] = useState('ALL');
-  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState(() => shipmentsFilterStatus || 'ALL');
   const [search, setSearch] = useState('');
+
+  // Synchronize incoming filter status navigation from Dashboard (e.g. 'shipped' / In Transit)
+  useEffect(() => {
+    if (shipmentsFilterStatus) {
+      setFilterStatus(shipmentsFilterStatus);
+      if (setShipmentsFilterStatus) {
+        setShipmentsFilterStatus(null);
+      }
+    }
+  }, [shipmentsFilterStatus, setShipmentsFilterStatus]);
 
   // Older Shipments Dropdown & View Mode State
   const [viewArchiveMode, setViewArchiveMode] = useState('recent_default'); // 'recent_default' | 'all' | 'older_only'
