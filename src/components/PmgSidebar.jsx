@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
@@ -11,7 +11,6 @@ import {
   LogOut,
   ShieldCheck,
   CheckCircle2,
-  Search,
   X,
   MessageSquare
 } from 'lucide-react';
@@ -32,8 +31,6 @@ export default function PmgSidebar() {
     isMobileNavOpen,
     setIsMobileNavOpen
   } = useApp();
-
-  const [navSearch, setNavSearch] = useState('');
 
   // Resolve user site object with universal resolver
   const userSite = useMemo(() => {
@@ -136,12 +133,6 @@ export default function PmgSidebar() {
     }
   ];
 
-  const filteredNavItems = pmgNavItems.filter(it => {
-    if (!navSearch.trim()) return true;
-    const q = navSearch.toLowerCase().trim();
-    return it.label.toLowerCase().includes(q) || it.section.toLowerCase().includes(q);
-  });
-
   const sections = ['Branch Operations', 'Network Visibility', 'Support & Help'];
 
   return (
@@ -166,7 +157,7 @@ export default function PmgSidebar() {
             </div>
             <div className="sidebar-brand-info">
               <div className="sidebar-brand-title-row">
-                <h2 className="sidebar-brand-title">MobileCare</h2>
+                <h2 className="sidebar-brand-title">DC System</h2>
                 <span className="pmg-role-badge">PMG</span>
               </div>
               <div className="sidebar-company-row">
@@ -185,38 +176,10 @@ export default function PmgSidebar() {
           </button>
         </div>
 
-      {/* Quick Search Bar */}
-      <div className="sidebar-search-container">
-        <div className="sidebar-search-input-wrapper">
-          <Search size={13} className="sidebar-search-icon" />
-          <input
-            type="text"
-            placeholder="Search menu..."
-            value={navSearch}
-            onChange={(e) => setNavSearch(e.target.value)}
-            className="sidebar-search-input"
-          />
-          {navSearch && (
-            <button
-              type="button"
-              onClick={() => setNavSearch('')}
-              className="sidebar-search-clear-btn"
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Navigation Links */}
-      <div className="sidebar-nav custom-scrollbar" style={{ flex: 1 }}>
-        {filteredNavItems.length === 0 ? (
-          <div className="sidebar-no-results">
-            No matching navigation items
-          </div>
-        ) : (
-          sections.map(secName => {
-            const items = filteredNavItems.filter(item => item.section === secName);
+        {/* Navigation Links */}
+        <div className="sidebar-nav custom-scrollbar" style={{ flex: 1 }}>
+          {sections.map(secName => {
+            const items = pmgNavItems.filter(item => item.section === secName);
             if (items.length === 0) return null;
 
             return (
@@ -254,8 +217,7 @@ export default function PmgSidebar() {
                 })}
               </div>
             );
-          })
-        )}
+          })}
       </div>
 
       {/* Branch Information Card */}

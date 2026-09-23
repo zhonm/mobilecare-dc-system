@@ -1102,7 +1102,7 @@ export default function Shipments() {
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
-              title="Download Corporate PDF Manifest"
+              title="Download Packing List PDF"
               style={{
                 fontSize: '11.5px',
                 padding: '4px 7px',
@@ -3735,10 +3735,10 @@ export default function Shipments() {
                     fontSize: '12px',
                     fontWeight: 600
                   }}
-                  title="Download Corporate PDF Packing List"
+                  title="Download Packing List PDF"
                 >
                   <Download size={13} />
-                  <span>Corporate PDF</span>
+                  <span>Packing List PDF</span>
                 </button>
 
                 <button

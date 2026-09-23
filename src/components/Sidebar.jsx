@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
@@ -17,7 +17,6 @@ import {
   ShieldCheck,
   Users,
   LogOut,
-  Search,
   X,
   Inbox,
   GitCompare
@@ -37,8 +36,6 @@ export default function Sidebar() {
     isMobileNavOpen,
     setIsMobileNavOpen
   } = useApp();
-
-  const [navSearch, setNavSearch] = useState('');
 
   const openPOsCount = purchaseOrders.filter(p => p.status !== 'closed' && p.status !== 'received').length;
   const pendingShipmentsCount = useMemo(() => {
@@ -81,13 +78,8 @@ export default function Sidebar() {
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
   ];
 
-  // Filter items by permitted access & search query
-  const visibleItems = navItems.filter(item => {
-    if (!canAccess(item.id)) return false;
-    if (!navSearch.trim()) return true;
-    const q = navSearch.toLowerCase().trim();
-    return item.label.toLowerCase().includes(q) || item.section.toLowerCase().includes(q);
-  });
+  // Filter items by permitted access
+  const visibleItems = navItems.filter(item => canAccess(item.id));
 
   const sections = [
     'Planning & Allocation',
@@ -134,37 +126,9 @@ export default function Sidebar() {
           </button>
         </div>
 
-      {/* Quick Search Bar */}
-      <div className="sidebar-search-container">
-        <div className="sidebar-search-input-wrapper">
-          <Search size={13} className="sidebar-search-icon" />
-          <input
-            type="text"
-            placeholder="Search menu..."
-            value={navSearch}
-            onChange={(e) => setNavSearch(e.target.value)}
-            className="sidebar-search-input"
-          />
-          {navSearch && (
-            <button
-              type="button"
-              onClick={() => setNavSearch('')}
-              className="sidebar-search-clear-btn"
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Navigation Menu */}
-      <div className="sidebar-nav custom-scrollbar">
-        {visibleItems.length === 0 ? (
-          <div className="sidebar-no-results">
-            No matching navigation items
-          </div>
-        ) : (
-          sections.map(secName => {
+        {/* Navigation Menu */}
+        <div className="sidebar-nav custom-scrollbar">
+          {sections.map(secName => {
             const items = visibleItems.filter(item => item.section === secName);
             if (items.length === 0) return null;
 
@@ -196,8 +160,7 @@ export default function Sidebar() {
                 })}
               </div>
             );
-          })
-        )}
+          })}
       </div>
 
       {/* Modernized User Profile Footer */}

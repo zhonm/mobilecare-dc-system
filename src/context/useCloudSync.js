@@ -674,7 +674,7 @@ export function useCloudSync({
         shouldFetch('inventory_units') ? (
           supabase.from('inventory_units').select('*').limit(2000)
         ) : Promise.resolve({ data: null }),
-        shouldFetch('parts') ? supabase.from('parts').select('*').limit(300) : Promise.resolve({ data: null }),
+        shouldFetch('parts') ? supabase.from('parts').select('*').order('part_number', { ascending: true }) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id destination for PMG branch users & filter active/open or recent manifests (<60 days)

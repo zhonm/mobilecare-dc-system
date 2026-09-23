@@ -16,6 +16,18 @@ export const DEFAULT_SUPERVISOR_SETTINGS = {
   guard_on_duty: ''
 };
 
+function canManagePartsCatalog(user) {
+  const role = String(user?.role || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  const isSuperadminRole = role === 'superadmin' || role === 'super_admin' ||
+    (role.includes('super') && role.includes('admin'));
+  const hasSuperadminPermissions = Array.isArray(user?.permittedPages) && user.permittedPages.includes('user-access');
+  return user?.isSuperAdmin === true || isSuperadminRole || hasSuperadminPermissions || role === 'admin';
+}
+
+function getCatalogUser(currentUser, getCurrentUser) {
+  return currentUser || (typeof getCurrentUser === 'function' ? getCurrentUser() : null);
+}
+
 function normalizeSiteCode(rawCode) {
   if (!rawCode) return '';
   const clean = String(rawCode).trim().toUpperCase();
@@ -301,7 +313,7 @@ export function useCatalogAndSites({
   }, []);
 
   const savePart = async (partData) => {
-    if (!['superadmin', 'admin'].includes(currentUser?.role)) {
+    if (!canManagePartsCatalog(getCatalogUser(currentUser, getCurrentUser))) {
       showToast('Permission denied: Only Superadmin or Admin can modify the parts catalog.', 'error');
       return { success: false, error: 'Insufficient catalog permissions' };
     }
@@ -424,7 +436,7 @@ export function useCatalogAndSites({
   };
 
   const deletePart = async (partIdOrObj, reason = 'Part permanently removed from catalog by user') => {
-    if (!['superadmin', 'admin'].includes(currentUser?.role)) {
+    if (!canManagePartsCatalog(getCatalogUser(currentUser, getCurrentUser))) {
       showToast('Permission denied: Only Superadmin or Admin can modify the parts catalog.', 'error');
       return { success: false, error: 'Insufficient catalog permissions' };
     }
