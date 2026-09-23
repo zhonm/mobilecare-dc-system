@@ -98,8 +98,34 @@ const appContextCode = fs.readFileSync(path.join(__dirname, '../context/AppConte
 assert.ok(appContextCode.includes('useInactivitySyncGuard'), 'AppContext imports useInactivitySyncGuard');
 assert.ok(appContextCode.includes('InactivityRefreshModal'), 'AppContext imports InactivityRefreshModal');
 assert.ok(appContextCode.includes('isDataSyncPaused: inactivityGuard.isDataSyncPaused'), 'isDataSyncPaused is passed to cloudSync');
+assert.ok(appContextCode.includes('resetInactivityTimer: inactivityGuard.resetInactivityTimer'), 'resetInactivityTimer is passed to cloudSync');
 assert.ok(appContextCode.includes('<InactivityRefreshModal'), 'InactivityRefreshModal is rendered at root level');
 console.log('  ✓ PASS: AppContext wires useInactivitySyncGuard and renders InactivityRefreshModal');
+
+// ----------------------------------------------------
+// 5. Manual Page Refresh & Refresh Button Recovery Verification
+// ----------------------------------------------------
+console.log('\n--- 5. Manual Page Refresh & Refresh Button Recovery ---');
+const guardCode = fs.readFileSync(path.join(__dirname, '../hooks/useInactivitySyncGuard.js'), 'utf-8');
+
+// 5a. Page Refresh mounts clean (never defaults to paused)
+assert.ok(
+  guardCode.includes('const [isDataSyncPaused, setIsDataSyncPaused] = useState(false);'),
+  'isDataSyncPaused must initialize to false on mount so fresh page reloads vanish the modal'
+);
+assert.ok(
+  guardCode.includes('localStorage.removeItem(INACTIVITY_PAUSED_STORAGE_KEY);'),
+  'useInactivitySyncGuard must clear INACTIVITY_PAUSED_STORAGE_KEY on mount'
+);
+console.log('  ✓ PASS: Manual page refresh vanishes Data Sync Paused modal and initializes with unpaused live state');
+
+// 5b. Refresh button unpauses sync & reloads data
+assert.ok(
+  cloudSyncCode.includes('if (isManual || !silent)') &&
+  cloudSyncCode.includes('resetInactivityTimer()'),
+  'autoRefreshData must call resetInactivityTimer when user triggers manual refresh or clicks refresh buttons'
+);
+console.log('  ✓ PASS: Clicking refresh buttons clears paused state and triggers full database reload');
 
 console.log('\n====================================================');
 console.log('ALL INACTIVITY GUARD & EGRESS OPTIMIZATION TESTS PASSED');

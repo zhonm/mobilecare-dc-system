@@ -18,21 +18,9 @@ export function useInactivitySyncGuard({
   onInactivityPause = null,
   onResumeSync = null
 } = {}) {
-  const [isDataSyncPaused, setIsDataSyncPaused] = useState(() => {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) return false;
-      const storedPaused = localStorage.getItem(INACTIVITY_PAUSED_STORAGE_KEY);
-      if (storedPaused === 'true') {
-        const lastAct = parseInt(localStorage.getItem(INACTIVITY_STORAGE_KEY) || '0', 10);
-        if (lastAct > 0 && Date.now() - lastAct >= timeoutMs) {
-          return true;
-        }
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  });
+  // Manual page refresh or initial page load counts as active user engagement retrieving latest data.
+  // The paused state should never persist across fresh page mounts/refreshes.
+  const [isDataSyncPaused, setIsDataSyncPaused] = useState(false);
 
   const [inactiveDurationMs, setInactiveDurationMs] = useState(0);
   const lastActivityTimeRef = useRef(Date.now());
@@ -49,21 +37,15 @@ export function useInactivitySyncGuard({
     onResumeSyncRef.current = onResumeSync;
   });
 
-  // Synchronize initial last activity timestamp from localStorage
+  // On page mount / refresh: clear any residual paused flag and reset activity timer
   useEffect(() => {
+    const now = Date.now();
+    lastActivityTimeRef.current = now;
+    lastEventThrottleTimeRef.current = now;
     try {
-      const stored = localStorage.getItem(INACTIVITY_STORAGE_KEY);
-      const parsed = stored ? parseInt(stored, 10) : 0;
-      if (parsed > 0 && parsed <= Date.now()) {
-        lastActivityTimeRef.current = parsed;
-      } else {
-        const now = Date.now();
-        lastActivityTimeRef.current = now;
-        localStorage.setItem(INACTIVITY_STORAGE_KEY, String(now));
-      }
-    } catch {
-      lastActivityTimeRef.current = Date.now();
-    }
+      localStorage.removeItem(INACTIVITY_PAUSED_STORAGE_KEY);
+      localStorage.setItem(INACTIVITY_STORAGE_KEY, String(now));
+    } catch {}
   }, []);
 
   // Record user interaction (throttled to at most once every 5 seconds to reduce CPU/Storage overhead)

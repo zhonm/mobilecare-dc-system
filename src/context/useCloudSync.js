@@ -99,7 +99,8 @@ export function useCloudSync({
   logDeletionAudit,
   setAutoLogoutConfig,
   setSessionAuditLogs,
-  isDataSyncPaused = false
+  isDataSyncPaused = false,
+  resetInactivityTimer = null
 }) {
   const [cloudSyncStatus, setCloudSyncStatus] = useState({
     isSaving: false,
@@ -2514,6 +2515,14 @@ export function useCloudSync({
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
+    // If user clicked any refresh button (manual refresh or non-silent sync),
+    // clear the inactivity paused state immediately and re-arm watchdog
+    if (isManual || !silent) {
+      if (typeof resetInactivityTimer === 'function') {
+        resetInactivityTimer();
+      }
+    }
+
     // 1-Hour User Inactivity Guard: block automatic background queries if paused
     if (isDataSyncPaused && !isManual) {
       console.debug('[AutoRefresh] Blocked by 1-hour user inactivity guard to conserve egress');
@@ -2576,7 +2585,7 @@ export function useCloudSync({
         setIsAutoRefreshing(false);
       }, 300);
     }
-  }, [hydrateFromSupabase, showToast, isDataSyncPaused]);
+  }, [hydrateFromSupabase, showToast, isDataSyncPaused, resetInactivityTimer]);
 
   useEffect(() => {
     autoRefreshDataRef.current = autoRefreshData;

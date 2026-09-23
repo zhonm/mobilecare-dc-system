@@ -638,7 +638,7 @@ export default function Dashboard() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Dashboard manual refresh' })}
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, isManual: true, reason: 'Dashboard manual refresh' })}
               disabled={isAutoRefreshing}
               style={{
                 background: 'rgba(15, 23, 42, 0.6)',

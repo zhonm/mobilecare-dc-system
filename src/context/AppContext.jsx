@@ -413,7 +413,8 @@ export function AppProvider({ children }) {
     logDeletionAudit: auditLogs.logDeletionAudit,
     setAutoLogoutConfig: (...args) => autoLogoutRef.current?.setAutoLogoutConfig?.(...args),
     setSessionAuditLogs: auditLogs.setSessionAuditLogs,
-    isDataSyncPaused: inactivityGuard.isDataSyncPaused
+    isDataSyncPaused: inactivityGuard.isDataSyncPaused,
+    resetInactivityTimer: inactivityGuard.resetInactivityTimer
   });
 
   useEffect(() => {
