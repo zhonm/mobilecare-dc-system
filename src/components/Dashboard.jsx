@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Boxes,
@@ -102,7 +102,7 @@ export default function Dashboard() {
   // VIEW & FILTER STATES
   // ─────────────────────────────────────────────────────────────────────────
   const [reportTab, setReportTab] = useState('top-parts'); // 'top-parts' | 'top-sites' | 'site-parts'
-  const [selectedSiteName, setSelectedSiteName] = useState('MOBILECARE - NEWPOINT MALL');
+  const [selectedSiteName, setSelectedSiteName] = useState('');
   const [reportCategory, setReportCategory] = useState('ALL');
   const [reportSearch, setReportSearch] = useState('');
   const [reportSortBy, setReportSortBy] = useState('units'); // 'units' | 'valuation' | 'name'
@@ -197,15 +197,27 @@ export default function Dashboard() {
     }, activeMasterlist, activePeriod);
   }, [reportSearch, reportLimit, selectedCategories, activeMasterlist, activePeriod]);
 
+  // Default to the top site by demand volume (which is at the top of the dropdown list, e.g. VERTIS NORTH)
+  const topSiteName = masterSitesReport.topSite?.siteName || masterSitesReport.all?.[0]?.siteName || '';
+  const effectiveSelectedSite = (selectedSiteName && masterSitesReport.all?.some(s => s.siteName === selectedSiteName))
+    ? selectedSiteName
+    : topSiteName;
+
+  useEffect(() => {
+    if (topSiteName && (!selectedSiteName || !masterSitesReport.all?.some(s => s.siteName === selectedSiteName))) {
+      setSelectedSiteName(topSiteName);
+    }
+  }, [topSiteName, selectedSiteName, masterSitesReport.all]);
+
   const sitePartsReport = useMemo(() => {
-    return getMasterlistPartsForSite(selectedSiteName, {
+    return getMasterlistPartsForSite(effectiveSelectedSite, {
       category: reportCategory,
       categories: selectedCategories,
       search: reportSearch,
       limit: reportLimit,
       sortBy: reportSortBy
     }, activeMasterlist, activePeriod);
-  }, [selectedSiteName, reportCategory, selectedCategories, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
+  }, [effectiveSelectedSite, reportCategory, selectedCategories, reportSearch, reportLimit, reportSortBy, activeMasterlist, activePeriod]);
 
   // Category Distribution for Donut Chart
   const categoryChartData = useMemo(() => {
@@ -325,7 +337,7 @@ export default function Dashboard() {
           ? 'Top iPhone Parts'
           : reportTab === 'top-sites'
           ? 'Service Hubs Network'
-          : `Branch Parts (${selectedSiteName})`;
+          : `Branch Parts (${effectiveSelectedSite})`;
 
       const currentPeriodLabel = typeof activePeriod === 'string'
         ? activePeriod
@@ -345,7 +357,7 @@ export default function Dashboard() {
         masterSitesReport: sitesReportToExport,
         sitePartsReport,
         masterSummary,
-        selectedSiteName,
+        selectedSiteName: effectiveSelectedSite,
         reportCategory: mode === 'all' ? 'ALL' : reportCategory,
         reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
@@ -374,7 +386,7 @@ export default function Dashboard() {
           ? 'Top iPhone Parts'
           : reportTab === 'top-sites'
           ? 'Service Hubs Network'
-          : `Branch Parts (${selectedSiteName})`;
+          : `Branch Parts (${effectiveSelectedSite})`;
 
       const currentPeriodLabel = typeof activePeriod === 'string'
         ? activePeriod
@@ -394,7 +406,7 @@ export default function Dashboard() {
         masterSitesReport: sitesReportToExport,
         sitePartsReport,
         masterSummary,
-        selectedSiteName,
+        selectedSiteName: effectiveSelectedSite,
         reportCategory: mode === 'all' ? 'ALL' : reportCategory,
         reportSearch: mode === 'all' ? '' : reportSearch,
         periodLabel: currentPeriodLabel,
@@ -979,6 +991,92 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        {/* VIEW 3 TOP SELECTOR: Prominent, Enlarged Site Selector Banner placed at the top */}
+        {reportTab === 'site-parts' && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
+              border: '1px solid #cbd5e1',
+              borderRadius: '10px',
+              padding: '16px 20px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '16px',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
+            }}
+          >
+            {/* Left Side: Large Dropdown Picker */}
+            <div style={{ flex: '1 1 340px' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '6px' }}>
+                Select Service Branch:
+              </label>
+              <div style={{ position: 'relative' }}>
+                <select
+                  className="form-select"
+                  value={effectiveSelectedSite}
+                  onChange={(e) => setSelectedSiteName(e.target.value)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    border: '2px solid #0284c7',
+                    fontSize: '14.5px',
+                    fontWeight: 800,
+                    color: '#0f172a',
+                    background: '#ffffff',
+                    width: '100%',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(2, 132, 199, 0.12)'
+                  }}
+                >
+                  {masterSitesReport.all.map(s => (
+                    <option key={s.siteName} value={s.siteName}>
+                      {s.shortName} • {s.totalUnits} iPhone units ({s.region})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Right Side: 3 Prominent Branch Metrics */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Branch Demand
+                </div>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                  {sitePartsReport.siteTotalUnits.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>units</span>
+                </div>
+              </div>
+
+              <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Total Branch Spend
+                </div>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', fontFamily: 'var(--font-mono)' }}>
+                  ${sitePartsReport.siteTotalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>(₱{(sitePartsReport.siteTotalValPHP / 1000000).toFixed(2)}M)</span>
+                </div>
+              </div>
+
+              <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
+
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
+                  Active SKUs
+                </div>
+                <div style={{ fontSize: '20px', fontWeight: 800, color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
+                  {sitePartsReport.totalPartsCount} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>parts</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Clean iPhone Category Filter Pills */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid #f1f5f9' }}>
@@ -1573,94 +1671,10 @@ export default function Dashboard() {
         )}
 
         {/* ───────────────────────────────────────────────────────────────── */}
-        {/* VIEW 3: ALL IPHONE PARTS PER SITE (ENLARGED PROMINENT SITE PICKER)*/}
+        {/* VIEW 3: ALL IPHONE PARTS PER SITE TABLE                           */}
         {/* ───────────────────────────────────────────────────────────────── */}
         {reportTab === 'site-parts' && (
           <div>
-            {/* Prominent, Enlarged Site Selector Banner */}
-            <div
-              style={{
-                background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-                border: '1px solid #cbd5e1',
-                borderRadius: '10px',
-                padding: '18px 22px',
-                marginBottom: '16px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '16px',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
-              }}
-            >
-              {/* Left Side: Large Dropdown Picker */}
-              <div style={{ flex: '1 1 340px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', marginBottom: '6px' }}>
-                  Select Service Branch:
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <select
-                    className="form-select"
-                    value={selectedSiteName}
-                    onChange={(e) => setSelectedSiteName(e.target.value)}
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: '2px solid #0284c7',
-                      fontSize: '14.5px',
-                      fontWeight: 800,
-                      color: '#0f172a',
-                      background: '#ffffff',
-                      width: '100%',
-                      cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(2, 132, 199, 0.12)'
-                    }}
-                  >
-                    {masterSitesReport.all.map(s => (
-                      <option key={s.siteName} value={s.siteName}>
-                        {s.shortName} • {s.totalUnits} iPhone units ({s.region})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Right Side: 3 Prominent Branch Metrics */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Branch Demand
-                  </div>
-                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                    {sitePartsReport.siteTotalUnits.toLocaleString()} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>units</span>
-                  </div>
-                </div>
-
-                <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
-
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Total Branch Spend
-                  </div>
-                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', fontFamily: 'var(--font-mono)' }}>
-                    ${sitePartsReport.siteTotalValUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}{' '}
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>(₱{(sitePartsReport.siteTotalValPHP / 1000000).toFixed(2)}M)</span>
-                  </div>
-                </div>
-
-                <div style={{ width: '1px', height: '36px', background: '#cbd5e1' }} />
-
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Active SKUs
-                  </div>
-                  <div style={{ fontSize: '20px', fontWeight: 800, color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>
-                    {sitePartsReport.totalPartsCount} <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>parts</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
             {/* Branch Parts Table (No DC In-Stock / Action Columns) */}
             {sitePartsReport.displayList.length === 0 ? (
               <div style={{ padding: '36px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>

@@ -530,7 +530,7 @@ export default function CommandPalette({ isOpen, onClose }) {
                           Stock Location:
                         </span>
                         <strong style={{ color: '#f1f5f9', fontSize: '11.5px' }}>
-                          {sd.isDcSite ? 'Central DC Warehouse' : sd.siteName}
+                          {sd.isDcSite ? 'DC Stocks' : sd.siteName}
                         </strong>
                       </div>
 
@@ -563,7 +563,7 @@ export default function CommandPalette({ isOpen, onClose }) {
 
                     <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: '6px' }}>
                       <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        Inspect Complete Dossier <ArrowRight size={12} />
+                        See Complete Details <ArrowRight size={12} />
                       </span>
                     </div>
                   </div>
@@ -654,7 +654,6 @@ export default function CommandPalette({ isOpen, onClose }) {
             borderTop: '1px solid #1e293b',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
             fontSize: '11.5px',
             color: '#64748b'
           }}
@@ -664,7 +663,6 @@ export default function CommandPalette({ isOpen, onClose }) {
             <span>↵ Select</span>
             <span>ESC Close</span>
           </div>
-          <span>DC System 2.0 Command Center</span>
         </div>
       </div>
 

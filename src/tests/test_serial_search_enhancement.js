@@ -108,6 +108,8 @@ it('Resolves serial currently in stock at Central DC Warehouse', () => {
   assert.ok(result, 'Result should exist');
   assert.strictEqual(result.serial_number, 'DCDC100020003000');
   assert.strictEqual(result.isDcSite, true, 'Should be DC site');
+  assert.strictEqual(result.siteName, 'DC Stocks', 'Should resolve siteName as DC Stocks');
+  assert.strictEqual(result.statusBadgeLabel, 'In Stock at DC Stocks');
   assert.strictEqual(result.statusKey, 'in_stock_dc');
   assert.strictEqual(result.statusBadgeType, 'dc');
   assert.strictEqual(result.isUsed, false, 'Should NOT be used');

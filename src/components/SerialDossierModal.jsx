@@ -140,7 +140,7 @@ export default function SerialDossierModal({
               <span>Current Stock Location</span>
             </div>
             <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
-              {serialDetails.isDcSite ? 'Central DC Warehouse' : serialDetails.siteName}
+              {serialDetails.isDcSite ? 'DC Stocks' : serialDetails.siteName}
             </div>
             <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
               {serialDetails.isDcSite ? (

@@ -169,7 +169,7 @@ export function resolveSerialFullDetails(serialInput, {
     siteObj.is_dc === true
   );
 
-  const siteName = siteObj ? siteObj.name : (isDcSite ? 'Central DC Warehouse' : 'Branch Site');
+  const siteName = isDcSite ? 'DC Stocks' : (siteObj ? siteObj.name : 'Branch Site');
   const siteCode = siteObj ? siteObj.code : (isDcSite ? 'DC-MDC' : 'BRANCH');
 
   // 6. Determine Lifecycle Status
@@ -209,7 +209,7 @@ export function resolveSerialFullDetails(serialInput, {
     statusBadgeType = 'site';
   } else {
     statusKey = 'in_stock_dc';
-    statusBadgeLabel = 'In Stock at Central DC Warehouse';
+    statusBadgeLabel = 'In Stock at DC Stocks';
     statusBadgeType = 'dc';
   }
 

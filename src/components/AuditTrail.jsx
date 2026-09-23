@@ -340,7 +340,7 @@ export default function AuditTrail() {
       { Property: 'Part Number', Value: matchedUnit.part_number },
       { Property: 'Description', Value: matchedUnit.description || 'N/A' },
       { Property: 'Current Status', Value: matchedUnit.statusBadgeLabel || String(matchedUnit.status || 'in_stock').toUpperCase() },
-      { Property: 'Stock Location', Value: matchedUnit.isDcSite ? 'Central DC Warehouse' : `${matchedUnit.siteName || 'Site'} (${matchedUnit.siteRegion || 'Branch'})` },
+      { Property: 'Stock Location', Value: matchedUnit.isDcSite ? 'DC Stocks' : `${matchedUnit.siteName || 'Site'} (${matchedUnit.siteRegion || 'Branch'})` },
       { Property: 'Site Arrival Date', Value: matchedUnit.siteArrivalFormatted || (matchedUnit.siteArrivalDate ? String(matchedUnit.siteArrivalDate).slice(0, 10) : 'N/A') },
       { Property: 'Site Arrival Status', Value: matchedUnit.siteArrivalStatus || 'N/A' },
       { Property: 'Used by Site', Value: matchedUnit.isUsed ? 'YES - Consumed in Repair' : 'NO - In Stock / Available' },
@@ -1714,7 +1714,7 @@ export default function AuditTrail() {
                     <span>Stock Location</span>
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
-                    {matchedUnit.isDcSite ? 'Central DC Warehouse' : matchedUnit.siteName || 'Branch Site'}
+                    {matchedUnit.isDcSite ? 'DC Stocks' : matchedUnit.siteName || 'Branch Site'}
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                     {matchedUnit.isDcSite ? 'Central DC Stock' : `Site Stock (${matchedUnit.siteRegion || 'Branch'})`}

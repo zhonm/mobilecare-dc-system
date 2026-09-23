@@ -8,7 +8,6 @@ import {
   RotateCcw,
   Search,
   FileSpreadsheet,
-  UploadCloud,
   FileText,
   X,
   RefreshCw,
@@ -30,7 +29,7 @@ import {
   Archive,
   Eye
 } from 'lucide-react';
-import { parseShipmentManifestFile, downloadShipmentManifestTemplate, exportPackingListXLSX } from '../utils/excelParser';
+import { exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import {
@@ -64,7 +63,6 @@ export default function Shipments() {
     confirmSiteReceive,
     partsRequests,
     updatePartsRequestStatus,
-    batchImportShipments,
     showToast,
     currentUser,
     canUserDeleteRecord,
@@ -173,13 +171,6 @@ export default function Shipments() {
 
   // Tracking Number Required Prompt Modal State (for Print / PDF)
   const [trackingModalState, setTrackingModalState] = useState(null);
-
-  // Import Modal State
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isParsing, setIsParsing] = useState(false);
-  const [parsedBatch, setParsedBatch] = useState(null);
-  const fileInputRef = useRef(null);
 
   // Shipment Deletion Modal State
   const [shipmentToDelete, setShipmentToDelete] = useState(null);
@@ -810,45 +801,6 @@ export default function Shipments() {
     }
   };
 
-  // --- XLSX / CSV Import Handling ---
-  const handleFileSelect = async (file) => {
-    if (!file) return;
-    setIsParsing(true);
-    try {
-      const res = await parseShipmentManifestFile(file, sites, parts);
-      if (res.success) {
-        setParsedBatch(res);
-        showToast(`Parsed ${res.shipments.length} shipments (${res.totalItems} total parts)`, 'info');
-      } else {
-        showToast(res.error || 'Failed to parse shipment manifest file', 'error');
-        setParsedBatch(null);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error processing file: ' + err.message, 'error');
-      setParsedBatch(null);
-    } finally {
-      setIsParsing(false);
-    }
-  };
-
-  const handleDownloadTemplate = (format) => {
-    downloadShipmentManifestTemplate(format, sites);
-    showToast(`Downloaded Shipment Manifest template (${format.toUpperCase()})`, 'info');
-  };
-
-  const handleConfirmBatchImport = () => {
-    if (!parsedBatch || !parsedBatch.shipments || parsedBatch.shipments.length === 0) return;
-
-    const res = batchImportShipments(parsedBatch.shipments);
-    if (res.success) {
-      setParsedBatch(null);
-      setIsImportModalOpen(false);
-    } else {
-      showToast(res.error || 'Failed to import shipments', 'error');
-    }
-  };
-
   // Render a standardized, ergonomic table row for a shipment
   const renderShipmentRow = (sh, isOlder = false) => {
     const destSite = resolveSite(sh.site_id || sh.site_name, sites);
@@ -1377,23 +1329,6 @@ export default function Shipments() {
             >
               <Hash size={15} color="#0284c7" />
               <span>Serials by Site</span>
-            </button>
-
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setIsImportModalOpen(true)}
-              style={{
-                background: '#f8fafc',
-                color: 'var(--primary)',
-                borderColor: 'var(--primary)',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <FileSpreadsheet size={15} />
-              <span>Import Manifests (XLSX / CSV)</span>
             </button>
 
             <div style={{ position: 'relative', width: '260px' }}>
@@ -2089,7 +2024,7 @@ export default function Shipments() {
                                   </div>
                                 </div>
                               ) : (
-                                'No shipments found for this status. Pack parts or import manifests above.'
+                                'No shipments found for this status.'
                               )}
                             </div>
                           )}
@@ -2268,166 +2203,6 @@ export default function Shipments() {
           </>
         );
       })()}
-
-      {/* --- XLSX / CSV Import Modal Dialog --- */}
-      {isImportModalOpen && (
-        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setIsImportModalOpen(false); }}>
-          <div className="modal-content">
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '8px', borderRadius: '8px' }}>
-                  <FileSpreadsheet size={22} color="#38bdf8" />
-                </div>
-                <div>
-                  <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Import Shipment Manifests (XLSX / CSV)</h3>
-                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
-                    Bulk upload historical or branch packing manifests
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setIsImportModalOpen(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              {/* Template Row */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '12px',
-                padding: '12px 16px',
-                background: '#f8fafc',
-                borderRadius: 'var(--radius-md)',
-                marginBottom: '16px',
-                border: '1px solid #e2e8f0'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Download size={16} color="var(--primary)" />
-                  <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)' }}>Need a formatted manifest template?</span>
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => handleDownloadTemplate('xlsx')}
-                    style={{ background: '#fff', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    <FileSpreadsheet size={13} color="#16a34a" />
-                    <span>Download Excel (.xlsx)</span>
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => handleDownloadTemplate('csv')}
-                    style={{ background: '#fff', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    <FileText size={13} color="#0284c7" />
-                    <span>Download CSV (.csv)</span>
-                  </button>
-                </div>
-              </div>
-
-              {!parsedBatch ? (
-                <div
-                  className={`dropzone ${isDragging ? 'active' : ''}`}
-                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={async (e) => {
-                    e.preventDefault();
-                    setIsDragging(false);
-                    if (e.dataTransfer.files?.[0]) await handleFileSelect(e.dataTransfer.files[0]);
-                  }}
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{ minHeight: '180px' }}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".xlsx, .xls, .csv"
-                    style={{ display: 'none' }}
-                    onChange={(e) => handleFileSelect(e.target.files?.[0])}
-                  />
-                  <div style={{ background: 'var(--primary-light)', padding: '14px', borderRadius: '50%', marginBottom: '12px' }}>
-                    <UploadCloud size={32} color="var(--primary)" />
-                  </div>
-                  <h4 style={{ fontSize: '15px', fontWeight: 600, marginBottom: '4px' }}>
-                    {isParsing ? 'Processing and validating shipment manifest...' : isDragging ? 'Drop manifest file here' : 'Click to browse or drag & drop shipment file'}
-                  </h4>
-                  <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                    Supports Microsoft Excel (<strong>.xlsx, .xls</strong>) and <strong>.csv</strong> files
-                  </p>
-                </div>
-              ) : (
-                <div>
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    background: '#f1f5f9',
-                    padding: '10px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    marginBottom: '16px'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <FileSpreadsheet size={18} color="var(--primary)" />
-                      <strong style={{ fontSize: '13px' }}>{parsedBatch.fileName}</strong>
-                    </div>
-                    <button className="btn btn-secondary btn-sm" onClick={() => setParsedBatch(null)} style={{ fontSize: '12px', background: '#fff' }}>
-                      <RefreshCw size={12} style={{ display: 'inline', marginRight: '4px' }} />
-                      Choose Different File
-                    </button>
-                  </div>
-
-                  <div className="table-container" style={{ maxHeight: '240px', overflowY: 'auto' }}>
-                    <table className="data-table" style={{ fontSize: '12.5px' }}>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Invoice Ref</th>
-                          <th>Shipment Number</th>
-                          <th>Destination Site</th>
-                          <th>Carrier</th>
-                          <th>Items Count</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {parsedBatch.shipments.map((sh, idx) => (
-                          <tr key={sh.id || idx}>
-                            <td className="font-mono">{idx + 1}</td>
-                            <td className="font-mono"><strong>{sh.invoice_ref}</strong></td>
-                            <td className="font-mono">{sh.shipment_number}</td>
-                            <td>{sh.site_name || 'Branch'}</td>
-                            <td>{sh.carrier}</td>
-                            <td style={{ textAlign: 'center', fontWeight: 600 }}>{sh.items?.length || 0}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setIsImportModalOpen(false)}>
-                Cancel
-              </button>
-              {parsedBatch && (
-                <button
-                  className="btn btn-primary"
-                  onClick={handleConfirmBatchImport}
-                  disabled={parsedBatch.shipments.length === 0}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                >
-                  <CheckCircle size={16} />
-                  <span>Import {parsedBatch.shipments.length} Shipment Manifests</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* --- Modal: Tracking Number & Declaration Form Required for Official Print / PDF --- */}
       {trackingModalState && (
