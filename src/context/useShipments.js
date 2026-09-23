@@ -754,7 +754,7 @@ export function useShipments({
               shipped_at: newShipment.shipment_date || u.shipped_at || new Date().toISOString(),
               shipped_by: resolvedPreparedBy,
               received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
-              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || currentUser?.fullName || 'Branch Staff') : u.received_by
+              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff') : u.received_by
             };
           }
           return u;
@@ -778,7 +778,7 @@ export function useShipments({
                 shipped_at: newShipment.shipment_date || new Date().toISOString(),
                 shipped_by: resolvedPreparedBy,
                 received_at: newShipment.received_at || new Date().toISOString(),
-                received_by: newShipment.received_by_name || currentUser?.fullName || 'Branch Staff',
+                received_by: newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff',
                 created_at: newShipment.created_at || new Date().toISOString(),
                 updated_at: new Date().toISOString()
               });
@@ -1115,7 +1115,18 @@ export function useShipments({
       return { success: false, error: 'Package must be shipped before confirmation' };
     }
 
-    const cleanReceiver = String(receiveDetails.receivedByName || '').trim() || currentUser?.fullName || (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Branch Staff');
+    const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin;
+    const providedReceiver = String(receiveDetails.receivedByName || '').trim();
+    if (!providedReceiver && isSuperadmin) {
+      showToast?.('Received By (Staff Name) must be completed before confirming site receipt.', 'warning');
+      return { success: false, error: 'Received By name is required' };
+    }
+
+    const cleanReceiver = providedReceiver || (!isSuperadmin ? (currentUser?.fullName || currentUser?.name || 'Branch Staff') : '');
+    if (!cleanReceiver) {
+      showToast?.('Received By (Staff Name) must be completed before confirming site receipt.', 'warning');
+      return { success: false, error: 'Received By name is required' };
+    }
     const cleanDate = String(receiveDetails.receivedDate || '').trim() || getTodayDateString();
     const cleanCondition = receiveDetails.receivedCondition || 'Good Condition (All parts intact & verified)';
     const cleanNotes = receiveDetails.receivingNotes || 'Confirmed physical receipt of package and parts at branch.';

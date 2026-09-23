@@ -267,10 +267,14 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       return;
     }
     const destSite = sites.find(st => st.id === shipment.site_id || st.code === shipment.site_code) || activeSiteObj;
+    const isSuper = currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin;
+    // For Superadmin users, field remains blank and must be completed before confirming receipt.
+    // For PMG accounts (and site users), auto-fill with their login name.
+    const initialReceiver = isSuper ? '' : (currentUser?.fullName || currentUser?.name || `${destSite.code || 'Branch'} Staff`);
     setReceiveModalState({
       shipment,
       site: destSite,
-      receivedByName: currentUser?.fullName || (isSuperadmin ? 'Superadmin' : `${destSite.code || 'Branch'} Staff`),
+      receivedByName: initialReceiver,
       receivedDate: new Date().toISOString().split('T')[0],
       receivedCondition: 'Good Condition (All parts intact & verified)',
       receivingNotes: `Confirmed physical receipt of shipment manifest #${shipment.invoice_ref || shipment.shipment_number} at ${destSite.name || 'Branch'}.`
@@ -280,6 +284,12 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const handleConfirmSiteReceiveSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!receiveModalState) return;
+
+    const trimmedReceiver = String(receiveModalState.receivedByName || '').trim();
+    if (!trimmedReceiver) {
+      showToast?.('Please enter the name of the staff member who received the package.', 'warning');
+      return;
+    }
 
     const targetShipment = receiveModalState.shipment;
     const isShipped = targetShipment?.status === 'shipped' || targetShipment?.status === 'in_transit';
@@ -307,7 +317,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         await confirmSiteReceive(
           targetShipment.id,
           {
-            receivedByName: receiveModalState.receivedByName,
+            receivedByName: trimmedReceiver,
             receivedDate: receiveModalState.receivedDate,
             receivedCondition: receiveModalState.receivedCondition,
             receivingNotes: receiveModalState.receivingNotes
@@ -3956,7 +3966,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       {/* 8. Delete Confirmation Modal for Branch Unit */}
       {unitToDelete && (
-        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+        <div className="modal-backdrop" style={{ zIndex: 9999 }} onClick={(e) => { if (e.target === e.currentTarget) setUnitToDelete(null); }}>
           <div className="modal-content" style={{ maxWidth: '440px' }}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -4049,7 +4059,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       {/* 9. Edit Unit Details Modal */}
       {unitToEdit && (
-        <div className="modal-overlay" style={{ zIndex: 1000 }}>
+        <div className="modal-backdrop" style={{ zIndex: 9999 }} onClick={(e) => { if (e.target === e.currentTarget) setUnitToEdit(null); }}>
           <div className="modal-content" style={{ maxWidth: '480px' }}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -4141,136 +4151,147 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 10. Superadmin Site Receipt Confirmation Modal */}
+      {/* 10. Site Receipt Confirmation Modal */}
       {receiveModalState && (
-        <div className="modal-overlay" style={{ zIndex: 1100 }}>
-          <div className="modal-content" style={{ maxWidth: '580px', width: '100%' }}>
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', color: '#fff', padding: '16px 20px', borderRadius: '8px 8px 0 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <PackageCheck size={20} color="#38bdf8" />
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#fff' }}>
-                  Confirm Site Package Receipt
-                </h3>
+        <div className="modal-backdrop" style={{ zIndex: 9999 }} onClick={(e) => { if (e.target === e.currentTarget) setReceiveModalState(null); }}>
+          <div className="modal-content" style={{ maxWidth: '580px', width: '95%' }}>
+            <div className="modal-header" style={{ background: '#065f46' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#10b981', padding: '7px', borderRadius: '6px', color: '#fff' }}>
+                  <PackageCheck size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
+                    Confirm Site Package Receipt
+                  </h3>
+                  <p style={{ color: '#a7f3d0', fontSize: '11.5px', margin: '2px 0 0 0' }}>
+                    Destination: <strong>{receiveModalState.site?.name || receiveModalState.shipment?.site_name}</strong>
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
-                className="btn-icon"
                 onClick={() => setReceiveModalState(null)}
                 disabled={isSubmittingReceive}
-                style={{ color: '#94a3b8' }}
+                style={{ background: 'transparent', border: 'none', color: '#a7f3d0', cursor: isSubmittingReceive ? 'not-allowed' : 'pointer', padding: '4px' }}
               >
-                <X size={18} />
+                <X size={20} />
               </button>
             </div>
 
-            <form onSubmit={handleConfirmSiteReceiveSubmit} style={{ padding: '20px' }}>
-              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '12px 14px', fontSize: '12.5px', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#166534', fontWeight: 600 }}>Manifest Reference:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>
-                    {receiveModalState.shipment.invoice_ref || receiveModalState.shipment.shipment_number}
-                  </strong>
+            <form onSubmit={handleConfirmSiteReceiveSubmit}>
+              <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
+                {/* Manifest Summary Box */}
+                <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 600 }}>
+                      Invoice Ref: {receiveModalState.shipment?.invoice_ref || receiveModalState.shipment?.shipment_number}
+                    </span>
+                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 700 }}>
+                      {receiveModalState.shipment?.items?.length || 0} Total Units ({receiveModalState.shipment?.total_boxes || 1} Box)
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#047857' }}>
+                    Courier: <strong>{receiveModalState.shipment?.carrier || receiveModalState.shipment?.courier || 'Lite Express'}</strong> • Waybill: <strong className="font-mono select-all" style={{ fontSize: '13px', color: '#065f46' }}>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#166534', fontWeight: 600 }}>Destination Branch:</span>
-                  <strong style={{ color: '#0f172a' }}>
-                    {receiveModalState.site?.name} ({receiveModalState.site?.code})
-                  </strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span style={{ color: '#166534', fontWeight: 600 }}>Courier / Booking:</span>
-                  <span style={{ color: '#334155' }}>
-                    {receiveModalState.shipment.carrier || receiveModalState.shipment.courier || 'Lite Express'} {receiveModalState.shipment.tracking_number ? `(#${receiveModalState.shipment.tracking_number})` : ''}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: '#166534', fontWeight: 600 }}>Total Parts in Package:</span>
-                  <strong style={{ color: '#059669' }}>
-                    {receiveModalState.shipment.items?.length || 0} units
-                  </strong>
-                </div>
-              </div>
 
-              {/* Items in Package */}
-              <div style={{ marginBottom: '16px' }}>
-                <label className="form-label" style={{ fontWeight: 700, fontSize: '12px', color: '#475569', marginBottom: '6px' }}>
-                  Parts Included in Manifest ({receiveModalState.shipment.items?.length || 0})
-                </label>
-                <div style={{ maxHeight: '140px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '6px 10px', background: '#f8fafc', fontSize: '11.5px' }}>
-                  {(receiveModalState.shipment.items || []).map((it, idx) => (
-                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: idx < (receiveModalState.shipment.items.length - 1) ? '1px solid #e2e8f0' : 'none' }}>
-                      <div>
-                        <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{it.part_number}</strong>
-                        <span style={{ color: '#64748b', marginLeft: '6px' }}>{it.description}</span>
+                {/* Items in Package */}
+                <div style={{ marginBottom: '16px' }}>
+                  <label className="form-label" style={{ fontWeight: 700, fontSize: '12px', color: '#475569', marginBottom: '6px' }}>
+                    Parts Included in Manifest ({receiveModalState.shipment.items?.length || 0})
+                  </label>
+                  <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '6px 10px', background: '#f8fafc', fontSize: '11.5px' }}>
+                    {(receiveModalState.shipment.items || []).map((it, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: idx < (receiveModalState.shipment.items.length - 1) ? '1px solid #e2e8f0' : 'none' }}>
+                        <div>
+                          <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{it.part_number}</strong>
+                          <span style={{ color: '#64748b', marginLeft: '6px' }}>{it.description}</span>
+                        </div>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: '#0f172a', fontWeight: 600 }}>
+                          {it.serial_number || it.serialNumber || 'Serialized Unit'}
+                        </span>
                       </div>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: '#0f172a', fontWeight: 600 }}>
-                        {it.serial_number || it.serialNumber || 'Serialized Unit'}
-                      </span>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              {/* Received By Staff Name */}
-              <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
-                  Confirmed Received By
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  value={receiveModalState.receivedByName}
-                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
-                  required
-                />
-              </div>
+                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                      Received By (Staff Name) <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder={isSuperadmin ? 'Enter branch staff name (required)' : 'e.g. Maria Santos'}
+                      value={receiveModalState.receivedByName}
+                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
+                      required
+                      autoFocus
+                      style={{
+                        fontSize: '12.5px',
+                        height: '36px',
+                        borderColor: (isSuperadmin && !receiveModalState.receivedByName?.trim()) ? '#f59e0b' : undefined
+                      }}
+                    />
+                    {isSuperadmin && !receiveModalState.receivedByName?.trim() && (
+                      <div style={{ fontSize: '11px', color: '#b45309', marginTop: '3px' }}>
+                        Please enter the name of the branch staff receiving the package.
+                      </div>
+                    )}
+                  </div>
 
-              {/* Receipt Date */}
-              <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
-                  Physical Receipt Date
-                </label>
-                <input
-                  type="date"
-                  className="form-input"
-                  value={receiveModalState.receivedDate}
-                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedDate: e.target.value }))}
-                  required
-                />
-              </div>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                      Date of Receipt <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={receiveModalState.receivedDate}
+                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedDate: e.target.value }))}
+                      required
+                      style={{ fontSize: '12.5px', height: '36px' }}
+                    />
+                  </div>
+                </div>
 
-              {/* Package Condition */}
-              <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
-                  Package Condition &amp; Security Seal
-                </label>
-                <select
-                  className="form-select"
-                  value={receiveModalState.receivedCondition}
-                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedCondition: e.target.value }))}
-                >
-                  <option value="Good Condition (All parts intact & verified)">Good Condition (All parts intact &amp; verified)</option>
-                  <option value="Minor Box Crease / Parts Intact">Minor Box Crease / Parts Intact</option>
-                  <option value="Security Seal Verified & Complete">Security Seal Verified &amp; Complete</option>
-                  <option value="Discrepancy / Inspected with Logistics">Discrepancy / Inspected with Logistics</option>
-                </select>
-              </div>
+                {/* Package Condition */}
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
+                    Package &amp; Parts Condition Status
+                  </label>
+                  <select
+                    className="form-select"
+                    value={receiveModalState.receivedCondition}
+                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedCondition: e.target.value }))}
+                    style={{ fontSize: '12.5px', height: '36px' }}
+                  >
+                    <option value="Good Condition (All parts intact & verified)">Good Condition (All parts intact &amp; verified)</option>
+                    <option value="Minor box wear, all parts complete">Minor box wear, all parts complete</option>
+                    <option value="Discrepancy / damage noted for inspection">Discrepancy / damage noted for inspection</option>
+                  </select>
+                </div>
 
-              {/* Receiving Notes */}
-              <div className="form-group" style={{ marginBottom: '20px' }}>
-                <label className="form-label" style={{ fontWeight: 600, fontSize: '12px' }}>
-                  Receiving Confirmation Notes
-                </label>
-                <textarea
-                  className="form-input"
-                  rows="2"
-                  value={receiveModalState.receivingNotes}
-                  onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivingNotes: e.target.value }))}
-                />
+                {/* Receiving Notes */}
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <label className="form-label" style={{ fontSize: '12px' }}>
+                    Receipt Remarks &amp; Verification Notes
+                  </label>
+                  <textarea
+                    className="form-input"
+                    rows={2}
+                    placeholder="e.g. Received intact, verified all serial numbers matched manifest."
+                    value={receiveModalState.receivingNotes}
+                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivingNotes: e.target.value }))}
+                    style={{ fontSize: '12px', resize: 'vertical' }}
+                  />
+                </div>
               </div>
 
               {/* Action Buttons */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -4282,11 +4303,21 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800 }}
-                  disabled={isSubmittingReceive}
+                  style={{
+                    background: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
+                    borderColor: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 800,
+                    opacity: (isSubmittingReceive || !receiveModalState.receivedByName?.trim()) ? 0.75 : 1,
+                    cursor: (isSubmittingReceive || !receiveModalState.receivedByName?.trim()) ? 'not-allowed' : 'pointer'
+                  }}
+                  disabled={isSubmittingReceive || !receiveModalState.receivedByName?.trim()}
+                  title={!receiveModalState.receivedByName?.trim() ? 'Received By (Staff Name) must be completed before confirming.' : undefined}
                 >
                   <PackageCheck size={16} />
-                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Site Package Receipt'}</span>
+                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Receipt & Archive Manifest'}</span>
                 </button>
               </div>
             </form>

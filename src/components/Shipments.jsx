@@ -641,10 +641,14 @@ export default function Shipments() {
   // --- Site Receipt: Open Modal ---
   const handleOpenReceiveModal = (shipment) => {
     const destSite = sites.find(st => st.id === shipment.site_id) || {};
+    const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin;
+    // For Superadmin users, this field should remain blank and must be completed before confirming receipt.
+    // For PMG accounts and site users, auto-fill with their login name.
+    const initialReceiver = isSuperadmin ? '' : (currentUser?.fullName || currentUser?.name || `${destSite.code || 'Branch'} Staff`);
     setReceiveModalState({
       shipment,
       site: destSite,
-      receivedByName: currentUser?.fullName || `${destSite.code || 'Branch'} Staff`,
+      receivedByName: initialReceiver,
       receivedDate: getTodayDateString(),
       receivedCondition: 'Good Condition (All parts intact & verified)',
       receivingNotes: 'Confirmed physical receipt of package and parts at branch.'
@@ -655,6 +659,12 @@ export default function Shipments() {
   const handleConfirmSiteReceive = async (e) => {
     e.preventDefault();
     if (!receiveModalState) return;
+
+    const trimmedReceiver = String(receiveModalState.receivedByName || '').trim();
+    if (!trimmedReceiver) {
+      showToast?.('Please enter the name of the staff member who received the package.', 'warning');
+      return;
+    }
 
     const targetShipment = receiveModalState.shipment;
     const targetSite = receiveModalState.site;
@@ -676,7 +686,7 @@ export default function Shipments() {
         await confirmSiteReceive(
           targetShipment.id,
           {
-            receivedByName: receiveModalState.receivedByName,
+            receivedByName: trimmedReceiver,
             receivedDate: receiveModalState.receivedDate,
             receivedCondition: receiveModalState.receivedCondition,
             receivingNotes: receiveModalState.receivingNotes
@@ -684,7 +694,7 @@ export default function Shipments() {
           { partsRequests, updatePartsRequestStatus }
         );
       } else {
-        const cleanReceiver = String(receiveModalState.receivedByName || '').trim() || currentUser?.fullName || 'Branch Staff';
+        const cleanReceiver = trimmedReceiver || 'Branch Staff';
         const cleanDate = String(receiveModalState.receivedDate || '').trim() || getTodayDateString();
 
         const updatedShipment = {
@@ -2960,13 +2970,22 @@ export default function Shipments() {
                     <input
                       type="text"
                       className="form-input"
-                      placeholder="e.g. Maria Santos"
+                      placeholder={(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) ? 'Enter branch staff name (required)' : 'e.g. Maria Santos'}
                       value={receiveModalState.receivedByName}
                       onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
                       required
                       autoFocus
-                      style={{ fontSize: '12.5px', height: '36px' }}
+                      style={{
+                        fontSize: '12.5px',
+                        height: '36px',
+                        borderColor: ((currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) && !receiveModalState.receivedByName?.trim()) ? '#f59e0b' : undefined
+                      }}
                     />
+                    {(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) && !receiveModalState.receivedByName?.trim() && (
+                      <div style={{ fontSize: '11px', color: '#b45309', marginTop: '3px' }}>
+                        Please enter the name of the branch staff receiving the package.
+                      </div>
+                    )}
                   </div>
 
                   <div className="form-group" style={{ margin: 0 }}>
@@ -3043,16 +3062,17 @@ export default function Shipments() {
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  disabled={Boolean(statusLoadingState?.isOpen)}
+                  disabled={Boolean(statusLoadingState?.isOpen) || !receiveModalState.receivedByName?.trim()}
                   style={{
-                    background: '#059669',
-                    borderColor: '#059669',
+                    background: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
+                    borderColor: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    opacity: statusLoadingState?.isOpen ? 0.75 : 1,
-                    cursor: statusLoadingState?.isOpen ? 'not-allowed' : 'pointer'
+                    opacity: (statusLoadingState?.isOpen || !receiveModalState.receivedByName?.trim()) ? 0.75 : 1,
+                    cursor: (statusLoadingState?.isOpen || !receiveModalState.receivedByName?.trim()) ? 'not-allowed' : 'pointer'
                   }}
+                  title={!receiveModalState.receivedByName?.trim() ? 'Received By (Staff Name) must be completed before confirming.' : undefined}
                 >
                   {statusLoadingState?.isOpen ? (
                     <>
