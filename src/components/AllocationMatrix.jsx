@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
-import { calculateWeeklySplit, generateAllocationsFromForecasts } from '../utils/allocationEngine';
+import { calculateWeeklySplit, calculateWeeklySiteAllocations, generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { CANONICAL_SITE_CODES } from '../constants/config';
 import { formatTo12HourTime } from '../utils/dateUtils';
@@ -308,20 +308,26 @@ export default function AllocationMatrix() {
       w3Cost += split.w3_cost;
       w4Cost += split.w4_cost;
 
+      const wAlloc = item.weekly_site_quantities || calculateWeeklySiteAllocations(item, orderedServiceSites, rIdx + rowOffset);
+
       orderedServiceSites.forEach(s => {
         const branchQty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
         siteTotals[s.id] = (siteTotals[s.id] || 0) + branchQty;
 
-        const bSplit = calculateWeeklySplit(branchQty, branchQty * stockPrice, rIdx + rowOffset);
-        siteW1Totals[s.id] = (siteW1Totals[s.id] || 0) + (bSplit.w1_qty || 0);
-        siteW2Totals[s.id] = (siteW2Totals[s.id] || 0) + (bSplit.w2_qty || 0);
-        siteW3Totals[s.id] = (siteW3Totals[s.id] || 0) + (bSplit.w3_qty || 0);
-        siteW4Totals[s.id] = (siteW4Totals[s.id] || 0) + (bSplit.w4_qty || 0);
+        const w1 = wAlloc[1]?.[s.id] ?? wAlloc[1]?.[s.code] ?? 0;
+        const w2 = wAlloc[2]?.[s.id] ?? wAlloc[2]?.[s.code] ?? 0;
+        const w3 = wAlloc[3]?.[s.id] ?? wAlloc[3]?.[s.code] ?? 0;
+        const w4 = wAlloc[4]?.[s.id] ?? wAlloc[4]?.[s.code] ?? 0;
 
-        siteW1Costs[s.id] = (siteW1Costs[s.id] || 0) + (bSplit.w1_cost || 0);
-        siteW2Costs[s.id] = (siteW2Costs[s.id] || 0) + (bSplit.w2_cost || 0);
-        siteW3Costs[s.id] = (siteW3Costs[s.id] || 0) + (bSplit.w3_cost || 0);
-        siteW4Costs[s.id] = (siteW4Costs[s.id] || 0) + (bSplit.w4_cost || 0);
+        siteW1Totals[s.id] = (siteW1Totals[s.id] || 0) + w1;
+        siteW2Totals[s.id] = (siteW2Totals[s.id] || 0) + w2;
+        siteW3Totals[s.id] = (siteW3Totals[s.id] || 0) + w3;
+        siteW4Totals[s.id] = (siteW4Totals[s.id] || 0) + w4;
+
+        siteW1Costs[s.id] = (siteW1Costs[s.id] || 0) + (w1 * stockPrice);
+        siteW2Costs[s.id] = (siteW2Costs[s.id] || 0) + (w2 * stockPrice);
+        siteW3Costs[s.id] = (siteW3Costs[s.id] || 0) + (w3 * stockPrice);
+        siteW4Costs[s.id] = (siteW4Costs[s.id] || 0) + (w4 * stockPrice);
       });
     });
 
@@ -569,11 +575,10 @@ export default function AllocationMatrix() {
         </td>
 
         {/* 26 Site Branch Quantities: Weekly vs Master vs Shares */}
-        {isWeeklyView ? (
-          orderedServiceSites.map(s => {
-            const bMonthly = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
-            const bSplit = calculateWeeklySplit(bMonthly, bMonthly * stockPrice, excelRowNumber);
-            const bWeekQty = bSplit[`w${selectedWeekNum}_qty`] || 0;
+        {isWeeklyView ? (() => {
+          const wAlloc = item.weekly_site_quantities || calculateWeeklySiteAllocations(item, orderedServiceSites, excelRowNumber);
+          return orderedServiceSites.map(s => {
+            const bWeekQty = wAlloc[selectedWeekNum]?.[s.id] ?? wAlloc[selectedWeekNum]?.[s.code] ?? 0;
             const hasQty = bWeekQty > 0;
 
             return (
@@ -597,8 +602,8 @@ export default function AllocationMatrix() {
                 )}
               </td>
             );
-          })
-        ) : activeViewMode === 'shares' ? (
+          });
+        })() : activeViewMode === 'shares' ? (
           orderedServiceSites.map(s => {
             const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
             const share = item.total_allocated_qty > 0 ? ((qty / item.total_allocated_qty) * 100).toFixed(1) : '0.0';

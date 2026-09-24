@@ -3,7 +3,8 @@ import {
   CANONICAL_SITE_LIST,
   CANONICAL_DISPLAY_DESCS,
   CANONICAL_BATTERY_DESCS,
-  CANONICAL_BATTERY_SHARE_DESCS
+  CANONICAL_BATTERY_SHARE_DESCS,
+  resolveSafeRegion
 } from '../constants/config.js';
 
 // Number of Display rows in the canonical Excel block.
@@ -437,6 +438,429 @@ export function calculateWeeklySplit(totalQty, totalCostOrRowIndex = 0, maybeRow
 }
 
 /**
+ * Top high-volume Metro Manila powerhouse hubs for reference and coordination.
+ */
+export const METRO_MANILA_POWERHOUSE_HUBS = ['ASP VN', 'ASP SMS', 'APP FES', 'ASP GL5', 'ASP POD'];
+
+/**
+ * Calculates Weekly Per-Site Allocations (Weeks 1 to 4) mirroring the cumulative waterfall
+ * interval intersection formula from reference workbook: Battery & Display (Allocation) - October 2026.xlsx:
+ * - Sites ordered canonically: 15 Metro Manila sites first (APP BHS to APP RM), followed by Provincial sites (ASP LIM to APP LAN).
+ * - Week 1 & Week 2: Priority is Metro Manila sites (0 provincial parts).
+ * - Week 3: Remainder of Metro Manila sites (extending at most to Week 3) + initial Provincial sites.
+ * - Week 4: Strictly EXCLUSIVELY Provincial sites (0 Metro Manila parts).
+ * - Exact waterfall formula:
+ *     alloc_w(k) = MAX(0, MIN(C_k, cumW_w) - MAX(C_{k-1}, cumW_{w-1}))
+ * - Zero Drift Invariant:
+ *     sum_{w=1..4}(site_qty_w) === site_total_qty for every site
+ *     sum_{sites}(site_qty_w) === weekly_target_qty_w for every week w in 1..4
+ *
+ * @param {Object} item - Allocation row (with site_quantities, total_allocated_qty, etc.)
+ * @param {Array} activeSites - Active branch service sites
+ * @param {number} rowIndex - Row index for alternating parity
+ * @returns {{1: Object, 2: Object, 3: Object, 4: Object, week1: Object, week2: Object, week3: Object, week4: Object}}
+ */
+export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex = 0) {
+  const rawServiceSites = (Array.isArray(activeSites) && activeSites.length > 0)
+    ? activeSites.filter(s =>
+        !s.is_dc &&
+        !s.code?.toUpperCase().includes('DC') &&
+        !s.code?.toUpperCase().includes('MOBILEC') &&
+        !s.name?.toLowerCase().includes('distribution') &&
+        s.code !== 'DC-MDC'
+      )
+    : CANONICAL_SITE_LIST;
+
+  // Canonical ordering: 15 Metro Manila sites first, then Provincial sites (matching reference workbook)
+  const serviceSites = [...rawServiceSites].sort((a, b) => {
+    const codeA = a.code || a.id;
+    const codeB = b.code || b.id;
+    const idxA = CANONICAL_SITE_CODES.indexOf(codeA);
+    const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
+    const posA = idxA !== -1 ? idxA : 999;
+    const posB = idxB !== -1 ? idxB : 999;
+    return posA - posB;
+  });
+
+  const res = {
+    1: {}, 2: {}, 3: {}, 4: {},
+    week1: {}, week2: {}, week3: {}, week4: {}
+  };
+
+  serviceSites.forEach(s => {
+    const sid = s.id || s.code;
+    const scode = s.code || s.id;
+    for (let w = 1; w <= 4; w++) {
+      res[w][sid] = 0;
+      res[w][scode] = 0;
+    }
+  });
+
+  if (!item) {
+    res.week1 = res[1]; res.week2 = res[2]; res.week3 = res[3]; res.week4 = res[4];
+    return res;
+  }
+
+  const siteDemands = serviceSites.map(s => {
+    const sid = s.id || s.code;
+    const scode = s.code || s.id;
+    const q = item.site_quantities?.[sid] ?? item.site_quantities?.[scode] ?? (s.name ? item.site_quantities?.[s.name] : 0) ?? 0;
+    const demand = Math.max(0, Math.round(Number(q) || 0));
+    const region = resolveSafeRegion(scode, s.region);
+    const isMM = region === 'Metro Manila';
+    return {
+      site: s,
+      siteId: sid,
+      siteCode: scode,
+      isMM,
+      demand
+    };
+  });
+
+  const totalDemand = siteDemands.reduce((sum, d) => sum + d.demand, 0);
+  if (totalDemand === 0) {
+    res.week1 = res[1]; res.week2 = res[2]; res.week3 = res[3]; res.week4 = res[4];
+    return res;
+  }
+
+  const totalMM = siteDemands.filter(d => d.isMM).reduce((sum, d) => sum + d.demand, 0);
+  const totalProv = totalDemand - totalMM;
+
+  // Resolve base weekly targets W1, W2, W3, W4
+  let W1 = item.w1_qty;
+  let W2 = item.w2_qty;
+  let W3 = item.w3_qty;
+  let W4 = item.w4_qty;
+
+  if (typeof W1 !== 'number' || typeof W2 !== 'number' || typeof W3 !== 'number' || typeof W4 !== 'number') {
+    const split = calculateWeeklySplit(totalDemand, (item.total_stock_cost || (totalDemand * (item.stocking_price || 99))), rowIndex);
+    W1 = split.w1_qty;
+    W2 = split.w2_qty;
+    W3 = split.w3_qty;
+    W4 = split.w4_qty;
+  } else {
+    const currentSum = W1 + W2 + W3 + W4;
+    if (currentSum !== totalDemand) {
+      W4 += (totalDemand - currentSum);
+    }
+  }
+
+  // Regional adjustment:
+  // 1. Pure Provincial item: 100% in W3 and W4 (0 in W1 and W2)
+  if (totalMM === 0) {
+    const half = Math.floor(totalDemand / 2);
+    W1 = 0;
+    W2 = 0;
+    W3 = half;
+    W4 = totalDemand - half;
+  }
+  // 2. Pure Metro Manila item: 100% in W1, W2, W3 (0 in W4)
+  else if (totalProv === 0) {
+    const b3 = Math.floor(totalDemand / 3);
+    const rem3 = totalDemand % 3;
+    W1 = b3 + (rem3 >= 1 ? 1 : 0);
+    W2 = b3 + (rem3 === 2 ? 1 : 0);
+    W3 = totalDemand - W1 - W2;
+    W4 = 0;
+  }
+  // 3. Mixed item:
+  else {
+    // Invariant A: W4 <= totalProv (mathematically guarantees ZERO MM parts in W4)
+    if (W4 > totalProv) {
+      const excess = W4 - totalProv;
+      W4 = totalProv;
+      const canTakeW12 = Math.max(0, totalMM - (W1 + W2));
+      const addW12 = Math.min(excess, canTakeW12);
+      const half = Math.floor(addW12 / 2);
+      W1 += half;
+      W2 += (addW12 - half);
+      W3 += (excess - addW12);
+    }
+    // Invariant B: W1 + W2 <= totalMM (mathematically guarantees ZERO Provincial parts in W1 & W2)
+    if (W1 + W2 > totalMM) {
+      const excess = (W1 + W2) - totalMM;
+      const subW2 = Math.min(excess, W2);
+      W2 -= subW2;
+      const subW1 = Math.min(excess - subW2, W1);
+      W1 -= subW1;
+      const canTakeW4 = Math.max(0, totalProv - W4);
+      const addW4 = Math.min(Math.floor(excess / 2), canTakeW4);
+      W4 += addW4;
+      W3 += (excess - addW4);
+    }
+    if (totalProv > 0 && W4 === 0 && W3 > 0) {
+      const take = Math.min(Math.ceil(totalProv / 2), W3, totalProv);
+      W4 += take;
+      W3 -= take;
+    }
+  }
+
+  // Exact Waterfall Interval Intersection Formula from reference Excel workbook
+  const cumW = [0, W1, W1 + W2, W1 + W2 + W3, totalDemand];
+
+  let cPrev = 0;
+  serviceSites.forEach(s => {
+    const sid = s.id || s.code;
+    const scode = s.code || s.id;
+    const q = Math.max(0, Math.round(Number(item.site_quantities?.[sid] ?? item.site_quantities?.[scode] ?? (s.name ? item.site_quantities?.[s.name] : 0)) || 0));
+    const cCurr = cPrev + q;
+
+    for (let w = 1; w <= 4; w++) {
+      const alloc = Math.max(0, Math.min(cCurr, cumW[w]) - Math.max(cPrev, cumW[w - 1]));
+      res[w][sid] = alloc;
+      res[w][scode] = alloc;
+    }
+    cPrev = cCurr;
+  });
+
+  res.week1 = res[1]; res.week2 = res[2]; res.week3 = res[3]; res.week4 = res[4];
+  return res;
+}
+
+/**
+ * Coordinates and balances multi-item allocations across the 4-week delivery pipeline:
+ * 1. Guarantees 0 provincial parts in Weeks 1 & 2.
+ * 2. Guarantees 0 Metro Manila parts in Week 4 (strictly exclusively provincial).
+ * 3. Consolidates site-level parcels to avoid single-part (1 or 2 part) shipments across the catalog.
+ * 4. Preserves exact zero-drift row and column sums for all items and sites.
+ *
+ * @param {Array} allocRows - Array of allocation item objects
+ * @param {Array} activeSites - Active branch service sites
+ * @returns {Array} Updated allocation items
+ */
+export function balanceCatalogWeeklyAllocations(allocRows = [], activeSites = []) {
+  if (!Array.isArray(allocRows) || allocRows.length === 0) return allocRows;
+
+  const rawServiceSites = (Array.isArray(activeSites) && activeSites.length > 0)
+    ? activeSites.filter(s =>
+        !s.is_dc &&
+        !s.code?.toUpperCase().includes('DC') &&
+        !s.code?.toUpperCase().includes('MOBILEC') &&
+        !s.name?.toLowerCase().includes('distribution') &&
+        s.code !== 'DC-MDC'
+      )
+    : CANONICAL_SITE_LIST;
+
+  const serviceSites = [...rawServiceSites].sort((a, b) => {
+    const codeA = a.code || a.id;
+    const codeB = b.code || b.id;
+    const idxA = CANONICAL_SITE_CODES.indexOf(codeA);
+    const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
+    return (idxA !== -1 ? idxA : 999) - (idxB !== -1 ? idxB : 999);
+  });
+
+  const mmSites = serviceSites.filter(s => resolveSafeRegion(s.code || s.id, s.region) === 'Metro Manila');
+  const provSites = serviceSites.filter(s => resolveSafeRegion(s.code || s.id, s.region) !== 'Metro Manila');
+
+  // Phase 1: Compute initial balanced weekly targets & waterfall allocations for every item
+  allocRows.forEach((item, rIdx) => {
+    const offset = getRowParityOffset(item);
+    const price = item.stocking_price || 99;
+    const totalQty = item.total_allocated_qty || 0;
+
+    let provDemand = 0;
+    let mmDemand = 0;
+    serviceSites.forEach(s => {
+      const sid = s.id || s.code;
+      const scode = s.code || s.id;
+      const q = Math.max(0, Math.round(Number(item.site_quantities?.[sid] ?? item.site_quantities?.[scode] ?? (s.name ? item.site_quantities?.[s.name] : 0)) || 0));
+      if (resolveSafeRegion(scode, s.region) === 'Metro Manila') {
+        mmDemand += q;
+      } else {
+        provDemand += q;
+      }
+    });
+
+    const split = calculateWeeklySplit(totalQty, (totalQty * price), rIdx + offset);
+    let W1 = split.w1_qty;
+    let W2 = split.w2_qty;
+    let W3 = split.w3_qty;
+    let W4 = split.w4_qty;
+
+    if (totalQty > 0) {
+      if (mmDemand === 0) {
+        const half = Math.floor(totalQty / 2);
+        W1 = 0; W2 = 0; W3 = half; W4 = totalQty - half;
+      } else if (provDemand === 0) {
+        const b3 = Math.floor(totalQty / 3);
+        const rem3 = totalQty % 3;
+        W1 = b3 + (rem3 >= 1 ? 1 : 0);
+        W2 = b3 + (rem3 === 2 ? 1 : 0);
+        W3 = totalQty - W1 - W2;
+        W4 = 0;
+      } else {
+        if (W4 > provDemand) {
+          const excess = W4 - provDemand;
+          W4 = provDemand;
+          const canTakeW12 = Math.max(0, mmDemand - (W1 + W2));
+          const addW12 = Math.min(excess, canTakeW12);
+          const half = Math.floor(addW12 / 2);
+          W1 += half;
+          W2 += (addW12 - half);
+          W3 += (excess - addW12);
+        }
+        if (W1 + W2 > mmDemand) {
+          const excess = (W1 + W2) - mmDemand;
+          const subW2 = Math.min(excess, W2);
+          W2 -= subW2;
+          const subW1 = Math.min(excess - subW2, W1);
+          W1 -= subW1;
+          const canTakeW4 = Math.max(0, provDemand - W4);
+          const addW4 = Math.min(Math.floor(excess / 2), canTakeW4);
+          W4 += addW4;
+          W3 += (excess - addW4);
+        }
+        if (provDemand > 0 && W4 === 0 && W3 > 0) {
+          const take = Math.min(Math.ceil(provDemand / 2), W3, provDemand);
+          W4 += take;
+          W3 -= take;
+        }
+      }
+    }
+
+    item.w1_qty = W1;
+    item.w2_qty = W2;
+    item.w3_qty = W3;
+    item.w4_qty = W4;
+    item.w1_cost = W1 * price;
+    item.w2_cost = W2 * price;
+    item.w3_cost = W3 * price;
+    item.w4_cost = W4 * price;
+
+    item.weekly_site_quantities = calculateWeeklySiteAllocations(item, serviceSites, rIdx + offset);
+  });
+
+  // Phase 2: Relocate small parcels (< 3 parts) across the catalog to avoid single-part deliveries
+  function getSiteTotals() {
+    const t = { 1: {}, 2: {}, 3: {}, 4: {} };
+    serviceSites.forEach(s => {
+      const sid = s.id || s.code;
+      const scode = s.code || s.id;
+      for (let w = 1; w <= 4; w++) {
+        t[w][sid] = 0;
+        t[w][scode] = 0;
+      }
+    });
+    allocRows.forEach(it => {
+      for (let w = 1; w <= 4; w++) {
+        serviceSites.forEach(s => {
+          const sid = s.id || s.code;
+          const scode = s.code || s.id;
+          const val = it.weekly_site_quantities?.[w]?.[sid] ?? it.weekly_site_quantities?.[w]?.[scode] ?? 0;
+          t[w][sid] += val;
+          t[w][scode] += val;
+        });
+      }
+    });
+    return t;
+  }
+
+  function relocateUnit(siteCode, fromW, toW, partnerPool) {
+    let siteTotals = getSiteTotals();
+    for (const it of allocRows) {
+      const q = it.weekly_site_quantities?.[fromW]?.[siteCode] || 0;
+      if (q > 0) {
+        for (const pIt of allocRows) {
+          const partner = partnerPool.find(p => {
+            const pcode = p.code || p.id;
+            return pcode !== siteCode &&
+              (pIt.weekly_site_quantities?.[toW]?.[pcode] || 0) >= 1 &&
+              ((siteTotals[toW][pcode] || 0) - 1) >= 3;
+          });
+          if (partner) {
+            const pcode = partner.code || partner.id;
+            it.weekly_site_quantities[fromW][siteCode]--;
+            it.weekly_site_quantities[toW][siteCode] = (it.weekly_site_quantities[toW][siteCode] || 0) + 1;
+
+            pIt.weekly_site_quantities[toW][pcode]--;
+            pIt.weekly_site_quantities[fromW][pcode] = (pIt.weekly_site_quantities[fromW][pcode] || 0) + 1;
+
+            // Mirror on id/code aliases
+            const p1 = serviceSites.find(s => (s.code === siteCode || s.id === siteCode));
+            if (p1) {
+              it.weekly_site_quantities[fromW][p1.id] = it.weekly_site_quantities[fromW][siteCode];
+              it.weekly_site_quantities[toW][p1.id] = it.weekly_site_quantities[toW][siteCode];
+            }
+            const p2 = serviceSites.find(s => (s.code === pcode || s.id === pcode));
+            if (p2) {
+              pIt.weekly_site_quantities[toW][p2.id] = pIt.weekly_site_quantities[toW][pcode];
+              pIt.weekly_site_quantities[fromW][p2.id] = pIt.weekly_site_quantities[fromW][pcode];
+            }
+
+            it[`w${fromW}_qty`]--;
+            it[`w${toW}_qty`]++;
+            pIt[`w${toW}_qty`]--;
+            pIt[`w${fromW}_qty`]++;
+
+            const price1 = it.stocking_price || 99;
+            it.w1_cost = (it.w1_qty || 0) * price1;
+            it.w2_cost = (it.w2_qty || 0) * price1;
+            it.w3_cost = (it.w3_qty || 0) * price1;
+            it.w4_cost = (it.w4_qty || 0) * price1;
+
+            const price2 = pIt.stocking_price || 99;
+            pIt.w1_cost = (pIt.w1_qty || 0) * price2;
+            pIt.w2_cost = (pIt.w2_qty || 0) * price2;
+            pIt.w3_cost = (pIt.w3_qty || 0) * price2;
+            pIt.w4_cost = (pIt.w4_qty || 0) * price2;
+
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  let moved = true;
+  let rounds = 0;
+  while (moved && rounds < 25) {
+    moved = false;
+    rounds++;
+    const siteTotals = getSiteTotals();
+
+    // Metro Manila consolidation (Weeks 1, 2, 3 only - NEVER Week 4)
+    for (const s of mmSites) {
+      const scode = s.code || s.id;
+      const totalDemand = allocRows.reduce((sum, it) => sum + (Number(it.site_quantities?.[scode] ?? it.site_quantities?.[s.id]) || 0), 0);
+      if (totalDemand < 3) continue;
+
+      if (siteTotals[2][scode] > 0 && siteTotals[2][scode] < 3 && siteTotals[1][scode] >= 3) {
+        if (relocateUnit(scode, 2, 1, mmSites)) { moved = true; break; }
+      }
+      if (siteTotals[1][scode] > 0 && siteTotals[1][scode] < 3 && siteTotals[2][scode] >= 3) {
+        if (relocateUnit(scode, 1, 2, mmSites)) { moved = true; break; }
+      }
+      if (siteTotals[2][scode] > 0 && siteTotals[2][scode] < 3 && siteTotals[3][scode] >= 3) {
+        if (relocateUnit(scode, 2, 3, mmSites)) { moved = true; break; }
+      }
+      if (siteTotals[1][scode] > 0 && siteTotals[1][scode] < 3 && siteTotals[3][scode] >= 3) {
+        if (relocateUnit(scode, 1, 3, mmSites)) { moved = true; break; }
+      }
+      if (siteTotals[3][scode] > 0 && siteTotals[3][scode] < 3 && siteTotals[2][scode] >= 3) {
+        if (relocateUnit(scode, 3, 2, mmSites)) { moved = true; break; }
+      }
+    }
+
+    // Provincial consolidation (Weeks 3 and 4 only - NEVER Weeks 1 and 2)
+    for (const s of provSites) {
+      const scode = s.code || s.id;
+      const totalDemand = allocRows.reduce((sum, it) => sum + (Number(it.site_quantities?.[scode] ?? it.site_quantities?.[s.id]) || 0), 0);
+      if (totalDemand < 3) continue;
+
+      if (siteTotals[3][scode] > 0 && siteTotals[3][scode] < 3 && siteTotals[4][scode] >= 3) {
+        if (relocateUnit(scode, 3, 4, provSites)) { moved = true; break; }
+      }
+      if (siteTotals[4][scode] > 0 && siteTotals[4][scode] < 3 && siteTotals[3][scode] >= 3) {
+        if (relocateUnit(scode, 4, 3, provSites)) { moved = true; break; }
+      }
+    }
+  }
+
+  return allocRows;
+}
+
+/**
  * Generates the operational order remark:
  * IF(total_allocated_qty == 0, "NO NEED TO ORDER", "ORDER REQUIRED")
  *
@@ -539,7 +963,7 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
 
   validateSiteSharesConsistency(sitesList);
 
-  return forecastList.map((fi, rIdx) => {
+  const allocRows = forecastList.map((fi, rIdx) => {
     // Authoritative Single Source of Truth for forecast quantity:
     // Read from final_forecast / computed_forecast directly, or compute using calculateItemForecast
     const fiQty = fi.final_forecast !== undefined && fi.final_forecast !== null
@@ -580,7 +1004,7 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
       else assignedCatId = 'cat-other';
     }
 
-    return {
+    const allocRow = {
       part_id: fi.part_id,
       part_number: fi.part_number,
       description: fi.description,
@@ -601,7 +1025,12 @@ export function generateAllocationsFromForecasts(forecastList = [], sitesList = 
       site_quantities: sq,
       remarks: getOrderRemark(tAlloc)
     };
+
+    allocRow.weekly_site_quantities = calculateWeeklySiteAllocations(allocRow, activeServiceSites, rIdx + rowParityOffset);
+    return allocRow;
   });
+
+  return balanceCatalogWeeklyAllocations(allocRows, activeServiceSites);
 }
 
 /**

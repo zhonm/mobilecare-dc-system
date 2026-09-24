@@ -5,6 +5,8 @@ import {
   calculateOptionAAllocation,
   allocatePartToSites,
   calculateWeeklySplit,
+  calculateWeeklySiteAllocations,
+  balanceCatalogWeeklyAllocations,
   getRowParityOffset,
   getOrderRemark
 } from './allocationEngine.js';
@@ -1950,6 +1952,11 @@ export function processRawUsageSheet(
 }
 
 export async function exportAllocationToExcel(allocations, sites, period = 'August 2026') {
+  const effectiveAllocations = balanceCatalogWeeklyAllocations(
+    (allocations || []).map(a => ({ ...a })),
+    sites
+  );
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Mobile Care Services Phils. Inc.';
   workbook.lastModifiedBy = 'MDC DC System 2';
@@ -1973,9 +1980,9 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   };
 
   // Calculate high-level summary metrics
-  const totalPartsAll = allocations.reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
+  const totalPartsAll = effectiveAllocations.reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
   let totalValueAll = 0;
-  allocations.forEach(it => {
+  effectiveAllocations.forEach(it => {
     const price = resolveStockPrice(it);
     totalValueAll += (it.total_allocated_qty || 0) * price;
   });
@@ -2099,7 +2106,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
 
   const categoryGroups = [];
   CATEGORY_ORDER.forEach(cfg => {
-    const items = allocations.filter(it => getPartCategory(it) === cfg.code);
+    const items = effectiveAllocations.filter(it => getPartCategory(it) === cfg.code);
     if (items.length > 0) {
       categoryGroups.push({
         ...cfg,
@@ -2109,7 +2116,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   });
 
   const recognizedItems = new Set(categoryGroups.flatMap(g => g.items));
-  const remainingItems = allocations.filter(it => !recognizedItems.has(it));
+  const remainingItems = effectiveAllocations.filter(it => !recognizedItems.has(it));
   if (remainingItems.length > 0) {
     categoryGroups.push({
       code: 'OTHER',
@@ -2345,7 +2352,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   ];
   sites.forEach(s => {
     let siteCost = 0;
-    allocations.forEach(item => {
+    effectiveAllocations.forEach(item => {
       const p = resolveStockPrice(item);
       const q = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
       siteCost += q * p;
@@ -2483,10 +2490,9 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
           sanitizeForSpreadsheet(item.description)
         ];
 
+        const itemWeekly = item.weekly_site_quantities || calculateWeeklySiteAllocations(item, sites, rIdx + offset);
         sites.forEach(s => {
-          const bMonthly = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
-          const bSplit = calculateWeeklySplit(bMonthly, bMonthly * stockPrice, rIdx + offset);
-          const bWQty = bSplit[`w${w}_qty`] || 0;
+          const bWQty = itemWeekly[w]?.[s.id] ?? itemWeekly[w]?.[s.code] ?? 0;
           subtotalWSites[s.id] = (subtotalWSites[s.id] || 0) + bWQty;
           rowValues.push(bWQty);
         });
