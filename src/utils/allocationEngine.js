@@ -552,7 +552,6 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
     W1 = 0;
     W2 = 0;
     W3 = half;
-    W4 = totalDemand - half;
   }
   // 2. Pure Metro Manila item: 100% in W1, W2, W3 (0 in W4)
   else if (totalProv === 0) {
@@ -561,7 +560,6 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
     W1 = b3 + (rem3 >= 1 ? 1 : 0);
     W2 = b3 + (rem3 === 2 ? 1 : 0);
     W3 = totalDemand - W1 - W2;
-    W4 = 0;
   }
   // 3. Mixed item:
   else {
@@ -590,7 +588,6 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
     }
     if (totalProv > 0 && W4 === 0 && W3 > 0) {
       const take = Math.min(Math.ceil(totalProv / 2), W3, totalProv);
-      W4 += take;
       W3 -= take;
     }
   }

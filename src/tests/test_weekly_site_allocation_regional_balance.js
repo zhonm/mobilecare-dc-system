@@ -4,13 +4,10 @@ const XLSX = require('xlsx');
 
 import {
   CANONICAL_SITE_LIST,
-  CANONICAL_SITE_CODES,
   resolveSafeRegion
 } from '../constants/config.js';
 import {
-  calculateWeeklySplit,
-  calculateWeeklySiteAllocations,
-  generateAllocationsFromForecasts
+  calculateWeeklySiteAllocations
 } from '../utils/allocationEngine.js';
 
 let totalTests = 0;
@@ -51,7 +48,7 @@ assert(allMMMatched, 'All 15 designated Metro Manila site codes match canonical 
 // --- 2. Invariant Conservation: Row Sum & Column Sum ---
 console.log('\n--- 2. INVARIANT CONSERVATION (SUM OF WEEKS === MONTHLY, SUM OF SITES === WEEKLY TARGET) ---');
 
-const activeSites = CANONICAL_SITE_LIST.map((s, idx) => ({
+const activeSites = CANONICAL_SITE_LIST.map(s => ({
   id: `site-${s.code.toLowerCase().replace(/[\s\W]+/g, '-')}`,
   code: s.code,
   name: s.name,
@@ -222,7 +219,7 @@ for (let w = 1; w <= 4; w++) {
 
   // Audit for single-part and 2-part parcels per site
   const siteParcels = {};
-  wSites.forEach((code, idx) => {
+  wSites.forEach(code => {
     siteParcels[code] = 0;
   });
   for (let r = 3; r < wData.length; r++) {
