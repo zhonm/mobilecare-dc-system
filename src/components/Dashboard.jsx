@@ -2159,17 +2159,18 @@ export default function Dashboard() {
                     </div>
 
                     <button
-                      className="btn btn-secondary btn-sm"
+                      className="btn btn-secondary"
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px',
-                        padding: '3px 8px',
-                        fontSize: '11px',
+                        gap: '5px',
+                        padding: '5px 11px',
+                        fontSize: '12.5px',
                         fontWeight: 600,
                         flexShrink: 0,
                         borderRadius: '6px',
-                        lineHeight: 1.2
+                        lineHeight: 1.2,
+                        cursor: 'pointer'
                       }}
                       onClick={() => generatePackingListPDF(sh, sh.items, destSite, {
                         supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
@@ -2179,7 +2180,7 @@ export default function Dashboard() {
                       })}
                       title="Download Outbound Shipment Manifest PDF"
                     >
-                      <Download size={11} />
+                      <Download size={13} />
                       <span>PDF</span>
                     </button>
                   </div>

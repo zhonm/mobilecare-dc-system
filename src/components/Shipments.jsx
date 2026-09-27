@@ -1108,48 +1108,56 @@ export default function Shipments() {
           )}
         </td>
 
-        <td style={{ textAlign: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
+        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'nowrap' }}>
             {/* Document group */}
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary"
               onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
               title="Download Packing List PDF"
               style={{
-                fontSize: '11.5px',
-                padding: '4px 7px',
+                fontSize: '13px',
+                fontWeight: 600,
+                padding: '6px 12px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '3px'
+                gap: '5px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                lineHeight: 1.3
               }}
             >
-              <Download size={12} />
+              <Download size={14} />
               <span>PDF</span>
             </button>
 
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary"
               onClick={() => handleDownloadXLSX(sh, sh.items, destSite)}
               title="Download Excel (.xlsx) Backup"
               style={{
                 background: '#f0fdf4',
                 color: '#15803d',
-                borderColor: '#bbf7d0',
-                fontSize: '11.5px',
-                padding: '4px 7px',
+                borderColor: '#86efac',
+                fontSize: '13px',
+                fontWeight: 600,
+                padding: '6px 12px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '3px'
+                gap: '5px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                lineHeight: 1.3
               }}
             >
-              <FileSpreadsheet size={12} color="#16a34a" />
+              <FileSpreadsheet size={14} color="#16a34a" />
               <span>XLSX</span>
             </button>
 
             {/* ACTION: Mark Ready when Draft */}
             {normStatus === 'draft' && (
               <button
-                className="btn btn-sm"
+                className="btn"
                 onClick={() => handleStatusChange(sh.id, 'pending_pickup')}
                 title="Mark manifest as Ready for Pickup"
                 style={{
@@ -1157,14 +1165,17 @@ export default function Shipments() {
                   color: '#b45309',
                   border: '1px solid #fde68a',
                   fontWeight: 600,
-                  fontSize: '11.5px',
-                  padding: '4px 8px',
+                  fontSize: '13px',
+                  padding: '6px 12px',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px'
+                  gap: '5px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  lineHeight: 1.3
                 }}
               >
-                <CheckCircle2 size={12} />
+                <CheckCircle2 size={14} />
                 <span>Mark Ready</span>
               </button>
             )}
@@ -1173,7 +1184,7 @@ export default function Shipments() {
             {normStatus === 'pending_pickup' && (
               <>
                 <button
-                  className="btn btn-sm"
+                  className="btn"
                   onClick={() => handleOpenPickupModal(sh)}
                   title="Handover package to Courier (Update status to Shipped)"
                   style={{
@@ -1181,19 +1192,22 @@ export default function Shipments() {
                     color: '#ffffff',
                     border: '1px solid #d97706',
                     fontWeight: 700,
-                    fontSize: '11.5px',
-                    padding: '4px 9px',
+                    fontSize: '13px',
+                    padding: '6px 14px',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '4px',
-                    boxShadow: '0 1px 3px rgba(245, 158, 11, 0.3)'
+                    gap: '5px',
+                    borderRadius: '6px',
+                    boxShadow: '0 1px 3px rgba(245, 158, 11, 0.3)',
+                    cursor: 'pointer',
+                    lineHeight: 1.3
                   }}
                 >
-                  <Truck size={12} />
+                  <Truck size={14} />
                   <span>Pick Up</span>
                 </button>
                 <button
-                  className="btn btn-sm"
+                  className="btn"
                   onClick={() => handleStatusChange(sh.id, 'draft')}
                   title="Revert status to Draft for editing"
                   style={{
@@ -1201,14 +1215,17 @@ export default function Shipments() {
                     color: '#475569',
                     border: '1px solid #cbd5e1',
                     fontWeight: 600,
-                    fontSize: '11.5px',
-                    padding: '4px 7px',
+                    fontSize: '13px',
+                    padding: '6px 11px',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '3px'
+                    gap: '5px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    lineHeight: 1.3
                   }}
                 >
-                  <RotateCcw size={11} />
+                  <RotateCcw size={13} />
                   <span>Set Draft</span>
                 </button>
               </>
@@ -1217,7 +1234,7 @@ export default function Shipments() {
             {/* ACTION BUTTON 2: Site Receive (When Shipped / In Transit) */}
             {normStatus === 'shipped' && (
               <button
-                className="btn btn-sm"
+                className="btn"
                 onClick={() => handleOpenReceiveModal(sh)}
                 title="Branch/Site confirms receipt of package"
                 style={{
@@ -1225,15 +1242,18 @@ export default function Shipments() {
                   color: '#ffffff',
                   border: '1px solid #059669',
                   fontWeight: 700,
-                  fontSize: '11.5px',
-                  padding: '4px 9px',
+                  fontSize: '13px',
+                  padding: '6px 14px',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px',
-                  boxShadow: '0 1px 3px rgba(16, 185, 129, 0.3)'
+                  gap: '5px',
+                  borderRadius: '6px',
+                  boxShadow: '0 1px 3px rgba(16, 185, 129, 0.3)',
+                  cursor: 'pointer',
+                  lineHeight: 1.3
                 }}
               >
-                <PackageCheck size={12} />
+                <PackageCheck size={15} />
                 <span>Receive</span>
               </button>
             )}
@@ -1241,7 +1261,7 @@ export default function Shipments() {
             {/* ACTION BUTTON 3: View Full Shipment & Package Details */}
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary"
               onClick={(e) => {
                 e.stopPropagation();
                 handleOpenPackageDetails(sh);
@@ -1250,17 +1270,19 @@ export default function Shipments() {
                 color: isLockedConfirmedShipment(sh) ? '#047857' : '#0369a1',
                 borderColor: isLockedConfirmedShipment(sh) ? '#a7f3d0' : '#bae6fd',
                 background: isLockedConfirmedShipment(sh) ? '#ecfdf5' : '#f0f9ff',
-                padding: '4px 8px',
+                padding: '6px 12px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '4px',
+                gap: '5px',
                 fontWeight: 600,
-                fontSize: '11px',
-                cursor: 'pointer'
+                fontSize: '13px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                lineHeight: 1.3
               }}
               title="View full package shipment and delivery details"
             >
-              <Eye size={12} color={isLockedConfirmedShipment(sh) ? '#059669' : '#0284c7'} />
+              <Eye size={14} color={isLockedConfirmedShipment(sh) ? '#059669' : '#0284c7'} />
               <span>Details</span>
             </button>
 
@@ -1268,7 +1290,7 @@ export default function Shipments() {
             {!isLockedConfirmedShipment(sh) && normStatus !== 'shipped' && (
               canUserDeleteRecord(sh, currentUser) ? (
                 <button
-                  className="btn btn-danger btn-sm"
+                  className="btn btn-danger"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShipmentToDelete(sh);
@@ -1276,18 +1298,36 @@ export default function Shipments() {
                     setCustomDeletionReason('');
                   }}
                   title="Delete Pending Shipment"
-                  style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5', padding: '4px 7px' }}
+                  style={{
+                    background: '#fee2e2',
+                    color: '#dc2626',
+                    borderColor: '#fca5a5',
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    lineHeight: 1.3
+                  }}
                 >
-                  <Trash2 size={12} />
+                  <Trash2 size={14} />
                 </button>
               ) : (
                 <button
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-secondary"
                   disabled
-                  style={{ opacity: 0.4, cursor: 'not-allowed', padding: '4px 7px' }}
+                  style={{
+                    opacity: 0.4,
+                    cursor: 'not-allowed',
+                    padding: '6px 10px',
+                    borderRadius: '6px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    lineHeight: 1.3
+                  }}
                   title={`Only ${sh.prepared_by_name || sh.saved_by_name || 'the creator'} can delete this shipment`}
                 >
-                  <Trash2 size={12} />
+                  <Trash2 size={14} />
                 </button>
               )
             )}
@@ -1326,20 +1366,24 @@ export default function Shipments() {
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
 
             <button
-              className="btn btn-secondary btn-sm"
+              className="btn btn-secondary"
               onClick={() => setIsSiteSerialsModalOpen(true)}
               style={{
                 background: '#f8fafc',
                 color: '#0f172a',
                 borderColor: '#cbd5e1',
                 fontWeight: 600,
+                fontSize: '13px',
+                padding: '6px 14px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '6px',
+                borderRadius: '6px',
+                cursor: 'pointer'
               }}
               title="View all serial numbers grouped by site"
             >
-              <Hash size={15} color="#0284c7" />
+              <Hash size={16} color="#0284c7" />
               <span>Serials by Site</span>
             </button>
 
@@ -1396,16 +1440,16 @@ export default function Shipments() {
             </span>
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn"
               onClick={() => setRegionTab('ALL')}
               style={{
                 background: regionTab === 'ALL' ? '#0f172a' : '#f8fafc',
                 color: regionTab === 'ALL' ? '#ffffff' : '#475569',
                 borderColor: regionTab === 'ALL' ? '#0f172a' : '#e2e8f0',
                 fontWeight: 700,
-                fontSize: '12px',
+                fontSize: '12.5px',
                 borderRadius: '8px',
-                padding: '5px 12px',
+                padding: '6px 14px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -1413,14 +1457,14 @@ export default function Shipments() {
                 boxShadow: regionTab === 'ALL' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
               }}
             >
-              <Layers size={13} />
+              <Layers size={14} />
               <span>All Sites</span>
               <span style={{
                 background: regionTab === 'ALL' ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
                 color: regionTab === 'ALL' ? '#fff' : '#475569',
                 padding: '1px 6px',
                 borderRadius: '10px',
-                fontSize: '10.5px',
+                fontSize: '11px',
                 fontWeight: 700,
                 marginLeft: '2px'
               }}>
@@ -1430,16 +1474,16 @@ export default function Shipments() {
 
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn"
               onClick={() => setRegionTab('METRO_MANILA')}
               style={{
                 background: regionTab === 'METRO_MANILA' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#f8fafc',
                 color: regionTab === 'METRO_MANILA' ? '#ffffff' : '#475569',
                 borderColor: regionTab === 'METRO_MANILA' ? '#0284c7' : '#e2e8f0',
                 fontWeight: 700,
-                fontSize: '12px',
+                fontSize: '12.5px',
                 borderRadius: '8px',
-                padding: '5px 12px',
+                padding: '6px 14px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -1447,14 +1491,14 @@ export default function Shipments() {
                 boxShadow: regionTab === 'METRO_MANILA' ? '0 2px 6px rgba(2,132,199,0.25)' : 'none'
               }}
             >
-              <Building2 size={13} />
+              <Building2 size={14} />
               <span>Metro Manila</span>
               <span style={{
                 background: regionTab === 'METRO_MANILA' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
                 color: regionTab === 'METRO_MANILA' ? '#fff' : '#475569',
                 padding: '1px 6px',
                 borderRadius: '10px',
-                fontSize: '10.5px',
+                fontSize: '11px',
                 fontWeight: 700,
                 marginLeft: '2px'
               }}>
@@ -1464,16 +1508,16 @@ export default function Shipments() {
 
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn"
               onClick={() => setRegionTab('PROVINCE')}
               style={{
                 background: regionTab === 'PROVINCE' ? 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)' : '#f8fafc',
                 color: regionTab === 'PROVINCE' ? '#ffffff' : '#475569',
                 borderColor: regionTab === 'PROVINCE' ? '#7c3aed' : '#e2e8f0',
                 fontWeight: 700,
-                fontSize: '12px',
+                fontSize: '12.5px',
                 borderRadius: '8px',
-                padding: '5px 12px',
+                padding: '6px 14px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -1481,14 +1525,14 @@ export default function Shipments() {
                 boxShadow: regionTab === 'PROVINCE' ? '0 2px 6px rgba(124,58,237,0.25)' : 'none'
               }}
             >
-              <MapPin size={13} />
+              <MapPin size={14} />
               <span>Province</span>
               <span style={{
                 background: regionTab === 'PROVINCE' ? 'rgba(255,255,255,0.25)' : '#e2e8f0',
                 color: regionTab === 'PROVINCE' ? '#fff' : '#475569',
                 padding: '1px 6px',
                 borderRadius: '10px',
-                fontSize: '10.5px',
+                fontSize: '11px',
                 fontWeight: 700,
                 marginLeft: '2px'
               }}>
@@ -1536,123 +1580,129 @@ export default function Shipments() {
         {/* 3. Interactive Status Filter Pills */}
         <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus('ALL')}
             style={{
               background: filterStatus === 'ALL' ? '#0f172a' : '#f8fafc',
               color: filterStatus === 'ALL' ? '#fff' : '#475569',
               borderColor: filterStatus === 'ALL' ? '#0f172a' : '#e2e8f0',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px'
+              padding: '6px 14px',
+              cursor: 'pointer'
             }}
           >
             All Manifests ({statusCounts.total})
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus('draft')}
             style={{
               background: filterStatus === 'draft' ? '#475569' : '#f8fafc',
               color: filterStatus === 'draft' ? '#fff' : '#475569',
               borderColor: filterStatus === 'draft' ? '#475569' : '#e2e8f0',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
           >
-            <FileText size={12} />
+            <FileText size={13} />
             <span>Drafts ({statusCounts.draft})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus('pending_pickup')}
             style={{
               background: filterStatus === 'pending_pickup' ? '#d97706' : '#fffbeb',
               color: filterStatus === 'pending_pickup' ? '#fff' : '#b45309',
               borderColor: filterStatus === 'pending_pickup' ? '#d97706' : '#fde68a',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
           >
-            <Clock size={12} />
+            <Clock size={13} />
             <span>Pending for Pickup ({statusCounts.pending})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus('shipped')}
             style={{
               background: filterStatus === 'shipped' ? '#0284c7' : '#f0f9ff',
               color: filterStatus === 'shipped' ? '#fff' : '#0369a1',
               borderColor: filterStatus === 'shipped' ? '#0284c7' : '#bae6fd',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
           >
-            <Truck size={12} />
+            <Truck size={13} />
             <span>Shipped / In Transit ({statusCounts.shipped})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus('received_confirmed')}
             style={{
               background: filterStatus === 'received_confirmed' ? '#059669' : '#ecfdf5',
               color: filterStatus === 'received_confirmed' ? '#fff' : '#047857',
               borderColor: filterStatus === 'received_confirmed' ? '#059669' : '#a7f3d0',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
           >
-            <CheckCircle size={12} />
+            <CheckCircle size={13} />
             <span>Received Confirmed ({statusCounts.received})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => setFilterStatus(filterStatus === 'today' ? 'ALL' : 'today')}
             style={{
               background: filterStatus === 'today' ? '#4f46e5' : '#eef2ff',
               color: filterStatus === 'today' ? '#fff' : '#4338ca',
               borderColor: filterStatus === 'today' ? '#4f46e5' : '#c7d2fe',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
           >
-            <Calendar size={12} />
+            <Calendar size={13} />
             <span>Today ({kpiMetrics.todayManifests})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={() => {
               if (filterStatus === 'archived') {
                 setFilterStatus('ALL');
@@ -1668,21 +1718,22 @@ export default function Shipments() {
               color: filterStatus === 'archived' ? '#fff' : '#475569',
               borderColor: filterStatus === 'archived' ? '#334155' : '#cbd5e1',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '5px'
+              gap: '5px',
+              cursor: 'pointer'
             }}
             title="Filter historical closed shipments older than 60 days"
           >
-            <Archive size={12} />
+            <Archive size={13} />
             <span>Archived ({statusCounts.archived})</span>
           </button>
 
           <button
-            className="btn btn-sm"
+            className="btn"
             onClick={async () => {
               if (typeof reconcileCompletedDrafts === 'function') {
                 await reconcileCompletedDrafts(null, { silent: false });
@@ -1693,17 +1744,18 @@ export default function Shipments() {
               color: '#0369a1',
               borderColor: '#bae6fd',
               fontWeight: 600,
-              fontSize: '12px',
+              fontSize: '12.5px',
               borderRadius: '20px',
-              padding: '4px 12px',
+              padding: '6px 14px',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '5px',
-              marginLeft: 'auto'
+              marginLeft: 'auto',
+              cursor: 'pointer'
             }}
             title="Reconcile and synchronize draft manifests with completed shipments"
           >
-            <RefreshCw size={12} />
+            <RefreshCw size={13} />
             <span>Sync Drafts</span>
           </button>
         </div>
@@ -1956,7 +2008,7 @@ export default function Shipments() {
                       <th style={{ textAlign: 'center' }}>Total Units</th>
                       <th style={{ textAlign: 'center' }}>Boxes</th>
                       <th style={{ textAlign: 'center' }}>Status</th>
-                      <th style={{ textAlign: 'center' }}>Actions</th>
+                      <th style={{ textAlign: 'center', minWidth: '320px' }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2174,7 +2226,7 @@ export default function Shipments() {
                             <th style={{ textAlign: 'center' }}>Total Units</th>
                             <th style={{ textAlign: 'center' }}>Boxes</th>
                             <th style={{ textAlign: 'center' }}>Status</th>
-                            <th style={{ textAlign: 'center' }}>Actions</th>
+                            <th style={{ textAlign: 'center', minWidth: '320px' }}>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3731,7 +3783,7 @@ export default function Shipments() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-secondary"
                   onClick={() => {
                     handleRequestPrintOrPDF(
                       viewPackageModalState.shipment,
@@ -3743,19 +3795,22 @@ export default function Shipments() {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '5px',
-                    fontSize: '12px',
-                    fontWeight: 600
+                    gap: '6px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    padding: '7px 14px',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
                   }}
                   title="Download Packing List PDF"
                 >
-                  <Download size={13} />
+                  <Download size={14} />
                   <span>Packing List PDF</span>
                 </button>
 
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-secondary"
                   onClick={() => {
                     handleDownloadXLSX(
                       viewPackageModalState.shipment,
@@ -3766,16 +3821,19 @@ export default function Shipments() {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '5px',
-                    fontSize: '12px',
+                    gap: '6px',
+                    fontSize: '13px',
                     fontWeight: 600,
+                    padding: '7px 14px',
+                    borderRadius: '6px',
                     background: '#f0fdf4',
                     color: '#15803d',
-                    borderColor: '#bbf7d0'
+                    borderColor: '#86efac',
+                    cursor: 'pointer'
                   }}
                   title="Download Excel Backup (.xlsx)"
                 >
-                  <FileSpreadsheet size={13} color="#16a34a" />
+                  <FileSpreadsheet size={14} color="#16a34a" />
                   <span>Download XLSX</span>
                 </button>
               </div>
@@ -3785,7 +3843,7 @@ export default function Shipments() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={() => setViewPackageModalState(null)}
-                  style={{ minWidth: '80px' }}
+                  style={{ minWidth: '80px', fontSize: '13px', padding: '7px 16px', borderRadius: '6px', cursor: 'pointer' }}
                 >
                   Close
                 </button>
@@ -3800,18 +3858,21 @@ export default function Shipments() {
                     alignItems: 'center',
                     gap: '6px',
                     fontWeight: 600,
-                    fontSize: '12px'
+                    fontSize: '13px',
+                    padding: '7px 16px',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
                   }}
                   title="Copy plain-text serials formatted for GSX / Fixably"
                 >
                   {copiedPackageSerialToken === 'ALL' || copiedSerialToken === 'ALL' ? (
                     <>
-                      <Check size={13} />
+                      <Check size={14} />
                       <span>Copied All Serials!</span>
                     </>
                   ) : (
                     <>
-                      <Copy size={13} />
+                      <Copy size={14} />
                       <span>Copy Plain Text Serials</span>
                     </>
                   )}
