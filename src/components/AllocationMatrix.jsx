@@ -770,7 +770,7 @@ export default function AllocationMatrix() {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AllocationMatrix manual refresh' })}
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AllocationMatrix manual refresh', tables: ['saved_records', 'parts', 'sites'] })}
               disabled={isAutoRefreshing}
               title="Force reload latest allocation matrix from database"
               style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}

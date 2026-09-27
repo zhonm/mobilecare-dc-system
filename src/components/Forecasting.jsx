@@ -276,7 +276,7 @@ export default function Forecasting() {
               onClick={async () => {
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
-                autoRefreshData({ force: true, silent: false, reason: 'Forecasting refresh button', isManual: true });
+                autoRefreshData({ force: true, silent: false, reason: 'Forecasting refresh button', isManual: true, tables: ['saved_records', 'parts'] });
               }}
               disabled={isAutoRefreshing}
               title="Revalidate forecast with latest cloud data"

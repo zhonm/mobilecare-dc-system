@@ -392,10 +392,22 @@ export function useCloudSync({
         if (tbl === 'profiles' || tbl === 'user_page_permissions') {
           if (isSiteRestrictedPmg) return false;
           const curTab = activeTabRef.current || (typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '') : '');
-          if (curTab === 'user-access' || curUser?.role === 'superadmin' || curUser?.role === 'admin' || (selectiveTables && selectiveTables.includes(tbl))) {
+          if (curTab === 'user-access' || (selectiveTables && selectiveTables.includes(tbl))) {
+            return true;
+          }
+          if (isForce && (curUser?.role === 'superadmin' || curUser?.role === 'admin')) {
             return true;
           }
           return false;
+        }
+        // Master lookup tables: sites, part_categories rarely change
+        if (tbl === 'sites' || tbl === 'part_categories') {
+          if (selectiveTables && selectiveTables.includes(tbl)) return true;
+          if (isForce) return true;
+          // Skip routine background polling if already loaded in memory to prevent log ingestion waste
+          if (tbl === 'sites' && Array.isArray(sites) && sites.length > 0) return false;
+          if (tbl === 'part_categories' && Array.isArray(categories) && categories.length > 0) return false;
+          return true;
         }
         if (!selectiveTables) return true;
         return selectiveTables.includes(tbl);
@@ -2895,7 +2907,7 @@ export function useCloudSync({
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
               if (Date.now() - lastLocalTime >= 3000) {
-                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]' });
+                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]', tables: ['saved_records'] });
               }
             } else if (ev.data.type === 'STOCK_TRANSFERS_UPDATED') {
               autoRefreshData({ force: true, silent: true, isManual: false, reason: 'Local Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
@@ -3104,7 +3116,7 @@ export function useCloudSync({
             } else if (bType === 'MASTER_DATA_UPDATED') {
               const lastLocalTime = parseInt(localStorage.getItem('mdc_last_override_time') || '0', 10);
               if (Date.now() - lastLocalTime >= 3000) {
-                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'WebSocket Broadcast [MASTER_DATA_UPDATED]' });
+                autoRefreshData({ force: false, silent: true, isManual: false, reason: 'WebSocket Broadcast [MASTER_DATA_UPDATED]', tables: ['saved_records'] });
               }
             }
           });
@@ -3232,7 +3244,7 @@ export function useCloudSync({
   useEffect(() => {
     const handleFocusOrVisibility = () => {
       if (document.visibilityState === 'visible' && currentUser?.id) {
-        if (realtimeConnected) return;
+        if (realtimeConnected || realtimeConnectedRef.current) return;
         const now = Date.now();
         if (now - lastRefreshTimeRef.current >= 1800000) {
           autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
@@ -3266,7 +3278,7 @@ export function useCloudSync({
       window.removeEventListener('offline', handleOffline);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, processOfflineSyncQueue]);
+  }, [currentUser?.id, processOfflineSyncQueue, realtimeConnected]);
 
   // 4. Periodic background safety-net heartbeat revalidation (every 10 mins, only if offline or disconnected and active)
   useEffect(() => {

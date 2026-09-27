@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
@@ -54,9 +54,20 @@ export function usePartsRequests({
     }
   }, []);
 
-  // 1. Fetch & Hydrate Parts Requests from Supabase
-  const fetchPartsRequests = useCallback(async () => {
+  const lastFetchRef = useRef(0);
+  const partsRef = useRef(parts);
+  const sitesRef = useRef(sites);
+  useEffect(() => { partsRef.current = parts; }, [parts]);
+  useEffect(() => { sitesRef.current = sites; }, [sites]);
+
+  // 1. Fetch & Hydrate Parts Requests from Supabase (with safe cooldown & deduping)
+  const fetchPartsRequests = useCallback(async ({ force = false } = {}) => {
     if (!supabase) return;
+    const now = Date.now();
+    if (!force && now - lastFetchRef.current < 20000) {
+      return;
+    }
+    lastFetchRef.current = now;
     setIsLoadingRequests(true);
     try {
       let query = supabase
@@ -81,9 +92,11 @@ export function usePartsRequests({
       if (Array.isArray(data)) {
         setPartsRequests(prev => {
           const map = new Map((prev || []).map(r => [r.id, r]));
+          const currentParts = partsRef.current || [];
+          const currentSites = sitesRef.current || [];
           data.forEach(dbRow => {
-            const partObj = dbRow.parts || parts.find(p => p.id === dbRow.part_id) || {};
-            const siteObj = dbRow.sites || sites.find(s => s.id === dbRow.site_id) || {};
+            const partObj = dbRow.parts || currentParts.find(p => p.id === dbRow.part_id) || {};
+            const siteObj = dbRow.sites || currentSites.find(s => s.id === dbRow.site_id) || {};
             map.set(dbRow.id, {
               ...dbRow,
               part_number: partObj.part_number || dbRow.part_number,
@@ -104,12 +117,14 @@ export function usePartsRequests({
     } finally {
       setIsLoadingRequests(false);
     }
-  }, [currentUser, isFulfillmentUser, parts, sites, persistPartsRequests]);
+  }, [currentUser, isFulfillmentUser, persistPartsRequests]);
 
-  // Initial fetch on mount or user change
+  // Initial fetch on mount or user change only (isolated from parts/sites mutations)
   useEffect(() => {
-    fetchPartsRequests();
-  }, [fetchPartsRequests]);
+    if (currentUser?.id) {
+      fetchPartsRequests();
+    }
+  }, [currentUser?.id, currentUser?.siteId, fetchPartsRequests]);
 
   // 2. Submit New Parts Request (Atomic SECURITY DEFINER RPC with offline fallback)
   const submitPartsRequest = async ({

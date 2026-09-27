@@ -1318,8 +1318,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               className="btn btn-secondary"
               style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}
               onClick={() => {
-                fetchPartsRequests();
-                if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'Parts requests refresh' });
+                if (autoRefreshData) {
+                  autoRefreshData({ force: true, silent: false, reason: 'Parts requests refresh', tables: ['parts_requests', 'parts', 'inventory_units'] });
+                } else if (typeof fetchPartsRequests === 'function') {
+                  fetchPartsRequests({ force: true });
+                }
               }}
               disabled={isLoadingPartsRequests || isAutoRefreshing}
               title="Refresh live data from cloud database"

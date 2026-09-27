@@ -532,7 +532,7 @@ export default function AuditTrail() {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AuditTrail manual refresh' })}
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AuditTrail manual refresh', tables: ['saved_records'] })}
               disabled={isAutoRefreshing}
               title="Force reload latest audit logs from Supabase cloud database"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600, padding: '6px 12px', borderRadius: '6px' }}

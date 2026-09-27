@@ -767,7 +767,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
           <button
             className="btn btn-secondary btn-sm"
             onClick={() => {
-              if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual sync' });
+              if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual sync', tables: ['dc_intake_records', 'inventory_units', 'saved_records'] });
               if (processOfflineSyncQueue) processOfflineSyncQueue();
             }}
             disabled={isAutoRefreshing}

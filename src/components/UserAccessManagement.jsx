@@ -73,7 +73,7 @@ export default function UserAccessManagement() {
   // Auto-refresh registered users from database if list has 1 or fewer users on mount
   useEffect(() => {
     if (typeof autoRefreshData === 'function' && (!usersList || usersList.length <= 1)) {
-      autoRefreshData({ force: true, silent: true, reason: 'user_access_mount' });
+      autoRefreshData({ force: true, silent: true, reason: 'user_access_mount', tables: ['profiles', 'user_page_permissions', 'saved_records'] });
     }
   }, [autoRefreshData, usersList]);
 
@@ -485,7 +485,7 @@ export default function UserAccessManagement() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               className="btn btn-secondary"
-              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'manual_db_sync' })}
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'manual_db_sync', tables: ['profiles', 'user_page_permissions', 'saved_records'] })}
               disabled={isAutoRefreshing}
               style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#fff', borderColor: 'rgba(255, 255, 255, 0.2)', padding: '7px 12px', fontSize: '12.5px' }}
             >
