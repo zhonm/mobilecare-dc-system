@@ -50,6 +50,25 @@ assert(
 );
 console.log('  ✓ PASS: select-all class enabled on Waybill elements for easy copying');
 
+// 5. Verify automatic copy to clipboard on click in Shipments.jsx
+assert(
+  shipmentsFile.includes('handleCopyWaybill') &&
+  shipmentsFile.includes('handleCopyWaybill(sh.tracking_number)') &&
+  shipmentsFile.includes('cursor: \'pointer\''),
+  'Shipments.jsx must bind handleCopyWaybill on click with pointer cursor'
+);
+console.log('  ✓ PASS: Shipments.jsx automatically copies Waybill to clipboard on click');
+
+// 6. Verify automatic copy to clipboard on click in ScanOutPacking.jsx and RequestParts.jsx
+const requestPartsFile = fs.readFileSync(path.join(__dirname, '../components/RequestParts.jsx'), 'utf8');
+assert(
+  scanOutFile.includes('handleCopyWaybill') &&
+  scanOutFile.includes('handleCopyWaybill(s.tracking_number)') &&
+  requestPartsFile.includes('handleCopyWaybill'),
+  'ScanOutPacking.jsx and RequestParts.jsx must support automatic Waybill click-to-copy'
+);
+console.log('  ✓ PASS: ScanOutPacking.jsx and RequestParts.jsx automatically copy Waybill to clipboard on click');
+
 console.log('====================================================');
-console.log('ALL WAYBILL VISIBILITY TESTS PASSED (4/4)');
+console.log('ALL WAYBILL VISIBILITY & CLICK-TO-COPY TESTS PASSED (6/6)');
 console.log('====================================================');

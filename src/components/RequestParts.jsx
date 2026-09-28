@@ -135,6 +135,32 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     }
   };
 
+  const [copiedWaybill, setCopiedWaybill] = useState(null);
+
+  const handleCopyWaybill = (rawTracking) => {
+    if (!rawTracking) return;
+    const clean = String(rawTracking).replace(/^#\s*/, '').trim();
+    if (!clean) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(clean);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = clean;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedWaybill(clean);
+      showToast?.(`Copied Waybill #${clean} to clipboard!`, 'success');
+      setTimeout(() => setCopiedWaybill(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy waybill:', err);
+      showToast?.('Failed to copy Waybill to clipboard', 'error');
+    }
+  };
+
   // Listen for quick action events triggered from PmgSidebar
   useEffect(() => {
     const handleOpenReq = () => {
@@ -2481,7 +2507,39 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
                         <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           <div>Destination: <strong style={{ color: '#334155' }}>{destSite.name} ({destSite.code})</strong></div>
-                          <div>Courier / Tracking: <strong style={{ color: '#334155' }}>{formatCourierWithMode(sh.carrier || sh.courier || 'Lite Express', sh.shipping_mode)} {sh.tracking_number ? `• #${sh.tracking_number}` : ''}</strong></div>
+                          <div>
+                            Courier / Tracking:{' '}
+                            <strong style={{ color: '#334155' }}>
+                              {formatCourierWithMode(sh.carrier || sh.courier || 'Lite Express', sh.shipping_mode)}{' '}
+                              {sh.tracking_number ? (
+                                <span
+                                  className="font-mono"
+                                  onClick={() => handleCopyWaybill(sh.tracking_number)}
+                                  style={{
+                                    cursor: 'pointer',
+                                    fontWeight: 600,
+                                    color: copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? '#15803d' : '#0f172a',
+                                    padding: '1px 4px',
+                                    borderRadius: '3px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '2px',
+                                    transition: 'background-color 0.15s ease'
+                                  }}
+                                  title="Click to copy Waybill number"
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f1f5f9'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  • #{sh.tracking_number}
+                                  {copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? (
+                                    <Check size={11} strokeWidth={2.5} color="#15803d" />
+                                  ) : (
+                                    <Copy size={10} color="#64748b" style={{ opacity: 0.7 }} />
+                                  )}
+                                </span>
+                              ) : ''}
+                            </strong>
+                          </div>
                           <div>Packed by: <span style={{ color: '#334155' }}>{sh.prepared_by_name || 'Warehouse Staff'}</span></div>
                         </div>
 
@@ -4195,7 +4253,41 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     </span>
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#047857' }}>
-                    Courier: <strong>{receiveModalState.shipment?.carrier || receiveModalState.shipment?.courier || 'Lite Express'}</strong> • Waybill: <strong className="font-mono select-all" style={{ fontSize: '13px', color: '#065f46' }}>#{receiveModalState.shipment?.tracking_number || 'N/A'}</strong>
+                    Courier: <strong>{receiveModalState.shipment?.carrier || receiveModalState.shipment?.courier || 'Lite Express'}</strong> • Waybill: <strong
+                      className="font-mono select-all"
+                      style={{
+                        fontSize: '13px',
+                        color: '#065f46',
+                        cursor: receiveModalState.shipment?.tracking_number ? 'pointer' : 'default',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        transition: 'background-color 0.15s ease'
+                      }}
+                      title={receiveModalState.shipment?.tracking_number ? (copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? "Copied to clipboard!" : "Click to copy Waybill number") : ""}
+                      onClick={() => {
+                        if (receiveModalState.shipment?.tracking_number) {
+                          handleCopyWaybill(receiveModalState.shipment.tracking_number);
+                        }
+                      }}
+                      onMouseEnter={(e) => {
+                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = '#d1fae5';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                    >
+                      #{receiveModalState.shipment?.tracking_number || 'N/A'}
+                      {receiveModalState.shipment?.tracking_number && (
+                        copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? (
+                          <Check size={11} strokeWidth={2.5} color="#15803d" style={{ marginLeft: '2px' }} />
+                        ) : (
+                          <Copy size={11} color="#047857" style={{ opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
+                        )
+                      )}
+                    </strong>
                   </div>
                 </div>
 

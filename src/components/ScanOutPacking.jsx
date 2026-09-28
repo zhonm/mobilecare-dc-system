@@ -906,6 +906,32 @@ export default function ScanOutPacking() {
     } catch (e) {}
   };
 
+  const [copiedWaybill, setCopiedWaybill] = useState(null);
+
+  const handleCopyWaybill = (rawTracking) => {
+    if (!rawTracking) return;
+    const clean = String(rawTracking).replace(/^#\s*/, '').trim();
+    if (!clean) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(clean);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = clean;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedWaybill(clean);
+      showToast(`Copied Waybill #${clean} to clipboard!`, 'success');
+      setTimeout(() => setCopiedWaybill(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy waybill:', err);
+      showToast('Failed to copy Waybill to clipboard', 'error');
+    }
+  };
+
   const getCategoryBadgeStyle = (catCode = '') => {
     const code = String(catCode).toUpperCase();
     if (code.includes('BATTERY')) return { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' };
@@ -3092,19 +3118,45 @@ export default function ScanOutPacking() {
                       {s.tracking_number ? (
                         <div
                           className="font-mono select-all"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyWaybill(s.tracking_number);
+                          }}
                           style={{
                             fontSize: '13px',
                             fontWeight: 700,
-                            color: '#0f172a',
+                            color: copiedWaybill === String(s.tracking_number).replace(/^#\s*/, '').trim() ? '#15803d' : '#0f172a',
                             marginTop: '1.5px',
-                            letterSpacing: '0.02em'
+                            letterSpacing: '0.02em',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '1px 5px',
+                            marginLeft: '-5px',
+                            borderRadius: '4px',
+                            transition: 'background-color 0.15s ease'
                           }}
-                          title="Waybill Number"
+                          title={copiedWaybill === String(s.tracking_number).replace(/^#\s*/, '').trim() ? "Copied to clipboard!" : "Click to copy Waybill number"}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = '#f1f5f9';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
                         >
                           <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#64748b', marginRight: '3px', textTransform: 'uppercase' }}>
                             Waybill
                           </span>
                           #{s.tracking_number}
+                          {copiedWaybill === String(s.tracking_number).replace(/^#\s*/, '').trim() ? (
+                            <span style={{ fontSize: '10.5px', color: '#16a34a', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '3px' }}>
+                              <Check size={12} strokeWidth={2.5} />
+                              Copied!
+                            </span>
+                          ) : (
+                            <Copy size={11} color="#94a3b8" style={{ opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
+                          )}
                         </div>
                       ) : (
                         <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>
@@ -3374,7 +3426,36 @@ export default function ScanOutPacking() {
 
             <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
               <div style={{ fontSize: '12px', color: '#64748b' }}>
-                Carrier: <strong>{inspectShipmentModal.carrier || 'Lite Express'}</strong> • Tracking: <span className="font-mono">{inspectShipmentModal.tracking_number ? `#${inspectShipmentModal.tracking_number}` : 'None'}</span>
+                Carrier: <strong>{inspectShipmentModal.carrier || 'Lite Express'}</strong> • Tracking:{' '}
+                {inspectShipmentModal.tracking_number ? (
+                  <span
+                    className="font-mono"
+                    onClick={() => handleCopyWaybill(inspectShipmentModal.tracking_number)}
+                    style={{
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      color: copiedWaybill === String(inspectShipmentModal.tracking_number).replace(/^#\s*/, '').trim() ? '#15803d' : '#0f172a',
+                      padding: '1px 5px',
+                      borderRadius: '3px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '2px',
+                      transition: 'background-color 0.15s ease'
+                    }}
+                    title="Click to copy Waybill number"
+                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f1f5f9'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                  >
+                    #{inspectShipmentModal.tracking_number}
+                    {copiedWaybill === String(inspectShipmentModal.tracking_number).replace(/^#\s*/, '').trim() ? (
+                      <Check size={11} strokeWidth={2.5} color="#15803d" />
+                    ) : (
+                      <Copy size={10} color="#94a3b8" style={{ opacity: 0.7 }} />
+                    )}
+                  </span>
+                ) : (
+                  <span className="font-mono">None</span>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
