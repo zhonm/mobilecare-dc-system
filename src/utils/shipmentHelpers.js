@@ -586,14 +586,21 @@ export const partitionShipmentsByRecency = (shipments = [], daysThreshold = 7, m
   const thresholdMs = daysThreshold * 24 * 60 * 60 * 1000;
   const cutoffTime = maxTime - thresholdMs;
 
-  const recent = [];
+  const inTransit = [];
+  const otherActive = [];
+  const recentCompleted = [];
   const older = [];
   let completedInRecent = 0;
 
   for (const sh of sorted) {
     const active = isShipmentActive(sh);
     if (active) {
-      recent.push(sh);
+      const s = String(sh.status || '').toLowerCase().replace(/[\s_-]+/g, '');
+      if (s === 'shipped' || s === 'intransit') {
+        inTransit.push(sh);
+      } else {
+        otherActive.push(sh);
+      }
       continue;
     }
 
@@ -601,12 +608,15 @@ export const partitionShipmentsByRecency = (shipments = [], daysThreshold = 7, m
     const time = d ? d.getTime() : 0;
 
     if (time >= cutoffTime || completedInRecent < minRecentCompleted) {
-      recent.push(sh);
+      recentCompleted.push(sh);
       completedInRecent++;
     } else {
       older.push(sh);
     }
   }
+
+  // Always position all In-Transit packages at the top of recent shipments
+  const recent = [...inTransit, ...otherActive, ...recentCompleted];
 
   return {
     recent,

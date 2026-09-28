@@ -477,7 +477,25 @@ export default function Shipments() {
       return true;
     });
 
-    return sortShipmentsChronological(list, 'desc');
+    const sorted = sortShipmentsChronological(list, 'desc');
+
+    // Always display all In-Transit packages at the top so they are immediately visible
+    const inTransit = [];
+    const otherActive = [];
+    const completed = [];
+
+    for (const sh of sorted) {
+      const norm = getNormalizedStatus(sh);
+      if (norm === 'shipped') {
+        inTransit.push(sh);
+      } else if (norm === 'pending_pickup' || norm === 'draft') {
+        otherActive.push(sh);
+      } else {
+        completed.push(sh);
+      }
+    }
+
+    return [...inTransit, ...otherActive, ...completed];
   }, [shipments, regionTab, filterStatus, search, sites, getNormalizedStatus]);
 
   // Recency Partitioning: Recent & Active vs Older Historical Archive
