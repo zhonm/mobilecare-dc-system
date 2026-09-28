@@ -395,7 +395,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   // ══════════════════════════════════════════════════════════════════════════
   // PAGE 2: OFFICIAL DECLARATION FORM FOR SITE TRANSFERS
   // ══════════════════════════════════════════════════════════════════════════
-  doc.addPage();
+  const includeDeclaration = options.includeDeclarationForm !== false;
+
+  if (includeDeclaration) {
+    doc.addPage();
 
   const decMargin = 20;
   const decPageWidth = doc.internal.pageSize.getWidth();
@@ -544,6 +547,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
   // Pickup Date field remains completely blank, with no text or placeholder values displayed
   doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // UNIVERSAL FOOTER PAGINATION (Packing List pages only; omitted on Declaration Form)

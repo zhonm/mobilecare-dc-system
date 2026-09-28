@@ -77,6 +77,10 @@ export default function Shipments() {
     setShipmentsFilterStatus
   } = useApp();
 
+  const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin);
+  // PDF Download Selection Modal State (Superadmin exclusive)
+  const [pdfSelectModalState, setPdfSelectModalState] = useState(null);
+
   const { serialDict, partsMapByPn } = useMemo(() => {
     return buildSerialDictionary({
       dcIntakeRecords,
@@ -238,19 +242,30 @@ export default function Shipments() {
   };
 
   // Direct Corporate PDF Request Handler
-  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf') => {
+  const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf', customOptions = {}) => {
+    // Superadmin can choose whether to include Declaration Form. PMG and non-superadmin users are restricted to PL only.
+    const includeDeclaration = isSuperadmin
+      ? (customOptions?.includeDeclarationForm !== undefined ? customOptions.includeDeclarationForm : true)
+      : false;
+
     const pdfOptions = {
       supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
       guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
+      pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date,
+      ...customOptions,
+      includeDeclarationForm: includeDeclaration
     };
 
     const sourceItems = items && items.length > 0 ? items : (shipmentObj?.items || []);
     const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
 
     generatePackingListPDF(shipmentObj, resolvedItems, siteObj || {}, pdfOptions);
-    showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    if (includeDeclaration) {
+      showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    } else {
+      showToast(`Downloaded Packing List PDF (PL Only) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    }
   };
 
   // Direct Corporate Excel (.xlsx) Request Handler
@@ -1113,8 +1128,14 @@ export default function Shipments() {
             {/* Document group */}
             <button
               className="btn btn-secondary"
-              onClick={() => handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf')}
-              title="Download Packing List PDF"
+              onClick={() => {
+                if (isSuperadmin) {
+                  setPdfSelectModalState({ shipment: sh, items: sh.items, site: destSite });
+                } else {
+                  handleRequestPrintOrPDF(sh, sh.items, destSite, 'pdf', { includeDeclarationForm: false });
+                }
+              }}
+              title={isSuperadmin ? "Select document download: PL Only or PL + Declaration Form" : "Download Packing List PDF (PL Only)"}
               style={{
                 fontSize: '13px',
                 fontWeight: 600,
@@ -1129,6 +1150,7 @@ export default function Shipments() {
             >
               <Download size={14} />
               <span>PDF</span>
+              {isSuperadmin && <ChevronDown size={12} style={{ marginLeft: '-1px', opacity: 0.75 }} />}
             </button>
 
             <button
@@ -3785,12 +3807,21 @@ export default function Shipments() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={() => {
-                    handleRequestPrintOrPDF(
-                      viewPackageModalState.shipment,
-                      viewPackageModalState.shipment?.items || [],
-                      viewPackageModalState.site,
-                      'pdf'
-                    );
+                    if (isSuperadmin) {
+                      setPdfSelectModalState({
+                        shipment: viewPackageModalState.shipment,
+                        items: viewPackageModalState.shipment?.items || [],
+                        site: viewPackageModalState.site
+                      });
+                    } else {
+                      handleRequestPrintOrPDF(
+                        viewPackageModalState.shipment,
+                        viewPackageModalState.shipment?.items || [],
+                        viewPackageModalState.site,
+                        'pdf',
+                        { includeDeclarationForm: false }
+                      );
+                    }
                   }}
                   style={{
                     display: 'inline-flex',
@@ -3802,10 +3833,11 @@ export default function Shipments() {
                     borderRadius: '6px',
                     cursor: 'pointer'
                   }}
-                  title="Download Packing List PDF"
+                  title={isSuperadmin ? "Select document download: PL Only or PL + Declaration Form" : "Download Packing List PDF (PL Only)"}
                 >
                   <Download size={14} />
-                  <span>Packing List PDF</span>
+                  <span>{isSuperadmin ? 'PDF Options' : 'Packing List PDF'}</span>
+                  {isSuperadmin && <ChevronDown size={12} style={{ opacity: 0.75 }} />}
                 </button>
 
                 <button
@@ -4128,6 +4160,312 @@ export default function Shipments() {
               <button className="btn btn-danger btn-sm" onClick={handleConfirmDeleteShipment} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                 <Trash2 size={13} />
                 <span>Yes, Delete Shipment</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Superadmin PDF Download Options Modal --- */}
+      {pdfSelectModalState && (
+        <div
+          className="modal-backdrop"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1200,
+            padding: '16px'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPdfSelectModalState(null);
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{
+              maxWidth: '520px',
+              width: '100%',
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              overflow: 'hidden',
+              border: '1px solid #e2e8f0',
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                padding: '18px 22px',
+                borderBottom: '1px solid #e2e8f0',
+                background: '#f8fafc'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div
+                  style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#2563eb',
+                    flexShrink: 0
+                  }}
+                >
+                  <Download size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
+                    Select Document Download
+                  </h3>
+                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                    <span>Manifest: <strong style={{ color: '#0f172a' }}>{pdfSelectModalState.shipment?.invoice_ref || pdfSelectModalState.shipment?.shipment_number || 'Manifest'}</strong></span>
+                    <span style={{ margin: '0 6px' }}>•</span>
+                    <span>Destination: <strong style={{ color: '#0f172a' }}>{pdfSelectModalState.site?.name || pdfSelectModalState.shipment?.site_name || 'Service Hub'}</strong></span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setPdfSelectModalState(null)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                title="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                Choose which document format you would like to download for this outbound shipment:
+              </p>
+
+              {/* Option 1: Packing List Only */}
+              <div
+                onClick={() => {
+                  handleRequestPrintOrPDF(
+                    pdfSelectModalState.shipment,
+                    pdfSelectModalState.items,
+                    pdfSelectModalState.site,
+                    'pdf',
+                    { includeDeclarationForm: false }
+                  );
+                  setPdfSelectModalState(null);
+                }}
+                style={{
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '16px',
+                  cursor: 'pointer',
+                  transition: 'all 0.18s ease',
+                  background: '#ffffff',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '14px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = '#3b82f6';
+                  e.currentTarget.style.background = '#f8faff';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.08)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                  e.currentTarget.style.background = '#ffffff';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div
+                  style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    background: '#eff6ff',
+                    border: '1px solid #dbeafe',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#2563eb',
+                    flexShrink: 0,
+                    marginTop: '2px'
+                  }}
+                >
+                  <FileText size={20} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
+                      Packing List (PL Only)
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: '#2563eb',
+                        background: '#eff6ff',
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        border: '1px solid #bfdbfe'
+                      }}
+                    >
+                      Manifest Only
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', lineHeight: 1.45 }}>
+                    Standard warehouse dispatch manifest containing part numbers, descriptions, serial numbers, models, and quantities.
+                  </p>
+                  <div style={{ marginTop: '10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', fontWeight: 600, color: '#2563eb' }}>
+                    <span>Download PL Only</span>
+                    <span style={{ fontSize: '14px' }}>→</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Option 2: Both PL & Declaration Form */}
+              <div
+                onClick={() => {
+                  handleRequestPrintOrPDF(
+                    pdfSelectModalState.shipment,
+                    pdfSelectModalState.items,
+                    pdfSelectModalState.site,
+                    'pdf',
+                    { includeDeclarationForm: true }
+                  );
+                  setPdfSelectModalState(null);
+                }}
+                style={{
+                  border: '1.5px solid #bbf7d0',
+                  borderRadius: '10px',
+                  padding: '16px',
+                  cursor: 'pointer',
+                  transition: 'all 0.18s ease',
+                  background: '#fcfdfb',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '14px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = '#16a34a';
+                  e.currentTarget.style.background = '#f0fdf4';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(22, 163, 74, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = '#bbf7d0';
+                  e.currentTarget.style.background = '#fcfdfb';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <div
+                  style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    background: '#dcfce7',
+                    border: '1px solid #bbf7d0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#15803d',
+                    flexShrink: 0,
+                    marginTop: '2px'
+                  }}
+                >
+                  <Layers size={20} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
+                      Both (PL &amp; Declaration Form)
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        color: '#15803d',
+                        background: '#f0fdf4',
+                        padding: '2px 8px',
+                        borderRadius: '12px',
+                        border: '1px solid #bbf7d0'
+                      }}
+                    >
+                      Official Package
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', lineHeight: 1.45 }}>
+                    Complete corporate shipment package containing both the Packing List manifest and the official MDC Site Transfer Declaration Form.
+                  </p>
+                  <div style={{ marginTop: '10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12.5px', fontWeight: 600, color: '#15803d' }}>
+                    <span>Download Both (PL + Declaration)</span>
+                    <span style={{ fontSize: '14px' }}>→</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Superadmin Restricted Notice */}
+              <div
+                style={{
+                  padding: '10px 14px',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  color: '#64748b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                <span style={{ fontSize: '14px' }}>🛡️</span>
+                <span>
+                  <strong>Superadmin Exclusive:</strong> PMG users cannot view or download the Declaration Form in the system and are restricted to Packing List (PL Only).
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'center',
+                padding: '12px 22px',
+                borderTop: '1px solid #e2e8f0',
+                background: '#f8fafc'
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setPdfSelectModalState(null)}
+                style={{
+                  fontSize: '13px',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
               </button>
             </div>
           </div>
