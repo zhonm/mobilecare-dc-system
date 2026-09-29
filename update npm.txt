@@ -1,0 +1,27 @@
+# Run from the project root.
+# Check the current toolchain before changing dependencies.
+node --version
+npm --version
+
+# Optional: update npm itself. Use a Node-compatible npm version.
+npm install --global npm@latest
+npm --version
+
+# Review available updates before applying them.
+npm outdated
+
+# Update dependencies within the version ranges in package.json and refresh package-lock.json.
+npm update
+
+# Review vulnerabilities, then apply npm's non-breaking fixes.
+npm audit
+npm audit fix
+npm audit
+
+# Verify the application after the dependency update.
+npm run lint
+npm run build
+npm test
+
+# Review exactly what changed before committing.
+git diff -- package.json package-lock.json
