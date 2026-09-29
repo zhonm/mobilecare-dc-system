@@ -932,6 +932,32 @@ export default function ScanOutPacking() {
     }
   };
 
+  const [copiedTS, setCopiedTS] = useState(null);
+
+  const handleCopyTS = (rawTS) => {
+    if (!rawTS) return;
+    const clean = String(rawTS).replace(/^TS[:#\s-]*/i, '').trim();
+    if (!clean) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(clean);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = clean;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedTS(clean);
+      showToast(`Copied TS #${clean} to clipboard!`, 'success');
+      setTimeout(() => setCopiedTS(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy TS:', err);
+      showToast('Failed to copy TS number to clipboard', 'error');
+    }
+  };
+
   const getCategoryBadgeStyle = (catCode = '') => {
     const code = String(catCode).toUpperCase();
     if (code.includes('BATTERY')) return { background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' };
@@ -3172,11 +3198,46 @@ export default function ScanOutPacking() {
                           </div>
                         );
                       })()}
-                      {(s.transfer_slip_number || s.transfer_slip) && (
-                        <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
-                          TS: {s.transfer_slip_number || s.transfer_slip}
-                        </div>
-                      )}
+                      {(s.transfer_slip_number || s.transfer_slip) && (() => {
+                        const cleanTS = String(s.transfer_slip_number || s.transfer_slip).replace(/^TS[:#\s-]*/i, '').trim();
+                        const isCopied = copiedTS === cleanTS;
+                        return (
+                          <div
+                            className="font-mono select-all"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyTS(cleanTS);
+                            }}
+                            style={{
+                              fontSize: '10.5px',
+                              color: isCopied ? '#15803d' : '#0284c7',
+                              marginTop: '2px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              padding: '1px 4px',
+                              marginLeft: '-4px',
+                              borderRadius: '4px',
+                              transition: 'background-color 0.15s ease'
+                            }}
+                            title={isCopied ? "Copied to clipboard!" : "Click to copy TS number"}
+                            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e0f2fe'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <span style={{ fontWeight: 500, color: '#64748b' }}>TS:</span>
+                            <span style={{ fontWeight: 700 }}>{cleanTS}</span>
+                            {isCopied ? (
+                              <span style={{ fontSize: '9.5px', color: '#16a34a', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                <Check size={10} strokeWidth={2.5} />
+                                Copied!
+                              </span>
+                            ) : (
+                              <Copy size={10} color="#0284c7" style={{ opacity: 0.7 }} />
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ fontSize: '11.5px', color: '#475569' }}>
                       <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>

@@ -212,6 +212,33 @@ export default function Shipments() {
     }
   };
 
+  // TS (Transfer Slip) Click-to-Copy State and Handler
+  const [copiedTS, setCopiedTS] = useState(null);
+
+  const handleCopyTS = (rawTS) => {
+    if (!rawTS) return;
+    const clean = String(rawTS).replace(/^TS[:#\s-]*/i, '').trim();
+    if (!clean) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(clean);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = clean;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedTS(clean);
+      showToast(`Copied TS #${clean} to clipboard!`, 'success');
+      setTimeout(() => setCopiedTS(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy TS:', err);
+      showToast('Failed to copy TS number to clipboard', 'error');
+    }
+  };
+
   // Tracking Number Required Prompt Modal State (for Print / PDF)
   const [trackingModalState, setTrackingModalState] = useState(null);
 
@@ -939,12 +966,53 @@ export default function Shipments() {
               </span>
             )}
           </div>
-          {(sh.transfer_slip_number || sh.transfer_slip) && (
-            <div style={{ fontSize: '11px', color: '#0284c7', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}>
-              <span>TS:</span>
-              <span style={{ fontWeight: 600 }}>{sh.transfer_slip_number || sh.transfer_slip}</span>
-            </div>
-          )}
+          {(() => {
+            const rawTS = sh.transfer_slip_number || sh.transfer_slip;
+            if (!rawTS) return null;
+            const cleanTS = String(rawTS).replace(/^TS[:#\s-]*/i, '').trim();
+            const isCopied = copiedTS === cleanTS;
+
+            return (
+              <div
+                className="font-mono select-all"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyTS(cleanTS);
+                }}
+                style={{
+                  fontSize: '11px',
+                  color: isCopied ? '#15803d' : '#0284c7',
+                  marginTop: '2.5px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  cursor: 'pointer',
+                  padding: '1px 5px',
+                  marginLeft: '-5px',
+                  borderRadius: '4px',
+                  transition: 'background-color 0.15s ease'
+                }}
+                title={isCopied ? "Copied to clipboard!" : "Click to copy TS number"}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#e0f2fe';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                <span style={{ fontWeight: 500, color: '#64748b' }}>TS:</span>
+                <span style={{ fontWeight: 700 }}>{cleanTS}</span>
+                {isCopied ? (
+                  <span style={{ fontSize: '10px', color: '#16a34a', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '2px' }}>
+                    <Check size={11} strokeWidth={2.5} />
+                    Copied!
+                  </span>
+                ) : (
+                  <Copy size={10} color="#0284c7" style={{ opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
+                )}
+              </div>
+            );
+          })()}
         </td>
         <td>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -3175,9 +3243,43 @@ export default function Shipments() {
                     </div>
                     <p style={{ color: '#cbd5e1', fontSize: '12px', margin: '3px 0 0 0' }}>
                       Manifest: <strong style={{ color: '#f8fafc' }}>{sh?.invoice_ref || sh?.shipment_number}</strong>
-                      {(sh?.transfer_slip_number || sh?.transfer_slip) && (
-                        <span> • TS: <strong style={{ color: '#93c5fd' }}>{sh?.transfer_slip_number || sh?.transfer_slip}</strong></span>
-                      )}
+                      {(() => {
+                        const rawTS = sh?.transfer_slip_number || sh?.transfer_slip;
+                        if (!rawTS) return null;
+                        const cleanTS = String(rawTS).replace(/^TS[:#\s-]*/i, '').trim();
+                        const isCopied = copiedTS === cleanTS;
+                        return (
+                          <span>
+                            {' '}•{' '}
+                            <span
+                              className="font-mono select-all"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopyTS(cleanTS);
+                              }}
+                              style={{
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                background: isCopied ? 'rgba(34, 197, 94, 0.25)' : 'rgba(255, 255, 255, 0.1)',
+                                transition: 'background-color 0.15s ease'
+                              }}
+                              title={isCopied ? "Copied to clipboard!" : "Click to copy TS number"}
+                            >
+                              <span style={{ color: '#cbd5e1' }}>TS:</span>
+                              <strong style={{ color: isCopied ? '#86efac' : '#93c5fd' }}>{cleanTS}</strong>
+                              {isCopied ? (
+                                <Check size={11} strokeWidth={2.5} color="#86efac" />
+                              ) : (
+                                <Copy size={10} color="#93c5fd" style={{ opacity: 0.7 }} />
+                              )}
+                            </span>
+                          </span>
+                        );
+                      })()}
                       <span> • Destination: <strong style={{ color: '#f8fafc' }}>{site?.name || sh?.site_name}</strong></span>
                     </p>
                   </div>
@@ -3326,11 +3428,43 @@ export default function Shipments() {
                       Reference Slip
                     </div>
                     <div style={{ fontWeight: 600, fontSize: '13px', color: '#0f172a', marginTop: '2px' }}>
-                      {sh?.transfer_slip_number || sh?.transfer_slip ? (
-                        <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                          TS #{sh?.transfer_slip_number || sh?.transfer_slip}
-                        </span>
-                      ) : (
+                      {sh?.transfer_slip_number || sh?.transfer_slip ? (() => {
+                        const cleanTS = String(sh.transfer_slip_number || sh.transfer_slip).replace(/^TS[:#\s-]*/i, '').trim();
+                        const isCopied = copiedTS === cleanTS;
+                        return (
+                          <div
+                            className="font-mono select-all"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyTS(cleanTS);
+                            }}
+                            style={{
+                              color: isCopied ? '#15803d' : '#0284c7',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 6px',
+                              marginLeft: '-6px',
+                              borderRadius: '4px',
+                              transition: 'background-color 0.15s ease'
+                            }}
+                            title={isCopied ? "Copied to clipboard!" : "Click to copy TS number"}
+                            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e0f2fe'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <span>TS #{cleanTS}</span>
+                            {isCopied ? (
+                              <span style={{ fontSize: '10.5px', color: '#16a34a', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '2px' }}>
+                                <Check size={11} strokeWidth={2.5} />
+                                Copied!
+                              </span>
+                            ) : (
+                              <Copy size={11} color="#0284c7" style={{ opacity: 0.7, flexShrink: 0 }} />
+                            )}
+                          </div>
+                        );
+                      })() : (
                         <span style={{ color: '#94a3b8' }}>None specified</span>
                       )}
                     </div>
@@ -4166,9 +4300,38 @@ export default function Shipments() {
                                 <span className="font-mono" style={{ fontWeight: 700, fontSize: '12.5px', color: '#0f172a' }}>
                                   {s.invoice_ref || s.shipment_number}
                                 </span>
-                                {(s.transfer_slip_number || s.transfer_slip) && (
-                                  <span style={{ fontSize: '11px', color: '#0284c7', marginLeft: '8px' }}>TS: {s.transfer_slip_number || s.transfer_slip}</span>
-                                )}
+                                {(s.transfer_slip_number || s.transfer_slip) && (() => {
+                                  const cleanTS = String(s.transfer_slip_number || s.transfer_slip).replace(/^TS[:#\s-]*/i, '').trim();
+                                  const isCopied = copiedTS === cleanTS;
+                                  return (
+                                    <span
+                                      className="font-mono"
+                                      onClick={() => handleCopyTS(cleanTS)}
+                                      style={{
+                                        fontSize: '11px',
+                                        color: isCopied ? '#15803d' : '#0284c7',
+                                        marginLeft: '8px',
+                                        cursor: 'pointer',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '2px',
+                                        padding: '1px 4px',
+                                        borderRadius: '3px',
+                                        transition: 'background-color 0.15s ease'
+                                      }}
+                                      title={isCopied ? "Copied to clipboard!" : "Click to copy TS number"}
+                                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e0f2fe'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                    >
+                                      TS: {cleanTS}
+                                      {isCopied ? (
+                                        <Check size={10} strokeWidth={2.5} color="#15803d" />
+                                      ) : (
+                                        <Copy size={10} color="#0284c7" style={{ opacity: 0.7 }} />
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                                 <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
                                   Date: {s.shipment_date || s.pickup_date || 'N/A'} • {s.carrier || 'Lite Express'}{' '}
                                   {s.tracking_number ? (
