@@ -922,7 +922,9 @@ export function useAuth({
 
     setCurrentUser(user);
     const hasDashboard = user.role === 'superadmin' || user.role === 'admin' || user.role === 'user' || user.permittedPages?.includes('dashboard');
-    const initialPage = hasDashboard ? 'dashboard' : (user.permittedPages?.[0] || 'request-parts');
+    const initialPage = hasDashboard
+      ? 'dashboard'
+      : (user.role === 'parts_management' ? 'request-parts' : (user.permittedPages?.[0] || 'request-parts'));
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
     showToast(`Welcome back, ${user.fullName}!`, 'success');
     return { success: true, user };
@@ -1223,7 +1225,9 @@ export function useAuth({
     }
 
     const hasDashboard = updatedUser.role === 'superadmin' || updatedUser.role === 'admin' || updatedUser.role === 'user' || updatedUser.permittedPages?.includes('dashboard');
-    const initialPage = hasDashboard ? 'dashboard' : (updatedUser.permittedPages?.[0] || 'request-parts');
+    const initialPage = hasDashboard
+      ? 'dashboard'
+      : (updatedUser.role === 'parts_management' ? 'request-parts' : (updatedUser.permittedPages?.[0] || 'request-parts'));
     if (typeof setActiveTab === 'function') setActiveTab(initialPage);
     showToast(`Password successfully configured! Welcome to DC System, ${updatedUser.fullName}.`, 'success');
     return { success: true, user: updatedUser };

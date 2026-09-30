@@ -185,6 +185,15 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [activeTab, setActiveTab]);
 
+  // Synchronize pmgSubTab when global activeTab changes between request-parts and all-stocks
+  useEffect(() => {
+    if (activeTab === 'all-stocks' && pmgSubTab !== 'all_stocks') {
+      setPmgSubTab('all_stocks');
+    } else if (activeTab === 'request-parts' && pmgSubTab === 'all_stocks') {
+      setPmgSubTab('requests_table');
+    }
+  }, [activeTab, pmgSubTab]);
+
   const lastToastRef = useRef({ message: '', time: 0 });
   const toastTimeoutRef = useRef(null);
 

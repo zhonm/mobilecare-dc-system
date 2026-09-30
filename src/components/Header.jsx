@@ -160,8 +160,10 @@ export default function Header() {
     return `${currentMonthName} ${pYear}`;
   })();
 
+  const isPmg = currentUser?.role === 'parts_management';
+
   return (
-    <header className="header-bar">
+    <header className={`header-bar ${isPmg ? 'floating-header pmg-floating-header' : ''}`}>
       {/* Left: Hamburger, Section Breadcrumb, Page Title & Category Filters */}
       <div className="header-left">
         <button

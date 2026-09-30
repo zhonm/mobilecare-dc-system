@@ -39,7 +39,7 @@ import { normalizeInventoryUnits } from '../utils/partResolver';
 import { getBasePoNumber, generateAppleSerialNumber, consolidateDcIntakeRecordsList, isDirectOrNonPo, normalizeDateToIso, sortBatchesNewestFirst, filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import { isIntakeRecordArchived } from '../utils/archiveManager';
 
-export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn = null }) {
+export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onNavigateToScanIn: _onNavigateToScanIn = null }) {
   const {
     dcIntakeRecords,
     deleteIntakeRecord,
@@ -53,9 +53,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
     setActiveTab,
     isAutoRefreshing,
     lastSyncedAt,
-    autoRefreshData,
     showToast,
-    processOfflineSyncQueue,
     currentUser,
     canUserDeleteRecord,
     activePackDraft,
@@ -824,81 +822,6 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                 </>
               )}
             </div>
-
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual sync', tables: ['dc_intake_records', 'inventory_units', 'saved_records'] });
-                if (processOfflineSyncQueue) processOfflineSyncQueue();
-              }}
-              disabled={isAutoRefreshing}
-              title="Force reload latest inventory & intake records from database"
-              style={{
-                background: '#1e293b',
-                color: '#38bdf8',
-                borderColor: '#38bdf8',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                height: '36px'
-              }}
-            >
-              <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
-              <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud DB'}</span>
-            </button>
-
-            {canEdit && (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  if (onNavigateToScanIn) {
-                    onNavigateToScanIn();
-                  } else {
-                    setActiveTab('scan-in');
-                  }
-                }}
-                style={{
-                  background: '#0284c7',
-                  color: '#ffffff',
-                  borderColor: '#0284c7',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  height: '36px',
-                  padding: '0 14px',
-                  borderRadius: '6px',
-                  boxShadow: '0 1px 3px rgba(2,132,199,0.3)'
-                }}
-                title="Return to Receive Scan-In Station"
-              >
-                <Barcode size={16} />
-                <span>{embeddedMode ? 'Switch to Scan-In Station' : '← Back to Receive Scan-In'}</span>
-              </button>
-            )}
-
-            {canEdit && (
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={() => {
-                  setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
-                  setIsSaveModalOpen(true);
-                }}
-                disabled={enrichedStockUnits.length === 0}
-                style={{
-                  height: '36px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontWeight: 600
-                }}
-                title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent parts history record" : "Scan parts first in Receive Scan-In"}
-              >
-                <Plus size={16} />
-                <span>Save Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
-              </button>
-            )}
 
             {isReadOnly && (
               <span

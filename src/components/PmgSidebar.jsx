@@ -10,9 +10,11 @@ import {
   Wrench,
   LogOut,
   ShieldCheck,
-  CheckCircle2,
   X,
-  MessageSquare
+  MessageSquare,
+  Lock,
+  ChevronRight,
+  Building2
 } from 'lucide-react';
 
 export default function PmgSidebar() {
@@ -61,11 +63,12 @@ export default function PmgSidebar() {
 
   const pendingCount = branchRequests.filter(r => r.status === 'pending').length;
 
-  // PMG Navigation Items
+  // PMG Navigation Items with rich subtitles and enlarged layout
   const pmgNavItems = [
     {
       id: 'requests',
       label: 'Parts Requests',
+      description: 'Requisitions & fulfillment',
       section: 'Branch Operations',
       icon: Inbox,
       badge: pendingCount,
@@ -79,6 +82,7 @@ export default function PmgSidebar() {
     {
       id: 'stock',
       label: 'Branch Stock On Hand',
+      description: 'Local inventory & parts',
       section: 'Branch Operations',
       icon: Package,
       badge: branchStock.totalInStock,
@@ -92,6 +96,7 @@ export default function PmgSidebar() {
     {
       id: 'scan-in',
       label: 'Receive Scan-In',
+      description: 'Scan incoming DC packages',
       section: 'Branch Operations',
       icon: Barcode,
       onClick: () => {
@@ -102,6 +107,7 @@ export default function PmgSidebar() {
     {
       id: 'used-parts',
       label: 'Parts Consumption Log',
+      description: 'Technician usage history',
       section: 'Branch Operations',
       icon: Wrench,
       onClick: () => {
@@ -113,6 +119,7 @@ export default function PmgSidebar() {
     {
       id: 'all-stocks',
       label: 'All Stocks & Multi-Site',
+      description: 'Network-wide parts visibility',
       section: 'Network Visibility',
       icon: Globe,
       onClick: () => {
@@ -124,6 +131,7 @@ export default function PmgSidebar() {
     {
       id: 'feedback',
       label: 'Developer Contact',
+      description: 'Direct support & feedback',
       section: 'Support & Help',
       icon: MessageSquare,
       onClick: () => {
@@ -144,7 +152,7 @@ export default function PmgSidebar() {
           aria-hidden="true"
         />
       )}
-      <aside className={`sidebar pmg-sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
+      <aside className={`sidebar pmg-sidebar floating-sidebar ${isMobileNavOpen ? 'mobile-open' : ''}`}>
         {/* Brand Header */}
         <div className="sidebar-header">
           <div className="sidebar-brand-wrapper">
@@ -158,7 +166,7 @@ export default function PmgSidebar() {
             <div className="sidebar-brand-info">
               <div className="sidebar-brand-title-row">
                 <h2 className="sidebar-brand-title">DC System</h2>
-                <span className="pmg-role-badge">PMG</span>
+                <span className="pmg-role-badge">PMG PORTAL</span>
               </div>
               <div className="sidebar-company-row">
                 <span className="sidebar-status-dot" title="Live Database Synchronization Active"></span>
@@ -176,41 +184,59 @@ export default function PmgSidebar() {
           </button>
         </div>
 
-        {/* Navigation Links */}
+        {/* Enriched & Enlarged Navigation Items */}
         <div className="sidebar-nav custom-scrollbar" style={{ flex: 1 }}>
           {sections.map(secName => {
             const items = pmgNavItems.filter(item => item.section === secName);
             if (items.length === 0) return null;
 
             return (
-              <div key={secName} className="nav-section-group">
-                <div className="nav-section-title">{secName}</div>
+              <div key={secName} className="pmg-nav-section">
+                <div className="pmg-nav-section-title">
+                  <span>{secName}</span>
+                  <span className="pmg-nav-section-line" />
+                </div>
                 {items.map(item => {
                   const Icon = item.icon;
                   const isActive = item.isActive;
                   return (
                     <div
                       key={item.id}
-                      className={`nav-item ${isActive ? 'active' : ''}`}
+                      className={`pmg-nav-card ${isActive ? 'active' : ''}`}
                       onClick={() => {
                         if (typeof item.onClick === 'function') item.onClick();
                         setIsMobileNavOpen(false);
                       }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          if (typeof item.onClick === 'function') item.onClick();
+                          setIsMobileNavOpen(false);
+                        }
+                      }}
+                      title={`${item.label} — ${item.description}`}
                     >
-                      <div className="nav-item-left">
-                        <Icon size={16} className={`nav-icon ${isActive ? 'active-icon' : ''}`} />
-                        <span className="nav-label">{item.label}</span>
+                      <div className="pmg-nav-card-left">
+                        <div className="pmg-nav-icon-tile">
+                          <Icon size={19} />
+                        </div>
+                        <div className="pmg-nav-text-col">
+                          <span className="pmg-nav-card-title">{item.label}</span>
+                          <span className="pmg-nav-card-desc">{item.description}</span>
+                        </div>
                       </div>
-                      <div className="nav-item-right">
-                        {item.hotkey && <span className="nav-hotkey">{item.hotkey}</span>}
+                      <div className="pmg-nav-card-right">
                         {typeof item.badge === 'number' && item.badge > 0 && (
                           <span
-                            className="nav-badge"
-                            style={{ background: item.badgeColor || '#0284c7' }}
+                            className="pmg-nav-pill-badge"
+                            style={item.badgeColor ? { background: `${item.badgeColor}25`, borderColor: `${item.badgeColor}66`, color: item.badgeColor } : undefined}
                           >
                             {item.badge}
                           </span>
                         )}
+                        <ChevronRight size={14} className="pmg-nav-chevron" />
                       </div>
                     </div>
                   );
@@ -218,66 +244,87 @@ export default function PmgSidebar() {
               </div>
             );
           })}
-      </div>
+        </div>
 
-      {/* Branch Information Card */}
-      <div className="pmg-info-card">
-        <div className="pmg-info-row">
-          <span className="pmg-info-label">Branch Code:</span>
-          <span className="pmg-info-val font-mono">{userSite.code}</span>
-        </div>
-        <div className="pmg-info-row">
-          <span className="pmg-info-label">Security:</span>
-          <span className="pmg-info-val" style={{ color: '#10b981' }}>Serial Privacy Protected</span>
-        </div>
-        <div className="pmg-info-row">
-          <span className="pmg-info-label">Sync Status:</span>
-          <span className="pmg-info-val" style={{ color: isAutoRefreshing ? '#38bdf8' : '#10b981', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <CheckCircle2 size={10} />
-            {isAutoRefreshing ? 'Syncing...' : 'Connected'}
-          </span>
-        </div>
-      </div>
-
-      {/* Modernized User Profile Footer */}
-      <div className="sidebar-footer">
-        <div className="user-profile-card">
-          <div className="user-avatar-wrapper">
-            <div className="user-avatar" style={{ background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' }}>
-              <ShieldCheck size={16} color="#ffffff" />
+        {/* Branch Station & Operational Telemetry Card */}
+        <div className="pmg-station-card">
+          <div className="pmg-station-header">
+            <div className="pmg-station-badge">
+              <Building2 size={12} />
+              <span>{userSite.code || 'BRANCH'} STATION</span>
             </div>
-            <span className="user-online-ring"></span>
+            <div className="pmg-station-status" style={{ color: isAutoRefreshing ? '#38bdf8' : '#10b981' }}>
+              <span className={`status-dot ${isAutoRefreshing ? 'dot-blue' : 'dot-green'}`} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Connected'}</span>
+            </div>
           </div>
 
-          <div className="user-info-text">
-            <h4 title={currentUser?.fullName || 'User'}>
-              {currentUser?.fullName || 'User'}
-            </h4>
-            <div className="user-role-position" title={currentUser?.rolePosition || 'Parts Management Specialist'}>
-              {currentUser?.rolePosition || 'Parts Management Specialist'}
-            </div>
-            <div className="user-tags-row">
-              <span className="user-role-badge user-role-pmg">
-                PMG SPECIALIST
+          <div className="pmg-station-grid">
+            <div className="pmg-station-metric">
+              <span className="pmg-station-metric-label">Stock Units</span>
+              <span className="pmg-station-metric-val font-mono" style={{ color: '#38bdf8' }}>
+                {branchStock.totalInStock}
               </span>
-              <span className="user-site-code">
-                <span className="user-dot-sep">•</span>
-                <span>{userSite.code}</span>
+            </div>
+            <div className="pmg-station-metric">
+              <span className="pmg-station-metric-label">Pending Reqs</span>
+              <span className="pmg-station-metric-val font-mono" style={{ color: pendingCount > 0 ? '#f59e0b' : '#94a3b8' }}>
+                {pendingCount}
               </span>
             </div>
           </div>
+
+          <div className="pmg-station-footer-row">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#10b981', fontSize: '10.5px' }}>
+              <Lock size={10} />
+              <span>Serial Privacy Protected</span>
+            </div>
+            <span className="font-mono" style={{ fontSize: '10px', color: '#64748b' }}>
+              {userSite.name || 'MobileCare'}
+            </span>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={signOut}
-          className="sidebar-signout-btn"
-        >
-          <LogOut size={14} />
-          <span>Sign Out</span>
-        </button>
-      </div>
-    </aside>
+        {/* User Details Footer at the Bottom to Prevent Accidental Sign-Outs */}
+        <div className="sidebar-footer pmg-sidebar-footer">
+          <div className="user-profile-card">
+            <div className="user-avatar-wrapper">
+              <div className="user-avatar" style={{ background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' }}>
+                <ShieldCheck size={18} color="#ffffff" />
+              </div>
+              <span className="user-online-ring"></span>
+            </div>
+
+            <div className="user-info-text">
+              <h4 title={currentUser?.fullName || 'User'}>
+                {currentUser?.fullName || 'User'}
+              </h4>
+              <div className="user-role-position" title={currentUser?.rolePosition || 'Parts Management Specialist'}>
+                {currentUser?.rolePosition || 'Parts Management Specialist'}
+              </div>
+              <div className="user-tags-row">
+                <span className="user-role-badge user-role-pmg">
+                  PMG SPECIALIST
+                </span>
+                <span className="user-site-code">
+                  <span className="user-dot-sep">•</span>
+                  <span>{userSite.code}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={signOut}
+            className="sidebar-signout-btn"
+            title="Sign Out of PMG Portal"
+          >
+            <LogOut size={14} />
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </aside>
     </>
   );
 }

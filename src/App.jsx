@@ -103,7 +103,7 @@ function MainApp() {
     <div className="app-container">
       <MobileNoticeModal isLoginScreen={false} />
       {currentUser?.role === 'parts_management' ? <PmgSidebar /> : <Sidebar />}
-      <div className="main-content">
+      <div className={`main-content ${currentUser?.role === 'parts_management' ? 'pmg-main-content' : ''}`}>
         <Header />
         <main className="page-body">
           {renderActiveTab()}

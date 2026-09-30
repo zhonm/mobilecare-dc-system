@@ -70,7 +70,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     categories = [],
     inventoryUnits,
     dcIntakeRecords,
-    cloudSyncStatus,
     showToast,
     _setActiveTab,
     setActiveTab,
@@ -1368,46 +1367,61 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   return (
     <div className="scanner-container">
-      {/* Top Segmented Navigation Tabs: Station vs Records */}
-      <div className="scanin-top-tabs-bar">
-        <div className="scanin-top-tabs-group">
+      {/* Top Dual-Card Navigation: Workstation vs Stock Records */}
+      <div className="scanin-top-tabs-bar" role="tablist" aria-label="Receive Scan-In Navigation">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeReceiveTab === 'station'}
+          className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
+          onClick={() => setActiveReceiveTab('station')}
+        >
+          <div className="scanin-tab-card-icon">
+            <Barcode size={22} />
+          </div>
+          <div className="scanin-tab-card-content">
+            <div className="scanin-tab-card-header">
+              <span className="scanin-tab-card-title">
+                {isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}
+              </span>
+              <span className="scanin-tab-badge">
+                <span className="scanin-tab-dot live" />
+                {availableInStockUnits.length} in stock
+              </span>
+            </div>
+            <div className="scanin-tab-card-subtitle">
+              {isPmgUser
+                ? 'Branch inbound barcode scanning & inventory intake'
+                : 'Serial barcode workstation, real-time intake & PO routing'}
+            </div>
+          </div>
+        </button>
+
+        {!isPmgUser && (
           <button
             type="button"
-            className={`scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
-            onClick={() => setActiveReceiveTab('station')}
+            role="tab"
+            aria-selected={activeReceiveTab === 'records'}
+            className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
+            onClick={() => setActiveReceiveTab('records')}
           >
-            <Barcode size={16} />
-            <span>{isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}</span>
-            <span className="scanin-tab-badge">
-              {availableInStockUnits.length} in stock
-            </span>
+            <div className="scanin-tab-card-icon">
+              <BookmarkPlus size={22} />
+            </div>
+            <div className="scanin-tab-card-content">
+              <div className="scanin-tab-card-header">
+                <span className="scanin-tab-card-title">DC Stock Records</span>
+                <span className="scanin-tab-badge">
+                  <span className="scanin-tab-dot records" />
+                  {dcIntakeRecords?.length || 0} batches
+                </span>
+              </div>
+              <div className="scanin-tab-card-subtitle">
+                Historical intake batches, saved audit logs & Excel exports
+              </div>
+            </div>
           </button>
-
-          {!isPmgUser && (
-            <button
-              type="button"
-              className={`scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
-              onClick={() => setActiveReceiveTab('records')}
-            >
-              <BookmarkPlus size={16} />
-              <span>DC Stock Records</span>
-              <span className="scanin-tab-badge">
-                {dcIntakeRecords?.length || 0} batches
-              </span>
-            </button>
-          )}
-        </div>
-
-        <div className="scanin-top-tabs-actions">
-          <div className="telemetry-badge" title="Cloud Database Realtime Active" style={{ height: '32px' }}>
-            <span className={`status-indicator ${cloudSyncStatus.isSaving ? 'syncing' : 'online'}`} />
-            <span style={{ fontSize: '11.5px' }}>{cloudSyncStatus.isSaving ? 'Saving to Cloud...' : 'Cloud Auto-Save: Active'}</span>
-          </div>
-          <div className="telemetry-badge" title="Hardware Scanner Connection Status" style={{ height: '32px' }}>
-            <div className="pulse-dot" />
-            <span style={{ color: '#34d399', fontWeight: 600, fontSize: '11.5px' }}>Scanner: Ready (HID)</span>
-          </div>
-        </div>
+        )}
       </div>
 
       {!isPmgUser && activeReceiveTab === 'records' ? (
@@ -3332,6 +3346,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           </div>
         </div>
       )}
+
         </>
       )}
     </div>

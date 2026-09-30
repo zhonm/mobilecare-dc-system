@@ -118,15 +118,28 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   }, [sites, selectedSiteId, userSiteObj]);
 
   // Active Sub-Tab: 'requests_table' | 'stock_on_hand' | 'all_stocks' | 'usage_history'
-  const [activeTab, setActiveTab] = useState(pmgSubTab || defaultTab);
+  const [activeTab, setActiveTab] = useState(() => {
+    if (defaultTab === 'all_stocks') return 'all_stocks';
+    return pmgSubTab || defaultTab || 'requests_table';
+  });
 
   useEffect(() => {
-    if (pmgSubTab) {
+    if (defaultTab === 'all_stocks') {
+      setActiveTab('all_stocks');
+      if (setPmgSubTab && pmgSubTab !== 'all_stocks') {
+        setPmgSubTab('all_stocks');
+      }
+    } else if (defaultTab && defaultTab !== 'all_stocks' && pmgSubTab === 'all_stocks') {
+      setActiveTab(defaultTab);
+      if (setPmgSubTab) {
+        setPmgSubTab(defaultTab);
+      }
+    } else if (pmgSubTab) {
       setActiveTab(pmgSubTab);
     } else if (defaultTab) {
       setActiveTab(defaultTab);
     }
-  }, [pmgSubTab, defaultTab]);
+  }, [defaultTab, pmgSubTab, setPmgSubTab]);
 
   const handleTabChange = (newTab) => {
     setActiveTab(newTab);

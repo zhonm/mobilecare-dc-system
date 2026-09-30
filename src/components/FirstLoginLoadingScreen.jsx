@@ -104,8 +104,11 @@ export default function FirstLoginLoadingScreen() {
       setTimeout(() => {
         setIsInitialSyncing(false);
         const hasDashboard = currentUser?.role === 'superadmin' || currentUser?.role === 'admin' || currentUser?.role === 'user' || currentUser?.permittedPages?.includes('dashboard');
+        const landingPage = hasDashboard
+          ? 'dashboard'
+          : (currentUser?.role === 'parts_management' ? 'request-parts' : (currentUser?.permittedPages?.[0] || 'request-parts'));
         if (typeof setActiveTab === 'function') {
-          setActiveTab(hasDashboard ? 'dashboard' : (currentUser?.permittedPages?.[0] || 'request-parts'));
+          setActiveTab(landingPage);
         }
         if (showToast) {
           showToast(`Live workspace ready for ${currentUser?.fullName || currentUser?.email || 'User'}!`, 'success');
