@@ -481,7 +481,7 @@ export function useCloudSync({
               .eq('record_type', 'shipment')
               .gte('created_at', archiveCutoffIsoTimestamp)
               .order('created_at', { ascending: false })
-              .limit(60)
+              .limit(500)
           ]);
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];

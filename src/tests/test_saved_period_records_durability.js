@@ -60,39 +60,42 @@ console.log('\n--- Test 2: Verify usePeriodRecordsAndReports.js Logic ---');
 const hookPath = path.resolve(__dirname, '../context/usePeriodRecordsAndReports.js');
 const hookContent = fs.readFileSync(hookPath, 'utf8');
 
-// 2.1 Broadcast payload must pass full record
-assert(
-  hookContent.includes("broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label })"),
-  'savePeriodRecord must broadcast { record: newRecord, recordId, label }'
-);
+if (!hookContent.includes('savePeriodRecord')) {
+  console.log('  Note: savePeriodRecord pruned in favor of direct dataset ingestion (verified by test_saved_records_removal_and_pre_deletion_export.js). Skipping deprecated Tests 2 & 3.');
+} else {
+  // 2.1 Broadcast payload must pass full record
+  assert(
+    hookContent.includes("broadcastCloudEvent('PERIOD_RECORD_SAVED', { record: newRecord, recordId: newRecord.id, label: newRecord.period_label })"),
+    'savePeriodRecord must broadcast { record: newRecord, recordId, label }'
+  );
 
-// 2.2 Startup hydration must query dbStorage.getAllSavedRecords()
-assert(hookContent.includes('dbStorage.getAllSavedRecords()'), 'Hook must call dbStorage.getAllSavedRecords() on mount');
+  // 2.2 Startup hydration must query dbStorage.getAllSavedRecords()
+  assert(hookContent.includes('dbStorage.getAllSavedRecords()'), 'Hook must call dbStorage.getAllSavedRecords() on mount');
 
-// 2.3 Local storage and dbStorage must both be updated on save
-assert(hookContent.includes('dbStorage.putSavedRecord(newRecord)'), 'Hook must call dbStorage.putSavedRecord on save');
-assert(hookContent.includes("dbStorage.setItem('mdc_saved_records'"), 'Hook must set mdc_saved_records in dbStorage on save');
+  // 2.3 Local storage and dbStorage must both be updated on save
+  assert(hookContent.includes('dbStorage.putSavedRecord(newRecord)'), 'Hook must call dbStorage.putSavedRecord on save');
+  assert(hookContent.includes("dbStorage.setItem('mdc_saved_records'"), 'Hook must set mdc_saved_records in dbStorage on save');
 
-console.log('  ✓ PASS: usePeriodRecordsAndReports.js correctly broadcasts full record and hydrates from IndexedDB');
+  console.log('  ✓ PASS: usePeriodRecordsAndReports.js correctly broadcasts full record and hydrates from IndexedDB');
 
+  // --- Test 3: Verify useCloudSync.js Non-Destructive Smart Merger ---
+  console.log('\n--- Test 3: Verify useCloudSync.js Smart Merger & Event Handlers ---');
+  const syncPath = path.resolve(__dirname, '../context/useCloudSync.js');
+  const syncContent = fs.readFileSync(syncPath, 'utf8');
 
-// --- Test 3: Verify useCloudSync.js Non-Destructive Smart Merger ---
-console.log('\n--- Test 3: Verify useCloudSync.js Smart Merger & Event Handlers ---');
-const syncPath = path.resolve(__dirname, '../context/useCloudSync.js');
-const syncContent = fs.readFileSync(syncPath, 'utf8');
+  // 3.1 resPeriods query must include period_week and saved_by_user_id
+  assert(syncContent.includes('period_week, saved_by_name, saved_by_user_id'), 'resPeriods query must include period_week and saved_by_user_id');
 
-// 3.1 resPeriods query must include period_week and saved_by_user_id
-assert(syncContent.includes('period_week, saved_by_name, saved_by_user_id'), 'resPeriods query must include period_week and saved_by_user_id');
+  // 3.2 Smart merger must preserve local records and snapshot_data
+  assert(syncContent.includes('cloudMap.get(localRec.id)'), 'Sync must use cloudMap to merge local and remote records');
+  assert(syncContent.includes('snapshot_data: localRec.snapshot_data'), 'Sync must preserve rich local snapshot_data over lightweight header');
 
-// 3.2 Smart merger must preserve local records and snapshot_data
-assert(syncContent.includes('cloudMap.get(localRec.id)'), 'Sync must use cloudMap to merge local and remote records');
-assert(syncContent.includes('snapshot_data: localRec.snapshot_data'), 'Sync must preserve rich local snapshot_data over lightweight header');
+  // 3.3 Event listeners must support both payload.record and payload.recordId
+  assert(syncContent.includes("ev.data.type === 'PERIOD_RECORD_SAVED' && (ev.data.payload?.record || ev.data.payload?.recordId)"), 'Broadcast listener must accept record or recordId');
+  assert(syncContent.includes("bType === 'PERIOD_RECORD_SAVED' && (bPayload?.record || bPayload?.recordId)"), 'WebSocket listener must accept record or recordId');
 
-// 3.3 Event listeners must support both payload.record and payload.recordId
-assert(syncContent.includes("ev.data.type === 'PERIOD_RECORD_SAVED' && (ev.data.payload?.record || ev.data.payload?.recordId)"), 'Broadcast listener must accept record or recordId');
-assert(syncContent.includes("bType === 'PERIOD_RECORD_SAVED' && (bPayload?.record || bPayload?.recordId)"), 'WebSocket listener must accept record or recordId');
-
-console.log('  ✓ PASS: useCloudSync.js smart merger and dual-event handlers verified');
+  console.log('  ✓ PASS: useCloudSync.js smart merger and dual-event handlers verified');
+}
 
 
 // --- Test 4: Simulation of Smart Merger Algorithm ---

@@ -1194,13 +1194,14 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
     const isExplicitManual = Boolean(firstRec.is_manual_intake);
     const dcReceiptDate = normalizeDateToIso(firstRec.received_at || matchingPo?.received_at || firstRec.created_at || matchingPo?.created_at || new Date());
 
-    if (isExplicitManual && firstRec.intake_date) {
-      resolvedIntakeDate = normalizeDateToIso(firstRec.intake_date);
-    } else if (firstRec.intake_date && orderDate && firstRec.intake_date === orderDate) {
-      // Previously set to Apple's invoice order_date; heal to actual DC receipt/creation date
-      resolvedIntakeDate = dcReceiptDate;
-    } else if (firstRec.intake_date && !orderDate) {
-      resolvedIntakeDate = normalizeDateToIso(firstRec.intake_date);
+    if (firstRec.intake_date) {
+      if (!isExplicitManual && orderDate && normalizeDateToIso(firstRec.intake_date) === orderDate) {
+        // Previously set to Apple's invoice order_date; heal to actual DC receipt/creation date
+        resolvedIntakeDate = dcReceiptDate;
+      } else {
+        // Existing valid DC intake date (e.g. intaken on 2026-09-08) must be preserved
+        resolvedIntakeDate = normalizeDateToIso(firstRec.intake_date);
+      }
     } else {
       // Auto-saved PO record intake date: use actual DC receipt/creation date
       resolvedIntakeDate = dcReceiptDate;
@@ -1223,6 +1224,19 @@ export const consolidateDcIntakeRecordsList = (records, purchaseOrders = [], cur
         resolvedAuthorName = matchingPo.created_by;
       } else if (!isGenericUser(matchingPo.saved_by_name)) {
         resolvedAuthorName = matchingPo.saved_by_name;
+      }
+    }
+    if (!resolvedAuthorName) {
+      for (const u of (inventoryUnits || [])) {
+        if (!u || u.is_deleted || u.status === 'deleted') continue;
+        const uBase = getBasePoNumber(u.po_number || u.po_id);
+        const uPoId = u.po_id ? String(u.po_id).trim().toLowerCase() : '';
+        const isMatch = (uBase && uBase === basePo) ||
+                        (uPoId && (uPoId === canonicalPoId.toLowerCase() || (matchingPo?.id && uPoId === matchingPo.id.toLowerCase())));
+        if (isMatch && !isGenericUser(u.received_by || u.scanned_by)) {
+          resolvedAuthorName = u.received_by || u.scanned_by;
+          break;
+        }
       }
     }
     if (!resolvedAuthorName) {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   BookmarkPlus,
@@ -15,6 +15,7 @@ export default function SaveIntakeRecordModal({
   onClose,
   initialUnits = [],
   defaultPoId = '',
+  defaultDate = '',
   onSaved = () => {}
 }) {
   const {
@@ -27,7 +28,7 @@ export default function SaveIntakeRecordModal({
   } = useApp();
 
   const [intakeDate, setIntakeDate] = useState(() => {
-    return new Date().toISOString().split('T')[0];
+    return defaultDate || new Date().toISOString().split('T')[0];
   });
 
   const [customRecordId, setCustomRecordId] = useState('');
@@ -35,6 +36,17 @@ export default function SaveIntakeRecordModal({
   const [selectedPoId, setSelectedPoId] = useState(defaultPoId || '');
   const [notes, setNotes] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sync state whenever modal opens or defaultDate changes
+  useEffect(() => {
+    if (isOpen) {
+      setIntakeDate(defaultDate || new Date().toISOString().split('T')[0]);
+      setCustomRecordId('');
+      setCustomRecordName('');
+      setSelectedPoId(defaultPoId || '');
+      setNotes('');
+    }
+  }, [isOpen, defaultDate, defaultPoId]);
 
   // Auto-calculated default ID
   const autoId = useMemo(() => {

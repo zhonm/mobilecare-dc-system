@@ -78,6 +78,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Modals & Inspectors
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [modalInitialUnits, setModalInitialUnits] = useState([]);
+  const [modalInitialDate, setModalInitialDate] = useState('');
   const [selectedRecordToInspect, setSelectedRecordToInspect] = useState(null);
   const [recordToDelete, setRecordToDelete] = useState(null);
   const [unitToDelete, setUnitToDelete] = useState(null);
@@ -531,6 +532,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
   // Open Save Batch Modal with custom initial units (e.g. for a specific date group)
   const handleOpenSaveBatchForDate = (dateGroup) => {
     setModalInitialUnits(dateGroup.items || []);
+    setModalInitialDate(dateGroup.dateKey || '');
     setIsSaveModalOpen(true);
   };
 
@@ -723,137 +725,197 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
 
   return (
     <div className="intake-records-container">
-      {/* Top Hero Banner */}
-      <div className="scanner-hero" style={{ marginBottom: '24px' }}>
-        <div className="scanner-hero-header" style={{ marginBottom: '12px' }}>
+      {/* Redesigned Clean Header Card */}
+      <div
+        className="scanner-hero"
+        style={{
+          marginBottom: '20px',
+          padding: '18px 22px',
+          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+          borderRadius: '12px',
+          border: '1px solid #334155'
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '14px'
+          }}
+        >
+          {/* Title & Description */}
           <div>
-            <h2 style={{ color: '#fff', fontSize: '22px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
-              <BookmarkPlus size={24} color="#38bdf8" />
-              <span>DC Parts Stock Records</span>
-            </h2>
-            <span
-              className="badge"
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+              <div
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  borderRadius: '8px',
+                  background: 'rgba(56, 189, 248, 0.15)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#38bdf8'
+                }}
+              >
+                <BookmarkPlus size={20} />
+              </div>
+              <h2 style={{ color: '#fff', fontSize: '20px', fontWeight: 700, margin: 0 }}>
+                DC Parts Stock Records
+              </h2>
+            </div>
+            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
+              Live Stock Parts Tracking • Destination Tracking (<code>MDC - Forecasting</code> vs <code>DC - CRBR</code>)
+            </p>
+          </div>
+
+          {/* Status & Sync Indicator */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div
               style={{
-                background: 'rgba(16, 185, 129, 0.15)',
-                color: '#34d399',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                fontSize: '11px',
-                marginTop: '4px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '4px'
+                gap: '8px',
+                padding: '6px 14px',
+                borderRadius: '20px',
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(51, 65, 85, 0.8)',
+                fontSize: '12px',
+                color: '#94a3b8'
               }}
             >
-              {isAutoRefreshing ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  color: isAutoRefreshing ? '#38bdf8' : '#34d399',
+                  fontWeight: 600
+                }}
+              >
+                {isAutoRefreshing ? (
+                  <>
+                    <RefreshCw size={12} className="spin" />
+                    <span>Syncing with Cloud...</span>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      style={{
+                        width: '7px',
+                        height: '7px',
+                        borderRadius: '50%',
+                        background: '#10b981',
+                        display: 'inline-block',
+                        boxShadow: '0 0 6px #10b981'
+                      }}
+                    />
+                    <span>Live Realtime Synced</span>
+                  </>
+                )}
+              </span>
+              {lastSyncedAt && (
                 <>
-                  <RefreshCw size={11} className="spin" />
-                  <span>Syncing with Cloud...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 size={11} />
-                  <span>Live Realtime Synced</span>
+                  <span style={{ color: '#475569' }}>•</span>
+                  <span>Verified: {formatTo12HourTime(lastSyncedAt)}</span>
                 </>
               )}
-            </span>
-          </div>
-          <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-            Live Stock Parts Tracking • Destination Tracking (<code>MDC - Forecasting</code> vs <code>DC - CRBR</code>)
-            {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {formatTo12HourTime(lastSyncedAt)}</span>}
-          </p>
-        </div>
+            </div>
 
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => {
-              if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual sync', tables: ['dc_intake_records', 'inventory_units', 'saved_records'] });
-              if (processOfflineSyncQueue) processOfflineSyncQueue();
-            }}
-            disabled={isAutoRefreshing}
-            title="Force reload latest inventory & intake records from database"
-            style={{
-              background: '#1e293b',
-              color: '#38bdf8',
-              borderColor: '#38bdf8',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              height: '36px'
-            }}
-          >
-            <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
-            <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud DB'}</span>
-          </button>
-
-          {canEdit && (
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => {
-                if (onNavigateToScanIn) {
-                  onNavigateToScanIn();
-                } else {
-                  setActiveTab('scan-in');
-                }
+                if (autoRefreshData) autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual sync', tables: ['dc_intake_records', 'inventory_units', 'saved_records'] });
+                if (processOfflineSyncQueue) processOfflineSyncQueue();
               }}
+              disabled={isAutoRefreshing}
+              title="Force reload latest inventory & intake records from database"
               style={{
-                background: '#0284c7',
-                color: '#ffffff',
-                borderColor: '#0284c7',
-                fontWeight: 700,
+                background: '#1e293b',
+                color: '#38bdf8',
+                borderColor: '#38bdf8',
+                fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                height: '36px',
-                padding: '0 14px',
-                borderRadius: '6px',
-                boxShadow: '0 1px 3px rgba(2,132,199,0.3)'
+                height: '36px'
               }}
-              title="Return to Receive Scan-In Station"
             >
-              <Barcode size={16} />
-              <span>{embeddedMode ? 'Switch to Scan-In Station' : '← Back to Receive Scan-In'}</span>
+              <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Sync Cloud DB'}</span>
             </button>
-          )}
 
-          {canEdit && (
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => {
-                setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
-                setIsSaveModalOpen(true);
-              }}
-              disabled={enrichedStockUnits.length === 0}
-              style={{
-                height: '36px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontWeight: 600
-              }}
-              title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent parts history record" : "Scan parts first in Receive Scan-In"}
-            >
-              <Plus size={16} />
-              <span>Save Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
-            </button>
-          )}
+            {canEdit && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  if (onNavigateToScanIn) {
+                    onNavigateToScanIn();
+                  } else {
+                    setActiveTab('scan-in');
+                  }
+                }}
+                style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  borderColor: '#0284c7',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  height: '36px',
+                  padding: '0 14px',
+                  borderRadius: '6px',
+                  boxShadow: '0 1px 3px rgba(2,132,199,0.3)'
+                }}
+                title="Return to Receive Scan-In Station"
+              >
+                <Barcode size={16} />
+                <span>{embeddedMode ? 'Switch to Scan-In Station' : '← Back to Receive Scan-In'}</span>
+              </button>
+            )}
 
-          {isReadOnly && (
-            <span
-              className="badge"
-              style={{
-                background: 'rgba(16, 185, 129, 0.2)',
-                color: '#34d399',
-                border: '1px solid rgba(16, 185, 129, 0.4)',
-                fontSize: '12px',
-                padding: '6px 12px',
-                fontWeight: 600
-              }}
-            >
-              View &amp; Export Mode
-            </span>
-          )}
+            {canEdit && (
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  setModalInitialUnits(todayScannedUnits.length > 0 ? todayScannedUnits : enrichedStockUnits);
+                  setIsSaveModalOpen(true);
+                }}
+                disabled={enrichedStockUnits.length === 0}
+                style={{
+                  height: '36px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontWeight: 600
+                }}
+                title={enrichedStockUnits.length > 0 ? "Save stock units into a permanent parts history record" : "Scan parts first in Receive Scan-In"}
+              >
+                <Plus size={16} />
+                <span>Save Parts History Record ({todayScannedUnits.length > 0 ? todayScannedUnits.length : enrichedStockUnits.length})</span>
+              </button>
+            )}
+
+            {isReadOnly && (
+              <span
+                className="badge"
+                style={{
+                  background: 'rgba(16, 185, 129, 0.2)',
+                  color: '#34d399',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  fontSize: '12px',
+                  padding: '6px 12px',
+                  fontWeight: 600
+                }}
+              >
+                View &amp; Export Mode
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1401,15 +1463,17 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
                               <span>Print Slip</span>
                             </button>
 
-                            <button
-                              className="btn btn-primary btn-sm"
-                              onClick={() => handleOpenSaveBatchForDate(group)}
-                              style={{ padding: '3px 10px', fontSize: '11.5px', height: '28px', fontWeight: 600 }}
-                              title="Save this date's parts into a permanent intake batch record"
-                            >
-                              <BookmarkPlus size={13} />
-                              <span>Save as Batch</span>
-                            </button>
+                            {canEdit && (
+                              <button
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleOpenSaveBatchForDate(group)}
+                                style={{ padding: '3px 10px', fontSize: '11.5px', height: '28px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                                title="Save this date's parts into a permanent intake batch record"
+                              >
+                                <BookmarkPlus size={13} />
+                                <span>Save as Batch</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2027,6 +2091,7 @@ export default function IntakeRecords({ embeddedMode = false, onNavigateToScanIn
         isOpen={isSaveModalOpen}
         onClose={() => setIsSaveModalOpen(false)}
         initialUnits={modalInitialUnits}
+        defaultDate={modalInitialDate}
         onSaved={(newRec) => {
           showToast(`Created Parts Saved History Record ${newRec.id}`, 'success');
           setActiveView('batch_records');

@@ -43,7 +43,8 @@ export async function extractPdfVisualLines(pdfInput) {
       try {
         if (typeof window === 'undefined') {
           // Node.js environment
-          const zlib = await import('zlib');
+          const zlibMod = 'zlib';
+          const zlib = await import(/* @vite-ignore */ zlibMod);
           const buf = Buffer.from(streamData, 'latin1');
           decoded = zlib.inflateSync(buf).toString('latin1');
         } else if (typeof DecompressionStream !== 'undefined') {
