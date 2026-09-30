@@ -19,7 +19,8 @@ import {
   LogOut,
   X,
   Inbox,
-  GitCompare
+  GitCompare,
+  Globe
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -68,12 +69,15 @@ export default function Sidebar() {
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, badge: pendingShipmentsCount, section: 'Operations & Logistics' },
     { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
 
-    // 3. Reports & Traceability
+    // 3. Network Visibility
+    { id: 'all-stocks', label: 'All Stocks & Multi-Site', icon: Globe, section: 'Network Visibility' },
+
+    // 4. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
     { id: 'site-transfers-fifo', label: 'Site Transfers & FIFO Audit', icon: GitCompare, section: 'Reports & Traceability' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
 
-    // 4. Administration
+    // 5. Administration
     { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
   ];
@@ -84,6 +88,7 @@ export default function Sidebar() {
   const sections = [
     'Planning & Allocation',
     'Operations & Logistics',
+    'Network Visibility',
     'Reports & Traceability',
     'Administration'
   ];
@@ -168,7 +173,7 @@ export default function Sidebar() {
         <div className="user-profile-card">
           <div className="user-avatar-wrapper">
             <div className="user-avatar">
-              <ShieldCheck size={16} color="#38bdf8" />
+              <ShieldCheck size={18} color="#38bdf8" />
             </div>
             <span className="user-online-ring"></span>
           </div>

@@ -78,9 +78,9 @@ function MainApp() {
       case 'shipments':
         return <Shipments />;
       case 'request-parts':
-        return <RequestParts />;
+        return <RequestParts defaultTab="requests_table" key="request-parts" />;
       case 'all-stocks':
-        return <RequestParts defaultTab="all_stocks" />;
+        return <RequestParts defaultTab="all_stocks" key="all-stocks" />;
       case 'reports':
       case 'site-transfers-fifo':
         return <SiteTransfersFifoReport />;

@@ -380,9 +380,11 @@ CREATE POLICY "saved_records_select_scoped" ON public.saved_records
                     'master_users_registry',
                     'deleted_shipment_ids_registry',
                     'deleted_intake_ids_registry',
-                    'deleted_unit_serials_registry'
+                    'deleted_unit_serials_registry',
+                    'master_branch_inventory_registry',
+                    'cleared_sites_registry'
                 )
-                OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry')
+                OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry', 'branch_inventory')
             )
         )
     );
@@ -398,9 +400,11 @@ CREATE POLICY "saved_records_select_anon" ON public.saved_records
             'master_users_registry',
             'deleted_shipment_ids_registry',
             'deleted_intake_ids_registry',
-            'deleted_unit_serials_registry'
+            'deleted_unit_serials_registry',
+            'master_branch_inventory_registry',
+            'cleared_sites_registry'
         )
-        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry')
+        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry', 'branch_inventory')
     );
 
 -- Only admins, planners, and authorized DC staff can create/update/delete saved_records
@@ -424,9 +428,11 @@ CREATE POLICY "saved_records_manage_admin" ON public.saved_records
             'deleted_shipment_ids_registry',
             'live_master_dc_inventory',
             'master_dc_intakes_registry',
-            'master_shipments_registry'
+            'master_shipments_registry',
+            'master_branch_inventory_registry',
+            'cleared_sites_registry'
         )
-        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry')
+        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry', 'branch_inventory')
     )
     WITH CHECK (
         public.current_user_role() IN ('superadmin', 'admin', 'planner')
@@ -444,9 +450,11 @@ CREATE POLICY "saved_records_manage_admin" ON public.saved_records
             'deleted_shipment_ids_registry',
             'live_master_dc_inventory',
             'master_dc_intakes_registry',
-            'master_shipments_registry'
+            'master_shipments_registry',
+            'master_branch_inventory_registry',
+            'cleared_sites_registry'
         )
-        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry')
+        OR record_type IN ('intake_record', 'intake_batch', 'shipment', 'deletion_registry', 'branch_inventory')
     );
 
 -- ============================================================================
@@ -485,7 +493,7 @@ BEGIN
     IF v_prof IS NULL THEN
         -- Fallback: check master_users_registry in saved_records
         SELECT 
-            (u->>'id')::uuid AS id,
+            CASE WHEN (u->>'id') IS NOT NULL AND (u->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (u->>'id')::uuid ELSE NULL END AS id,
             u->>'email' AS email,
             u->>'fullName' AS full_name,
             u->>'role' AS role,

@@ -833,3 +833,252 @@ export async function exportPmgBranchInventoryToExcel({
   return { workbook, buffer, fileName };
 }
 
+/**
+ * Builds and exports an Excel workbook replicating the exact 5-section layout
+ * of Site Stock Monitoring.xlsx:
+ * 1. Stock on hand (Col A-G)
+ * 2. Used Parts (Col I-M)
+ * 3. For Outtake (Col O-R)
+ * 4. Transferred Parts to Other Sites (Col T-X)
+ * 5. Site Stock (Col Z-AC)
+ */
+export async function exportSiteStockMonitoringToExcel({
+  siteCode = 'APP BHS',
+  siteName: _siteName = 'MOBILECARE - APP BONIFACIO HIGH STREET',
+  inStockUnits = [],
+  usedUnits = [],
+  outtakeUnits = [],
+  transferredUnits = [],
+  stockSummary = [],
+  customFileName = null
+} = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'PMG Specialist';
+  workbook.created = new Date();
+
+  const cleanSiteCode = String(siteCode || 'BRANCH').toUpperCase();
+  const fileBranchCode = cleanSiteCode.replace(/[^A-Z0-9_-]+/gi, '_');
+  const dateSuffix = new Date().toISOString().split('T')[0];
+  const fileName = customFileName || `${fileBranchCode}_Site_Stock_Monitoring_${dateSuffix}.xlsx`;
+
+  const sheetName = cleanSiteCode.slice(0, 31);
+  const ws = workbook.addWorksheet(sheetName, {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    views: [{ state: 'frozen', ySplit: 2, showGridLines: true }]
+  });
+
+  // Row 1: Section Headers
+  const row1Values = [];
+  row1Values[1] = ''; // Col A
+  row1Values[2] = 'Stock on hand'; // Col B
+  row1Values[9] = 'Used Parts'; // Col I
+  row1Values[15] = 'For Outtake'; // Col O
+  row1Values[20] = 'Transferred Parts to Other Sites'; // Col T
+  row1Values[26] = 'Site Stock'; // Col Z
+
+  const r1 = ws.addRow(row1Values);
+  r1.height = 24;
+
+  // Row 2: Sub-Headers (Matching exact Site Stock Monitoring.xlsx format)
+  const row2Values = [
+    'Site', 'P/N', 'Part Description', 'Serialized Count', 'Serial', 'Date Received', 'Remarks', '',
+    'Date Used', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'Date Transferred', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'Site', 'P/N', 'Part Description', 'Serialized Count'
+  ];
+
+  const r2 = ws.addRow(row2Values);
+  r2.height = 22;
+
+  // Style Row 1 Section Headers
+  const sectionColors = {
+    2: { bg: 'FF0284C7', text: 'FFFFFFFF' },  // Stock on Hand: Ocean Blue
+    9: { bg: 'FFD97706', text: 'FFFFFFFF' },  // Used Parts: Amber
+    15: { bg: 'FF7C3AED', text: 'FFFFFFFF' }, // For Outtake: Purple
+    20: { bg: 'FF0891B2', text: 'FFFFFFFF' }, // Transferred Parts: Cyan
+    26: { bg: 'FF059669', text: 'FFFFFFFF' }  // Site Stock: Emerald
+  };
+
+  Object.entries(sectionColors).forEach(([colIdx, style]) => {
+    const cell = r1.getCell(parseInt(colIdx, 10));
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: style.text } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: style.bg } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  // Style Row 2 Sub-Headers
+  r2.eachCell((cell, _colNumber) => {
+    cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1E293B' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+      left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+    };
+  });
+
+  // Populate data rows across all 5 sections
+  const maxRows = Math.max(
+    inStockUnits.length,
+    usedUnits.length,
+    outtakeUnits.length,
+    transferredUnits.length,
+    stockSummary.length,
+    1
+  );
+
+  for (let i = 0; i < maxRows; i++) {
+    const row = [];
+
+    // 1. Stock on hand (Col A-G)
+    const oh = inStockUnits[i];
+    if (oh) {
+      row[0] = cleanSiteCode;
+      row[1] = oh.part_number || oh.partNumber || '';
+      row[2] = oh.description || '';
+      row[3] = 1;
+      row[4] = oh.serial_number || oh.serialNumber || '';
+      row[5] = oh.received_at ? String(oh.received_at).substring(0, 10) : '';
+      row[6] = oh.remarks || oh.notes || 'On-hand';
+    } else {
+      row[0] = ''; row[1] = ''; row[2] = ''; row[3] = ''; row[4] = ''; row[5] = ''; row[6] = '';
+    }
+    row[7] = ''; // Col H (Spacer)
+
+    // 2. Used Parts (Col I-M)
+    const u = usedUnits[i];
+    if (u) {
+      row[8] = u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '');
+      row[9] = u.part_number || u.partNumber || '';
+      row[10] = u.description || '';
+      row[11] = u.serial_number || u.serialNumber || '';
+      row[12] = u.work_order_number ? `Used to OC# ${u.work_order_number}` : (u.remarks || u.notes || 'Used in Repair');
+    } else {
+      row[8] = ''; row[9] = ''; row[10] = ''; row[11] = ''; row[12] = '';
+    }
+    row[13] = ''; // Col N (Spacer)
+
+    // 3. For Outtake (Col O-R)
+    const ot = outtakeUnits[i];
+    if (ot) {
+      row[14] = ot.part_number || ot.partNumber || '';
+      row[15] = ot.description || '';
+      row[16] = ot.serial_number || ot.serialNumber || '';
+      row[17] = ot.outtake_reason || ot.remarks || ot.notes || 'For Outtake';
+    } else {
+      row[14] = ''; row[15] = ''; row[16] = ''; row[17] = '';
+    }
+    row[18] = ''; // Col S (Spacer)
+
+    // 4. Transferred Parts (Col T-X)
+    const tr = transferredUnits[i];
+    if (tr) {
+      row[19] = tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '');
+      row[20] = tr.part_number || tr.partNumber || '';
+      row[21] = tr.description || '';
+      row[22] = tr.serial_number || tr.serialNumber || '';
+      row[23] = tr.transfer_slip_number ? `${tr.transfer_slip_number} to ${tr.transferred_to_site_code || 'Branch'}` : (tr.remarks || tr.notes || 'Transferred');
+    } else {
+      row[19] = ''; row[20] = ''; row[21] = ''; row[22] = ''; row[23] = '';
+    }
+    row[24] = ''; // Col Y (Spacer)
+
+    // 5. Site Stock Summary (Col Z-AC)
+    const sum = stockSummary[i];
+    if (sum) {
+      row[25] = cleanSiteCode;
+      row[26] = sum.part_number || sum.partNumber || '';
+      row[27] = sum.description || '';
+      row[28] = sum.serializedCount || sum.inStockCount || sum.count || 0;
+    } else {
+      row[25] = ''; row[26] = ''; row[27] = ''; row[28] = '';
+    }
+
+    const dataRow = ws.addRow(row);
+    dataRow.height = 19;
+
+    dataRow.eachCell((cell, colNum) => {
+      cell.font = { name: 'Arial', size: 9, color: { argb: 'FF334155' } };
+      cell.border = {
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFF1F5F9' } }
+      };
+
+      // Serials in monospace
+      if ([5, 12, 17, 23].includes(colNum)) {
+        cell.font = { name: 'Courier New', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+      }
+      // P/N bold
+      if ([2, 10, 15, 21, 27].includes(colNum)) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0284C7' } };
+      }
+      // Alignment
+      if ([1, 4, 6, 8, 9, 14, 19, 20, 25, 26, 29].includes(colNum)) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      }
+    });
+  }
+
+  // Set Column Widths
+  const colWidths = [
+    12, // A: Site
+    15, // B: P/N
+    26, // C: Part Description
+    8,  // D: Qty
+    22, // E: Serial
+    13, // F: Date Received
+    18, // G: Remarks
+    4,  // H: Spacer
+    13, // I: Date Used
+    15, // J: P/N
+    26, // K: Part Description
+    22, // L: Serial
+    24, // M: Remarks
+    4,  // N: Spacer
+    15, // O: P/N
+    26, // P: Part Description
+    22, // Q: Serial
+    18, // R: Remarks
+    4,  // S: Spacer
+    13, // T: Date Transferred
+    15, // U: P/N
+    26, // V: Part Description
+    22, // W: Serial
+    24, // X: Remarks
+    4,  // Y: Spacer
+    12, // Z: Site
+    15, // AA: P/N
+    26, // AB: Part Description
+    12  // AC: Serialized Count
+  ];
+
+  colWidths.forEach((w, idx) => {
+    ws.getColumn(idx + 1).width = w;
+  });
+
+  // Browser download
+  const buffer = await workbook.xlsx.writeBuffer();
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  return { workbook, buffer, fileName };
+}
+
+

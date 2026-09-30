@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isUUID } from '../utils/appContextHelpers';
 import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus } from '../utils/partResolver';
@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
 import { formatCourierWithMode } from '../utils/shipmentHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
+import SiteStockMonitoring from './SiteStockMonitoring';
 import {
   Inbox,
   Send,
@@ -62,6 +63,8 @@ const REASON_PRESETS = [
 
 export default function RequestParts({ defaultTab = 'requests_table' }) {
   const {
+    activeTab: globalActiveTab,
+    setActiveTab: setGlobalActiveTab,
     currentUser,
     sites = [],
     parts = [],
@@ -81,6 +84,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     markUnitAsUsed,
     unmarkUnitAsUsed,
     deleteScanInUnit,
+    clearSiteParts,
     updateUnitDetails,
     fetchPartsRequests,
     isLoadingPartsRequests,
@@ -123,28 +127,35 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     return pmgSubTab || defaultTab || 'requests_table';
   });
 
+  const prevDefaultTabRef = useRef(defaultTab);
   useEffect(() => {
-    if (defaultTab === 'all_stocks') {
-      setActiveTab('all_stocks');
-      if (setPmgSubTab && pmgSubTab !== 'all_stocks') {
-        setPmgSubTab('all_stocks');
+    if (prevDefaultTabRef.current !== defaultTab) {
+      prevDefaultTabRef.current = defaultTab;
+      if (defaultTab === 'all_stocks') {
+        setActiveTab('all_stocks');
+        if (setPmgSubTab && pmgSubTab !== 'all_stocks') {
+          setPmgSubTab('all_stocks');
+        }
+      } else if (defaultTab) {
+        setActiveTab(defaultTab);
+        if (setPmgSubTab) {
+          setPmgSubTab(defaultTab);
+        }
       }
-    } else if (defaultTab && defaultTab !== 'all_stocks' && pmgSubTab === 'all_stocks') {
-      setActiveTab(defaultTab);
-      if (setPmgSubTab) {
-        setPmgSubTab(defaultTab);
-      }
-    } else if (pmgSubTab) {
+    } else if (pmgSubTab && pmgSubTab !== activeTab) {
       setActiveTab(pmgSubTab);
-    } else if (defaultTab) {
-      setActiveTab(defaultTab);
     }
-  }, [defaultTab, pmgSubTab, setPmgSubTab]);
+  }, [defaultTab, pmgSubTab, activeTab, setPmgSubTab]);
 
   const handleTabChange = (newTab) => {
     setActiveTab(newTab);
     if (setPmgSubTab) {
       setPmgSubTab(newTab);
+    }
+    if (newTab === 'all_stocks' && setGlobalActiveTab && globalActiveTab !== 'all-stocks') {
+      setGlobalActiveTab('all-stocks');
+    } else if (newTab !== 'all_stocks' && setGlobalActiveTab && globalActiveTab === 'all-stocks') {
+      setGlobalActiveTab('request-parts');
     }
   };
 
@@ -292,6 +303,10 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [editWorkOrder, setEditWorkOrder] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  // Clear Site Parts Modal State
+  const [clearPartsModalState, setClearPartsModalState] = useState(null);
+  const [isClearingSiteParts, setIsClearingSiteParts] = useState(false);
 
   // Superadmin Site Receipt Confirmation Modal State
   const [receiveModalState, setReceiveModalState] = useState(null);
@@ -448,19 +463,60 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     }
   };
 
+  const handleOpenClearPartsModal = (siteId, siteCode, siteName = '') => {
+    const isAll = siteId === 'ALL';
+    const count = isAll
+      ? (inventoryUnits || []).filter(u => {
+        const sId = String(u.current_site_id || u.site_id || u.siteId || '').toLowerCase();
+        const sCode = String(u.site_code || u.siteCode || '').toUpperCase();
+        return sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && !u.is_dc;
+      }).length
+      : ((multiSiteStockData || []).find(s => s.siteId === siteId || s.siteCode === siteCode)?.totalInStock || 0);
+    setClearPartsModalState({
+      siteId,
+      siteCode,
+      siteName: siteName || (isAll ? 'All Retail Branches' : (siteCode || 'Branch')),
+      count,
+      isAllSites: isAll
+    });
+  };
+
+  const handleConfirmClearParts = async () => {
+    if (!clearPartsModalState || typeof clearSiteParts !== 'function') return;
+    setIsClearingSiteParts(true);
+    try {
+      await clearSiteParts({
+        siteId: clearPartsModalState.isAllSites ? null : clearPartsModalState.siteId,
+        siteCode: clearPartsModalState.isAllSites ? null : clearPartsModalState.siteCode,
+        clearAllSites: clearPartsModalState.isAllSites,
+        reason: `Cleared old shipped parts for ${clearPartsModalState.siteName} prior to Excel import`
+      });
+      setClearPartsModalState(null);
+    } catch (err) {
+      showToast?.('Error clearing parts: ' + err.message, 'error');
+    } finally {
+      setIsClearingSiteParts(false);
+    }
+  };
+
   // Derive Stock On Hand for current site
   const siteStockData = useMemo(() => {
     return getStockOnHandForSite(selectedSiteId);
   }, [getStockOnHandForSite, selectedSiteId]);
 
   // Derive Multi-Site Stocks with Granular Serial Privacy (Excluding Central DC stocks)
+  // The compiler cannot preserve this conditional memo, which intentionally gates
+  // the expensive network summary until the All Stocks tab is visible.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const multiSiteStockData = useMemo(() => {
+    // Network-wide serialized detail is expensive; compute it only when the tab is visible.
+    if (activeTab !== 'all_stocks') return [];
     if (typeof getAllSitesStockSummary === 'function') {
       const all = getAllSitesStockSummary(allStocksSiteFilter) || [];
       return all.filter(s => s.siteId !== 'site-dc' && s.siteCode !== 'DC-MDC' && s.siteCode !== 'DC');
     }
     return [];
-  }, [getAllSitesStockSummary, allStocksSiteFilter]);
+  }, [activeTab, getAllSitesStockSummary, allStocksSiteFilter]);
 
   // Derive Used Parts historical consumption
   const siteUsageData = useMemo(() => {
@@ -2023,6 +2079,15 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             </button>
             <button
               type="button"
+              className={`btn btn-sm ${activeTab === 'site_monitoring' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleTabChange('site_monitoring')}
+              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
+            >
+              <FileSpreadsheet size={15} />
+              <span>Site Stock Monitoring (Excel)</span>
+            </button>
+            <button
+              type="button"
               className={`btn btn-sm ${activeTab === 'all_stocks' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => handleTabChange('all_stocks')}
               style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
@@ -2405,6 +2470,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             )}
           </div>
         </div>
+      )}
+
+      {/* Site Stock Monitoring (Excel Structure Tracking) */}
+      {activeTab === 'site_monitoring' && (
+        <SiteStockMonitoring initialSiteId={activeSiteObj.id} />
       )}
 
       {/* 6. TAB 2: Branch Stock on Hand View */}
@@ -2828,6 +2898,30 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   <Lock size={13} color="#0284c7" />
                   <span>Serial Privacy: <strong>Enforced</strong></span>
                 </div>
+                {(isSuperadmin || isPmgUser) && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{
+                      fontSize: '11.5px',
+                      padding: '6px 12px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontWeight: 700,
+                      color: '#dc2626',
+                      border: '1px solid #fca5a5',
+                      background: '#fff1f2',
+                      borderRadius: '6px',
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => handleOpenClearPartsModal('ALL', 'ALL', 'All Retail Branches')}
+                    title="Clear old parts across all 26 retail branch sites prior to Excel import"
+                  >
+                    <Trash2 size={13} color="#dc2626" />
+                    <span>Clear All Sites Parts</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -3227,6 +3321,30 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         {currentActiveMultiSiteStock.parts?.length || 0}
                       </div>
                     </div>
+                    {(isSuperadmin || isPmgUser) && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{
+                          fontSize: '11px',
+                          padding: '10px 14px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontWeight: 700,
+                          color: '#dc2626',
+                          border: '1px solid #fca5a5',
+                          background: '#fff1f2',
+                          borderRadius: '8px',
+                          cursor: 'pointer'
+                        }}
+                        onClick={() => handleOpenClearPartsModal(currentActiveMultiSite?.id, currentActiveMultiSite?.code, currentActiveMultiSite?.name)}
+                        title={`Clear old shipped parts from ${currentActiveMultiSite?.code || 'site'} prior to Excel import`}
+                      >
+                        <Trash2 size={13} color="#dc2626" />
+                        <span>Clear Site Parts</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -4221,6 +4339,106 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 9.5 Clear Site Parts Modal */}
+      {clearPartsModalState && (
+        <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '12px', maxWidth: '500px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid #fecaca', overflow: 'hidden' }}>
+            <div style={{ padding: '16px 20px', background: '#fef2f2', borderBottom: '1px solid #fecaca', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ padding: '6px', background: '#fee2e2', borderRadius: '8px', color: '#dc2626' }}>
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#991b1b' }}>
+                    {clearPartsModalState.isAllSites ? 'Clear All Retail Sites Parts' : `Clear Parts — ${clearPartsModalState.siteName}`}
+                  </h3>
+                  <div style={{ fontSize: '11px', color: '#b91c1c' }}>
+                    {clearPartsModalState.isAllSites ? 'Network-wide branch inventory purge' : `Target: ${clearPartsModalState.siteCode}`}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClearPartsModalState(null)}
+                disabled={isClearingSiteParts}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                {clearPartsModalState.isAllSites ? (
+                  <>
+                    Are you sure you want to clear <strong>all {clearPartsModalState.count} parts</strong> across all 26 retail branch sites?
+                    <div style={{ marginTop: '6px', color: '#64748b', fontSize: '11.5px' }}>
+                      This will remove previous stock previously shipped by DC to all retail sites, creating a clean slate for importing <strong>Site Stock Monitoring.xlsx</strong>. <em>Central DC stock is strictly preserved.</em>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to clear <strong>{clearPartsModalState.count} parts</strong> from <strong>{clearPartsModalState.siteName} ({clearPartsModalState.siteCode})</strong>?
+                    <div style={{ marginTop: '6px', color: '#64748b', fontSize: '11.5px' }}>
+                      This will remove previous DC-shipped stock for this branch so you can import the latest records from <strong>Site Stock Monitoring.xlsx</strong> without duplicates.
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px 12px', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '11.5px', color: '#92400e' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                  <AlertTriangle size={16} color="#d97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+                  <span>Cleared parts will be removed from local storage and cloud database. You can import new records anytime.</span>
+                </div>
+                <div style={{ borderTop: '1px dashed #fcd34d', paddingTop: '6px', fontSize: '11px', color: '#78350f', fontWeight: 600 }}>
+                  ✓ <strong>Shipment Records Protected:</strong> All DC shipments, packing lists, dispatches, and delivery logs are 100% preserved. The clear feature applies strictly to site inventory parts.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '4px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isClearingSiteParts}
+                  onClick={() => setClearPartsModalState(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{
+                    background: '#dc2626',
+                    borderColor: '#dc2626',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 16px'
+                  }}
+                  disabled={isClearingSiteParts}
+                  onClick={handleConfirmClearParts}
+                >
+                  {isClearingSiteParts ? (
+                    <>
+                      <RefreshCw size={13} className="spin" />
+                      <span>Clearing Parts...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={13} />
+                      <span>Confirm Clear Parts</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

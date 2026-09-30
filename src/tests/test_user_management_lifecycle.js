@@ -45,6 +45,7 @@ assert.strictEqual(resetMatches, 1, 'admin_reset_user_password must have exactly
 
 // Verify trigger permits SECURITY DEFINER
 assert.ok(sql.includes("CURRENT_USER IN ('postgres', 'supabase_admin', 'service_role')"), 'Trigger must allow SECURITY DEFINER execution');
+assert.ok(sql.includes("CASE WHEN (u->>'id') IS NOT NULL AND (u->>'id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (u->>'id')::uuid ELSE NULL END AS id"), 'Login fallback must ignore malformed registry user IDs instead of casting them');
 
 console.log('  ✓ PASS: SQL migration defines all 6 canonical RPCs with zero overloading');
 console.log('  ✓ PASS: Database trigger permits SECURITY DEFINER administrative modifications\n');

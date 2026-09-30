@@ -41,25 +41,50 @@ export const executeSaveUnitsToSupabase = async ({
       });
     }
 
+    const VALID_DB_STATUSES = new Set(['in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned']);
     const dbRows = units.map(u => {
       const pn = (u.part_number || 'UNKNOWN').toUpperCase();
       const partId = existingPartsMap.get(pn) || u.part_id;
+      const assign = u.intake_assignment || u.notes || 'MDC - Forecasting';
+      const dbStatus = VALID_DB_STATUSES.has(u.status) ? u.status : (u.status === 'outtake' ? 'returned' : 'in_stock');
+      const metaPayload = {
+        lifecycle_status: u.status || 'in_stock',
+        work_order_number: u.work_order_number || null,
+        usage_notes: u.usage_notes || null,
+        used_at: u.used_at || null,
+        outtake_at: u.outtake_at || null,
+        outtake_reason: u.outtake_reason || null,
+        transferred_at: u.transferred_at || null,
+        transfer_slip_number: u.transfer_slip_number || null,
+        transferred_to_site_code: u.transferred_to_site_code || null,
+        site_code: u.site_code || null,
+        site_name: u.site_name || null
+      };
+      const encodedNotes = `${assign} | __META__:${JSON.stringify(metaPayload)}`;
+
       return {
         serial_number: String(u.serial_number || '').trim().toUpperCase(),
         part_id: partId,
         current_site_id: u.current_site_id || 'site-dc',
-        status: u.status || 'in_stock',
+        status: dbStatus,
         box_number: u.box_number || 1,
-        notes: u.intake_assignment || u.notes || 'MDC - Forecasting',
+        notes: encodedNotes,
         received_at: u.received_at || new Date().toISOString(),
         received_by_name: currentUser?.fullName || u.received_by || 'Warehouse Staff',
         updated_at: new Date().toISOString()
       };
     }).filter(r => Boolean(r.serial_number));
 
-    const { error: upsertErr } = await supabase.from('inventory_units').upsert(dbRows, { onConflict: 'serial_number' });
-    if (upsertErr) {
-      console.warn('Direct inventory_units table notice:', upsertErr.message);
+    for (let i = 0; i < dbRows.length; i += 100) {
+      const chunk = dbRows.slice(i, i + 100);
+      try {
+        const { error: upsertErr } = await supabase.from('inventory_units').upsert(chunk, { onConflict: 'serial_number' });
+        if (upsertErr) {
+          console.warn('Direct inventory_units table notice:', upsertErr.message);
+        }
+      } catch (err) {
+        console.warn('inventory_units chunk error:', err.message);
+      }
     }
 
     // Debounce & sequentialize singleton master snapshots to eliminate ShareLock contention
@@ -74,6 +99,27 @@ export const executeSaveUnitsToSupabase = async ({
       snapshot_data: { units },
       updated_at: new Date().toISOString()
     }, { debounceMs: 1200 });
+
+    const isDcUnit = (item) => {
+      const sId = String(item.current_site_id || item.site_id || item.siteId || '').toLowerCase();
+      const sCode = String(item.site_code || item.siteCode || '').toUpperCase();
+      return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || (!sId && !sCode && item.is_dc);
+    };
+    const branchUnits = units.filter(u => !isDcUnit(u));
+    if (branchUnits.length > 0) {
+      queuedSavedRecordsUpsert({
+        id: 'master_branch_inventory_registry',
+        record_type: 'branch_inventory',
+        period_label: 'Master Retail Branch Inventory',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        period_week: 1,
+        notes: 'Master In-Stock & Site Stock Monitoring branch inventory across all MobileCare ASP service points',
+        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+        snapshot_data: { units: branchUnits },
+        updated_at: new Date().toISOString()
+      }, { debounceMs: 1200 });
+    }
 
     setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
   } catch (e) {

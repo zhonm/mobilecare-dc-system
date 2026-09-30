@@ -186,11 +186,16 @@ export function AppProvider({ children }) {
   }, [activeTab, setActiveTab]);
 
   // Synchronize pmgSubTab when global activeTab changes between request-parts and all-stocks
+  const prevActiveTabRef = useRef(activeTab);
   useEffect(() => {
-    if (activeTab === 'all-stocks' && pmgSubTab !== 'all_stocks') {
-      setPmgSubTab('all_stocks');
-    } else if (activeTab === 'request-parts' && pmgSubTab === 'all_stocks') {
-      setPmgSubTab('requests_table');
+    const prev = prevActiveTabRef.current;
+    if (prev !== activeTab) {
+      prevActiveTabRef.current = activeTab;
+      if (activeTab === 'all-stocks' && pmgSubTab !== 'all_stocks') {
+        setPmgSubTab('all_stocks');
+      } else if (activeTab === 'request-parts' && prev === 'all-stocks' && pmgSubTab === 'all_stocks') {
+        setPmgSubTab('requests_table');
+      }
     }
   }, [activeTab, pmgSubTab]);
 
@@ -309,6 +314,7 @@ export function AppProvider({ children }) {
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     dcIntakeRecords: intakeRecords.dcIntakeRecords,
     setDcIntakeRecords: intakeRecords.setDcIntakeRecords,
+    getShipments: () => shipmentsDomain.shipments,
     setShipments: (...args) => shipmentsDomain.setShipments(...args),
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
     logDeletionAudit: auditLogs.logDeletionAudit
@@ -545,6 +551,11 @@ export function AppProvider({ children }) {
         getUsedUnitsLog: partsRequestsDomain.getUsedUnitsLog,
         markUnitAsUsed: partsRequestsDomain.markUnitAsUsed,
         unmarkUnitAsUsed: partsRequestsDomain.unmarkUnitAsUsed,
+        markUnitForOuttake: partsRequestsDomain.markUnitForOuttake,
+        unmarkUnitForOuttake: partsRequestsDomain.unmarkUnitForOuttake,
+        transferUnitToSite: partsRequestsDomain.transferUnitToSite,
+        unmarkUnitTransfer: partsRequestsDomain.unmarkUnitTransfer,
+        getSiteMonitoringData: partsRequestsDomain.getSiteMonitoringData,
         stockTransferReports: periodRecords.stockTransferReports,
         setStockTransferReports: periodRecords.setStockTransferReports,
         stockTransferMetadata: periodRecords.stockTransferMetadata,
@@ -559,6 +570,7 @@ export function AppProvider({ children }) {
         clearStockTransfersReport: periodRecords.clearStockTransfersReport,
         addScanInUnit: inventory.addScanInUnit,
         deleteScanInUnit: inventory.deleteScanInUnit,
+        clearSiteParts: inventory.clearSiteParts,
         updateUnitAssignment: inventory.updateUnitAssignment,
         updateUnitDetails: inventory.updateUnitDetails,
         batchAddScanInUnits: inventory.batchAddScanInUnits,

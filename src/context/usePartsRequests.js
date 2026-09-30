@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { barcodeAudio } from '../utils/barcodeAudio';
-import { isUUID } from '../utils/appContextHelpers';
+import { isUUID, resolveSite, isDcSite } from '../utils/appContextHelpers';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { getCategoryForPart } from '../utils/categoryFilter';
 
@@ -698,23 +698,31 @@ export function usePartsRequests({
   const getStockOnHandForSite = useCallback((siteIdOrCode) => {
     if (!siteIdOrCode) return { partsSummary: {}, totalUnits: 0, units: [] };
 
-    const targetSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
+    const targetSite = resolveSite(siteIdOrCode, sites);
     const siteId = targetSite?.id || siteIdOrCode;
     const siteCode = targetSite?.code || siteIdOrCode;
 
     // Central DC stock is strictly restricted to Superadmin; other users cannot query DC stock
     const isSuper = currentUser?.role === 'superadmin';
-    const isDcTarget = siteId === 'site-dc' || siteCode === 'DC-MDC' || siteCode === 'DC' || Boolean(targetSite?.is_dc);
+    const isDcTarget = isDcSite(siteId, sites) || isDcSite(siteCode, sites);
     if (!isSuper && isDcTarget) {
       return { siteId, siteCode, partsSummary: {}, totalInStock: 0, totalAllocated: 0, totalPacked: 0, totalUnits: 0, units: [] };
     }
 
+    const targetIdLower = String(siteId).toLowerCase();
+    const targetCodeUpper = String(siteCode).toUpperCase();
+    const targetNameLower = String(targetSite?.name || '').toLowerCase();
+
     // Filter matching units
     const matchingUnits = (inventoryUnits || []).filter(u => {
-      const uSiteId = u.current_site_id || u.siteId;
-      const uSiteCode = u.site_code || u.siteCode;
-      return (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
-             (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
+      const uSiteId = String(u.current_site_id || u.siteId || '').toLowerCase();
+      const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+      const uSiteName = String(u.site_name || u.siteName || '').toLowerCase();
+      return (targetIdLower && uSiteId === targetIdLower) ||
+             (targetCodeUpper && uSiteCode === targetCodeUpper) ||
+             (targetCodeUpper && uSiteId === targetCodeUpper.toLowerCase()) ||
+             (targetIdLower && uSiteCode.toLowerCase() === targetIdLower) ||
+             (targetNameLower && uSiteName && (uSiteName.includes(targetNameLower) || targetNameLower.includes(uSiteName)));
     });
 
     const partsSummary = {};
@@ -1222,10 +1230,251 @@ export function usePartsRequests({
     return { success: true };
   }, [inventoryUnits, setInventoryUnits, currentUser, showToast, broadcastCloudEvent]);
 
-  // 10. Aging / Zero-Stock Awareness (Strict Non-Deletion Policy: all inventory units remain 100% intact)
+  // 10. Mark Unit for Outtake (Return to DC / Apple)
+  const markUnitForOuttake = useCallback(async ({ serialNumber, reason = '', notes = '' }) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) {
+      showToast?.('Please specify a valid serial number.', 'error');
+      return { success: false, error: 'Missing serial' };
+    }
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+    if (!targetUnit) {
+      showToast?.(`Unit ${cleanSerial} not found in inventory.`, 'error');
+      return { success: false, error: 'Unit not found' };
+    }
+    const nowIso = new Date().toISOString();
+    const updatedUnit = {
+      ...targetUnit,
+      status: 'outtake',
+      outtake_at: nowIso,
+      outtake_reason: reason || 'Scheduled for Return / Outtake',
+      notes: notes || reason || 'For Outtake'
+    };
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        const next = (prev || []).map(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u);
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', next);
+        return next;
+      });
+    }
+    if (supabase) {
+      try {
+        await supabase.from('inventory_units').update({ status: 'outtake', notes: updatedUnit.notes }).eq('serial_number', cleanSerial);
+      } catch (e) {}
+    }
+    showToast?.(`Part #${cleanSerial} marked for OUTTAKE.`, 'info');
+    if (broadcastCloudEvent) broadcastCloudEvent('PART_MARKED_OUTTAKE', { unit: updatedUnit });
+    return { success: true, unit: updatedUnit };
+  }, [inventoryUnits, setInventoryUnits, showToast, broadcastCloudEvent]);
+
+  // 11. Unmark Unit Outtake / Restore to Stock
+  const unmarkUnitForOuttake = useCallback(async (serialNumber) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return { success: false, error: 'Missing serial' };
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+    const updatedUnit = {
+      ...(targetUnit || {}),
+      status: 'in_stock',
+      outtake_at: null,
+      outtake_reason: null
+    };
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        const next = (prev || []).map(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u);
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', next);
+        return next;
+      });
+    }
+    if (supabase) {
+      try {
+        await supabase.from('inventory_units').update({ status: 'in_stock' }).eq('serial_number', cleanSerial);
+      } catch (e) {}
+    }
+    showToast?.(`Part #${cleanSerial} restored to In-Stock.`, 'info');
+    if (broadcastCloudEvent) broadcastCloudEvent('PART_RESTORED_TO_STOCK', { serialNumber: cleanSerial });
+    return { success: true };
+  }, [inventoryUnits, setInventoryUnits, showToast, broadcastCloudEvent]);
+
+  // 12. Transfer Unit to Other Branch Site
+  const transferUnitToSite = useCallback(async ({
+    serialNumber,
+    targetSiteId,
+    targetSiteCode,
+    transferSlipNumber = '',
+    notes = '',
+    transferDate = null
+  }) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) {
+      showToast?.('Please specify a valid serial number.', 'error');
+      return { success: false, error: 'Missing serial' };
+    }
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+    if (!targetUnit) {
+      showToast?.(`Unit ${cleanSerial} not found in inventory.`, 'error');
+      return { success: false, error: 'Unit not found' };
+    }
+    const nowIso = new Date().toISOString();
+    const effectiveDate = transferDate ? new Date(transferDate).toISOString() : nowIso;
+    const destSite = sites.find(s => s.id === targetSiteId || s.code === targetSiteCode) || { id: targetSiteId, code: targetSiteCode };
+    const updatedUnit = {
+      ...targetUnit,
+      status: 'transferred',
+      transferred_at: effectiveDate,
+      transferred_to_site_id: destSite.id,
+      transferred_to_site_code: destSite.code,
+      transfer_slip_number: transferSlipNumber,
+      notes: notes || `Transferred: TS ${transferSlipNumber || 'N/A'} to ${destSite.code || 'Branch'}`
+    };
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        const next = (prev || []).map(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u);
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', next);
+        return next;
+      });
+    }
+    if (supabase) {
+      try {
+        await supabase.from('inventory_units').update({ status: 'transferred', notes: updatedUnit.notes }).eq('serial_number', cleanSerial);
+      } catch (e) {}
+    }
+    showToast?.(`Part #${cleanSerial} recorded as TRANSFERRED to ${destSite.code || 'Branch'}.`, 'success');
+    if (broadcastCloudEvent) broadcastCloudEvent('PART_TRANSFERRED', { unit: updatedUnit });
+    return { success: true, unit: updatedUnit };
+  }, [inventoryUnits, sites, setInventoryUnits, showToast, broadcastCloudEvent]);
+
+  // 13. Unmark Unit Transfer / Restore to Stock
+  const unmarkUnitTransfer = useCallback(async (serialNumber) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return { success: false, error: 'Missing serial' };
+    const targetUnit = (inventoryUnits || []).find(u =>
+      String(u.serial_number || '').trim().toUpperCase() === cleanSerial
+    );
+    const updatedUnit = {
+      ...(targetUnit || {}),
+      status: 'in_stock',
+      transferred_at: null,
+      transferred_to_site_id: null,
+      transferred_to_site_code: null,
+      transfer_slip_number: null
+    };
+    if (setInventoryUnits) {
+      setInventoryUnits(prev => {
+        const next = (prev || []).map(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial ? updatedUnit : u);
+        try { localStorage.setItem('mdc_inventory', JSON.stringify(next)); } catch (e) {}
+        dbStorage.setItem('mdc_inventory', next);
+        return next;
+      });
+    }
+    if (supabase) {
+      try {
+        await supabase.from('inventory_units').update({ status: 'in_stock' }).eq('serial_number', cleanSerial);
+      } catch (e) {}
+    }
+    showToast?.(`Part #${cleanSerial} restored to In-Stock.`, 'info');
+    if (broadcastCloudEvent) broadcastCloudEvent('PART_RESTORED_TO_STOCK', { serialNumber: cleanSerial });
+    return { success: true };
+  }, [inventoryUnits, setInventoryUnits, showToast, broadcastCloudEvent]);
+
+  // 14. Comprehensive Site Stock Monitoring Data Helper
+  const getSiteMonitoringData = useCallback((siteIdOrCode = 'ALL') => {
+    const targetSite = siteIdOrCode === 'ALL'
+      ? { id: 'ALL', code: 'ALL', name: 'All Retail Branches' }
+      : resolveSite(siteIdOrCode, sites);
+    const siteId = targetSite?.id || siteIdOrCode;
+    const siteCode = targetSite?.code || siteIdOrCode;
+
+    let deletedSerialsSet = new Set();
+    try {
+      const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      if (Array.isArray(localDeleted)) {
+        deletedSerialsSet = new Set(localDeleted.map(s => String(s).trim().toUpperCase()));
+      }
+    } catch (e) {}
+
+    const targetIdLower = String(siteId).toLowerCase();
+    const targetCodeUpper = String(siteCode).toUpperCase();
+    const targetNameLower = String(targetSite?.name || '').toLowerCase();
+
+    const siteUnits = (inventoryUnits || []).filter(u => {
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s && deletedSerialsSet.has(s)) return false;
+      if (siteIdOrCode && siteIdOrCode !== 'ALL') {
+        const uSiteId = String(u.current_site_id || u.siteId || '').toLowerCase();
+        const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+        const uSiteName = String(u.site_name || u.siteName || '').toLowerCase();
+        const matches = (targetIdLower && uSiteId === targetIdLower) ||
+                        (targetCodeUpper && uSiteCode === targetCodeUpper) ||
+                        (targetCodeUpper && uSiteId === targetCodeUpper.toLowerCase()) ||
+                        (targetIdLower && uSiteCode.toLowerCase() === targetIdLower) ||
+                        (targetNameLower && uSiteName && (uSiteName.includes(targetNameLower) || targetNameLower.includes(uSiteName)));
+        if (!matches) return false;
+      }
+      return true;
+    });
+
+    const inStock = siteUnits.filter(u => u.status === 'in_stock' || !u.status);
+    const used = siteUnits.filter(u => u.status === 'used');
+    const outtake = siteUnits.filter(u => u.status === 'outtake' || u.status === 'for_outtake');
+    const transferred = siteUnits.filter(u => u.status === 'transferred');
+
+    // Aggregate Site Stock Summary by Part Number
+    const summaryMap = new Map();
+    siteUnits.forEach(u => {
+      const pn = String(u.part_number || '').toUpperCase();
+      if (!pn) return;
+      if (!summaryMap.has(pn)) {
+        summaryMap.set(pn, {
+          partNumber: pn,
+          description: u.description || '',
+          inStockCount: 0,
+          usedCount: 0,
+          outtakeCount: 0,
+          transferredCount: 0,
+          totalCount: 0
+        });
+      }
+      const entry = summaryMap.get(pn);
+      entry.totalCount++;
+      if (u.status === 'in_stock' || !u.status) entry.inStockCount++;
+      else if (u.status === 'used') entry.usedCount++;
+      else if (u.status === 'outtake' || u.status === 'for_outtake') entry.outtakeCount++;
+      else if (u.status === 'transferred') entry.transferredCount++;
+    });
+
+    const stockSummary = Array.from(summaryMap.values()).sort((a, b) => b.inStockCount - a.inStockCount || b.totalCount - a.totalCount);
+
+    return {
+      siteId,
+      siteCode,
+      siteName: targetSite?.name || siteCode,
+      inStock,
+      used,
+      outtake,
+      transferred,
+      stockSummary,
+      kpi: {
+        inStockCount: inStock.length,
+        usedCount: used.length,
+        outtakeCount: outtake.length,
+        transferredCount: transferred.length,
+        totalCount: siteUnits.length,
+        skuCount: stockSummary.length
+      }
+    };
+  }, [inventoryUnits, sites]);
+
+  // 15. Aging / Zero-Stock Awareness (Strict Non-Deletion Policy: all inventory units remain 100% intact)
   const purgeStaleZeroStockUnits = useCallback(async () => {
-    // Strictly preserve all inventory units without deletion under any circumstances.
-    // Aging and zero-stock notices serve only as informational awareness.
     return { success: true, purged: 0 };
   }, []);
 
@@ -1250,6 +1499,11 @@ export function usePartsRequests({
     getUsedUnitsLog,
     markUnitAsUsed,
     unmarkUnitAsUsed,
+    markUnitForOuttake,
+    unmarkUnitForOuttake,
+    transferUnitToSite,
+    unmarkUnitTransfer,
+    getSiteMonitoringData,
     purgeStaleZeroStockUnits
   };
 }

@@ -14,7 +14,8 @@ import {
   MessageSquare,
   Lock,
   ChevronRight,
-  Building2
+  Building2,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export default function PmgSidebar() {
@@ -92,6 +93,20 @@ export default function PmgSidebar() {
         if (setPmgSubTab) setPmgSubTab('stock_on_hand');
       },
       isActive: activeTab === 'request-parts' && pmgSubTab === 'stock_on_hand'
+    },
+    {
+      id: 'site-monitoring',
+      label: 'Site Stock Monitoring',
+      description: 'Excel parts usage & stock tracking',
+      section: 'Branch Operations',
+      icon: FileSpreadsheet,
+      badge: branchStock.totalInStock,
+      badgeColor: '#059669',
+      onClick: () => {
+        setActiveTab('request-parts');
+        if (setPmgSubTab) setPmgSubTab('site_monitoring');
+      },
+      isActive: activeTab === 'request-parts' && pmgSubTab === 'site_monitoring'
     },
     {
       id: 'scan-in',

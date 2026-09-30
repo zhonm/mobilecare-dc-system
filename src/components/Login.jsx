@@ -22,8 +22,7 @@ export default function Login() {
   const [errorMessage, setErrorMessage] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [showMobileNoticeModal, setShowMobileNoticeModal] = useState(false);
-  const [copyEmailSuccess, setCopyEmailSuccess] = useState(false);
-  const [copyViberSuccess, setCopyViberSuccess] = useState(false);
+  const [copiedContactKey, setCopiedContactKey] = useState(null);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileStatus, setTurnstileStatus] = useState('idle'); // 'idle' | 'success' | 'error' | 'expired'
   const [isRetryingTurnstile, setIsRetryingTurnstile] = useState(false);
@@ -638,15 +637,15 @@ export default function Login() {
             padding: '20px'
           }}
         >
-          <div className="card" style={{ maxWidth: '440px', width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
+          <div className="card" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ width: '34px', height: '34px', borderRadius: '8px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Phone size={17} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Phone size={18} />
                 </div>
                 <div>
                   <h3 style={{ color: '#fff', margin: 0, fontSize: '16.5px', fontWeight: 800 }}>Developer Direct Support</h3>
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>Technical Escalations &amp; Assistance</span>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>Technical Escalations &amp; Branch Inquiries</span>
                 </div>
               </div>
               <button
@@ -659,71 +658,159 @@ export default function Login() {
               </button>
             </div>
 
-            <p style={{ fontSize: '12.5px', color: '#94a3b8', marginBottom: '18px', lineHeight: 1.5 }}>
-              If you cannot sign in, experience system glitches, or require direct technical assistance, reach out to the developer directly:
-            </p>
-
-            {/* Email item */}
-            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '10px', padding: '12px 14px', marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>
-                  Developer Email
-                </div>
-                <a
-                  href="mailto:zhon.manaois@mobilecareph.com"
-                  style={{ fontSize: '13px', color: '#38bdf8', fontWeight: 600, textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title="Click to send email"
-                >
-                  zhon.manaois@mobilecareph.com
-                </a>
+            <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: '10px', padding: '12px 14px', marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: '#e2e8f0', lineHeight: 1.5, marginBottom: '6px' }}>
+                📦 Contact <strong>Joshua Juvida</strong> for <strong>MDC concerns</strong> (branch requisitions, replenishment, parts).
               </div>
-              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    navigator.clipboard.writeText('zhon.manaois@mobilecareph.com');
-                    setCopyEmailSuccess(true);
-                    setTimeout(() => setCopyEmailSuccess(false), 2000);
-                    showToast('Developer email copied to clipboard', 'success');
-                  }}
-                  style={{ fontSize: '11px', padding: '5px 9px' }}
-                >
-                  {copyEmailSuccess ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
-                  <span>{copyEmailSuccess ? 'Copied' : 'Copy'}</span>
-                </button>
+              <div style={{ fontSize: '12px', color: '#e2e8f0', lineHeight: 1.5, marginBottom: '6px' }}>
+                💻 Contact <strong>Zhon Manaois</strong> for <strong>system-related issues</strong> (login errors, bugs, glitches).
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.4, borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '6px' }}>
+                🤝 <em>Note: You may reach out to either of them for any concern.</em>
               </div>
             </div>
 
-            {/* Phone / Viber item */}
-            <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '10px', padding: '12px 14px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-              <div>
-                <div style={{ fontSize: '10.5px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <span>Viber / Mobile</span>
-                  <span style={{ background: '#7c3aed', color: '#fff', fontSize: '9px', padding: '0 4px', borderRadius: '3px', fontWeight: 800 }}>VIBER</span>
+            {/* Contact 1: Joshua Juvida */}
+            <div style={{ background: '#1e293b', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#f8fafc' }}>
+                    Joshua Juvida
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    Inventory Planner / MDC Operations
+                  </div>
                 </div>
-                <a
-                  href="tel:09763543574"
-                  style={{ fontSize: '15px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}
-                >
-                  09763543574
-                </a>
+                <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.4)', padding: '2px 8px', borderRadius: '4px' }}>
+                  MDC Concerns
+                </span>
               </div>
-              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    navigator.clipboard.writeText('09763543574');
-                    setCopyViberSuccess(true);
-                    setTimeout(() => setCopyViberSuccess(false), 2000);
-                    showToast('Developer Viber/Phone copied to clipboard', 'success');
-                  }}
-                  style={{ fontSize: '11px', padding: '5px 9px' }}
-                >
-                  {copyViberSuccess ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
-                  <span>{copyViberSuccess ? 'Copied' : 'Copy'}</span>
-                </button>
+
+              {/* Email row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px', marginBottom: '8px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Email</div>
+                  <a href="mailto:joshua.juvida@mobilecareph.com" style={{ fontSize: '12.5px', color: '#38bdf8', fontWeight: 600, textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    joshua.juvida@mobilecareph.com
+                  </a>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText('joshua.juvida@mobilecareph.com');
+                      setCopiedContactKey('joshua-email');
+                      setTimeout(() => setCopiedContactKey(null), 2000);
+                      showToast("Joshua's email copied to clipboard", 'success');
+                    }}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                  >
+                    {copiedContactKey === 'joshua-email' ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                    <span>{copiedContactKey === 'joshua-email' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Phone / Viber row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span>Viber / Mobile</span>
+                    <span style={{ background: '#7c3aed', color: '#fff', fontSize: '8px', padding: '0 3px', borderRadius: '2px', fontWeight: 800 }}>VIBER</span>
+                  </div>
+                  <a href="tel:09613328304" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>
+                    09613328304
+                  </a>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText('09613328304');
+                      setCopiedContactKey('joshua-phone');
+                      setTimeout(() => setCopiedContactKey(null), 2000);
+                      showToast("Joshua's number copied to clipboard", 'success');
+                    }}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                  >
+                    {copiedContactKey === 'joshua-phone' ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                    <span>{copiedContactKey === 'joshua-phone' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Contact 2: Zhon Manaois */}
+            <div style={{ background: '#1e293b', border: '1px solid rgba(168, 85, 247, 0.3)', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#f8fafc' }}>
+                    Zhon Manaois
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    Parts Management Specialist / MDC Operations
+                  </div>
+                </div>
+                <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', padding: '2px 8px', borderRadius: '4px' }}>
+                  System Issues
+                </span>
+              </div>
+
+              {/* Email row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px', marginBottom: '8px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700 }}>Email</div>
+                  <a href="mailto:zhon.manaois@mobilecareph.com" style={{ fontSize: '12.5px', color: '#38bdf8', fontWeight: 600, textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    zhon.manaois@mobilecareph.com
+                  </a>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText('zhon.manaois@mobilecareph.com');
+                      setCopiedContactKey('zhon-email');
+                      setTimeout(() => setCopiedContactKey(null), 2000);
+                      showToast("Zhon's email copied to clipboard", 'success');
+                    }}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                  >
+                    {copiedContactKey === 'zhon-email' ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                    <span>{copiedContactKey === 'zhon-email' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Phone / Viber row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span>Viber / Mobile</span>
+                    <span style={{ background: '#7c3aed', color: '#fff', fontSize: '8px', padding: '0 3px', borderRadius: '2px', fontWeight: 800 }}>VIBER</span>
+                  </div>
+                  <a href="tel:09763543574" style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700, textDecoration: 'none', fontFamily: 'var(--font-mono)' }}>
+                    09763543574
+                  </a>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText('09763543574');
+                      setCopiedContactKey('zhon-phone');
+                      setTimeout(() => setCopiedContactKey(null), 2000);
+                      showToast("Zhon's number copied to clipboard", 'success');
+                    }}
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                  >
+                    {copiedContactKey === 'zhon-phone' ? <Check size={12} color="#34d399" /> : <Copy size={12} />}
+                    <span>{copiedContactKey === 'zhon-phone' ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
               </div>
             </div>
 

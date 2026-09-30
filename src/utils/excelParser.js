@@ -2829,6 +2829,590 @@ export function downloadScanInTemplate(format = 'xlsx') {
 }
 
 /**
+ * Safely parse date from Excel serial numbers or standard date strings into YYYY-MM-DD
+ */
+export function parseExcelDateCell(val) {
+  if (!val) return null;
+  if (typeof val === 'number' && val > 30000 && val < 65000) {
+    try {
+      const d = XLSX.SSF.parse_date_code(val);
+      if (d && d.y) {
+        return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
+      }
+    } catch (e) {}
+  }
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+  return s;
+}
+
+/**
+ * Detects whether a workbook follows the Site Stock Monitoring.xlsx structure
+ * (Contains branch sheets with Stock on Hand, Used Parts, For Outtake, Transferred Parts, etc.)
+ */
+export function isSiteStockMonitoringWorkbook(workbook) {
+  if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) return false;
+  const names = workbook.SheetNames;
+  const knownSheets = ['KGB Serial Lists', 'STOCKS', 'products', 'Search Bar'];
+  const matches = knownSheets.filter(k => names.includes(k));
+  if (matches.length >= 2) return true;
+
+  for (const sName of names) {
+    const ws = workbook.Sheets[sName];
+    if (!ws) continue;
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (rows.length < 2) continue;
+    const r0 = (rows[0] || []).join(' ').toLowerCase();
+    const r1 = (rows[1] || []).join(' ').toLowerCase();
+    if (
+      (r0.includes('stock on hand') || r0.includes('stocks on hand')) &&
+      (r0.includes('used part') || r1.includes('date used') || r0.includes('outtake') || r0.includes('transferred') || r0.includes('site stock'))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Parses a Site Stock Monitoring workbook and extracts parts across:
+ * 1. Stock on hand (in_stock)
+ * 2. Used Parts (used)
+ * 3. For Outtake (outtake)
+ * 4. Transferred Parts (transferred)
+ */
+/**
+ * Resolves a branch sheet name or site code to the system site object from seedData / context.
+ * Gracefully handles naming discrepancies (e.g., 'ASP LIMA' -> 'ASP LIM', 'APP ILO' -> 'ASP ILO').
+ */
+export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
+  if (!sheetNameOrCode) return null;
+  const raw = String(sheetNameOrCode).trim();
+  const clean = raw.toUpperCase().replace(/\s+/g, ' ');
+  const norm = clean.replace(/[^A-Z0-9]/g, '');
+
+  // Alias maps for known sheet names in Site Stock Monitoring.xlsx
+  if (norm === 'ASPLIMA' || norm === 'LIMA') {
+    const lim = sites.find(s => s.code === 'ASP LIM');
+    if (lim) return lim;
+  }
+  if (norm === 'APPILO' || norm === 'ASPILO' || norm === 'ILOILO') {
+    const ilo = sites.find(s => s.code === 'ASP ILO');
+    if (ilo) return ilo;
+  }
+
+  // Exact match on site code
+  let match = sites.find(s => s.code?.toUpperCase() === clean);
+  if (match) return match;
+
+  // Normalized alphanumeric code match
+  match = sites.find(s => s.code?.replace(/[^A-Z0-9]/g, '').toUpperCase() === norm);
+  if (match) return match;
+
+  // Match by site name
+  match = sites.find(s => s.name?.toUpperCase().includes(clean));
+  if (match) return match;
+
+  return null;
+}
+
+/**
+ * Extracts raw unit items from a single Site Stock Monitoring branch sheet
+ */
+export function extractRowsFromBranchSheet(ws, sheetName, siteObj = null) {
+  if (!ws) return [];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (!rows || rows.length < 2) return [];
+
+  const r0 = rows[0] || [];
+  const r1 = rows[1] || [];
+
+  let onHandStart = -1, usedStart = -1, outtakeStart = -1, transferredStart = -1, summaryStart = -1;
+
+  for (let c = 0; c < Math.max(r0.length, r1.length); c++) {
+    const v0 = String(r0[c] || '').trim().toLowerCase();
+    const v1 = String(r1[c] || '').trim().toLowerCase();
+    if (v0.includes('stock on hand') || v0.includes('stocks on hand')) {
+      onHandStart = c;
+    } else if (v0.includes('used part') || v1.includes('date used')) {
+      if (usedStart === -1) usedStart = c;
+    } else if (v0.includes('outtake') || (v1.includes('p/n') && c >= 12 && c <= 18 && outtakeStart === -1)) {
+      if (v0.includes('outtake')) outtakeStart = c;
+    } else if (v0.includes('transferred') || v1.includes('date transferred')) {
+      if (transferredStart === -1) transferredStart = c;
+    } else if (v0.includes('site stock') || (v1.includes('serialized count') && c >= 20)) {
+      if (summaryStart === -1) summaryStart = c;
+    }
+  }
+
+  if (onHandStart === -1) onHandStart = 0;
+  if (usedStart === -1) usedStart = 8;
+  if (outtakeStart === -1) outtakeStart = 14;
+  if (transferredStart === -1) transferredStart = 19;
+  if (summaryStart === -1) summaryStart = 25;
+
+  const onHandEnd = usedStart;
+  const usedEnd = outtakeStart;
+  const outtakeEnd = transferredStart;
+  const transferredEnd = summaryStart;
+
+  const resolvedSiteId = siteObj?.id || null;
+  const resolvedSiteCode = siteObj?.code || sheetName;
+  const resolvedSiteName = siteObj?.name || sheetName;
+
+  const sheetItems = [];
+  const siteStockSummary = new Map();
+
+  for (let r = 2; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length === 0) continue;
+
+    const summaryPartNumber = String(row[summaryStart + 1] || '').trim().toUpperCase();
+    const summaryQuantity = Number(row[summaryStart + 3]);
+    if (summaryPartNumber && Number.isFinite(summaryQuantity) && summaryQuantity > 0) {
+      siteStockSummary.set(summaryPartNumber, {
+        partNumber: summaryPartNumber,
+        description: String(row[summaryStart + 2] || '').trim(),
+        quantity: (siteStockSummary.get(summaryPartNumber)?.quantity || 0) + summaryQuantity,
+        siteId: resolvedSiteId,
+        siteCode: resolvedSiteCode,
+        siteName: resolvedSiteName
+      });
+    }
+
+    // 1. Stock on Hand
+    const ohCells = row.slice(onHandStart, onHandEnd);
+    let ohPn = '', ohDesc = '', ohSerial = '', ohDate = '', ohRemarks = '';
+    ohCells.forEach(c => {
+      const s = String(c || '').trim();
+      if (!s) return;
+      if (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && !ohPn) ohPn = s.toUpperCase();
+      else if (/^[A-Z0-9]{10,20}$/i.test(s) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && isNaN(Number(s)) && !ohSerial) ohSerial = s.toUpperCase();
+      else if (typeof c === 'number' && c > 30000 && c < 65000 && !ohDate) ohDate = parseExcelDateCell(c);
+      else if (/display|battery|kit|top case|enclosure/i.test(s) && !ohDesc) ohDesc = s;
+      else if (!ohRemarks && isNaN(Number(s)) && !s.includes(sheetName)) ohRemarks = s;
+    });
+    if (ohPn && ohSerial) {
+      sheetItems.push({
+        partNumber: ohPn,
+        description: ohDesc,
+        serialNumber: ohSerial,
+        dateReceived: ohDate,
+        remarks: ohRemarks || 'On-hand',
+        notes: ohRemarks || 'On-hand',
+        lifecycle_status: 'in_stock',
+        rowNumber: r + 1,
+        sheetName,
+        current_site_id: resolvedSiteId,
+        site_code: resolvedSiteCode,
+        site_name: resolvedSiteName
+      });
+    }
+
+    // 2. Used Parts
+    const uCells = row.slice(usedStart, usedEnd);
+    let uPn = '', uDesc = '', uSerial = '', uDate = '', uRemarks = '';
+    uCells.forEach(c => {
+      const s = String(c || '').trim();
+      if (!s) return;
+      if (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && !uPn) uPn = s.toUpperCase();
+      else if (/^[A-Z0-9]{10,20}$/i.test(s) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && isNaN(Number(s)) && !uSerial) uSerial = s.toUpperCase();
+      else if (typeof c === 'number' && c > 30000 && c < 65000 && !uDate) uDate = parseExcelDateCell(c);
+      else if (/display|battery|kit|top case/i.test(s) && !uDesc) uDesc = s;
+      else if (s && !uRemarks) uRemarks = s;
+    });
+    if (uPn && uSerial) {
+      const ocMatch = uRemarks.match(/\b(?:OC#?\s*|#\s*)?(\d{7,10})\b/i);
+      sheetItems.push({
+        partNumber: uPn,
+        description: uDesc,
+        serialNumber: uSerial,
+        dateUsed: uDate,
+        workOrderNumber: ocMatch ? ocMatch[1] : (/^\d{7,10}$/.test(uRemarks) ? uRemarks : null),
+        remarks: uRemarks,
+        notes: uRemarks ? `Used in Repair (${uRemarks})` : 'Used in Repair',
+        usage_notes: uRemarks,
+        lifecycle_status: 'used',
+        rowNumber: r + 1,
+        sheetName,
+        current_site_id: resolvedSiteId,
+        site_code: resolvedSiteCode,
+        site_name: resolvedSiteName
+      });
+    }
+
+    // 3. For Outtake
+    const otCells = row.slice(outtakeStart, outtakeEnd);
+    let otPn = '', otDesc = '', otSerial = '', otRemarks = '';
+    otCells.forEach(c => {
+      const s = String(c || '').trim();
+      if (!s) return;
+      if (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && !otPn) otPn = s.toUpperCase();
+      else if (/^[A-Z0-9]{10,20}$/i.test(s) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && isNaN(Number(s)) && !otSerial) otSerial = s.toUpperCase();
+      else if (/display|battery|kit/i.test(s) && !otDesc) otDesc = s;
+      else if (s && !otRemarks) otRemarks = s;
+    });
+    if (otPn && otSerial) {
+      sheetItems.push({
+        partNumber: otPn,
+        description: otDesc,
+        serialNumber: otSerial,
+        remarks: otRemarks,
+        notes: otRemarks ? `Outtake: ${otRemarks}` : 'For Outtake',
+        outtake_reason: otRemarks,
+        lifecycle_status: 'outtake',
+        rowNumber: r + 1,
+        sheetName,
+        current_site_id: resolvedSiteId,
+        site_code: resolvedSiteCode,
+        site_name: resolvedSiteName
+      });
+    }
+
+    // 4. Transferred Parts
+    const trCells = row.slice(transferredStart, transferredEnd);
+    let trPn = '', trDesc = '', trSerial = '', trDate = '', trRemarks = '';
+    trCells.forEach(c => {
+      const s = String(c || '').trim();
+      if (!s) return;
+      if (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && !trPn) trPn = s.toUpperCase();
+      else if (/^[A-Z0-9]{10,20}$/i.test(s) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(s) && isNaN(Number(s)) && !trSerial) trSerial = s.toUpperCase();
+      else if (typeof c === 'number' && c > 30000 && c < 65000 && !trDate) trDate = parseExcelDateCell(c);
+      else if (/display|battery|kit/i.test(s) && !trDesc) trDesc = s;
+      else if (s && !trRemarks) trRemarks = s;
+    });
+    if (trPn && trSerial) {
+      const tsMatch = trRemarks.match(/\b(TS\d+)\b/i);
+      const toSiteMatch = trRemarks.match(/(?:TO|to)\s+([A-Za-z0-9\s]+)/i);
+      sheetItems.push({
+        partNumber: trPn,
+        description: trDesc,
+        serialNumber: trSerial,
+        dateTransferred: trDate,
+        transferSlipNumber: tsMatch ? tsMatch[1] : null,
+        targetSiteCode: toSiteMatch ? toSiteMatch[1].trim() : null,
+        remarks: trRemarks,
+        notes: trRemarks ? `Transferred: ${trRemarks}` : 'Transferred Part',
+        lifecycle_status: 'transferred',
+        rowNumber: r + 1,
+        sheetName,
+        current_site_id: resolvedSiteId,
+        site_code: resolvedSiteCode,
+        site_name: resolvedSiteName
+      });
+    }
+  }
+
+  // Preserve aggregate Site Stock quantities that have no serialized lifecycle row.
+  // The source workbook can contain legacy/non-serialized stock in this section.
+  sheetItems.siteStockSummary = Array.from(siteStockSummary.values());
+
+  return sheetItems;
+}
+
+function reconcileSheetStockItems(sheetItems, existingParts = []) {
+  const summaryRows = sheetItems?.siteStockSummary || [];
+  if (summaryRows.length === 0) return sheetItems;
+
+  const expectedCounts = new Map();
+  summaryRows.forEach(summary => {
+    const canonicalPart = resolvePartInfo(summary.partNumber, existingParts)?.part_number || summary.partNumber;
+    expectedCounts.set(canonicalPart, (expectedCounts.get(canonicalPart) || 0) + summary.quantity);
+  });
+
+  const currentCounts = new Map();
+  const seenSerials = new Set();
+  const reconciledItems = sheetItems.filter(item => {
+    if (item.lifecycle_status !== 'in_stock') return true;
+      const serial = String(item.serialNumber || '').trim().toUpperCase();
+      const canonicalPart = resolvePartInfo(item.partNumber, existingParts)?.part_number || item.partNumber;
+      const expectedCount = expectedCounts.get(canonicalPart) || 0;
+      if (!serial || seenSerials.has(serial) || !expectedCount) return false;
+      seenSerials.add(serial);
+      const retainedCount = currentCounts.get(canonicalPart) || 0;
+      if (retainedCount >= expectedCount) return false;
+      currentCounts.set(canonicalPart, retainedCount + 1);
+      return true;
+    });
+
+  const summaryOnlyItems = [];
+  summaryRows.forEach(summary => {
+    const canonicalPart = resolvePartInfo(summary.partNumber, existingParts)?.part_number || summary.partNumber;
+    const deficit = Math.max(0, summary.quantity - (currentCounts.get(canonicalPart) || 0));
+    for (let index = 0; index < deficit; index += 1) {
+      const summarySerial = `SUMMARY${canonicalPart.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyItems.length + 1}`.toUpperCase();
+      summaryOnlyItems.push({
+        partNumber: canonicalPart,
+        description: summary.description || `Legacy summary stock (${canonicalPart})`,
+        serialNumber: summarySerial,
+        lifecycle_status: 'in_stock',
+        summary_only: true,
+        status: 'NEW_PART',
+        statusMessage: 'Imported from Site Stock summary; serial number not provided',
+        sheetName: summary.siteCode,
+        current_site_id: summary.siteId,
+        site_code: summary.siteCode,
+        site_name: summary.siteName
+      });
+    }
+  });
+
+  reconciledItems.push(...summaryOnlyItems);
+  reconciledItems.siteStockSummary = summaryRows;
+  return reconciledItems;
+}
+
+/**
+ * Parses a Site Stock Monitoring workbook and extracts parts across:
+ * 1. Stock on hand (in_stock)
+ * 2. Used Parts (used)
+ * 3. For Outtake (outtake)
+ * 4. Transferred Parts (transferred)
+ *
+ * Supports single-sheet branch imports as well as network-wide consolidated parsing across all 27 branch sheets.
+ */
+export function parseSiteStockMonitoringWorkbook(workbook, {
+  file = null,
+  existingParts = [],
+  existingUnits = [],
+  _purchaseOrders = [],
+  targetSiteId = 'site-dc',
+  targetSiteCode = 'DC-MDC',
+  specificSheetName = null,
+  parseAllSheets = false,
+  sites = []
+} = {}) {
+  const availableBranchSheets = workbook.SheetNames.filter(s =>
+    !['STOCKS', 'products', 'Search Bar', 'Sheet17', 'KGB Serial Lists'].includes(s)
+  );
+
+  const shouldParseAll = parseAllSheets || specificSheetName === 'ALL_SHEETS' || targetSiteId === 'ALL';
+
+  let rawExtractedItems = [];
+  const siteStockSummary = new Map();
+  let activeSheetName = specificSheetName;
+
+  if (shouldParseAll) {
+    activeSheetName = 'ALL_SHEETS';
+    availableBranchSheets.forEach(sName => {
+      const ws = workbook.Sheets[sName];
+      if (!ws) return;
+      const siteObj = resolveSiteFromSheetOrCode(sName, sites);
+      const itemsFromSheet = extractRowsFromBranchSheet(ws, sName, siteObj);
+      rawExtractedItems.push(...reconcileSheetStockItems(itemsFromSheet, existingParts));
+      (itemsFromSheet.siteStockSummary || []).forEach(summary => {
+        const existing = siteStockSummary.get(summary.partNumber);
+        siteStockSummary.set(summary.partNumber, {
+          ...summary,
+          quantity: (existing?.quantity || 0) + summary.quantity
+        });
+      });
+    });
+  } else {
+    const normTarget = String(targetSiteCode || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (!activeSheetName && normTarget && normTarget !== 'DCMDC' && normTarget !== 'DC' && normTarget !== 'SITEDC' && normTarget !== 'ALL') {
+      activeSheetName = workbook.SheetNames.find(s => s.replace(/[^A-Za-z0-9]/g, '').toUpperCase() === normTarget);
+    }
+    if (!activeSheetName) {
+      activeSheetName = availableBranchSheets[0] || workbook.SheetNames[0];
+    }
+
+    const ws = workbook.Sheets[activeSheetName];
+    if (!ws) {
+      return { success: false, error: `Sheet "${activeSheetName}" could not be read.` };
+    }
+    const siteObj = resolveSiteFromSheetOrCode(activeSheetName, sites) || (targetSiteId ? { id: targetSiteId, code: targetSiteCode } : null);
+    rawExtractedItems = extractRowsFromBranchSheet(ws, activeSheetName, siteObj);
+    rawExtractedItems = reconcileSheetStockItems(rawExtractedItems, existingParts);
+    (rawExtractedItems.siteStockSummary || []).forEach(summary => siteStockSummary.set(summary.partNumber, summary));
+  }
+
+  // Validate items and match with part catalog
+  const isDcTarget = targetSiteId === 'site-dc' || targetSiteCode === 'DC-MDC' || targetSiteCode === 'DC' || (!targetSiteId && !targetSiteCode);
+  const targetSiteUnits = (existingUnits || []).filter(u => {
+    if (shouldParseAll) return true;
+    if (isDcTarget) {
+      return (u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code));
+    }
+    return (u.current_site_id === targetSiteId || u.site_code === targetSiteCode);
+  });
+
+  const existingSerialsSet = new Set(targetSiteUnits.map(u => String(u.serial_number || '').trim().toUpperCase()));
+  const seenSerialsInBatch = new Set();
+  const parsedItems = [];
+
+  rawExtractedItems.forEach((raw, idx) => {
+    const resolvedPart = resolvePartInfo(raw.partNumber, existingParts) || resolvePartInfo(raw.description, existingParts);
+    const cleanPN = resolvedPart ? resolvedPart.part_number : raw.partNumber.toUpperCase();
+    const existingPart = resolvedPart || existingParts.find(p => p.part_number.toUpperCase() === cleanPN);
+    const partDesc = resolvedPart?.description || raw.description || existingPart?.description || `Replacement Part (${cleanPN})`;
+
+      const serialValidation = raw.summary_only
+        ? { isValid: true, cleanSerial: raw.serialNumber }
+        : validateAppleSerialNumber(raw.serialNumber, cleanPN, existingParts);
+    const cleanSerial = serialValidation.cleanSerial || raw.serialNumber;
+
+    let status = 'VALID';
+    let statusMessage = 'Ready to import';
+
+    if (!serialValidation.isValid) {
+      status = 'ERROR';
+      statusMessage = serialValidation.reason || 'Invalid serial format';
+    } else if (seenSerialsInBatch.has(cleanSerial)) {
+      status = 'DUPLICATE';
+      statusMessage = 'Duplicate serial found in uploaded file';
+    } else if (existingSerialsSet.has(cleanSerial)) {
+      status = 'EXISTING_INVENTORY';
+      statusMessage = `Already exists in ${raw.site_code || activeSheetName || 'site'} inventory`;
+    } else if (!existingPart) {
+      status = 'NEW_PART';
+      statusMessage = 'New part catalog SKU (auto-register on receive)';
+    }
+
+    seenSerialsInBatch.add(cleanSerial);
+
+    parsedItems.push({
+      id: `batch-mon-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+      rowNumber: raw.rowNumber,
+      sheetName: raw.sheetName,
+      partNumber: cleanPN,
+      description: partDesc,
+      serialNumber: cleanSerial,
+      lifecycle_status: raw.lifecycle_status,
+      dateReceived: raw.dateReceived || null,
+      dateUsed: raw.dateUsed || null,
+      workOrderNumber: raw.workOrderNumber || null,
+      dateTransferred: raw.dateTransferred || null,
+      transferSlipNumber: raw.transferSlipNumber || null,
+      targetSiteCode: raw.targetSiteCode || null,
+      remarks: raw.remarks,
+      notes: raw.notes,
+      usage_notes: raw.usage_notes || null,
+      outtake_reason: raw.outtake_reason || null,
+      status,
+      statusMessage,
+      isExistingPart: !!existingPart,
+      current_site_id: raw.current_site_id,
+      site_code: raw.site_code,
+      site_name: raw.site_name,
+      summary_only: Boolean(raw.summary_only)
+    });
+  });
+
+  const importedInStockCount = parsedItems.filter(item => item.lifecycle_status === 'in_stock' && item.status !== 'DUPLICATE').length;
+  const expectedSiteStockCount = Array.from(siteStockSummary.values()).reduce((total, item) => total + item.quantity, 0);
+  let summaryOnlyIndex = 0;
+  const summaryOnlyTarget = shouldParseAll
+    ? 0
+    : Math.max(0, expectedSiteStockCount - importedInStockCount);
+
+  if (summaryOnlyTarget > 0) {
+    for (const summary of siteStockSummary.values()) {
+      if (summaryOnlyIndex >= summaryOnlyTarget) break;
+      const canonicalPart = resolvePartInfo(summary.partNumber, existingParts);
+      const cleanPartNumber = canonicalPart?.part_number || summary.partNumber;
+      const summarySerial = `SUMMARY${cleanPartNumber.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyIndex + 1}`.toUpperCase();
+      parsedItems.push({
+        id: `summary-stock-${summarySerial}`,
+        partNumber: cleanPartNumber,
+        description: summary.description || canonicalPart?.description || `Legacy summary stock (${cleanPartNumber})`,
+        serialNumber: summarySerial,
+        lifecycle_status: 'in_stock',
+        status: 'NEW_PART',
+        statusMessage: 'Imported from Site Stock summary; serial number not provided',
+        summary_only: true,
+        current_site_id: summary.siteId || targetSiteId,
+        site_code: summary.siteCode || targetSiteCode,
+        site_name: summary.siteName || resolveSiteFromSheetOrCode(targetSiteCode, sites)?.name || targetSiteCode
+      });
+      summaryOnlyIndex += 1;
+    }
+  }
+
+  const validCount = parsedItems.filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY').length;
+  const duplicateCount = parsedItems.filter(it => it.status === 'DUPLICATE').length;
+  const existingInStockCount = parsedItems.filter(it => it.status === 'EXISTING_INVENTORY').length;
+  const newPartsCount = parsedItems.filter(it => it.status === 'NEW_PART').length;
+  const errorCount = parsedItems.filter(it => it.status === 'ERROR').length;
+
+  return {
+    success: true,
+    fileName: file?.name || (shouldParseAll ? 'Site_Stock_Monitoring_All_Branches.xlsx' : `${activeSheetName}_Site_Stock_Monitoring.xlsx`),
+    isSiteStockMonitoring: true,
+    activeSheet: activeSheetName,
+    availableSheets: ['ALL_SHEETS', ...availableBranchSheets],
+    isMultiSite: shouldParseAll,
+    items: parsedItems,
+    workbook,
+    summary: {
+      total: parsedItems.length,
+      valid: validCount,
+      duplicates: duplicateCount,
+      existingInStock: existingInStockCount,
+      newParts: newPartsCount,
+      errors: errorCount,
+      inStock: parsedItems.filter(i => i.lifecycle_status === 'in_stock').length,
+      used: parsedItems.filter(i => i.lifecycle_status === 'used').length,
+      outtake: parsedItems.filter(i => i.lifecycle_status === 'outtake').length,
+      transferred: parsedItems.filter(i => i.lifecycle_status === 'transferred').length
+    }
+  };
+}
+
+/**
+ * Downloads a sample template specifically replicating Site Stock Monitoring.xlsx
+ */
+export function downloadSiteStockMonitoringTemplate(siteCode = 'APP BHS') {
+  const wb = XLSX.utils.book_new();
+  const cleanSite = String(siteCode || 'APP BHS').toUpperCase();
+
+  const r0 = [
+    '', 'Stock on hand', '', '', '', '', '', '',
+    'Used Parts', '', '', '', '', '',
+    'For Outtake', '', '', '', '',
+    'Transferred Parts to Other Sites', '', '', '', '', '',
+    'Site Stock'
+  ];
+
+  const r1 = [
+    'Site', 'P/N', 'Part Description', 'Serialized Count', 'Serial', 'Date Received', 'Remarks', '',
+    'Date Used', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'Date Transferred', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
+    'Site', 'P/N', 'Part Description', 'Serialized Count'
+  ];
+
+  const sampleRows = [
+    [
+      cleanSite, '661-21991', 'Battery, iPhone 13', 1, 'F8Y6173C4P118FKB8', '2026-03-01', 'On-hand', '',
+      '2026-03-02', '661-21988', 'Display, iPhone 13', 'G9Q5174CLKCPR5QAC', 'Used to OC# 20045111', '',
+      '661-13574', 'Battery, iPhone 11', 'F8Y4464C0QEM6YNDK', 'Damaged Pin Return', '',
+      '2026-03-04', '661-42726', 'Display, iPhone 16 Pro', 'G9PHL8T27E700005DP', 'TS526151 to GL5', '',
+      cleanSite, '661-21991', 'Battery, iPhone 13', 5
+    ],
+    [
+      cleanSite, '661-21996', 'Battery, iPhone 13 Pro', 1, 'F8Y5122C45C13RHCA', '2026-03-01', 'On-hand', '',
+      '2026-03-03', '661-22309', 'Display, iPhone 13 Pro Max', 'G9P5385MFKBPQCLA4', 'Used to OC# 20048363', '',
+      '', '', '', '', '',
+      '', '', '', '', '', '',
+      cleanSite, '661-21996', 'Battery, iPhone 13 Pro', 3
+    ]
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet([r0, r1, ...sampleRows]);
+  ws['!cols'] = [
+    { wch: 12 }, { wch: 15 }, { wch: 25 }, { wch: 8 }, { wch: 22 }, { wch: 13 }, { wch: 16 }, { wch: 4 },
+    { wch: 13 }, { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 24 }, { wch: 4 },
+    { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 18 }, { wch: 4 },
+    { wch: 13 }, { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 24 }, { wch: 4 },
+    { wch: 12 }, { wch: 15 }, { wch: 25 }, { wch: 12 }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, cleanSite);
+  XLSX.writeFile(wb, `${cleanSite}_Site_Stock_Monitoring_Template.xlsx`);
+}
+
+/**
  * Parse an uploaded XLSX or CSV file for batch parts receiving into DC inventory
  */
 export async function parseScanInPartsFile(
@@ -2837,11 +3421,27 @@ export async function parseScanInPartsFile(
   existingUnits = [],
   purchaseOrders = [],
   targetSiteId = 'site-dc',
-  targetSiteCode = 'DC-MDC'
+  targetSiteCode = 'DC-MDC',
+  options = {}
 ) {
   try {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
+
+    // Check if the uploaded file follows the Site Stock Monitoring.xlsx structure
+    if (isSiteStockMonitoringWorkbook(workbook)) {
+      return parseSiteStockMonitoringWorkbook(workbook, {
+        file,
+        existingParts,
+        existingUnits,
+        purchaseOrders,
+        targetSiteId,
+        targetSiteCode,
+        parseAllSheets: options.parseAllSheets || targetSiteId === 'ALL',
+        specificSheetName: options.specificSheetName || null,
+        sites: options.sites || []
+      });
+    }
     
     // Pick the best sheet by scoring content (prefers sheets with actual parts and serial data)
     let targetSheetName = workbook.SheetNames[0];

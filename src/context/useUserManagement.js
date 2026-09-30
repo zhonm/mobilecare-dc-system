@@ -140,6 +140,13 @@ export function useUserManagement({
         localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deleted));
       } catch (e) {}
 
+      // Admin reconciliation keeps profiles and permissions convergent without
+      // issuing one RPC per account. Regular users only update the registry.
+      const activeUser = getActiveUser();
+      if (activeUser?.role === 'superadmin' || activeUser?.role === 'admin') {
+        await syncAllUsersToDatabase(usersListToSync, { skipRegistry: true });
+      }
+
       await supabase.from('saved_records').upsert({
         id: 'master_users_registry',
         record_type: 'users_registry',
@@ -160,7 +167,7 @@ export function useUserManagement({
   };
 
   // Helper to sync all active provisioned users and their hashed passwords into Supabase PostgreSQL tables
-  const syncAllUsersToDatabase = async (customList = null) => {
+  const syncAllUsersToDatabase = async (customList = null, { skipRegistry = false } = {}) => {
     if (!supabase) return;
     const listToSync = customList || usersList;
     if (!Array.isArray(listToSync) || listToSync.length === 0) return;
@@ -174,63 +181,55 @@ export function useUserManagement({
         !LEGACY_MOCK_EMAILS.includes(u.email.toLowerCase())
       );
 
-      for (const u of activeUsers) {
+      const profileRows = activeUsers.map(u => {
         const cleanEmail = u.email.trim().toLowerCase();
         const validId = (u.id && isUUID(u.id)) ? u.id : toValidUUID(u.id || cleanEmail);
         const resolvedRole = u.role || 'user';
         const resolvedPosition = u.rolePosition || getDefaultRolePosition(resolvedRole);
-        const perms = u.permittedPages || (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+        return {
+          id: validId,
+          email: cleanEmail,
+          full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
+          role: resolvedRole,
+          role_position: resolvedPosition,
+          site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
+          has_set_password: Boolean(u.hasSetPassword || u.passwordHash),
+          is_active: u.isActive ?? true,
+          is_deleted: false,
+          updated_at: new Date().toISOString()
+        };
+      });
 
-        let syncedViaRpc = false;
-        try {
-          const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_provision_user', {
-            p_email: cleanEmail,
-            p_full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
-            p_role: resolvedRole,
-            p_role_position: resolvedPosition,
-            p_site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
-            p_permitted_pages: perms || [],
-            p_admin_email: getActiveUser()?.email || currentUser?.email || null
-          });
-          if (!rpcErr && rpcRes?.success) {
-            syncedViaRpc = true;
-          }
-        } catch (e) {}
-
-        if (!syncedViaRpc) {
-          // 1. Upsert into public.profiles
-          const { data: inserted, error: profErr } = await supabase
-            .from('profiles')
-            .upsert({
-              id: validId,
-              email: cleanEmail,
-              full_name: (u.fullName || cleanEmail.split('@')[0]).trim(),
-              role: resolvedRole,
-              role_position: resolvedPosition,
-              site_id: (u.siteId && isUUID(u.siteId)) ? u.siteId : null,
-              has_set_password: Boolean(u.hasSetPassword || u.passwordHash),
-              is_active: u.isActive ?? true,
-              is_deleted: false,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'email' })
-            .select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted');
-
-          if (profErr) console.warn('Supabase profile sync note:', cleanEmail, profErr.message);
-
-          const effectiveUserId = (inserted && inserted[0]?.id && isUUID(inserted[0].id)) ? inserted[0].id : validId;
-
-          // 2. Upsert page permissions into public.user_page_permissions
-          if (perms && perms.length > 0 && isUUID(effectiveUserId)) {
-            const permRows = perms.map(pageId => ({
-              user_id: effectiveUserId,
-              page_id: pageId
-            }));
-            await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
-          }
-        }
+      const profileIdByEmail = new Map();
+      for (let start = 0; start < profileRows.length; start += 100) {
+        const profileBatch = profileRows.slice(start, start + 100);
+        const { data: syncedProfiles, error: profileError } = await supabase
+          .from('profiles')
+          .upsert(profileBatch, { onConflict: 'email' })
+          .select('id, email');
+        if (profileError) throw profileError;
+        (syncedProfiles || []).forEach(profile => {
+          if (profile.email && isUUID(profile.id)) profileIdByEmail.set(profile.email.toLowerCase(), profile.id);
+        });
       }
 
-      await syncMasterUsersRegistry(activeUsers);
+      const permissionRows = activeUsers.flatMap(u => {
+        const email = String(u.email || '').trim().toLowerCase();
+        const userId = profileIdByEmail.get(email) || ((u.id && isUUID(u.id)) ? u.id : toValidUUID(u.id || email));
+        const role = u.role || 'user';
+        const perms = u.permittedPages || (role === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[role] || ROLE_PRESETS.user));
+        return isUUID(userId) ? perms.map(pageId => ({ user_id: userId, page_id: pageId })) : [];
+      });
+
+      for (let start = 0; start < permissionRows.length; start += 250) {
+        const permissionBatch = permissionRows.slice(start, start + 250);
+        const { error: permissionError } = await supabase
+          .from('user_page_permissions')
+          .upsert(permissionBatch, { onConflict: 'user_id,page_id' });
+        if (permissionError) throw permissionError;
+      }
+
+      if (!skipRegistry) await syncMasterUsersRegistry(activeUsers, deletedIds);
     } catch (e) {
       console.warn('syncAllUsersToDatabase notice:', e);
     }

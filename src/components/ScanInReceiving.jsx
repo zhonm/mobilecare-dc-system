@@ -31,7 +31,12 @@ import {
   Lock,
   Shield
 } from 'lucide-react';
-import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
+import {
+  parseScanInPartsFile,
+  parseSiteStockMonitoringWorkbook,
+  downloadScanInTemplate,
+  downloadSiteStockMonitoringTemplate
+} from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import { exportPmgBranchInventoryToExcel, exportDcCompleteStockInventoryToExcel } from '../utils/stockExportUtils';
@@ -61,6 +66,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const {
     addScanInUnit,
     deleteScanInUnit,
+    clearSiteParts,
     updateUnitAssignment,
     batchAddScanInUnits,
     purchaseOrders,
@@ -333,6 +339,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const [parsedBatch, setParsedBatch] = useState(null);
   const [modalPoId, setModalPoId] = useState(purchaseOrders[0]?.id || '');
   const [importFilter, setImportFilter] = useState('ALL'); // 'ALL' | 'VALID' | 'DUPLICATE'
+  const [isClearSiteModalOpen, setIsClearSiteModalOpen] = useState(false);
+  const [isClearingSiteParts, setIsClearingSiteParts] = useState(false);
+  const [clearSiteScope, setClearSiteScope] = useState('CURRENT');
+  const [clearBeforeBatchImport, setClearBeforeBatchImport] = useState(false);
 
   const pnInputRef = useRef(null);
   const serialInputRef = useRef(null);
@@ -923,17 +933,23 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (!file) return;
     setIsParsing(true);
     try {
+      const isSuperadminOrDc = !isPmgUser && (activeReceivingSite?.id === 'site-dc' || currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin');
       const res = await parseScanInPartsFile(
         file,
         parts,
         inventoryUnits,
         purchaseOrders,
         activeReceivingSite?.id,
-        activeReceivingSite?.code
+        activeReceivingSite?.code,
+        {
+          parseAllSheets: isSuperadminOrDc,
+          sites
+        }
       );
       if (res.success) {
         setParsedBatch(res);
-        showToast(`Parsed ${res.summary.total} rows (${res.summary.valid} ready to import)`, 'info');
+        const label = res.activeSheet === 'ALL_SHEETS' ? 'all 27 branch sheets' : (res.activeSheet || 'file');
+        showToast(`Parsed ${res.summary.total} rows (${res.summary.valid} ready to import) from ${label}`, 'info');
       } else {
         showToast(res.error || 'Failed to parse parts file', 'error');
         setParsedBatch(null);
@@ -944,6 +960,27 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       setParsedBatch(null);
     } finally {
       setIsParsing(false);
+    }
+  };
+
+  // Switch Active Worksheet in Modal (Instant Client-Side Switch)
+  const handleSheetChange = (sheetName) => {
+    if (!parsedBatch?.workbook) return;
+    const parseAll = sheetName === 'ALL_SHEETS';
+    const siteObj = parseAll ? null : sites.find(s => s.code === sheetName || s.name?.includes(sheetName));
+    const res = parseSiteStockMonitoringWorkbook(parsedBatch.workbook, {
+      existingParts: parts,
+      existingUnits: inventoryUnits,
+      purchaseOrders,
+      targetSiteId: parseAll ? 'ALL' : (siteObj?.id || activeReceivingSite?.id),
+      targetSiteCode: parseAll ? 'ALL' : (siteObj?.code || activeReceivingSite?.code),
+      specificSheetName: sheetName,
+      parseAllSheets: parseAll,
+      sites
+    });
+    if (res.success) {
+      setParsedBatch(res);
+      showToast(`Switched to ${parseAll ? 'All 27 Branch Sheets' : `Sheet "${sheetName}"`} (${res.summary.valid} valid records)`, 'info');
     }
   };
 
@@ -970,8 +1007,31 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     showToast(`Downloaded sample template (${format.toUpperCase()})`, 'info');
   };
 
-  const handleConfirmBatchImport = () => {
+  const handleDownloadMonitoringTemplate = () => {
+    downloadSiteStockMonitoringTemplate(activeReceivingSite?.code || 'APP BHS');
+    showToast('Downloaded Site Stock Monitoring Template (.xlsx)', 'info');
+  };
+
+  const handleConfirmBatchImport = async () => {
     if (!parsedBatch || !parsedBatch.items) return;
+
+    const isMulti = parsedBatch?.activeSheet === 'ALL_SHEETS';
+
+    if (clearBeforeBatchImport && typeof clearSiteParts === 'function') {
+      if (isMulti) {
+        await clearSiteParts({
+          clearAllSites: true,
+          reason: 'Pre-import clean slate for all retail branch sites prior to consolidated Site Stock Monitoring import'
+        });
+      } else {
+        await clearSiteParts({
+          siteId: activeReceivingSite.id,
+          siteCode: activeReceivingSite.code,
+          clearAllSites: false,
+          reason: `Pre-import clean slate for ${activeReceivingSite.name} prior to batch import`
+        });
+      }
+    }
 
     const effectiveDest = isPmgUser ? `${activeReceivingSite.code} Stock` : modalAssignment;
 
@@ -979,11 +1039,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       .filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY')
       .map(it => ({
         ...it,
-        intake_assignment: isPmgUser ? `${activeReceivingSite.code} Stock` : (it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment),
-        notes: isPmgUser ? `${activeReceivingSite.code} Stock` : (it.notes || modalAssignment),
-        current_site_id: activeReceivingSite.id,
-        site_code: activeReceivingSite.code,
-        site_name: activeReceivingSite.name
+        intake_assignment: isPmgUser ? `${it.site_code || activeReceivingSite.code} Stock` : (it.notes?.includes('CRBR') ? 'DC - CRBR' : modalAssignment),
+        notes: it.notes || (isPmgUser ? `${it.site_code || activeReceivingSite.code} Stock` : modalAssignment),
+        current_site_id: isMulti ? (it.current_site_id || activeReceivingSite.id) : activeReceivingSite.id,
+        site_code: isMulti ? (it.site_code || activeReceivingSite.code) : activeReceivingSite.code,
+        site_name: isMulti ? (it.site_name || activeReceivingSite.name) : activeReceivingSite.name
       }));
 
     if (validItems.length === 0) {
@@ -995,24 +1055,60 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       validItems,
       isPmgUser ? null : (modalPoId || selectedPoId || null),
       effectiveDest,
-      activeReceivingSite.id,
-      activeReceivingSite.code,
-      activeReceivingSite.name
+      isMulti ? 'ALL' : activeReceivingSite.id,
+      isMulti ? 'ALL' : activeReceivingSite.code,
+      isMulti ? 'All Retail Branches' : activeReceivingSite.name
     );
     if (res.success) {
       const importedWithFlag = res.units.map(u => ({ ...u, isImported: true }));
       setSessionScans(prev => [...importedWithFlag, ...prev]);
 
+      const breakdown = parsedBatch.isSiteStockMonitoring
+        ? ` (${parsedBatch.summary.inStock || 0} In-Stock, ${parsedBatch.summary.used || 0} Used, ${parsedBatch.summary.transferred || 0} Transferred, ${parsedBatch.summary.outtake || 0} Outtake)`
+        : '';
+
+      const destTargetName = isMulti ? 'all 26 branch sites' : activeReceivingSite.name;
       setScanResult({
         type: 'success',
-        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts into ${activeReceivingSite.name} database!`
+        message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts${breakdown} across ${destTargetName} database!`
       });
 
       setParsedBatch(null);
       setIsImportModalOpen(false);
+      setClearBeforeBatchImport(false);
       pnInputRef.current?.focus();
     } else {
       showToast(res.error || 'Batch import failed', 'error');
+    }
+  };
+
+  const handleConfirmClearActiveSite = async () => {
+    if (typeof clearSiteParts !== 'function') return;
+    setIsClearingSiteParts(true);
+    try {
+      if (clearSiteScope === 'SYSTEM') {
+        await clearSiteParts({
+          clearEntireSystem: true,
+          reason: 'Complete system-wide purge by Superadmin prior to fresh master import'
+        });
+      } else if (clearSiteScope === 'ALL') {
+        await clearSiteParts({
+          clearAllSites: true,
+          reason: 'Bulk cleared all retail branch sites prior to Site Stock Monitoring Excel import'
+        });
+      } else {
+        await clearSiteParts({
+          siteId: activeReceivingSite.id,
+          siteCode: activeReceivingSite.code,
+          clearAllSites: false,
+          reason: `Cleared old shipped parts for ${activeReceivingSite.name} prior to Excel import`
+        });
+      }
+      setIsClearSiteModalOpen(false);
+    } catch (err) {
+      showToast?.('Error clearing parts: ' + err.message, 'error');
+    } finally {
+      setIsClearingSiteParts(false);
     }
   };
 
@@ -1020,6 +1116,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (importFilter === 'VALID') return item.status === 'VALID' || item.status === 'NEW_PART' || item.status === 'EXISTING_INVENTORY';
     if (importFilter === 'EXISTING') return item.status === 'EXISTING_INVENTORY';
     if (importFilter === 'DUPLICATE') return item.status === 'DUPLICATE';
+    if (importFilter === 'IN_STOCK') return item.lifecycle_status === 'in_stock';
+    if (importFilter === 'USED') return item.lifecycle_status === 'used';
+    if (importFilter === 'OUTTAKE') return item.lifecycle_status === 'outtake';
+    if (importFilter === 'TRANSFERRED') return item.lifecycle_status === 'transferred';
     return true;
   });
 
@@ -1674,6 +1774,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   >
                     <FileSpreadsheet size={14} />
                     <span>Import Spreadsheet (XLSX/CSV)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn-batch-outline"
+                    style={{ color: '#dc2626', borderColor: '#fca5a5', background: '#fff1f2' }}
+                    onClick={() => setIsClearSiteModalOpen(true)}
+                    title={`Clear old parts from ${activeReceivingSite?.name || 'site'} prior to import`}
+                  >
+                    <Trash2 size={14} color="#dc2626" />
+                    <span>Clear Site Parts</span>
                   </button>
 
                   {isPmgUser && (
@@ -2999,7 +3110,16 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <Download size={16} color="var(--primary)" />
                   <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)' }}>Need a formatted template?</span>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleDownloadMonitoringTemplate}
+                    style={{ background: '#ecfdf5', borderColor: '#bbf7d0', color: '#166534', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}
+                    title="Download Site Stock Monitoring template (.xlsx) matching Google Sheets structure"
+                  >
+                    <FileSpreadsheet size={13} color="#16a34a" />
+                    <span>Site Stock Monitoring (.xlsx)</span>
+                  </button>
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => handleDownloadTemplate('xlsx')}
@@ -3140,52 +3260,141 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     </button>
                   </div>
 
+                  {/* Sheet Selector (for multi-sheet workbooks) */}
+                  {parsedBatch.isSiteStockMonitoring && parsedBatch.availableSheets?.length > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', marginBottom: '14px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', minWidth: '85px', margin: 0 }}>
+                        Active Sheet:
+                      </label>
+                      <select
+                        className="form-select form-select-sm"
+                        value={parsedBatch.activeSheet}
+                        onChange={(e) => handleSheetChange(e.target.value)}
+                        style={{ fontSize: '12px', fontWeight: 600, flex: 1, padding: '4px 8px' }}
+                      >
+                        <option value="ALL_SHEETS">
+                          ★ All 27 Retail Branch Sheets (Update All 26 Sites — Consolidated)
+                        </option>
+                        {parsedBatch.availableSheets.filter(s => s !== 'ALL_SHEETS').map(sName => (
+                          <option key={sName} value={sName}>
+                            Branch Sheet: {sName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* Summary Metric Cards */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
-                    <div className="import-stat-card">
-                      <span className="import-stat-label">Total Rows</span>
-                      <span className="import-stat-value">{parsedBatch.summary.total}</span>
+                  {parsedBatch.isSiteStockMonitoring ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '16px' }}>
+                      <div className="import-stat-card">
+                        <span className="import-stat-label">Total Rows</span>
+                        <span className="import-stat-value">{parsedBatch.summary.total}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: '#bfdbfe', background: '#eff6ff' }}>
+                        <span className="import-stat-label" style={{ color: '#1d4ed8' }}>Stock on Hand</span>
+                        <span className="import-stat-value" style={{ color: '#1d4ed8' }}>{parsedBatch.summary.inStock || 0}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: '#fde68a', background: '#fffbeb' }}>
+                        <span className="import-stat-label" style={{ color: '#b45309' }}>Used in Repair</span>
+                        <span className="import-stat-value" style={{ color: '#b45309' }}>{parsedBatch.summary.used || 0}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: '#e9d5ff', background: '#faf5ff' }}>
+                        <span className="import-stat-label" style={{ color: '#7c3aed' }}>For Outtake</span>
+                        <span className="import-stat-value" style={{ color: '#7c3aed' }}>{parsedBatch.summary.outtake || 0}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: '#a5f3fc', background: '#ecfeff' }}>
+                        <span className="import-stat-label" style={{ color: '#0891b2' }}>Transferred</span>
+                        <span className="import-stat-value" style={{ color: '#0891b2' }}>{parsedBatch.summary.transferred || 0}</span>
+                      </div>
                     </div>
-                    <div className="import-stat-card" style={{ borderColor: '#bbf7d0', background: '#f0fdf4' }}>
-                      <span className="import-stat-label" style={{ color: '#16a34a' }}>Ready to Receive</span>
-                      <span className="import-stat-value" style={{ color: '#16a34a' }}>{parsedBatch.summary.valid}</span>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '16px' }}>
+                      <div className="import-stat-card">
+                        <span className="import-stat-label">Total Rows</span>
+                        <span className="import-stat-value">{parsedBatch.summary.total}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: '#bbf7d0', background: '#f0fdf4' }}>
+                        <span className="import-stat-label" style={{ color: '#16a34a' }}>Ready to Receive</span>
+                        <span className="import-stat-value" style={{ color: '#16a34a' }}>{parsedBatch.summary.valid}</span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: (parsedBatch.summary.existingInStock || 0) > 0 ? '#bae6fd' : '#e2e8f0', background: (parsedBatch.summary.existingInStock || 0) > 0 ? '#f0f9ff' : 'transparent' }}>
+                        <span className="import-stat-label" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
+                          Already in Stock
+                        </span>
+                        <span className="import-stat-value" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
+                          {parsedBatch.summary.existingInStock || 0}
+                        </span>
+                      </div>
+                      <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.duplicates > 0 ? '#fecaca' : '#e2e8f0' }}>
+                        <span className="import-stat-label" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
+                          Duplicates in File
+                        </span>
+                        <span className="import-stat-value" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
+                          {parsedBatch.summary.duplicates}
+                        </span>
+                      </div>
                     </div>
-                    <div className="import-stat-card" style={{ borderColor: (parsedBatch.summary.existingInStock || 0) > 0 ? '#bae6fd' : '#e2e8f0', background: (parsedBatch.summary.existingInStock || 0) > 0 ? '#f0f9ff' : 'transparent' }}>
-                      <span className="import-stat-label" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
-                        Already in Stock
-                      </span>
-                      <span className="import-stat-value" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
-                        {parsedBatch.summary.existingInStock || 0}
-                      </span>
-                    </div>
-                    <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.duplicates > 0 ? '#fecaca' : '#e2e8f0' }}>
-                      <span className="import-stat-label" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
-                        Duplicates in File
-                      </span>
-                      <span className="import-stat-value" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
-                        {parsedBatch.summary.duplicates}
-                      </span>
-                    </div>
-                  </div>
+                  )}
 
                   {/* Filter Tabs */}
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
                     <button
+                      type="button"
                       className={`btn btn-sm ${importFilter === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setImportFilter('ALL')}
                       style={{ fontSize: '12px' }}
                     >
                       All Items ({parsedBatch.items.length})
                     </button>
-                    <button
-                      className={`btn btn-sm ${importFilter === 'VALID' ? 'btn-primary' : 'btn-secondary'}`}
-                      onClick={() => setImportFilter('VALID')}
-                      style={{ fontSize: '12px' }}
-                    >
-                      Valid ({parsedBatch.summary.valid})
-                    </button>
+                    {parsedBatch.isSiteStockMonitoring ? (
+                      <>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${importFilter === 'IN_STOCK' ? 'btn-primary' : 'btn-secondary'}`}
+                          onClick={() => setImportFilter('IN_STOCK')}
+                          style={{ fontSize: '12px' }}
+                        >
+                          Stock on Hand ({parsedBatch.summary.inStock || 0})
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${importFilter === 'USED' ? 'btn-primary' : 'btn-secondary'}`}
+                          onClick={() => setImportFilter('USED')}
+                          style={{ fontSize: '12px' }}
+                        >
+                          Used ({parsedBatch.summary.used || 0})
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${importFilter === 'OUTTAKE' ? 'btn-primary' : 'btn-secondary'}`}
+                          onClick={() => setImportFilter('OUTTAKE')}
+                          style={{ fontSize: '12px' }}
+                        >
+                          Outtake ({parsedBatch.summary.outtake || 0})
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn btn-sm ${importFilter === 'TRANSFERRED' ? 'btn-primary' : 'btn-secondary'}`}
+                          onClick={() => setImportFilter('TRANSFERRED')}
+                          style={{ fontSize: '12px' }}
+                        >
+                          Transferred ({parsedBatch.summary.transferred || 0})
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${importFilter === 'VALID' ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setImportFilter('VALID')}
+                        style={{ fontSize: '12px' }}
+                      >
+                        Valid ({parsedBatch.summary.valid})
+                      </button>
+                    )}
                     {parsedBatch.summary.duplicates > 0 && (
                       <button
+                        type="button"
                         className={`btn btn-sm ${importFilter === 'DUPLICATE' ? 'btn-primary' : 'btn-secondary'}`}
                         onClick={() => setImportFilter('DUPLICATE')}
                         style={{ fontSize: '12px' }}
@@ -3204,7 +3413,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                           <th>Part Number</th>
                           <th>Description</th>
                           <th>Serial Number</th>
-                          <th>{isPmgUser ? 'Receiving Site' : 'Destination'}</th>
+                          <th>{parsedBatch.isSiteStockMonitoring ? 'Lifecycle Category' : (isPmgUser ? 'Receiving Site' : 'Destination')}</th>
                           <th>Status</th>
                         </tr>
                       </thead>
@@ -3216,14 +3425,26 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             <td>{item.description}</td>
                             <td className="font-mono">{item.serialNumber}</td>
                             <td>
-                              <span className="badge" style={{
-                                background: isPmgUser ? '#f0fdf4' : (modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe'),
-                                color: isPmgUser ? '#166534' : (modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1'),
-                                border: isPmgUser ? '1px solid #bbf7d0' : undefined,
-                                fontSize: '11px'
-                              }}>
-                                {isPmgUser ? activeReceivingSite.code : modalAssignment}
-                              </span>
+                              {parsedBatch.isSiteStockMonitoring ? (
+                                <span className="badge" style={{
+                                  background: item.lifecycle_status === 'used' ? '#fffbeb' : item.lifecycle_status === 'outtake' ? '#faf5ff' : item.lifecycle_status === 'transferred' ? '#ecfeff' : '#eff6ff',
+                                  color: item.lifecycle_status === 'used' ? '#b45309' : item.lifecycle_status === 'outtake' ? '#7c3aed' : item.lifecycle_status === 'transferred' ? '#0891b2' : '#1d4ed8',
+                                  border: '1px solid currentColor',
+                                  fontWeight: 700,
+                                  fontSize: '11px'
+                                }}>
+                                  {item.lifecycle_status === 'used' ? 'Used in Repair' : item.lifecycle_status === 'outtake' ? 'For Outtake' : item.lifecycle_status === 'transferred' ? 'Transferred' : 'Stock on Hand'}
+                                </span>
+                              ) : (
+                                <span className="badge" style={{
+                                  background: isPmgUser ? '#f0fdf4' : (modalAssignment === 'DC - CRBR' ? '#fef3c7' : '#e0f2fe'),
+                                  color: isPmgUser ? '#166534' : (modalAssignment === 'DC - CRBR' ? '#92400e' : '#0369a1'),
+                                  border: isPmgUser ? '1px solid #bbf7d0' : undefined,
+                                  fontSize: '11px'
+                                }}>
+                                  {isPmgUser ? activeReceivingSite.code : modalAssignment}
+                                </span>
+                              )}
                             </td>
                             <td>
                               <span className={`badge ${
@@ -3240,6 +3461,19 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     </table>
                   </div>
                 </div>
+              )}
+
+              {/* Optional Pre-Import Clear Checkbox */}
+              {parsedBatch && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: '14px 0 6px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={clearBeforeBatchImport}
+                    onChange={(e) => setClearBeforeBatchImport(e.target.checked)}
+                    style={{ width: '16px', height: '16px', accentColor: '#d97706' }}
+                  />
+                  <span>Clear existing old parts for {activeReceivingSite.name} before importing (recommended for clean replacement)</span>
+                </label>
               )}
             </div>
 
@@ -3265,6 +3499,195 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <span>Receive & Save {parsedBatch.summary.valid} Parts {isPmgUser ? `(${activeReceivingSite.code})` : `(${modalAssignment})`}</span>
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Site Parts Modal */}
+      {isClearSiteModalOpen && (
+        <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '12px', maxWidth: '500px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid #fecaca', overflow: 'hidden' }}>
+            <div style={{ padding: '16px 20px', background: '#fef2f2', borderBottom: '1px solid #fecaca', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ padding: '6px', background: '#fee2e2', borderRadius: '8px', color: '#dc2626' }}>
+                  <Trash2 size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#991b1b' }}>
+                    Clear Site Parts — {activeReceivingSite.name}
+                  </h3>
+                  <div style={{ fontSize: '11px', color: '#b91c1c' }}>
+                    Branch Code: {activeReceivingSite.code}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsClearSiteModalOpen(false)}
+                disabled={isClearingSiteParts}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
+                Select the scope of parts to clear prior to importing <strong>Site Stock Monitoring.xlsx</strong>:
+              </div>
+
+              {/* Scope Selector */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    border: clearSiteScope === 'CURRENT' ? '2px solid #dc2626' : '1px solid #e2e8f0',
+                    background: clearSiteScope === 'CURRENT' ? '#fff1f2' : '#f8fafc',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="clearSiteScopeRadio"
+                    value="CURRENT"
+                    checked={clearSiteScope === 'CURRENT'}
+                    onChange={() => setClearSiteScope('CURRENT')}
+                    style={{ marginTop: '3px', accentColor: '#dc2626' }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 800, fontSize: '13px', color: '#0f172a' }}>
+                      Clear Current Site: {activeReceivingSite.name} ({activeReceivingSite.code})
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                      Removes old parts from {activeReceivingSite.code} only.
+                    </div>
+                  </div>
+                </label>
+
+                {(!isPmgUser || currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin') && (
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: clearSiteScope === 'ALL' ? '2px solid #dc2626' : '1px solid #e2e8f0',
+                      background: clearSiteScope === 'ALL' ? '#fff1f2' : '#f8fafc',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="clearSiteScopeRadio"
+                      value="ALL"
+                      checked={clearSiteScope === 'ALL'}
+                      onChange={() => setClearSiteScope('ALL')}
+                      style={{ marginTop: '3px', accentColor: '#dc2626' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 800, fontSize: '13px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>Clear ALL Retail Branches (26 Sites)</span>
+                        <span className="badge" style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5', fontSize: '10px' }}>
+                          Network-wide
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                        Purges all retail branches. Central DC inventory is strictly preserved.
+                      </div>
+                    </div>
+                  </label>
+                )}
+
+                {(currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin') && (
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: clearSiteScope === 'SYSTEM' ? '2px solid #991b1b' : '1px solid #e2e8f0',
+                      background: clearSiteScope === 'SYSTEM' ? '#fef2f2' : '#f8fafc',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="clearSiteScopeRadio"
+                      value="SYSTEM"
+                      checked={clearSiteScope === 'SYSTEM'}
+                      onChange={() => setClearSiteScope('SYSTEM')}
+                      style={{ marginTop: '3px', accentColor: '#991b1b' }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 800, fontSize: '13px', color: '#991b1b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>Clear ENTIRE System (Central DC + All 26 Branches)</span>
+                        <span className="badge" style={{ background: '#991b1b', color: '#fff', fontSize: '10px' }}>
+                          Superadmin Full Reset
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                        100% clean factory reset across all sites and DC before master workbook import.
+                      </div>
+                    </div>
+                  </label>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px 12px', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '11.5px', color: '#92400e' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                  <AlertTriangle size={16} color="#d97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+                  <span>Cleared parts will be removed from local storage and the database. You can import your updated spreadsheet immediately after.</span>
+                </div>
+                <div style={{ borderTop: '1px dashed #fcd34d', paddingTop: '6px', fontSize: '11px', color: '#78350f', fontWeight: 600 }}>
+                  ✓ <strong>Shipment Records Protected:</strong> All DC shipments, packing lists, dispatches, and delivery logs are 100% preserved. The clear feature applies strictly to site inventory parts.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '4px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isClearingSiteParts}
+                  onClick={() => setIsClearSiteModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{
+                    background: '#dc2626',
+                    borderColor: '#dc2626',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 16px'
+                  }}
+                  disabled={isClearingSiteParts}
+                  onClick={handleConfirmClearActiveSite}
+                >
+                  {isClearingSiteParts ? (
+                    <>
+                      <RefreshCw size={13} className="spin" />
+                      <span>Clearing Site Parts...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={13} />
+                      <span>Confirm Clear {activeReceivingSite.code} Parts</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

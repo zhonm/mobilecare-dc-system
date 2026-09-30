@@ -77,6 +77,18 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
     return [];
   }
 
+  let deletedSerialsSet = new Set();
+  let clearedSitesMap = {};
+  if (typeof localStorage !== 'undefined' || typeof window !== 'undefined') {
+    try {
+      const deletedSerials = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
+      deletedSerialsSet = new Set(deletedSerials.map(s => String(s).trim().toUpperCase()));
+    } catch (e) {}
+    try {
+      clearedSitesMap = JSON.parse(localStorage.getItem('mdc_cleared_site_timestamps') || '{}');
+    } catch (e) {}
+  }
+
   const packedSerialsMap = new Map();
 
   // 1. Check explicit draft from caller
@@ -180,6 +192,27 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
   if (Array.isArray(effectiveShipments)) {
     effectiveShipments.forEach(sh => {
       if (sh && Array.isArray(sh.items) && sh.status !== 'cancelled') {
+        const sId = String(sh.site_id || '').toLowerCase();
+        const sCode = String(sh.site_code || '').toUpperCase();
+        const isBranchSite = sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && (Boolean(sId) || Boolean(sCode));
+
+        const clearTime = clearedSitesMap['ENTIRE_SYSTEM'] ||
+          (isBranchSite && clearedSitesMap['ALL_BRANCHES']) ||
+          clearedSitesMap[sh.site_id] ||
+          clearedSitesMap[sh.site_code] ||
+          clearedSitesMap[sId] ||
+          clearedSitesMap[sCode] ||
+          null;
+
+        if (clearTime) {
+          const shDateStr = sh.received_at || sh.received_date || sh.shipment_date || sh.created_at || sh.updated_at || 0;
+          const isPriorToClear = new Date(shDateStr).getTime() <= new Date(clearTime).getTime();
+          if (isPriorToClear) {
+            // Completed historical shipment prior to clear time: do NOT synthesize into site inventory!
+            return;
+          }
+        }
+
         const isReceived = sh.status === 'received_confirmed' || sh.status === 'delivered' || sh.status === 'received';
         const isShipped = !isReceived && (sh.status === 'shipped' || sh.status === 'in_transit');
         const targetStatus = isReceived ? 'in_stock' : (isShipped ? 'shipped' : 'packed');
@@ -189,7 +222,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
 
         sh.items.forEach(it => {
           const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
-          if (s && !packedSerialsMap.has(s)) {
+          if (s && !deletedSerialsSet.has(s) && !packedSerialsMap.has(s)) {
             packedSerialsMap.set(s, {
               status: targetStatus,
               box_number: it.box_number || 1,
@@ -233,7 +266,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
 
   // Ensure any serialized unit in a finalized shipment (e.g. received or shipped) exists in inventory
   packedSerialsMap.forEach((packInfo, s) => {
-    if (!seenSerials.has(s) && !packInfo.isDraft) {
+    if (!seenSerials.has(s) && !packInfo.isDraft && !deletedSerialsSet.has(s)) {
       updatedUnits.push({
         id: `unit-${s}`,
         part_id: packInfo.part_id || null,

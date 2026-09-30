@@ -336,7 +336,11 @@ BEGIN
         SELECT jsonb_agg(u) INTO v_updated_users
         FROM jsonb_array_elements(v_current_users) u
         WHERE LOWER(u->>'email') <> v_clean_email
-          AND (v_target_id IS NULL OR (u->>'id')::uuid <> v_target_id);
+                    AND (
+                            v_target_id IS NULL
+                            OR (u->>'id') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                            OR (u->>'id')::uuid <> v_target_id
+                    );
 
         IF v_updated_users IS NULL THEN
             v_updated_users := '[]'::jsonb;
