@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isUUID } from '../utils/appContextHelpers';
-import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus } from '../utils/partResolver';
+import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus, resolveCanonicalIPhoneModel } from '../utils/partResolver';
 import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
@@ -42,6 +42,8 @@ import {
   Truck,
   PackageCheck,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   MapPin,
   Smartphone,
   SearchX,
@@ -61,7 +63,7 @@ const REASON_PRESETS = [
   'Quarterly Buffer Replenishment'
 ];
 
-export default function RequestParts({ defaultTab = 'requests_table' }) {
+export default function RequestParts({ defaultTab = 'requests_table', _embeddedMode = false, onNavigateToStation = null }) {
   const {
     activeTab: globalActiveTab,
     setActiveTab: setGlobalActiveTab,
@@ -95,7 +97,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     setPmgSubTab
   } = useApp();
 
-  const isSuperadmin = currentUser?.role === 'superadmin';
+  const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
   const currentUserSiteRef = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
 
@@ -271,7 +273,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   // Mark Part as Used Modal State (PMG Repair Consumption Feature)
   const [isMarkUsedModalOpen, setIsMarkUsedModalOpen] = useState(false);
   const [markUsedPartPn, setMarkUsedPartPn] = useState('');
-  const [markUsedSerial, setMarkUsedSerial] = useState('');
+  const [markUsedSerials, setMarkUsedSerials] = useState([]);
+  const [serialSearchFilter, setSerialSearchFilter] = useState('');
   const [markUsedWorkOrder, setMarkUsedWorkOrder] = useState('');
   const [markUsedNotes, setMarkUsedNotes] = useState('');
   const [isSubmittingMarkUsed, setIsSubmittingMarkUsed] = useState(false);
@@ -284,7 +287,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [stockSearchQuery, setStockSearchQuery] = useState('');
   const [stockCategoryFilter, setStockCategoryFilter] = useState('ALL');
-  const [stockAvailabilityFilter, setStockAvailabilityFilter] = useState('ALL');
+  const [stockViewMode, setStockViewMode] = useState('grouped'); // 'grouped' | 'flat'
+  const [stockDeviceFilter, setStockDeviceFilter] = useState('ALL');
+  const [collapsedDevices, setCollapsedDevices] = useState({});
   const [isIncomingShipmentsCollapsed, setIsIncomingShipmentsCollapsed] = useState(false);
 
   // Multi-Site All Stocks Tab State
@@ -856,36 +861,158 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     });
   }, [inventoryUnits, markUsedPartPn, isSuperadmin, selectedSiteId, currentUser, userSiteObj]);
 
+  // Available or searched serials based on the search/paste bar input
+  const displayedSerials = useMemo(() => {
+    const rawTokens = (serialSearchFilter || '')
+      .split(/[\s,;\n\r]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (rawTokens.length === 0) {
+      // Empty search bar: show all available in-stock branch serials
+      return availableSerialsForMarkUsed.map(u => ({
+        serial_number: String(u.serial_number || '').trim().toUpperCase(),
+        box_number: u.box_number || 1,
+        inStock: true,
+        source: 'branch_stock'
+      }));
+    }
+
+    // User entered or pasted token(s)
+    const results = [];
+    const seen = new Set();
+
+    // 1. Search in branch in-stock units
+    availableSerialsForMarkUsed.forEach(u => {
+      const sn = String(u.serial_number || '').trim().toUpperCase();
+      const isMatch = rawTokens.some(t => sn.includes(t));
+      if (isMatch) {
+        results.push({
+          serial_number: sn,
+          box_number: u.box_number || 1,
+          inStock: true,
+          source: 'branch_stock'
+        });
+        seen.add(sn);
+      }
+    });
+
+    // 2. If user pasted specific serial numbers not currently in branch list
+    rawTokens.forEach(token => {
+      if (!seen.has(token) && token.length >= 3) {
+        results.push({
+          serial_number: token,
+          box_number: 1,
+          inStock: false,
+          source: 'pasted_manual'
+        });
+        seen.add(token);
+      }
+    });
+
+    return results;
+  }, [availableSerialsForMarkUsed, serialSearchFilter]);
+
+  const handleToggleMarkUsedSerial = (serial) => {
+    const clean = String(serial || '').trim().toUpperCase();
+    if (!clean) return;
+    setMarkUsedSerials(prev =>
+      prev.includes(clean) ? prev.filter(s => s !== clean) : [...prev, clean]
+    );
+  };
+
+  const handleSelectAllDisplayedSerials = () => {
+    const all = displayedSerials
+      .map(u => String(u.serial_number || '').trim().toUpperCase())
+      .filter(Boolean);
+    setMarkUsedSerials(prev => Array.from(new Set([...prev, ...all])));
+  };
+
+  const handleDeselectAllSerials = () => {
+    setMarkUsedSerials([]);
+  };
+
+  const handlePasteInSearchBar = (e) => {
+    const pastedText = e.clipboardData?.getData('text') || '';
+    if (!pastedText.trim()) return;
+
+    const tokens = pastedText
+      .split(/[\s,;\n\r]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (tokens.length > 0) {
+      // Automatically check the pasted serial(s) so user sees them checked immediately
+      setMarkUsedSerials(prev => Array.from(new Set([...prev, ...tokens])));
+    }
+  };
+
   // Open Mark as Used Modal
   const openMarkUsedModal = (partNumber = '', prefillSerial = '') => {
     setMarkUsedPartPn(partNumber);
-    setMarkUsedSerial(prefillSerial);
+    setMarkUsedSerials(prefillSerial ? [String(prefillSerial).trim().toUpperCase()] : []);
+    setSerialSearchFilter('');
     setMarkUsedWorkOrder('');
     setMarkUsedNotes('');
     setIsMarkUsedModalOpen(true);
   };
 
-  // Submit Mark as Used Action
+  // Submit Mark as Used Action (Batch supported)
   const handleConfirmMarkAsUsed = async (e) => {
     if (e) e.preventDefault();
-    if (!markUsedSerial) {
-      showToast('Please select or enter the serial number of the used part.', 'error');
+
+    let serialsToProcess = [...markUsedSerials];
+    if (serialsToProcess.length === 0 && serialSearchFilter.trim()) {
+      const tokens = serialSearchFilter
+        .split(/[\s,;\n\r]+/)
+        .map(s => s.trim().toUpperCase())
+        .filter(Boolean);
+      if (tokens.length > 0) {
+        serialsToProcess = tokens;
+      }
+    }
+
+    if (serialsToProcess.length === 0) {
+      showToast('Please paste, search, or check at least one serial number to consume.', 'error');
       return;
     }
+
     setIsSubmittingMarkUsed(true);
+    let successCount = 0;
+    const errors = [];
+
     try {
-      const res = await markUnitAsUsed({
-        serialNumber: markUsedSerial,
-        partNumber: markUsedPartPn,
-        siteId: userSiteObj.id || currentUser?.siteId,
-        workOrderNumber: markUsedWorkOrder,
-        notes: markUsedNotes
-      });
-      if (res && res.success) {
+      const siteId = userSiteObj?.id || currentUser?.siteId;
+      for (const sn of serialsToProcess) {
+        try {
+          const res = await markUnitAsUsed({
+            serialNumber: sn,
+            partNumber: markUsedPartPn,
+            siteId,
+            workOrderNumber: markUsedWorkOrder,
+            notes: markUsedNotes
+          });
+          if (res && res.success !== false) {
+            successCount++;
+          } else if (res && res.error) {
+            errors.push(`${sn}: ${res.error}`);
+          }
+        } catch (err) {
+          errors.push(`${sn}: ${err.message || 'Failed'}`);
+        }
+      }
+
+      if (successCount > 0) {
+        if (serialsToProcess.length > 1) {
+          showToast(`Successfully recorded ${successCount} parts as USED in repair order ${markUsedWorkOrder || 'N/A'}.`, 'success');
+        }
         setIsMarkUsedModalOpen(false);
-        setMarkUsedSerial('');
+        setMarkUsedSerials([]);
+        setSerialSearchFilter('');
         setMarkUsedWorkOrder('');
         setMarkUsedNotes('');
+      } else if (errors.length > 0) {
+        showToast(`Failed to record: ${errors.join('; ')}`, 'error');
       }
     } finally {
       setIsSubmittingMarkUsed(false);
@@ -935,54 +1062,232 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     showToast(`Exported ${rows.length} used parts records to ${fileName}`, 'success');
   };
 
-  // Stock on Hand Table Filtered Rows
+  // Map of active parts in the parts master catalog
+  const activeCatalogPartsMap = useMemo(() => {
+    const map = new Map();
+    (parts || []).forEach(p => {
+      const pn = String(p.part_number || '').trim().toUpperCase();
+      if (pn && p.is_active !== false && p.status !== 'inactive') {
+        map.set(pn, p);
+      }
+    });
+    return map;
+  }, [parts]);
+
+  // Stock on Hand Table Filtered Rows (Active catalog parts with in-stock inventory only)
   const stockRows = (() => {
     const items = Object.values(siteStockData.partsSummary || {});
-    return items.filter(it => {
+    return items.map(it => {
+      const pnClean = String(it.partNumber || '').trim().toUpperCase();
+      const catalogPart = activeCatalogPartsMap.get(pnClean);
+      const cleanModel = resolveCanonicalIPhoneModel(
+        it.model || catalogPart?.iphone_model,
+        it.description || catalogPart?.description
+      );
+      return {
+        ...it,
+        model: cleanModel
+      };
+    }).filter(it => {
+      const pnClean = String(it.partNumber || '').trim().toUpperCase();
+
+      // 1. MUST be an active part in the system's parts master catalog
+      const catalogPart = activeCatalogPartsMap.get(pnClean);
+      if (!catalogPart) return false;
+
+      // 2. Strict In-Stock check: If out of stock, do NOT display on the page
+      if ((it.inStock || 0) <= 0) return false;
+
+      // 3. Category Filter
       if (stockCategoryFilter !== 'ALL') {
         const itemCat = String(it.category || '').toUpperCase();
         if (stockCategoryFilter === 'DISPLAY' && !itemCat.includes('DISP')) return false;
         if (stockCategoryFilter === 'BATTERY' && !itemCat.includes('BATT')) return false;
         if (stockCategoryFilter === 'OTHER' && (itemCat.includes('DISP') || itemCat.includes('BATT'))) return false;
       }
-      if (stockAvailabilityFilter === 'in_stock' && (it.inStock || 0) <= 0) return false;
-      if (stockAvailabilityFilter === 'out_of_stock' && (it.inStock || 0) > 0) return false;
+
+      // 4. Device Filter
+      if (stockDeviceFilter !== 'ALL') {
+        if (it.model !== stockDeviceFilter) return false;
+      }
+
+      // 5. Search Query Filter
       if (stockSearchQuery.trim()) {
         const q = stockSearchQuery.toLowerCase().trim();
-        return (it.partNumber || '').toLowerCase().includes(q) ||
-               (it.description || '').toLowerCase().includes(q) ||
-               (it.model || '').toLowerCase().includes(q);
+        const qClean = q.replace(/[^a-z0-9]/gi, '');
+        const pn = (it.partNumber || '').toLowerCase();
+        const pnClean = pn.replace(/[^a-z0-9]/gi, '');
+        const desc = (it.description || '').toLowerCase();
+        const model = (it.model || '').toLowerCase();
+
+        const directMatch = pn.includes(q) || desc.includes(q) || model.includes(q) || (qClean && qClean.length >= 3 && pnClean.includes(qClean));
+        if (directMatch) return true;
+
+        // Also check if any unit of this SKU matches the serial search
+        if (qClean && qClean.length >= 3) {
+          const hasMatchingUnit = (siteStockData.units || []).some(u => {
+            const upn = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+            if (upn !== pnClean) return false;
+            const sn = String(u.serial_number || u.serialNumber || '').toLowerCase().replace(/[^a-z0-9]/gi, '');
+            return sn.includes(qClean);
+          });
+          if (hasMatchingUnit) return true;
+        }
+
+        return false;
       }
       return true;
     }).sort((a, b) => (b.inStock || 0) - (a.inStock || 0) || a.partNumber.localeCompare(b.partNumber));
   })();
 
-  // Category & Availability counts for the filter tabs
+  // Category counts for active in-stock parts only
   const stockCategoryCounts = useMemo(() => {
-    const all = Object.values(siteStockData.partsSummary || {});
+    const all = Object.values(siteStockData.partsSummary || {}).filter(it => {
+      const pnClean = String(it.partNumber || '').trim().toUpperCase();
+      const catalogPart = activeCatalogPartsMap.get(pnClean);
+      if (!catalogPart) return false;
+      return (it.inStock || 0) > 0;
+    });
+
     let displays = 0;
     let batteries = 0;
     let other = 0;
-    let inStock = 0;
-    let outOfStock = 0;
+
     all.forEach(item => {
       const cat = String(item.category || '').toUpperCase();
       if (cat.includes('DISP')) displays++;
       else if (cat.includes('BATT')) batteries++;
       else other++;
-
-      if ((item.inStock || 0) > 0) inStock++;
-      else outOfStock++;
     });
+
     return {
       total: all.length,
       displays,
       batteries,
       other,
-      inStock,
-      outOfStock
+      inStock: all.length,
+      outOfStock: 0
     };
-  }, [siteStockData]);
+  }, [siteStockData, activeCatalogPartsMap]);
+
+  // Available unique device models in current site stock (active in-stock parts only)
+  const allStockDeviceModels = useMemo(() => {
+    const set = new Set();
+    Object.values(siteStockData.partsSummary || {}).forEach(it => {
+      const pnClean = String(it.partNumber || '').trim().toUpperCase();
+      const catalogPart = activeCatalogPartsMap.get(pnClean);
+      if (!catalogPart) return;
+      if ((it.inStock || 0) <= 0) return;
+      const m = resolveCanonicalIPhoneModel(it.model || catalogPart.iphone_model, it.description || catalogPart.description);
+      if (m) set.add(m);
+    });
+
+    const getModelSortWeight = (name) => {
+      const m = name.toLowerCase();
+      const numMatch = m.match(/iphone\s*(\d+)/i);
+      const num = numMatch ? parseInt(numMatch[1], 10) : (m.includes('iphone') ? 990 : 1000);
+      let subWeight = 0;
+      if (m.includes('mini')) subWeight = 1;
+      else if (m.includes('plus')) subWeight = 2;
+      else if (m.includes('pro max')) subWeight = 4;
+      else if (m.includes('pro')) subWeight = 3;
+      else if (m.includes('air')) subWeight = 5;
+      else if (m.includes('ultra')) subWeight = 6;
+
+      if (m.includes('universal') || m.includes('other')) return 9999;
+      // Standalone "iPhone Air" without a generation number belongs to iPhone 17 era (175)
+      if (m.includes('air') && !numMatch) return 175;
+      return num * 10 + subWeight;
+    };
+
+    return Array.from(set).sort((a, b) => {
+      const wA = getModelSortWeight(a);
+      const wB = getModelSortWeight(b);
+      if (wA !== wB) return wA - wB;
+      return a.localeCompare(b);
+    });
+  }, [siteStockData, activeCatalogPartsMap]);
+
+  // Group stock rows by device model (for organized Model page view)
+  const groupedStockByDevice = useMemo(() => {
+    const groups = {};
+
+    const filteredRows = stockDeviceFilter === 'ALL'
+      ? stockRows
+      : stockRows.filter(r => (r.model || 'Universal / Multi-Model') === stockDeviceFilter);
+
+    filteredRows.forEach(row => {
+      const model = (row.model || 'Universal / Multi-Model').trim();
+      if (!groups[model]) {
+        groups[model] = {
+          model,
+          rows: [],
+          totalInStock: 0,
+          totalAllocated: 0,
+          totalPacked: 0
+        };
+      }
+      groups[model].rows.push(row);
+      groups[model].totalInStock += (row.inStock || 0);
+      groups[model].totalAllocated += (row.allocated || 0);
+      groups[model].totalPacked += (row.packed || 0);
+    });
+
+    const getModelSortWeight = (name) => {
+      const m = name.toLowerCase();
+      const numMatch = m.match(/iphone\s*(\d+)/i);
+      const num = numMatch ? parseInt(numMatch[1], 10) : (m.includes('iphone') ? 990 : 1000);
+      let subWeight = 0;
+      if (m.includes('mini')) subWeight = 1;
+      else if (m.includes('plus')) subWeight = 2;
+      else if (m.includes('pro max')) subWeight = 4;
+      else if (m.includes('pro')) subWeight = 3;
+      else if (m.includes('air')) subWeight = 5;
+      else if (m.includes('ultra')) subWeight = 6;
+
+      if (m.includes('universal') || m.includes('other')) return 9999;
+      // Standalone "iPhone Air" without a generation number belongs to iPhone 17 era (175)
+      if (m.includes('air') && !numMatch) return 175;
+      return num * 10 + subWeight;
+    };
+
+    const sortedGroups = Object.values(groups).sort((a, b) => {
+      const wA = getModelSortWeight(a.model);
+      const wB = getModelSortWeight(b.model);
+      if (wA !== wB) return wA - wB;
+      return a.model.localeCompare(b.model);
+    });
+
+    sortedGroups.forEach(g => {
+      g.rows.sort((a, b) => {
+        const catA = String(a.category || '').toUpperCase();
+        const catB = String(b.category || '').toUpperCase();
+        if (catA !== catB) return catA.localeCompare(catB);
+        return (b.inStock || 0) - (a.inStock || 0) || a.partNumber.localeCompare(b.partNumber);
+      });
+    });
+
+    return sortedGroups;
+  }, [stockRows, stockDeviceFilter]);
+
+  const toggleDeviceCollapse = (modelName) => {
+    setCollapsedDevices(prev => ({
+      ...prev,
+      [modelName]: !prev[modelName]
+    }));
+  };
+
+  const expandAllDevices = () => {
+    setCollapsedDevices({});
+  };
+
+  const collapseAllDevices = () => {
+    const next = {};
+    groupedStockByDevice.forEach(g => {
+      next[g.model] = true;
+    });
+    setCollapsedDevices(next);
+  };
 
   // Regional Site Classification (Metro Manila vs Provincial vs DC)
   const { metroManilaSites, provincialSites } = useMemo(() => {
@@ -1204,7 +1509,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             label: 'Branch Stock On Hand',
             value: siteStockData.totalInStock,
             unit: 'units in stock',
-            subtext: `${Object.keys(siteStockData.partsSummary || {}).length} unique part numbers`,
+            subtext: `${stockCategoryCounts.total} unique part numbers in stock`,
             icon: Package,
             accent: '#0284c7',
             iconBg: '#e0f2fe',
@@ -1377,7 +1682,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             label: 'Branch Stock On Hand',
             value: siteStockData.totalInStock,
             unit: 'units in stock',
-            subtext: `${Object.keys(siteStockData.partsSummary || {}).length} unique part numbers`,
+            subtext: `${stockCategoryCounts.total} unique part numbers in stock`,
             icon: Package,
             accent: '#0284c7',
             iconBg: '#e0f2fe',
@@ -1389,6 +1694,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     activeTab,
     metrics,
     siteStockData,
+    stockCategoryCounts.total,
     incomingShipments,
     liveUsedUnitsLog,
     regionStockTotals,
@@ -1562,7 +1868,13 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => setActiveTab('scan-in')}
+                    onClick={() => {
+                      if (onNavigateToStation) {
+                        onNavigateToStation();
+                      } else if (setGlobalActiveTab) {
+                        setGlobalActiveTab('scan-in');
+                      }
+                    }}
                     style={{ background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
                     title="Open Receive Scan-In Station"
                   >
@@ -2738,16 +3050,25 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)', background: '#ffffff' }}>
             
             {/* Toolbar: Search, Category Filters, Status Filter */}
-            <div style={{ padding: '16px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ padding: '14px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 
                 {/* Search Bar */}
-                <div style={{ position: 'relative', width: '100%', maxWidth: '380px' }}>
-                  <Search size={15} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                <div style={{ position: 'relative', flex: '1 1 300px', maxWidth: '440px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: stockSearchQuery ? '#0284c7' : '#94a3b8', pointerEvents: 'none' }} />
                   <input
                     type="text"
                     className="form-input"
-                    style={{ paddingLeft: '34px', fontSize: '13px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                    style={{
+                      width: '100%',
+                      paddingLeft: '34px',
+                      paddingRight: stockSearchQuery ? '32px' : '12px',
+                      fontSize: '12.5px',
+                      height: '34px',
+                      borderRadius: '7px',
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff'
+                    }}
                     placeholder="Search part number, description, or model..."
                     value={stockSearchQuery}
                     onChange={(e) => setStockSearchQuery(e.target.value)}
@@ -2764,99 +3085,237 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   )}
                 </div>
 
-                {/* Right Metadata & Availability Filter */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Stock Status:</span>
+                {/* Right Controls: Device Filter, Status Filter & SKU Count Pill */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, flexWrap: 'wrap' }}>
+                  {/* Device Model Dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>Device:</span>
                     <select
                       className="form-select"
-                      style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600 }}
-                      value={stockAvailabilityFilter}
-                      onChange={(e) => setStockAvailabilityFilter(e.target.value)}
+                      style={{
+                        fontSize: '12px',
+                        padding: '4px 10px',
+                        height: '34px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontWeight: 600,
+                        color: '#1e293b',
+                        background: '#ffffff',
+                        cursor: 'pointer',
+                        maxWidth: '170px'
+                      }}
+                      value={stockDeviceFilter}
+                      onChange={(e) => setStockDeviceFilter(e.target.value)}
                     >
-                      <option value="ALL">All Items ({stockCategoryCounts.total})</option>
-                      <option value="in_stock">In Stock Only ({stockCategoryCounts.inStock})</option>
-                      <option value="out_of_stock">Out of Stock ({stockCategoryCounts.outOfStock})</option>
+                      <option value="ALL">All Devices ({allStockDeviceModels.length})</option>
+                      {allStockDeviceModels.map(m => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
                     </select>
                   </div>
 
-                  <span style={{ fontSize: '12px', color: '#64748b' }}>
-                    Showing: <strong style={{ color: '#0f172a' }}>{stockRows.length}</strong> SKUs for <strong style={{ color: '#0f172a' }}>{activeSiteObj.name} ({activeSiteObj.code})</strong>
-                  </span>
+                  {/* Active In-Stock Indicator */}
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '5px 10px',
+                    background: '#ecfdf5',
+                    color: '#065f46',
+                    border: '1px solid #a7f3d0',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap'
+                  }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#059669' }} />
+                    <span>Active In-Stock</span>
+                  </div>
+
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    <span style={{ color: '#64748b' }}>Showing:</span>
+                    <strong style={{ color: '#0f172a', fontWeight: 700 }}>{stockRows.length}</strong>
+                    <span style={{ color: '#64748b' }}>{stockRows.length === 1 ? 'SKU' : 'SKUs'}</span>
+                    {stockRows.length !== stockCategoryCounts.total && (
+                      <span style={{ color: '#94a3b8', fontSize: '11px' }}>({stockCategoryCounts.total} total)</span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Category Filter Tabs */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
-                <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '4px' }}>
-                  Category:
-                </span>
-                {[
-                  { id: 'ALL', label: 'All Parts', count: stockCategoryCounts.total },
-                  { id: 'DISPLAY', label: 'Displays', count: stockCategoryCounts.displays },
-                  { id: 'BATTERY', label: 'Batteries', count: stockCategoryCounts.batteries },
-                  { id: 'OTHER', label: 'Other Components', count: stockCategoryCounts.other }
-                ].map(cat => {
-                  const isActive = stockCategoryFilter === cat.id;
-                  return (
+              {/* Category Filter Tabs & View Controls */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', paddingTop: '2px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '4px', whiteSpace: 'nowrap' }}>
+                    Category:
+                  </span>
+                  {[
+                    { id: 'ALL', label: 'All Parts', count: stockCategoryCounts.total },
+                    { id: 'DISPLAY', label: 'Displays', count: stockCategoryCounts.displays },
+                    { id: 'BATTERY', label: 'Batteries', count: stockCategoryCounts.batteries },
+                    { id: 'OTHER', label: 'Other Components', count: stockCategoryCounts.other }
+                  ].map(cat => {
+                    const isActive = stockCategoryFilter === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setStockCategoryFilter(cat.id)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: isActive ? 700 : 500,
+                          border: isActive ? '1px solid #0284c7' : '1px solid #e2e8f0',
+                          background: isActive ? '#f0f9ff' : '#ffffff',
+                          color: isActive ? '#0284c7' : '#475569',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <span>{cat.label}</span>
+                        <span
+                          style={{
+                            fontSize: '10.5px',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            background: isActive ? '#bae6fd' : '#f1f5f9',
+                            color: isActive ? '#0369a1' : '#64748b',
+                            fontWeight: 700
+                          }}
+                        >
+                          {cat.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  {/* View Mode Toggle: Group by Device vs Flat List */}
+                  <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
                     <button
-                      key={cat.id}
                       type="button"
-                      onClick={() => setStockCategoryFilter(cat.id)}
+                      onClick={() => setStockViewMode('grouped')}
                       style={{
-                        padding: '4px 10px',
-                        borderRadius: '6px',
-                        fontSize: '12px',
-                        fontWeight: isActive ? 700 : 500,
-                        border: isActive ? '1px solid #0284c7' : '1px solid #e2e8f0',
-                        background: isActive ? '#f0f9ff' : '#ffffff',
-                        color: isActive ? '#0284c7' : '#475569',
+                        padding: '3px 10px',
+                        fontSize: '11.5px',
+                        fontWeight: stockViewMode === 'grouped' ? 700 : 500,
+                        background: stockViewMode === 'grouped' ? '#ffffff' : 'transparent',
+                        color: stockViewMode === 'grouped' ? '#0284c7' : '#64748b',
+                        border: 'none',
+                        borderRadius: '4px',
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '6px',
-                        transition: 'all 0.15s ease'
+                        gap: '5px',
+                        boxShadow: stockViewMode === 'grouped' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none'
                       }}
+                      title="Group parts by Apple device model"
                     >
-                      <span>{cat.label}</span>
-                      <span
+                      <Smartphone size={12} />
+                      <span>Group by Device</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStockViewMode('flat')}
+                      style={{
+                        padding: '3px 10px',
+                        fontSize: '11.5px',
+                        fontWeight: stockViewMode === 'flat' ? 700 : 500,
+                        background: stockViewMode === 'flat' ? '#ffffff' : 'transparent',
+                        color: stockViewMode === 'flat' ? '#0284c7' : '#64748b',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        boxShadow: stockViewMode === 'flat' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none'
+                      }}
+                      title="View all parts in a flat table"
+                    >
+                      <Boxes size={12} />
+                      <span>Flat List</span>
+                    </button>
+                  </div>
+
+                  {stockViewMode === 'grouped' && (
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      <button
+                        type="button"
+                        onClick={expandAllDevices}
                         style={{
-                          fontSize: '10.5px',
-                          padding: '1px 6px',
-                          borderRadius: '999px',
-                          background: isActive ? '#bae6fd' : '#f1f5f9',
-                          color: isActive ? '#0369a1' : '#64748b',
-                          fontWeight: 700
+                          background: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '5px',
+                          color: '#475569',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '3px 8px',
+                          cursor: 'pointer'
                         }}
                       >
-                        {cat.count}
-                      </span>
-                    </button>
-                  );
-                })}
+                        Expand All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={collapseAllDevices}
+                        style={{
+                          background: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '5px',
+                          color: '#475569',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '3px 8px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Collapse All
+                      </button>
+                    </div>
+                  )}
 
-                {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStockSearchQuery('');
-                      setStockCategoryFilter('ALL');
-                      setStockAvailabilityFilter('ALL');
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#dc2626',
-                      fontSize: '11.5px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      padding: '4px 8px',
-                      marginLeft: 'auto'
-                    }}
-                  >
-                    Reset Filters
-                  </button>
-                )}
+                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockDeviceFilter !== 'ALL') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStockSearchQuery('');
+                        setStockCategoryFilter('ALL');
+                        setStockDeviceFilter('ALL');
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#dc2626',
+                        fontSize: '11.5px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        padding: '4px 8px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      <RotateCcw size={11} />
+                      <span>Reset Filters</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2866,21 +3325,21 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
                   <Package size={40} color="#cbd5e1" style={{ marginBottom: '12px' }} />
                   <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px', fontWeight: 700 }}>
-                    No Parts Found Matching Current Filters
+                    No Active In-Stock Parts Found
                   </h4>
                   <p style={{ margin: '0 0 16px', fontSize: '13px' }}>
-                    {stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL'
-                      ? 'Try clearing your search query or selecting a different category filter.'
-                      : `There are currently no serialized inventory units recorded in stock for ${activeSiteObj.name}.`}
+                    {stockSearchQuery || stockCategoryFilter !== 'ALL' || stockDeviceFilter !== 'ALL'
+                      ? 'Try clearing your search query or selecting a different category or device filter.'
+                      : `There are currently no active catalog parts in stock recorded for ${activeSiteObj.name}.`}
                   </p>
-                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL') && (
+                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockDeviceFilter !== 'ALL') && (
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
                       onClick={() => {
                         setStockSearchQuery('');
                         setStockCategoryFilter('ALL');
-                        setStockAvailabilityFilter('ALL');
+                        setStockDeviceFilter('ALL');
                       }}
                     >
                       Clear All Filters
@@ -2897,9 +3356,6 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                       <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: '240px' }}>
                         Part Description
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', width: '160px' }}>
-                        Compatible Model
-                      </th>
                       <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '140px' }}>
                         Available Stock
                       </th>
@@ -2915,7 +3371,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {stockRows.map(row => {
+                    {/* Render helper for standard row */}
+                    {(() => {
                       const isDc = isSuperadmin || currentUser?.siteId === 'site-dc' || userSiteObj?.code === 'DC-MDC' || userSiteObj?.code === 'DC';
                       const isUserSameSite = !isDc && Boolean(
                         currentUser?.siteId && (
@@ -2926,39 +3383,29 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         )
                       );
 
-                      return (
+                      const renderRow = (row, isNested = false) => (
                         <tr
                           key={row.partNumber}
-                          style={{ borderBottom: '1px solid #f1f5f9', transition: 'background-color 0.12s ease' }}
+                          style={{
+                            borderBottom: '1px solid #f1f5f9',
+                            transition: 'background-color 0.12s ease',
+                            backgroundColor: '#ffffff'
+                          }}
                           onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#ffffff'; }}
                         >
-                          <td style={{ padding: '12px 16px' }}>
-                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-                              {row.partNumber}
-                            </strong>
+                          <td style={{ padding: '12px 16px', paddingLeft: isNested ? '28px' : '16px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {isNested && (
+                                <span style={{ color: '#0284c7', fontSize: '12px', fontWeight: 700, userSelect: 'none' }}>↳</span>
+                              )}
+                              <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                {row.partNumber}
+                              </strong>
+                            </div>
                           </td>
                           <td style={{ padding: '12px 16px', fontSize: '12.5px', color: '#1e293b', fontWeight: 500 }}>
                             {row.description}
-                          </td>
-                          <td style={{ padding: '12px 16px' }}>
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                background: '#f8fafc',
-                                color: '#475569',
-                                border: '1px solid #e2e8f0',
-                                fontSize: '11.5px',
-                                fontWeight: 600,
-                                padding: '2px 8px',
-                                borderRadius: '6px'
-                              }}
-                            >
-                              <Smartphone size={11} color="#64748b" />
-                              <span>{row.model || 'Universal'}</span>
-                            </span>
                           </td>
                           <td style={{ padding: '12px 16px', textAlign: 'center' }}>
                             {row.inStock > 0 ? (
@@ -3139,7 +3586,130 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                           </td>
                         </tr>
                       );
-                    })}
+
+                      if (stockViewMode === 'grouped') {
+                        return groupedStockByDevice.map(group => {
+                          const isCollapsed = Boolean(collapsedDevices[group.model]);
+                          return (
+                            <Fragment key={group.model}>
+                              {/* Device Group Header Banner */}
+                              <tr
+                                style={{
+                                  background: 'linear-gradient(90deg, #f0f9ff 0%, #f8fafc 100%)',
+                                  borderTop: '2px solid #bae6fd',
+                                  borderBottom: isCollapsed ? '1px solid #cbd5e1' : '1px solid #e2e8f0',
+                                  borderLeft: '4px solid #0284c7'
+                                }}
+                              >
+                                <td colSpan={6} style={{ padding: '9px 16px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                                    {/* Left: Device Icon, Model Title & Parts Count */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                      <div style={{
+                                        width: '28px',
+                                        height: '28px',
+                                        borderRadius: '7px',
+                                        background: '#0284c7',
+                                        color: '#ffffff',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        boxShadow: '0 1px 3px rgba(2, 132, 199, 0.25)'
+                                      }}>
+                                        <Smartphone size={15} />
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <span style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                                          {group.model}
+                                        </span>
+                                        <span style={{
+                                          fontSize: '11px',
+                                          fontWeight: 600,
+                                          color: '#0369a1',
+                                          background: '#e0f2fe',
+                                          border: '1px solid #bae6fd',
+                                          padding: '2px 8px',
+                                          borderRadius: '12px'
+                                        }}>
+                                          {group.rows.length} {group.rows.length === 1 ? 'Part SKU' : 'Part SKUs'}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* Right: Stock Badges & Collapse Toggle */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '5px',
+                                          background: group.totalInStock > 0 ? '#ecfdf5' : '#fef2f2',
+                                          color: group.totalInStock > 0 ? '#065f46' : '#991b1b',
+                                          border: group.totalInStock > 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
+                                          fontWeight: 700,
+                                          fontSize: '11.5px',
+                                          padding: '3px 10px',
+                                          borderRadius: '999px'
+                                        }}
+                                      >
+                                        {group.totalInStock > 0 && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#059669' }} />}
+                                        <span>{group.totalInStock} units in stock</span>
+                                      </span>
+
+                                      {group.totalPacked > 0 && (
+                                        <span style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          background: '#eff6ff',
+                                          color: '#0284c7',
+                                          border: '1px solid #bae6fd',
+                                          fontSize: '11px',
+                                          fontWeight: 600,
+                                          padding: '3px 8px',
+                                          borderRadius: '999px'
+                                        }}>
+                                          <Truck size={11} />
+                                          <span>{group.totalPacked} in-transit</span>
+                                        </span>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleDeviceCollapse(group.model)}
+                                        style={{
+                                          background: '#ffffff',
+                                          border: '1px solid #cbd5e1',
+                                          borderRadius: '6px',
+                                          cursor: 'pointer',
+                                          padding: '3px 8px',
+                                          color: '#475569',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontSize: '11px',
+                                          fontWeight: 600
+                                        }}
+                                        title={isCollapsed ? `Expand ${group.model}` : `Collapse ${group.model}`}
+                                      >
+                                        {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                                        <span>{isCollapsed ? 'Expand' : 'Collapse'}</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+
+                              {/* Child Rows for this Device */}
+                              {!isCollapsed && group.rows.map(row => renderRow(row, true))}
+                            </Fragment>
+                          );
+                        });
+                      }
+
+                      // Flat list view
+                      return stockRows.map(row => renderRow(row, false));
+                    })()}
                   </tbody>
                 </table>
               )}
@@ -3188,7 +3758,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   <Lock size={13} color="#0284c7" />
                   <span>Serial Privacy: <strong>Enforced</strong></span>
                 </div>
-                {(isSuperadmin || isPmgUser) && (
+                {isSuperadmin && (
                   <button
                     type="button"
                     className="btn btn-sm"
@@ -3611,7 +4181,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                         {currentActiveMultiSiteStock.parts?.length || 0}
                       </div>
                     </div>
-                    {(isSuperadmin || isPmgUser) && (
+                    {isSuperadmin && (
                       <button
                         type="button"
                         className="btn btn-sm"
@@ -3673,189 +4243,482 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                           currentActiveMultiSite.code === currentUser?.site_code;
                         const canSeeFullDetails = isSuperadmin || isOwnSite || Boolean(row.canViewDetails);
 
+                        const inStockUnits = (row.serializedUnits || []).filter(u => {
+                          const s = String(u.status || '').toLowerCase();
+                          return s === 'in_stock' || s === 'available';
+                        });
+                        const usedUnits = (row.serializedUnits || []).filter(u => {
+                          const s = String(u.status || '').toLowerCase();
+                          return s === 'used' || s === 'consumed';
+                        });
+                        const otherUnits = (row.serializedUnits || []).filter(u => {
+                          const s = String(u.status || '').toLowerCase();
+                          return s !== 'in_stock' && s !== 'available' && s !== 'used' && s !== 'consumed';
+                        });
+
                         return (
-                          <tr key={rowKey} style={{ background: isOwnSite ? '#f8fafc' : '#ffffff' }}>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                                  {row.partNumber}
-                                </strong>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(row.partNumber);
-                                    showToast(`Copied ${row.partNumber} to clipboard`, 'info');
-                                  }}
-                                  style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
-                                  title="Copy part number"
-                                >
-                                  <Copy size={11} />
-                                </button>
-                              </div>
-                            </td>
-
-                            <td>
-                              <div style={{ fontSize: '12.5px', color: '#1e293b', fontWeight: 600 }}>
-                                {row.description}
-                              </div>
-                              <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span>{row.model}</span>
-                                {(() => {
-                                  const catObj = getCategoryForPart({ ...row, category_id: row.category_id || row.categoryId }, categories);
-                                  const rawCat = row.category_name || row.category;
-                                  const displayCategory = (!isUUID(rawCat) && rawCat) || catObj?.name;
-                                  if (!displayCategory) return null;
-                                  const badgeStyle = getCategoryBadgeStyle(catObj?.code || row.categoryCode || displayCategory);
-                                  return (
-                                    <span
-                                      className="badge"
-                                      style={{
-                                        fontSize: '10px',
-                                        padding: '1px 6px',
-                                        background: badgeStyle.bg,
-                                        color: badgeStyle.color,
-                                        border: `1px solid ${badgeStyle.border}`
-                                      }}
-                                    >
-                                      {displayCategory}
-                                    </span>
-                                  );
-                                })()}
-                              </div>
-                            </td>
-
-                            <td style={{ textAlign: 'center' }}>
-                              <span
-                                className="badge"
-                                style={{
-                                  background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
-                                  color: row.inStock > 0 ? '#059669' : '#dc2626',
-                                  fontWeight: 800,
-                                  fontSize: '12px',
-                                  padding: '4px 10px'
-                                }}
-                              >
-                                {row.inStock} units
-                              </span>
-                            </td>
-
-                            <td>
-                              {canSeeFullDetails ? (
-                                <div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: '#059669', fontWeight: 600 }}>
-                                    <Unlock size={12} />
-                                    <span>Full Serial Visibility ({row.serializedUnits?.length || 0} units)</span>
-                                  </div>
+                          <Fragment key={rowKey}>
+                            <tr style={{ background: isOwnSite ? '#f8fafc' : '#ffffff', borderBottom: isExpanded ? 'none' : '1px solid #f1f5f9' }}>
+                              <td style={{ verticalAlign: 'top', padding: '12px 16px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                    {row.partNumber}
+                                  </strong>
                                   <button
                                     type="button"
-                                    className="btn btn-sm btn-secondary"
-                                    style={{ fontSize: '10.5px', padding: '2px 6px', marginTop: '4px' }}
-                                    onClick={() => setExpandedPartKey(isExpanded ? null : rowKey)}
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(row.partNumber);
+                                      showToast(`Copied ${row.partNumber} to clipboard`, 'info');
+                                    }}
+                                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                                    title="Copy part number"
                                   >
-                                    {isExpanded ? 'Hide Serials' : 'View Serials'}
+                                    <Copy size={11} />
                                   </button>
+                                </div>
+                              </td>
 
-                                  {isExpanded && row.serializedUnits && (
-                                    <div style={{ marginTop: '8px', background: '#f1f5f9', padding: '8px', borderRadius: '6px', fontSize: '11px' }}>
-                                      {row.serializedUnits.map(u => {
+                              <td style={{ verticalAlign: 'top', padding: '12px 16px' }}>
+                                <div style={{ fontSize: '12.5px', color: '#1e293b', fontWeight: 600 }}>
+                                  {row.description}
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span>{row.model}</span>
+                                  {(() => {
+                                    const catObj = getCategoryForPart({ ...row, category_id: row.category_id || row.categoryId }, categories);
+                                    const rawCat = row.category_name || row.category;
+                                    const displayCategory = (!isUUID(rawCat) && rawCat) || catObj?.name;
+                                    if (!displayCategory) return null;
+                                    const badgeStyle = getCategoryBadgeStyle(catObj?.code || row.categoryCode || displayCategory);
+                                    return (
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          fontSize: '10px',
+                                          padding: '1px 6px',
+                                          background: badgeStyle.bg,
+                                          color: badgeStyle.color,
+                                          border: `1px solid ${badgeStyle.border}`
+                                        }}
+                                      >
+                                        {displayCategory}
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                              </td>
+
+                              <td style={{ verticalAlign: 'top', textAlign: 'center', padding: '12px 16px' }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
+                                    color: row.inStock > 0 ? '#059669' : '#dc2626',
+                                    fontWeight: 800,
+                                    fontSize: '12px',
+                                    padding: '4px 10px'
+                                  }}
+                                >
+                                  {row.inStock} units
+                                </span>
+                              </td>
+
+                              <td style={{ verticalAlign: 'top', padding: '12px 16px' }}>
+                                {canSeeFullDetails ? (
+                                  <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: '#059669', fontWeight: 600 }}>
+                                        <Unlock size={12} />
+                                        <span>Full Visibility ({row.serializedUnits?.length || 0} units)</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="btn btn-xs btn-secondary"
+                                        style={{
+                                          fontSize: '11px',
+                                          padding: '2px 8px',
+                                          borderRadius: '5px',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontWeight: 600,
+                                          background: isExpanded ? '#0284c7' : '#ffffff',
+                                          color: isExpanded ? '#ffffff' : '#334155',
+                                          borderColor: isExpanded ? '#0284c7' : '#cbd5e1'
+                                        }}
+                                        onClick={() => setExpandedPartKey(isExpanded ? null : rowKey)}
+                                      >
+                                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                        <span>{isExpanded ? 'Hide Serials' : 'View Serials'}</span>
+                                      </button>
+                                    </div>
+
+                                    {/* Status highlight summary pill tags on the row */}
+                                    {row.serializedUnits && row.serializedUnits.length > 0 && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                        <span style={{
+                                          fontSize: '10px',
+                                          fontWeight: 700,
+                                          color: '#15803d',
+                                          background: '#dcfce7',
+                                          border: '1px solid #86efac',
+                                          padding: '1px 6px',
+                                          borderRadius: '4px',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '3px'
+                                        }}>
+                                          <CheckCircle2 size={10} color="#16a34a" />
+                                          <span>{inStockUnits.length} In Stock</span>
+                                        </span>
+                                        {usedUnits.length > 0 && (
+                                          <span style={{
+                                            fontSize: '10px',
+                                            fontWeight: 700,
+                                            color: '#b45309',
+                                            background: '#fef3c7',
+                                            border: '1px solid #fde68a',
+                                            padding: '1px 6px',
+                                            borderRadius: '4px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '3px'
+                                          }}>
+                                            <Wrench size={10} color="#d97706" />
+                                            <span>{usedUnits.length} Used</span>
+                                          </span>
+                                        )}
+                                        {otherUnits.length > 0 && (
+                                          <span style={{
+                                            fontSize: '10px',
+                                            fontWeight: 600,
+                                            color: '#475569',
+                                            background: '#f1f5f9',
+                                            border: '1px solid #e2e8f0',
+                                            padding: '1px 6px',
+                                            borderRadius: '4px'
+                                          }}>
+                                            {otherUnits.length} Other
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
+                                    <Lock size={13} color="#94a3b8" />
+                                    <span style={{ fontStyle: 'italic' }}>
+                                      {`Serials restricted to ${currentActiveMultiSite.code} authorized staff`}
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+
+                              <td style={{ verticalAlign: 'top', textAlign: 'center', padding: '12px 16px' }}>
+                                {!isSuperadmin ? (
+                                  isOwnSite ? (
+                                    <button
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ fontSize: '11px', padding: '4px 10px', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                                      onClick={() => {
+                                        setMarkUsedPartPn(row.partNumber);
+                                        setIsMarkUsedModalOpen(true);
+                                      }}
+                                      title="Mark this part as consumed in a repair work order"
+                                    >
+                                      <Wrench size={11} />
+                                      <span>Mark Used</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                                      onClick={() => handleQuickRequestPart(row.partNumber, currentActiveMultiSite.name)}
+                                      title={`Request replenishment/transfer for ${row.partNumber} from ${currentActiveMultiSite.name}`}
+                                    >
+                                      <Send size={11} />
+                                      <span>Request Transfer</span>
+                                    </button>
+                                  )
+                                ) : (
+                                  <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+                                    Master DC View
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+
+                            {/* Expanded Serials Sub-Row */}
+                            {isExpanded && canSeeFullDetails && (
+                              <tr style={{ background: '#f8fafc', borderBottom: '2px solid #cbd5e1' }}>
+                                <td colSpan={5} style={{ padding: '14px 20px' }}>
+                                  <div style={{
+                                    background: '#ffffff',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '10px',
+                                    boxShadow: '0 2px 8px -2px rgba(15, 23, 42, 0.06)',
+                                    padding: '16px'
+                                  }}>
+                                    {/* Header bar of expanded section */}
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', paddingBottom: '12px', borderBottom: '1px solid #f1f5f9' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div style={{ width: '32px', height: '32px', borderRadius: '6px', background: '#f0f9ff', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                          <Boxes size={16} />
+                                        </div>
+                                        <div>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a' }}>
+                                              Serialized Inventory: {row.partNumber}
+                                            </span>
+                                            <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                                              ({row.serializedUnits?.length || 0} total units recorded)
+                                            </span>
+                                          </div>
+                                          <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                                            {row.description} — {currentActiveMultiSite.name} ({currentActiveMultiSite.code})
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Status Breakdown Pills & Copy Action */}
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                        <span style={{
+                                          fontSize: '11px',
+                                          fontWeight: 700,
+                                          color: '#15803d',
+                                          background: '#dcfce7',
+                                          border: '1px solid #86efac',
+                                          padding: '3px 10px',
+                                          borderRadius: '999px',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px'
+                                        }}>
+                                          <CheckCircle2 size={12} color="#16a34a" />
+                                          <span>{inStockUnits.length} In Stock</span>
+                                        </span>
+
+                                        {usedUnits.length > 0 && (
+                                          <span style={{
+                                            fontSize: '11px',
+                                            fontWeight: 700,
+                                            color: '#b45309',
+                                            background: '#fef3c7',
+                                            border: '1px solid #fde68a',
+                                            padding: '3px 10px',
+                                            borderRadius: '999px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px'
+                                          }}>
+                                            <Wrench size={12} color="#d97706" />
+                                            <span>{usedUnits.length} Used / Consumed</span>
+                                          </span>
+                                        )}
+
+                                        {otherUnits.length > 0 && (
+                                          <span style={{
+                                            fontSize: '11px',
+                                            fontWeight: 700,
+                                            color: '#475569',
+                                            background: '#f1f5f9',
+                                            border: '1px solid #cbd5e1',
+                                            padding: '3px 10px',
+                                            borderRadius: '999px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px'
+                                          }}>
+                                            <span>{otherUnits.length} Other</span>
+                                          </span>
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const allSerials = (row.serializedUnits || []).map(u => u.serialNumber).filter(Boolean).join('\n');
+                                            navigator.clipboard.writeText(allSerials);
+                                            showToast(`Copied ${row.serializedUnits.length} serials to clipboard`, 'success');
+                                          }}
+                                          className="btn btn-secondary btn-xs"
+                                          style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '5px', display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}
+                                          title="Copy all serials to clipboard"
+                                        >
+                                          <Copy size={11} />
+                                          <span>Copy All Serials</span>
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Units Responsive Grid with clean scroll */}
+                                    <div style={{
+                                      marginTop: '14px',
+                                      maxHeight: '440px',
+                                      overflowY: 'auto',
+                                      display: 'grid',
+                                      gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+                                      gap: '10px',
+                                      padding: '2px'
+                                    }}>
+                                      {(row.serializedUnits || []).map((u, uIdx) => {
                                         const isAddedByCurUser = isSuperadmin || Boolean(currentUser?.id && (u.added_by_user_id === currentUser?.id || u.received_by_id === currentUser?.id));
                                         const canManageUnit = isSuperadmin || isOwnSite || isAddedByCurUser;
                                         const isMaskedUnit = u.isMasked || (!isSuperadmin && !isOwnSite && !isAddedByCurUser);
+                                        const statusLower = String(u.status || '').toLowerCase();
+                                        const isInStock = statusLower === 'in_stock' || statusLower === 'available';
+                                        const isUsed = statusLower === 'used' || statusLower === 'consumed';
 
                                         return (
-                                          <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #e2e8f0', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                              {isMaskedUnit ? (
-                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                  <span style={{ fontFamily: 'var(--font-mono)', color: '#94a3b8', fontSize: '11px', letterSpacing: '0.04em' }}>••••••••••••••••</span>
-                                                  <span className="badge" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontSize: '9px', padding: '1px 4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
-                                                    <Lock size={9} /> Protected
+                                          <div
+                                            key={u.id || uIdx}
+                                            style={{
+                                              padding: '10px 12px',
+                                              borderRadius: '8px',
+                                              background: isInStock ? '#ffffff' : '#fffbeb',
+                                              border: `1px solid ${isInStock ? '#bbf7d0' : '#fde68a'}`,
+                                              borderLeft: `4px solid ${isInStock ? '#16a34a' : (isUsed ? '#d97706' : '#94a3b8')}`,
+                                              boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                                              display: 'flex',
+                                              flexDirection: 'column',
+                                              gap: '6px'
+                                            }}
+                                          >
+                                            {/* Line 1: Status Badge + Serial Number + Copy + Actions */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                                {/* Prominently Highlight IN STOCK vs USED */}
+                                                {isInStock ? (
+                                                  <span style={{
+                                                    fontSize: '10px',
+                                                    fontWeight: 800,
+                                                    color: '#15803d',
+                                                    background: '#dcfce7',
+                                                    border: '1px solid #86efac',
+                                                    padding: '2px 7px',
+                                                    borderRadius: '4px',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '3px',
+                                                    letterSpacing: '0.04em',
+                                                    flexShrink: 0
+                                                  }}>
+                                                    <CheckCircle2 size={11} color="#16a34a" />
+                                                    <span>IN STOCK</span>
                                                   </span>
-                                                </span>
-                                              ) : (
-                                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#0f172a' }}>{u.serialNumber}</span>
+                                                ) : isUsed ? (
+                                                  <span style={{
+                                                    fontSize: '10px',
+                                                    fontWeight: 800,
+                                                    color: '#92400e',
+                                                    background: '#fef3c7',
+                                                    border: '1px solid #fcd34d',
+                                                    padding: '2px 7px',
+                                                    borderRadius: '4px',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '3px',
+                                                    letterSpacing: '0.04em',
+                                                    flexShrink: 0
+                                                  }}>
+                                                    <Wrench size={11} color="#d97706" />
+                                                    <span>USED</span>
+                                                  </span>
+                                                ) : (
+                                                  <span style={{
+                                                    fontSize: '10px',
+                                                    fontWeight: 700,
+                                                    color: '#475569',
+                                                    background: '#f1f5f9',
+                                                    border: '1px solid #cbd5e1',
+                                                    padding: '2px 7px',
+                                                    borderRadius: '4px',
+                                                    letterSpacing: '0.04em',
+                                                    flexShrink: 0
+                                                  }}>
+                                                    {String(u.status || 'OTHER').toUpperCase()}
+                                                  </span>
+                                                )}
+
+                                                {/* Serial Number */}
+                                                {isMaskedUnit ? (
+                                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                    <span style={{ fontFamily: 'var(--font-mono)', color: '#94a3b8', fontSize: '11.5px', letterSpacing: '0.05em' }}>••••••••••••••••</span>
+                                                    <span className="badge" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontSize: '9px', padding: '1px 4px', display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                                      <Lock size={9} /> Protected
+                                                    </span>
+                                                  </span>
+                                                ) : (
+                                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '12px', color: '#0f172a', letterSpacing: '0.02em' }}>
+                                                      {u.serialNumber}
+                                                    </span>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => {
+                                                        navigator.clipboard.writeText(u.serialNumber);
+                                                        showToast(`Copied ${u.serialNumber}`, 'info');
+                                                      }}
+                                                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'flex', alignItems: 'center' }}
+                                                      title="Copy serial number"
+                                                    >
+                                                      <Copy size={11} />
+                                                    </button>
+                                                  </div>
+                                                )}
+                                              </div>
+
+                                              {/* Actions (Edit/Delete) */}
+                                              {canManageUnit && !isMaskedUnit && (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                                  <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-xs"
+                                                    style={{ padding: '2px 6px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                    onClick={() => openEditUnitModal(u)}
+                                                    title="Update box number or work order notes"
+                                                  >
+                                                    <Edit3 size={11} />
+                                                    <span>Edit</span>
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-xs"
+                                                    style={{ padding: '2px 6px', fontSize: '10.5px', color: '#ef4444', borderColor: '#fca5a5', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                                    onClick={() => setUnitToDelete(u)}
+                                                    title="Delete unit from this branch"
+                                                  >
+                                                    <Trash2 size={11} />
+                                                    <span>Delete</span>
+                                                  </button>
+                                                </div>
                                               )}
-                                              <span style={{ color: '#64748b' }}>Box: {u.boxNumber} • {u.status}</span>
+                                            </div>
+
+                                            {/* Line 2: Box, Work Order, Notes */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#64748b', flexWrap: 'wrap', marginTop: '2px' }}>
+                                              <span style={{ background: '#f1f5f9', color: '#334155', fontWeight: 600, padding: '1px 6px', borderRadius: '4px' }}>
+                                                Box #{u.boxNumber || 1}
+                                              </span>
                                               {u.work_order_number && (
-                                                <span style={{ color: '#0284c7', background: '#e0f2fe', padding: '1px 5px', borderRadius: '3px', fontSize: '10px', fontWeight: 600 }}>
+                                                <span style={{ color: '#0369a1', background: '#e0f2fe', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
                                                   WO: {u.work_order_number}
                                                 </span>
                                               )}
-                                              {u.notes && <span style={{ color: '#64748b', fontStyle: 'italic' }}>({u.notes})</span>}
+                                              {u.notes && (
+                                                <span style={{ color: '#64748b', fontStyle: 'italic' }}>
+                                                  {u.notes}
+                                                </span>
+                                              )}
                                             </div>
-                                            {canManageUnit && !isMaskedUnit && (
-                                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                <button
-                                                  type="button"
-                                                  className="btn btn-secondary btn-sm"
-                                                  style={{ padding: '2px 6px', fontSize: '10.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                                                  onClick={() => openEditUnitModal(u)}
-                                                  title="Update box number or work order notes"
-                                                >
-                                                  <Edit3 size={11} />
-                                                  <span>Edit</span>
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  className="btn btn-secondary btn-sm"
-                                                  style={{ padding: '2px 6px', fontSize: '10.5px', color: '#ef4444', borderColor: '#fca5a5', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                                                  onClick={() => setUnitToDelete(u)}
-                                                  title="Delete unit from this branch"
-                                                >
-                                                  <Trash2 size={11} />
-                                                  <span>Delete</span>
-                                                </button>
-                                              </div>
-                                            )}
                                           </div>
                                         );
                                       })}
                                     </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#64748b' }}>
-                                  <Lock size={13} color="#94a3b8" />
-                                  <span style={{ fontStyle: 'italic' }}>
-                                    {`Serials restricted to ${currentActiveMultiSite.code} authorized staff`}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-
-                            <td style={{ textAlign: 'center' }}>
-                              {!isSuperadmin ? (
-                                isOwnSite ? (
-                                  <button
-                                    className="btn btn-secondary btn-sm"
-                                    style={{ fontSize: '11px', padding: '4px 10px', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
-                                    onClick={() => {
-                                      setMarkUsedPartPn(row.partNumber);
-                                      setIsMarkUsedModalOpen(true);
-                                    }}
-                                    title="Mark this part as consumed in a repair work order"
-                                  >
-                                    <Wrench size={11} />
-                                    <span>Mark Used</span>
-                                  </button>
-                                ) : (
-                                  <button
-                                    className="btn btn-secondary btn-sm"
-                                    style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                                    onClick={() => handleQuickRequestPart(row.partNumber, currentActiveMultiSite.name)}
-                                    title={`Request replenishment/transfer for ${row.partNumber} from ${currentActiveMultiSite.name}`}
-                                  >
-                                    <Send size={11} />
-                                    <span>Request Transfer</span>
-                                  </button>
-                                )
-                              ) : (
-                                <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
-                                  Master DC View
-                                </span>
-                              )}
-                            </td>
-                          </tr>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
                         );
                       })}
                     </tbody>
@@ -4298,12 +5161,14 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           <div
             className="card"
             style={{
-              maxWidth: '520px',
+              maxWidth: '580px',
               width: '100%',
               background: '#ffffff',
               borderRadius: '12px',
               boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-              padding: '24px'
+              padding: '24px',
+              maxHeight: '90vh',
+              overflowY: 'auto'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -4313,7 +5178,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
-                    Record Part as Used / Consumed
+                    Record Part(s) as Used / Consumed
                   </h3>
                   <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b' }}>
                     Branch: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
@@ -4339,7 +5204,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   value={markUsedPartPn}
                   onChange={(e) => {
                     setMarkUsedPartPn(e.target.value);
-                    setMarkUsedSerial('');
+                    setMarkUsedSerials([]);
+                    setSerialSearchFilter('');
                   }}
                   required
                 >
@@ -4358,42 +5224,286 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </select>
               </div>
 
-              {/* Serial Number Selection or Input */}
-              <div className="form-group" style={{ marginBottom: '12px' }}>
-                <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Serial Number *</span>
-                  {availableSerialsForMarkUsed.length > 0 && (
-                    <span style={{ fontSize: '11px', color: '#059669', fontWeight: 600 }}>
-                      {availableSerialsForMarkUsed.length} available serials in branch
-                    </span>
-                  )}
-                </label>
+              {/* Search Bar & Check Serials */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label className="form-label" style={{ margin: 0, fontWeight: 700, fontSize: '12.5px' }}>
+                    Serial Number Search & Selection *
+                  </label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {availableSerialsForMarkUsed.length > 0 && (
+                      <span style={{ fontSize: '11px', color: '#059669', fontWeight: 600, background: '#ecfdf5', padding: '2px 7px', borderRadius: '4px' }}>
+                        {availableSerialsForMarkUsed.length} available in branch
+                      </span>
+                    )}
+                    {markUsedSerials.length > 0 && (
+                      <span style={{ fontSize: '11px', color: '#16a34a', fontWeight: 700, background: '#dcfce7', padding: '2px 8px', borderRadius: '4px' }}>
+                        {markUsedSerials.length} checked
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-                {availableSerialsForMarkUsed.length > 0 ? (
-                  <select
-                    className="form-input"
-                    value={markUsedSerial}
-                    onChange={(e) => setMarkUsedSerial(e.target.value)}
-                    required
-                    style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}
-                  >
-                    <option value="">-- Choose Serial Number to Consume --</option>
-                    {availableSerialsForMarkUsed.map(u => (
-                      <option key={u.id || u.serial_number} value={u.serial_number}>
-                        {u.serial_number} (Box: {u.box_number || 1})
-                      </option>
-                    ))}
-                  </select>
-                ) : (
+                {/* Primary Search & Paste Bar */}
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                  <Search size={16} color="#64748b" style={{ position: 'absolute', left: '12px', pointerEvents: 'none' }} />
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="Scan or enter part serial number (e.g. C02..., G6T...)"
-                    value={markUsedSerial}
-                    onChange={(e) => setMarkUsedSerial(e.target.value.trim().toUpperCase())}
-                    required
-                    style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+                    placeholder="Paste or type serial number here..."
+                    value={serialSearchFilter}
+                    onChange={(e) => setSerialSearchFilter(e.target.value)}
+                    onPaste={handlePasteInSearchBar}
+                    autoFocus
+                    style={{
+                      paddingLeft: '36px',
+                      paddingRight: serialSearchFilter ? '32px' : '12px',
+                      fontSize: '13px',
+                      fontFamily: 'var(--font-mono)',
+                      height: '42px',
+                      borderRadius: '8px',
+                      border: '1.5px solid #2563eb',
+                      background: '#f8fafc',
+                      boxShadow: '0 1px 3px rgba(37, 99, 235, 0.08)'
+                    }}
                   />
+                  {serialSearchFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setSerialSearchFilter('')}
+                      style={{
+                        position: 'absolute',
+                        right: '10px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: '#94a3b8',
+                        padding: '4px',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>
+                    {serialSearchFilter.trim() ? (
+                      <span>Showing matching serials for: <strong>"{serialSearchFilter.trim()}"</strong></span>
+                    ) : (
+                      <span>Paste serial from GSX/Dispatch, or select from branch stock:</span>
+                    )}
+                  </span>
+                  {displayedSerials.length > 0 && (
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={handleSelectAllDisplayedSerials}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#2563eb',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                      >
+                        Check All ({displayedSerials.length})
+                      </button>
+                      {markUsedSerials.length > 0 && (
+                        <>
+                          <span>•</span>
+                          <button
+                            type="button"
+                            onClick={handleDeselectAllSerials}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#ef4444',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              padding: 0
+                            }}
+                          >
+                            Uncheck All
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Serials List with Checkbox */}
+                <div style={{
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  background: '#ffffff',
+                  maxHeight: '175px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  padding: '6px'
+                }}>
+                  {displayedSerials.map((item) => {
+                    const isChecked = markUsedSerials.includes(item.serial_number);
+                    return (
+                      <div
+                        key={item.serial_number}
+                        onClick={() => handleToggleMarkUsedSerial(item.serial_number)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          border: isChecked ? '1.5px solid #059669' : '1px solid #f1f5f9',
+                          background: isChecked ? '#ecfdf5' : '#ffffff',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                          {/* Checkbox */}
+                          <div style={{
+                            width: '18px',
+                            height: '18px',
+                            borderRadius: '4px',
+                            border: isChecked ? '1.5px solid #059669' : '1.5px solid #94a3b8',
+                            background: isChecked ? '#059669' : '#ffffff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#ffffff',
+                            flexShrink: 0
+                          }}>
+                            {isChecked && <Check size={12} strokeWidth={3} />}
+                          </div>
+
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '12.5px',
+                              fontWeight: isChecked ? 700 : 600,
+                              color: isChecked ? '#065f46' : '#0f172a',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}>
+                              {item.serial_number}
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' }}>
+                              <span>Box {item.box_number || 1}</span>
+                              <span>•</span>
+                              {item.inStock ? (
+                                <span style={{ color: '#059669', fontWeight: 600 }}>In Branch Stock</span>
+                              ) : (
+                                <span style={{ color: '#d97706', fontWeight: 600 }}>Pasted / Manual Serial</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Status Tag */}
+                        <div style={{ flexShrink: 0, marginLeft: '8px' }}>
+                          {isChecked ? (
+                            <span style={{
+                              fontSize: '10.5px',
+                              fontWeight: 700,
+                              color: '#059669',
+                              background: '#dcfce7',
+                              padding: '2px 8px',
+                              borderRadius: '4px'
+                            }}>
+                              Checked to Consume
+                            </span>
+                          ) : (
+                            <span style={{
+                              fontSize: '10.5px',
+                              fontWeight: 500,
+                              color: '#94a3b8',
+                              background: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              padding: '2px 7px',
+                              borderRadius: '4px'
+                            }}>
+                              Click to Check
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {displayedSerials.length === 0 && (
+                    <div style={{ padding: '16px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                      <p style={{ margin: '0 0 6px 0', fontWeight: 600, color: '#334155' }}>
+                        No serial matching "{serialSearchFilter}"
+                      </p>
+                      {serialSearchFilter.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const custom = serialSearchFilter.trim().toUpperCase();
+                            setMarkUsedSerials(prev => Array.from(new Set([...prev, custom])));
+                          }}
+                          className="btn btn-secondary"
+                          style={{ fontSize: '11px', padding: '4px 10px' }}
+                        >
+                          Check "{serialSearchFilter.trim().toUpperCase()}" as Custom Serial
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Checked Serials Notification */}
+                {markUsedSerials.length > 0 ? (
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '8px 12px',
+                    background: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <CheckCircle2 size={15} color="#16a34a" />
+                      <span style={{ fontSize: '11.5px', color: '#166534', fontWeight: 600 }}>
+                        {markUsedSerials.length} serial{markUsedSerials.length > 1 ? 's' : ''} checked for consumption: <strong>{markUsedSerials.join(', ')}</strong>
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleDeselectAllSerials}
+                      style={{ background: 'none', border: 'none', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '7px 10px',
+                    background: '#fffbeb',
+                    border: '1px dashed #fcd34d',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    color: '#92400e',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}>
+                    <AlertTriangle size={13} color="#d97706" style={{ flexShrink: 0 }} />
+                    <span>Paste your serial in the search bar above and check it to proceed.</span>
+                  </div>
                 )}
               </div>
 
@@ -4434,11 +5544,24 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
-                  disabled={isSubmittingMarkUsed || !markUsedSerial}
+                  style={{
+                    background: '#059669',
+                    borderColor: '#059669',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 700
+                  }}
+                  disabled={isSubmittingMarkUsed || (markUsedSerials.length === 0 && !serialSearchFilter.trim())}
                 >
                   <Check size={14} />
-                  <span>{isSubmittingMarkUsed ? 'Recording...' : 'Confirm Part Used'}</span>
+                  <span>
+                    {isSubmittingMarkUsed
+                      ? 'Recording...'
+                      : markUsedSerials.length > 1
+                      ? `Confirm ${markUsedSerials.length} Parts Used`
+                      : 'Confirm Part Used'}
+                  </span>
                 </button>
               </div>
             </form>
@@ -4633,8 +5756,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 9.5 Clear Site Parts Modal */}
-      {clearPartsModalState && (
+      {/* 9.5 Clear Site Parts Modal (Superadmin Only) */}
+      {isSuperadmin && clearPartsModalState && (
         <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '12px', maxWidth: '500px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid #fecaca', overflow: 'hidden' }}>
             <div style={{ padding: '16px 20px', background: '#fef2f2', borderBottom: '1px solid #fecaca', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

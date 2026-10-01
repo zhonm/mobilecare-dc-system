@@ -516,3 +516,69 @@ export function isDisplayOrBatteryForIPhone13Plus(part) {
   return Boolean(is13Plus);
 }
 
+/**
+ * Normalizes case and spacing for Apple iPhone model strings
+ * e.g., "iphone 17 pro max" -> "iPhone 17 Pro Max"
+ */
+export function normalizeIPhoneModelCase(str) {
+  if (!str) return 'Apple iPhone';
+  let s = str.trim().replace(/\s+/g, ' ');
+  // Replace iphone with iPhone
+  s = s.replace(/^iphone/i, 'iPhone');
+  // Normalize sub-models
+  s = s.replace(/\bpro\s*max\b/i, 'Pro Max');
+  s = s.replace(/\bpro\b/i, 'Pro');
+  s = s.replace(/\bplus\b/i, 'Plus');
+  s = s.replace(/\bmini\b/i, 'mini');
+  s = s.replace(/\bultra\b/i, 'Ultra');
+  s = s.replace(/\bair\b/i, 'Air');
+  s = s.replace(/\bse(?:\s*(\d+))?\b/i, (m, g1) => g1 ? `SE (Gen ${g1})` : 'SE');
+  return s;
+}
+
+/**
+ * Intelligently extracts and standardizes canonical Apple device models from raw model and description strings.
+ * Handles cases where model is generic (e.g. "iPhone", "Apple iPhone"), has variant prefixes ("pSIM, iPhone 17 Pro"),
+ * or contains part descriptions ("SVC,IPHONE 14 PRO MAX, BATTERY", "Battery, eSIM, iPhone 17 Pro Max").
+ */
+export function resolveCanonicalIPhoneModel(rawModel = '', description = '') {
+  const m = String(rawModel || '').trim();
+  const desc = String(description || '').trim();
+
+  // Pattern matching standard Apple iPhone model definitions (iPhone + Generation / Family + Variant)
+  const modelRegex = /iPhone\s*(?:(?:1[1-9]|[2-9][0-9]|[6-9])|Air|SE(?:\s*\d+)?|XR|XS|X)(?:\s*(?:Pro\s*Max|Pro|Plus|mini|Ultra|Max|e))?/i;
+
+  const isGenericOrMessyModel = !m ||
+    /^apple\s*iphone$/i.test(m) ||
+    /^iphone$/i.test(m) ||
+    /^apple$/i.test(m) ||
+    /^(battery|display|camera|svc|psim|esim)/i.test(m) ||
+    m.includes(',') ||
+    !modelRegex.test(m);
+
+  // If rawModel is generic, messy, or doesn't have a specific model, extract from description
+  if (isGenericOrMessyModel) {
+    const descMatch = desc.match(modelRegex);
+    if (descMatch) {
+      return normalizeIPhoneModelCase(descMatch[0]);
+    }
+  }
+
+  // Extract from rawModel if matched
+  const rawMatch = m.match(modelRegex);
+  if (rawMatch) {
+    return normalizeIPhoneModelCase(rawMatch[0]);
+  }
+
+  // Universal / Other components
+  if (m.toLowerCase().includes('universal') || desc.toLowerCase().includes('universal')) {
+    return 'Universal / Multi-Model';
+  }
+
+  if (m && !isGenericOrMessyModel) {
+    return normalizeIPhoneModelCase(m);
+  }
+
+  return 'Universal / Multi-Model';
+}
+

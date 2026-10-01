@@ -29,7 +29,8 @@ import {
   User,
   Ban,
   Lock,
-  Shield
+  Shield,
+  Package
 } from 'lucide-react';
 import {
   parseScanInPartsFile,
@@ -44,6 +45,7 @@ import { barcodeAudio } from '../utils/barcodeAudio';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 import IntakeRecords from './IntakeRecords';
+import RequestParts from './RequestParts';
 
 // Pure category & assignment classification helpers
 function isUnitSvnr(u) {
@@ -87,17 +89,28 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   } = useApp();
 
   const isPmgUser = currentUser?.role === 'parts_management';
+  const isSuperadmin = currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin';
 
-  // Top Segmented Tab: 'station' (DC Receive Scan-In Station) | 'records' (DC Stock Records)
-  const [activeReceiveTab, setActiveReceiveTab] = useState(isPmgUser ? 'station' : initialTab);
+  // Top Segmented Tab:
+  // Superadmin: 'station' (DC Receive Scan-In Station) | 'records' (DC Stock Records)
+  // PMG: 'stock' (Branch Stock On Hand) | 'station' (Branch Receive Scan-In Station)
+  const [activeReceiveTab, setActiveReceiveTab] = useState(() => {
+    if (initialTab && initialTab !== 'default') return initialTab;
+    if (isPmgUser) {
+      try {
+        return localStorage.getItem('mdc_pmg_receive_tab') || 'stock';
+      } catch (e) {
+        return 'stock';
+      }
+    }
+    return 'station';
+  });
 
   useEffect(() => {
-    if (isPmgUser) {
-      setActiveReceiveTab('station');
-    } else if (initialTab) {
+    if (initialTab && initialTab !== 'default') {
       setActiveReceiveTab(initialTab);
     }
-  }, [initialTab, isPmgUser]);
+  }, [initialTab]);
 
   const userSiteObj = useMemo(() => {
     const rawId = currentUser?.siteId || currentUser?.site_id;
@@ -208,6 +221,18 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     });
   }, [shipments, isPmgUser, userSiteObj, sites, currentUser?.siteId, currentUser?.siteCode]);
 
+  // Verified in-stock parts count for this branch to display on the tab badge
+  const branchStockUnitsCount = useMemo(() => {
+    if (!activeReceivingSite?.id && !activeReceivingSite?.code) return 0;
+    const siteId = activeReceivingSite.id;
+    const siteCode = activeReceivingSite.code;
+    return (inventoryUnits || []).filter(u => {
+      const uSiteId = u.current_site_id || u.siteId;
+      const uSiteCode = u.site_code || u.siteCode;
+      const matchesSite = (siteId && uSiteId === siteId) || (siteCode && uSiteCode === siteCode);
+      return matchesSite && String(u.status || '').toLowerCase() === 'in_stock';
+    }).length;
+  }, [inventoryUnits, activeReceivingSite]);
   
   const [selectedPoId, setSelectedPoId] = useState(() => {
     return globalSelectedPoId || '';
@@ -263,11 +288,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     } catch (e) {}
   }, [intakeAssignment]);
 
-  // Auto-Receive Feature State with localStorage persistence
+  // Auto-Receive Feature State with localStorage persistence (Default ON for fast workflow)
   const [autoReceive, setAutoReceive] = useState(() => {
     try {
-      const saved = localStorage.getItem('mdc_auto_receive');
-      return saved !== null ? JSON.parse(saved) : true; // Default ON for seamless warehouse workflow
+      const key = isPmgUser ? 'mdc_pmg_auto_receive' : 'mdc_auto_receive';
+      const saved = localStorage.getItem(key);
+      return saved !== null ? JSON.parse(saved) : true; // Default ON for seamless warehouse/branch workflow
     } catch (e) {
       return true;
     }
@@ -275,7 +301,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   const [keepPartNumber, setKeepPartNumber] = useState(() => {
     try {
-      const saved = localStorage.getItem('mdc_keep_pn');
+      const key = isPmgUser ? 'mdc_pmg_keep_pn' : 'mdc_keep_pn';
+      const saved = localStorage.getItem(key);
       return saved !== null ? JSON.parse(saved) : true; // Keep P/N by default for batch serial scanning
     } catch (e) {
       return true;
@@ -285,15 +312,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Sync Auto-Receive settings to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('mdc_auto_receive', JSON.stringify(autoReceive));
+      const key = isPmgUser ? 'mdc_pmg_auto_receive' : 'mdc_auto_receive';
+      localStorage.setItem(key, JSON.stringify(autoReceive));
     } catch (e) {}
-  }, [autoReceive]);
+  }, [autoReceive, isPmgUser]);
 
   useEffect(() => {
     try {
-      localStorage.setItem('mdc_keep_pn', JSON.stringify(keepPartNumber));
+      const key = isPmgUser ? 'mdc_pmg_keep_pn' : 'mdc_keep_pn';
+      localStorage.setItem(key, JSON.stringify(keepPartNumber));
     } catch (e) {}
-  }, [keepPartNumber]);
+  }, [keepPartNumber, isPmgUser]);
 
   // In-memory scans state for current component lifecycle (cleared on unmount/session switch)
   const [sessionScans, setSessionScans] = useState([]);
@@ -1467,64 +1496,137 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   return (
     <div className="scanner-container">
-      {/* Top Dual-Card Navigation: Workstation vs Stock Records */}
+      {/* Top Dual-Card Navigation: Workstation vs Stock Records / Stock On Hand */}
       <div className="scanin-top-tabs-bar" role="tablist" aria-label="Receive Scan-In Navigation">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeReceiveTab === 'station'}
-          className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
-          onClick={() => setActiveReceiveTab('station')}
-        >
-          <div className="scanin-tab-card-icon">
-            <Barcode size={22} />
-          </div>
-          <div className="scanin-tab-card-content">
-            <div className="scanin-tab-card-header">
-              <span className="scanin-tab-card-title">
-                {isPmgUser ? 'Branch Receive Scan-In Station' : 'DC Receive Scan-In Station'}
-              </span>
-              <span className="scanin-tab-badge">
-                <span className="scanin-tab-dot live" />
-                {availableInStockUnits.length} in stock
-              </span>
-            </div>
-            <div className="scanin-tab-card-subtitle">
-              {isPmgUser
-                ? 'Branch inbound barcode scanning & inventory intake'
-                : 'Serial barcode workstation, real-time intake & PO routing'}
-            </div>
-          </div>
-        </button>
+        {isPmgUser ? (
+          <>
+            {/* PMG Card 1: Branch Stock On Hand */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'stock'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'stock' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveReceiveTab('stock');
+                try {
+                  localStorage.setItem('mdc_pmg_receive_tab', 'stock');
+                } catch (e) {}
+              }}
+            >
+              <div className="scanin-tab-card-icon">
+                <Package size={22} />
+              </div>
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">Branch Stock On Hand</span>
+                  <span className="scanin-tab-badge">
+                    <span className="scanin-tab-dot live" />
+                    {branchStockUnitsCount} in stock
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Local inventory, verified physical stock & device catalog
+                </div>
+              </div>
+            </button>
 
-        {!isPmgUser && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeReceiveTab === 'records'}
-            className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
-            onClick={() => setActiveReceiveTab('records')}
-          >
-            <div className="scanin-tab-card-icon">
-              <BookmarkPlus size={22} />
-            </div>
-            <div className="scanin-tab-card-content">
-              <div className="scanin-tab-card-header">
-                <span className="scanin-tab-card-title">DC Stock Records</span>
-                <span className="scanin-tab-badge">
-                  <span className="scanin-tab-dot records" />
-                  {dcIntakeRecords?.length || 0} batches
-                </span>
+            {/* PMG Card 2: Branch Receive Scan-In Station */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'station'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveReceiveTab('station');
+                try {
+                  localStorage.setItem('mdc_pmg_receive_tab', 'station');
+                } catch (e) {}
+              }}
+            >
+              <div className="scanin-tab-card-icon">
+                <Barcode size={22} />
               </div>
-              <div className="scanin-tab-card-subtitle">
-                Historical intake batches, saved audit logs & Excel exports
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">Branch Receive Scan-In Station</span>
+                  <span className="scanin-tab-badge">
+                    <span className="scanin-tab-dot records" />
+                    {availableInStockUnits.length} in stock
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Branch inbound barcode scanning & inventory intake
+                </div>
               </div>
-            </div>
-          </button>
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Superadmin Card 1: DC Receive Scan-In Station */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'station'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'station' ? 'active' : ''}`}
+              onClick={() => setActiveReceiveTab('station')}
+            >
+              <div className="scanin-tab-card-icon">
+                <Barcode size={22} />
+              </div>
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">DC Receive Scan-In Station</span>
+                  <span className="scanin-tab-badge">
+                    <span className="scanin-tab-dot live" />
+                    {availableInStockUnits.length} in stock
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Serial barcode workstation, real-time intake & PO routing
+                </div>
+              </div>
+            </button>
+
+            {/* Superadmin Card 2: DC Stock Records */}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeReceiveTab === 'records'}
+              className={`scanin-tab-card scanin-tab-btn ${activeReceiveTab === 'records' ? 'active' : ''}`}
+              onClick={() => setActiveReceiveTab('records')}
+            >
+              <div className="scanin-tab-card-icon">
+                <BookmarkPlus size={22} />
+              </div>
+              <div className="scanin-tab-card-content">
+                <div className="scanin-tab-card-header">
+                  <span className="scanin-tab-card-title">DC Stock Records</span>
+                  <span className="scanin-tab-badge">
+                    <span className="scanin-tab-dot records" />
+                    {dcIntakeRecords?.length || 0} batches
+                  </span>
+                </div>
+                <div className="scanin-tab-card-subtitle">
+                  Historical intake batches, saved audit logs & Excel exports
+                </div>
+              </div>
+            </button>
+          </>
         )}
       </div>
 
-      {!isPmgUser && activeReceiveTab === 'records' ? (
+      {isPmgUser && activeReceiveTab === 'stock' ? (
+        <RequestParts
+          defaultTab="stock_on_hand"
+          embeddedMode={true}
+          onNavigateToStation={() => {
+            setActiveReceiveTab('station');
+            try {
+              localStorage.setItem('mdc_pmg_receive_tab', 'station');
+            } catch (e) {}
+          }}
+        />
+      ) : !isPmgUser && activeReceiveTab === 'records' ? (
         <IntakeRecords 
           embeddedMode={true} 
           onNavigateToScanIn={() => setActiveReceiveTab('station')} 
@@ -1751,16 +1853,24 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
               {/* Sub-row: Batch scanning checkbox + Quick Actions Ribbon */}
               <div className="workstation-sub-actions-row">
-                <div className="workstation-options-group">
-                  {autoReceive && (
-                    <label className="workstation-checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={keepPartNumber}
-                        onChange={(e) => setKeepPartNumber(e.target.checked)}
-                      />
-                      <span>Keep P/N for batch scanning</span>
-                    </label>
+                <div className="workstation-options-group" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <label className="workstation-checkbox-label" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 600, color: '#f1f5f9' }}>
+                    <input
+                      type="checkbox"
+                      checked={keepPartNumber}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setKeepPartNumber(next);
+                        showToast(next ? 'Keep Part Number (P/N) ENABLED for rapid serial scanning' : 'Keep Part Number DISABLED', 'info');
+                      }}
+                      style={{ width: '16px', height: '16px', accentColor: '#0284c7', cursor: 'pointer' }}
+                    />
+                    <span>Keep Part Number (P/N) for batch serial scanning</span>
+                  </label>
+                  {isPmgUser && (
+                    <span style={{ fontSize: '11.5px', color: '#38bdf8', background: 'rgba(2, 132, 199, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '2px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                      ⚡ PMG Fast Barcode Intake Active
+                    </span>
                   )}
                 </div>
 
@@ -1776,16 +1886,18 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     <span>Import Spreadsheet (XLSX/CSV)</span>
                   </button>
 
-                  <button
-                    type="button"
-                    className="btn-batch-outline"
-                    style={{ color: '#dc2626', borderColor: '#fca5a5', background: '#fff1f2' }}
-                    onClick={() => setIsClearSiteModalOpen(true)}
-                    title={`Clear old parts from ${activeReceivingSite?.name || 'site'} prior to import`}
-                  >
-                    <Trash2 size={14} color="#dc2626" />
-                    <span>Clear Site Parts</span>
-                  </button>
+                  {isSuperadmin && (
+                    <button
+                      type="button"
+                      className="btn-batch-outline"
+                      style={{ color: '#dc2626', borderColor: '#fca5a5', background: '#fff1f2' }}
+                      onClick={() => setIsClearSiteModalOpen(true)}
+                      title={`Clear old parts from ${activeReceivingSite?.name || 'site'} prior to import`}
+                    >
+                      <Trash2 size={14} color="#dc2626" />
+                      <span>Clear Site Parts</span>
+                    </button>
+                  )}
 
                   {isPmgUser && (
                     <button
@@ -3504,8 +3616,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         </div>
       )}
 
-      {/* Clear Site Parts Modal */}
-      {isClearSiteModalOpen && (
+      {/* Clear Site Parts Modal (Superadmin Only) */}
+      {isSuperadmin && isClearSiteModalOpen && (
         <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '12px', maxWidth: '500px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid #fecaca', overflow: 'hidden' }}>
             <div style={{ padding: '16px 20px', background: '#fef2f2', borderBottom: '1px solid #fecaca', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

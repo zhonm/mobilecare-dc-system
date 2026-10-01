@@ -27,7 +27,10 @@ import {
   RefreshCw,
   LayoutGrid,
   Copy,
-  Check
+  Check,
+  Globe,
+  Info,
+  Filter
 } from 'lucide-react';
 
 const INITIAL_GRID_ROW_LIMIT = 100;
@@ -50,7 +53,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     showToast
   } = useApp();
 
-  const isSuperadmin = currentUser?.role === 'superadmin';
+  const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
 
   // Resolve user site object
@@ -60,21 +63,27 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
 
   // Selected site for monitoring
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
+    if (!isSuperadmin && userSiteObj?.id) return userSiteObj.id;
     if (initialSiteId) return initialSiteId;
-    if (isPmgUser && userSiteObj?.id) return userSiteObj.id;
     return userSiteObj?.id || sites[0]?.id || 'ALL';
   });
 
-  // Synchronize selected site whenever userSiteObj resolves (crucial for PMG users loaded asynchronously)
+  // Track parent initialSiteId changes without overriding user selections
+  const prevInitialSiteIdRef = useRef(initialSiteId);
   useEffect(() => {
-    if (initialSiteId) {
-      setSelectedSiteId(initialSiteId);
-    } else if (isPmgUser && userSiteObj?.id) {
-      setSelectedSiteId(userSiteObj.id);
-    } else if (!selectedSiteId || selectedSiteId === 'site-branch') {
-      if (userSiteObj?.id) setSelectedSiteId(userSiteObj.id);
+    if (!isSuperadmin && userSiteObj?.id) {
+      if (selectedSiteId !== userSiteObj.id) {
+        setSelectedSiteId(userSiteObj.id);
+      }
+      return;
     }
-  }, [initialSiteId, isPmgUser, selectedSiteId, userSiteObj?.id, userSiteObj?.code]);
+    if (initialSiteId && initialSiteId !== prevInitialSiteIdRef.current) {
+      prevInitialSiteIdRef.current = initialSiteId;
+      setSelectedSiteId(initialSiteId);
+    } else if (!selectedSiteId && userSiteObj?.id) {
+      setSelectedSiteId(userSiteObj.id);
+    }
+  }, [initialSiteId, userSiteObj?.id, selectedSiteId, isSuperadmin]);
 
   const activeSiteObj = useMemo(() => {
     if (selectedSiteId === 'ALL') {
@@ -259,44 +268,134 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     };
   }, [getSiteMonitoringData, activeSiteObj, inventoryUnits]);
 
+  // Robust part description resolver
+  const getPartDescription = useCallback((pn, fallbackDesc) => {
+    if (fallbackDesc && fallbackDesc !== 'Replacement Part') return fallbackDesc;
+    const clean = String(pn || '').trim().toUpperCase();
+    const p = parts.find(it => String(it.part_number || it.partNumber || '').trim().toUpperCase() === clean);
+    return p?.description || fallbackDesc || '';
+  }, [parts]);
+
   // Filtering helper
   const filterList = useCallback((items) => {
-    return (items || []).filter(item => {
+    if (!items || !Array.isArray(items)) return [];
+    const qRaw = searchQuery.toLowerCase().trim();
+    const qClean = qRaw.replace(/[^a-z0-9]/gi, '');
+
+    return items.filter(item => {
+      // 1. Category Filter
       if (categoryFilter !== 'ALL') {
-        const cat = getCategoryForPart(item.part_number || item.partNumber || '', parts);
+        const rawPN = item.part_number || item.partNumber || '';
+        const cat = getCategoryForPart(rawPN, parts);
         if (categoryFilter === 'cat-display' && !cat.includes('display')) return false;
         if (categoryFilter === 'cat-battery' && !cat.includes('battery')) return false;
       }
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase().trim();
+
+      // 2. Search Query Matching
+      if (qRaw) {
         const pn = String(item.part_number || item.partNumber || '').toLowerCase();
-        const desc = String(item.description || '').toLowerCase();
+        const pnClean = pn.replace(/[^a-z0-9]/gi, '');
+        const desc = String(item.description || getPartDescription(pn, '') || '').toLowerCase();
         const sn = String(item.serial_number || item.serialNumber || '').toLowerCase();
-        const rem = String(item.remarks || item.notes || item.work_order_number || item.transfer_slip_number || '').toLowerCase();
-        return pn.includes(q) || desc.includes(q) || sn.includes(q) || rem.includes(q);
+        const snClean = sn.replace(/[^a-z0-9]/gi, '');
+        const rem = String(item.remarks || item.notes || item.work_order_number || item.transfer_slip_number || item.outtake_reason || '').toLowerCase();
+        const site = String(item.site_code || item.siteCode || item.site_name || item.siteName || '').toLowerCase();
+
+        // Direct substring check
+        if (pn.includes(qRaw) || desc.includes(qRaw) || sn.includes(qRaw) || rem.includes(qRaw) || site.includes(qRaw)) {
+          return true;
+        }
+
+        // Normalized alphanumeric check (handles missing hyphens/spaces like "66121991" or partial serials)
+        if (qClean && qClean.length >= 3) {
+          if (pnClean.includes(qClean) || snClean.includes(qClean)) {
+            return true;
+          }
+        }
+        return false;
       }
       return true;
     });
-  }, [categoryFilter, parts, searchQuery]);
+  }, [categoryFilter, parts, searchQuery, getPartDescription]);
 
   const filteredInStock = useMemo(() => filterList(siteData.inStock), [filterList, siteData.inStock]);
   const filteredUsed = useMemo(() => filterList(siteData.used), [filterList, siteData.used]);
   const filteredOuttake = useMemo(() => filterList(siteData.outtake), [filterList, siteData.outtake]);
   const filteredTransferred = useMemo(() => filterList(siteData.transferred), [filterList, siteData.transferred]);
+
   const filteredSummary = useMemo(() => {
-    return (siteData.stockSummary || []).filter(item => {
+    const list = siteData.stockSummary || [];
+    const qRaw = searchQuery.toLowerCase().trim();
+    const qClean = qRaw.replace(/[^a-z0-9]/gi, '');
+
+    // Collect part numbers from all units that matched the search in other sections
+    const matchingUnitPartNumbers = new Set();
+    if (qRaw) {
+      filteredInStock.forEach(u => matchingUnitPartNumbers.add(String(u.part_number || u.partNumber || '').toUpperCase()));
+      filteredUsed.forEach(u => matchingUnitPartNumbers.add(String(u.part_number || u.partNumber || '').toUpperCase()));
+      filteredOuttake.forEach(u => matchingUnitPartNumbers.add(String(u.part_number || u.partNumber || '').toUpperCase()));
+      filteredTransferred.forEach(u => matchingUnitPartNumbers.add(String(u.part_number || u.partNumber || '').toUpperCase()));
+    }
+
+    return list.filter(item => {
+      const rawPN = item.partNumber || item.part_number || '';
+      const pnUpper = String(rawPN).toUpperCase();
+
       if (categoryFilter !== 'ALL') {
-        const cat = getCategoryForPart(item.partNumber, parts);
+        const cat = getCategoryForPart(rawPN, parts);
         if (categoryFilter === 'cat-display' && !cat.includes('display')) return false;
         if (categoryFilter === 'cat-battery' && !cat.includes('battery')) return false;
       }
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase().trim();
-        return item.partNumber.toLowerCase().includes(q) || (item.description || '').toLowerCase().includes(q);
+      if (qRaw) {
+        // If this part number had matching serials in any section, include it in summary
+        if (matchingUnitPartNumbers.has(pnUpper)) return true;
+
+        const pn = String(rawPN).toLowerCase();
+        const pnClean = pn.replace(/[^a-z0-9]/gi, '');
+        const desc = String(item.description || getPartDescription(rawPN, '') || '').toLowerCase();
+        const site = String(item.siteCode || item.site_code || '').toLowerCase();
+
+        if (pn.includes(qRaw) || desc.includes(qRaw) || site.includes(qRaw)) return true;
+        if (qClean && qClean.length >= 3 && pnClean.includes(qClean)) return true;
+
+        return false;
       }
       return true;
     });
-  }, [siteData.stockSummary, searchQuery, categoryFilter, parts]);
+  }, [siteData.stockSummary, searchQuery, categoryFilter, parts, filteredInStock, filteredUsed, filteredOuttake, filteredTransferred, getPartDescription]);
+
+  // Check if active query matches items in OTHER retail branches when a specific site is selected (Superadmin only)
+  const crossBranchMatchCount = useMemo(() => {
+    if (!isSuperadmin || !searchQuery || selectedSiteId === 'ALL') return 0;
+    const qRaw = searchQuery.toLowerCase().trim();
+    const qClean = qRaw.replace(/[^a-z0-9]/gi, '');
+    if (!qClean && !qRaw) return 0;
+
+    const currentSiteIdLower = String(activeSiteObj.id || '').toLowerCase();
+    const currentSiteCodeUpper = String(activeSiteObj.code || '').toUpperCase();
+
+    // Check all non-DC inventory units
+    return (inventoryUnits || []).filter(u => {
+      const sId = String(u.current_site_id || u.site_id || u.siteId || '').toLowerCase();
+      const sCode = String(u.site_code || u.siteCode || '').toUpperCase();
+      if (sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || u.is_dc) return false;
+
+      // Skip current site
+      if (sId === currentSiteIdLower || sCode === currentSiteCodeUpper) return false;
+
+      const pn = String(u.part_number || '').toLowerCase();
+      const pnClean = pn.replace(/[^a-z0-9]/gi, '');
+      const desc = String(u.description || getPartDescription(u.part_number, '') || '').toLowerCase();
+      const sn = String(u.serial_number || '').toLowerCase();
+      const snClean = sn.replace(/[^a-z0-9]/gi, '');
+      const rem = String(u.remarks || u.notes || u.work_order_number || u.transfer_slip_number || '').toLowerCase();
+      const site = String(u.site_code || u.site_name || '').toLowerCase();
+
+      if (pn.includes(qRaw) || desc.includes(qRaw) || sn.includes(qRaw) || rem.includes(qRaw) || site.includes(qRaw)) return true;
+      if (qClean && qClean.length >= 3 && (pnClean.includes(qClean) || snClean.includes(qClean))) return true;
+      return false;
+    }).length;
+  }, [isSuperadmin, searchQuery, selectedSiteId, activeSiteObj, inventoryUnits, getPartDescription]);
 
   // Export handler
   const handleExportXLSX = async () => {
@@ -548,8 +647,8 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            {/* Site selector for Superadmin or Multi-Site viewers */}
-            {(!isPmgUser || isSuperadmin) && (
+            {/* Site selector for selecting branch or All Retail Branches (Superadmin only) */}
+            {isSuperadmin ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Building2 size={15} color="#64748b" />
                 <select
@@ -563,6 +662,13 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                     <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
                   ))}
                 </select>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', border: '1px solid #e2e8f0', padding: '6px 12px', borderRadius: '6px' }}>
+                <Building2 size={14} color="#0284c7" />
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a' }}>
+                  {activeSiteObj.code} — {activeSiteObj.name}
+                </span>
               </div>
             )}
 
@@ -635,29 +741,31 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span>Export (.xlsx)</span>
             </button>
 
-            <button
-              type="button"
-              className="btn btn-sm"
-              style={{
-                fontSize: '11.5px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                fontWeight: 700,
-                color: '#dc2626',
-                border: '1px solid #fecaca',
-                background: '#fff1f2',
-                borderRadius: '6px'
-              }}
-              onClick={() => {
-                setClearPartsScope(activeSiteObj.id === 'ALL' ? 'ALL' : 'CURRENT');
-                setIsClearPartsOpen(true);
-              }}
-              title="Clear old shipped parts from site inventory prior to Excel import"
-            >
-              <Trash2 size={13} color="#dc2626" />
-              <span>Clear Parts</span>
-            </button>
+            {isSuperadmin && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{
+                  fontSize: '11.5px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: 700,
+                  color: '#dc2626',
+                  border: '1px solid #fecaca',
+                  background: '#fff1f2',
+                  borderRadius: '6px'
+                }}
+                onClick={() => {
+                  setClearPartsScope(activeSiteObj.id === 'ALL' ? 'ALL' : 'CURRENT');
+                  setIsClearPartsOpen(true);
+                }}
+                title="Clear old shipped parts from site inventory prior to Excel import"
+              >
+                <Trash2 size={13} color="#dc2626" />
+                <span>Clear Parts</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -721,179 +829,335 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
 
         </div>
 
-        {/* 3. Section Tabs & Search Bar */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #f1f5f9' }}>
-          
-          {/* Sub-view switcher */}
-          <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', gap: '2px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => setViewSection('grid')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'grid' ? '#ffffff' : 'transparent',
-                color: viewSection === 'grid' ? '#0f172a' : '#64748b',
-                boxShadow: viewSection === 'grid' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <LayoutGrid size={13} color={viewSection === 'grid' ? '#0284c7' : '#94a3b8'} />
-              <span>Spreadsheet Grid (All Sections)</span>
-            </button>
+        {/* 3. Section Tabs */}
+        <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            {/* Sub-view switcher */}
+            <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', gap: '2px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setViewSection('grid')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'grid' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'grid' ? '#0f172a' : '#64748b',
+                  boxShadow: viewSection === 'grid' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <LayoutGrid size={13} color={viewSection === 'grid' ? '#0284c7' : '#94a3b8'} />
+                <span>Consolidated View (All Sections)</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setViewSection('stock')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'stock' ? '#ffffff' : 'transparent',
-                color: viewSection === 'stock' ? '#1e40af' : '#64748b',
-                boxShadow: viewSection === 'stock' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <Package size={13} color={viewSection === 'stock' ? '#2563eb' : '#94a3b8'} />
-              <span>Stock on hand ({siteData.kpi.inStockCount})</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setViewSection('stock')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'stock' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'stock' ? '#1e40af' : '#64748b',
+                  boxShadow: viewSection === 'stock' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Package size={13} color={viewSection === 'stock' ? '#2563eb' : '#94a3b8'} />
+                <span>Stock on hand ({siteData.kpi.inStockCount})</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setViewSection('used')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'used' ? '#ffffff' : 'transparent',
-                color: viewSection === 'used' ? '#92400e' : '#64748b',
-                boxShadow: viewSection === 'used' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <Wrench size={13} color={viewSection === 'used' ? '#d97706' : '#94a3b8'} />
-              <span>Used Parts ({siteData.kpi.usedCount})</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setViewSection('used')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'used' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'used' ? '#92400e' : '#64748b',
+                  boxShadow: viewSection === 'used' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Wrench size={13} color={viewSection === 'used' ? '#d97706' : '#94a3b8'} />
+                <span>Used Parts ({siteData.kpi.usedCount})</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setViewSection('outtake')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'outtake' ? '#ffffff' : 'transparent',
-                color: viewSection === 'outtake' ? '#6b21a8' : '#64748b',
-                boxShadow: viewSection === 'outtake' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <LogOut size={13} color={viewSection === 'outtake' ? '#9333ea' : '#94a3b8'} />
-              <span>For Outtake ({siteData.kpi.outtakeCount})</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setViewSection('outtake')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'outtake' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'outtake' ? '#6b21a8' : '#64748b',
+                  boxShadow: viewSection === 'outtake' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <LogOut size={13} color={viewSection === 'outtake' ? '#9333ea' : '#94a3b8'} />
+                <span>For Outtake ({siteData.kpi.outtakeCount})</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setViewSection('transferred')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'transferred' ? '#ffffff' : 'transparent',
-                color: viewSection === 'transferred' ? '#155e75' : '#64748b',
-                boxShadow: viewSection === 'transferred' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <ArrowRightLeft size={13} color={viewSection === 'transferred' ? '#0891b2' : '#94a3b8'} />
-              <span>Transferred ({siteData.kpi.transferredCount})</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setViewSection('transferred')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'transferred' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'transferred' ? '#155e75' : '#64748b',
+                  boxShadow: viewSection === 'transferred' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <ArrowRightLeft size={13} color={viewSection === 'transferred' ? '#0891b2' : '#94a3b8'} />
+                <span>Transferred ({siteData.kpi.transferredCount})</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setViewSection('summary')}
-              style={{
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                background: viewSection === 'summary' ? '#ffffff' : 'transparent',
-                color: viewSection === 'summary' ? '#166534' : '#64748b',
-                boxShadow: viewSection === 'summary' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex',
+              <button
+                type="button"
+                onClick={() => setViewSection('summary')}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '5px 12px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  background: viewSection === 'summary' ? '#ffffff' : 'transparent',
+                  color: viewSection === 'summary' ? '#166534' : '#64748b',
+                  boxShadow: viewSection === 'summary' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Boxes size={13} color={viewSection === 'summary' ? '#16a34a' : '#94a3b8'} />
+                <span>Site Stock Breakdown</span>
+              </button>
+            </div>
+
+            {/* Scope info indicator */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b' }}>
+              <span style={{ fontWeight: 600 }}>Active Scope:</span>
+              <span style={{
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: '5px'
-              }}
-            >
-              <Boxes size={13} color={viewSection === 'summary' ? '#16a34a' : '#94a3b8'} />
-              <span>Site Stock Breakdown</span>
-            </button>
+                gap: '4px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                fontWeight: 700,
+                fontSize: '11px',
+                background: selectedSiteId === 'ALL' ? '#e0f2fe' : '#f1f5f9',
+                color: selectedSiteId === 'ALL' ? '#0284c7' : '#334155'
+              }}>
+                {selectedSiteId === 'ALL' ? <Globe size={11} /> : <Building2 size={11} />}
+                {selectedSiteId === 'ALL' ? 'All Retail Branches' : (activeSiteObj?.code || 'Current Branch')}
+              </span>
+            </div>
           </div>
 
-          {/* Search & Category Filter */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, justifyContent: 'flex-end', minWidth: '240px' }}>
-            <div style={{ position: 'relative', width: '100%', maxWidth: '260px' }}>
-              <Search size={13} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+          {/* 4. Dedicated Full-Width Search & Filter Toolbar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginTop: '12px',
+            padding: '8px 12px',
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: '8px',
+            flexWrap: 'wrap'
+          }}>
+            {/* Search Input Box */}
+            <div style={{ position: 'relative', flex: '1 1 320px', display: 'flex', alignItems: 'center' }}>
+              <Search
+                size={14}
+                style={{
+                  position: 'absolute',
+                  left: '12px',
+                  color: searchQuery ? '#0284c7' : '#94a3b8',
+                  pointerEvents: 'none'
+                }}
+              />
               <input
                 type="text"
                 className="form-input"
-                style={{ paddingLeft: '30px', fontSize: '12px', height: '32px', borderRadius: '6px' }}
-                placeholder="Search P/N, Serial, Order#, TS#..."
+                style={{
+                  width: '100%',
+                  paddingLeft: '34px',
+                  paddingRight: searchQuery ? '95px' : '14px',
+                  fontSize: '12px',
+                  height: '34px',
+                  borderRadius: '6px',
+                  background: '#ffffff',
+                  borderColor: searchQuery ? '#38bdf8' : '#cbd5e1',
+                  boxShadow: searchQuery ? '0 0 0 2px rgba(56, 189, 248, 0.15)' : 'none'
+                }}
+                placeholder="Search by Serial Number, Part Number, Description, Work Order #, or TS#..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
               {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
-                >
-                  <X size={12} />
-                </button>
+                <div style={{ position: 'absolute', right: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#0369a1', background: '#e0f2fe', padding: '1px 6px', borderRadius: '4px' }}>
+                    {filteredInStock.length + filteredUsed.length + filteredOuttake.length + filteredTransferred.length} found
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#94a3b8',
+                      cursor: 'pointer',
+                      padding: '2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: '4px'
+                    }}
+                    title="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
               )}
             </div>
 
-            <select
-              className="form-select"
-              style={{ fontSize: '11.5px', padding: '5px 10px', height: '32px', borderRadius: '6px', maxWidth: '140px' }}
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-            >
-              <option value="ALL">All Categories</option>
-              <option value="cat-display">Displays Only</option>
-              <option value="cat-battery">Batteries Only</option>
-            </select>
-          </div>
+            {/* Scope & Filter Controls Group */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, flexWrap: 'wrap' }}>
+              {/* Branch Scope Segmented Control (Superadmin only) */}
+              {isSuperadmin && (
+                <div style={{ display: 'inline-flex', background: '#e2e8f0', padding: '2px', borderRadius: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedSiteId === 'ALL') {
+                        setSelectedSiteId(userSiteObj?.id || sites.find(s => !s.is_dc)?.id || 'ALL');
+                      }
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: '5px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: selectedSiteId !== 'ALL' ? '#ffffff' : 'transparent',
+                      color: selectedSiteId !== 'ALL' ? '#0f172a' : '#64748b',
+                      boxShadow: selectedSiteId !== 'ALL' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Limit search to active branch"
+                  >
+                    <Building2 size={12} />
+                    <span>{activeSiteObj?.code || 'This Branch'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSiteId('ALL')}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: '5px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: selectedSiteId === 'ALL' ? '#0284c7' : 'transparent',
+                      color: selectedSiteId === 'ALL' ? '#ffffff' : '#64748b',
+                      boxShadow: selectedSiteId === 'ALL' ? '0 1px 2px rgba(0,0,0,0.1)' : 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Search across all retail branches network-wide"
+                  >
+                    <Globe size={12} />
+                    <span>All Retail Branches</span>
+                  </button>
+                </div>
+              )}
 
+              {/* Category Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Filter size={12} color="#64748b" />
+                <select
+                  className="form-select"
+                  style={{ fontSize: '11.5px', padding: '4px 8px', height: '30px', borderRadius: '6px', background: '#ffffff', borderColor: '#cbd5e1' }}
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                >
+                  <option value="ALL">All Categories</option>
+                  <option value="cat-display">Displays Only</option>
+                  <option value="cat-battery">Batteries Only</option>
+                </select>
+              </div>
+
+              {/* Reset button if filter or search is active */}
+              {(searchQuery || categoryFilter !== 'ALL') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setCategoryFilter('ALL');
+                  }}
+                  style={{
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#64748b',
+                    borderRadius: '6px',
+                    height: '30px',
+                    padding: '0 8px',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="Reset search and filters"
+                >
+                  <RotateCcw size={11} />
+                  <span>Reset</span>
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
       </div>
@@ -911,10 +1175,10 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               </div>
               <div>
                 <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
-                  Google Sheets / Excel Structure View — {activeSiteObj.code}
+                  Consolidated Stock Lifecycle Overview — {activeSiteObj.code === 'ALL' ? 'All Retail Branches' : activeSiteObj.name}
                 </h3>
                 <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
-                  Complete multi-sheet mirror of Google Sheets workbook. Showing first {Math.min(INITIAL_GRID_ROW_LIMIT, Math.max(filteredInStock.length, filteredUsed.length, filteredOuttake.length, filteredTransferred.length, filteredSummary.length))} rows per section.
+                  Unified side-by-side tracking across all 5 inventory stages (Stock on Hand, Used Parts, For Outtake, Transferred, and Stock Summary). Showing first {Math.min(INITIAL_GRID_ROW_LIMIT, Math.max(filteredInStock.length, filteredUsed.length, filteredOuttake.length, filteredTransferred.length, filteredSummary.length))} rows per section.
                 </p>
               </div>
             </div>
@@ -1046,6 +1310,81 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
             </div>
           </div>
 
+          {/* Cross-Branch Search Assistant Banner (Superadmin only) */}
+          {isSuperadmin && searchQuery && crossBranchMatchCount > 0 && (filteredInStock.length + filteredUsed.length + filteredOuttake.length + filteredTransferred.length === 0) && (
+            <div style={{
+              margin: '12px 18px',
+              padding: '10px 14px',
+              borderRadius: '8px',
+              background: '#f0f9ff',
+              border: '1px solid #bae6fd',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              flexWrap: 'wrap'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Info size={16} color="#0284c7" />
+                <span style={{ fontSize: '12px', color: '#0369a1', fontWeight: 600 }}>
+                  No matching parts for <strong>"{searchQuery}"</strong> at <strong>{activeSiteObj.code}</strong>, but <strong>{crossBranchMatchCount} matching unit{crossBranchMatchCount > 1 ? 's' : ''}</strong> found in other retail branches.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-xs"
+                style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  border: 'none',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                onClick={() => setSelectedSiteId('ALL')}
+              >
+                <Globe size={12} />
+                <span>Switch to All Retail Branches</span>
+              </button>
+            </div>
+          )}
+
+          {/* Zero Results Banner */}
+          {searchQuery && (filteredInStock.length + filteredUsed.length + filteredOuttake.length + filteredTransferred.length + filteredSummary.length === 0) && crossBranchMatchCount === 0 && (
+            <div style={{
+              margin: '12px 18px',
+              padding: '10px 14px',
+              borderRadius: '8px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              flexWrap: 'wrap'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Search size={15} color="#dc2626" />
+                <span style={{ fontSize: '12px', color: '#991b1b', fontWeight: 600 }}>
+                  No records matching <strong>"{searchQuery}"</strong> found across Part Numbers, Serials, Descriptions, or Remarks.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-xs"
+                style={{ background: '#ffffff', border: '1px solid #fca5a5', color: '#dc2626', fontSize: '11.5px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', cursor: 'pointer' }}
+                onClick={() => setSearchQuery('')}
+              >
+                Clear Search
+              </button>
+            </div>
+          )}
+
           {/* Sticky Table Viewport */}
           <div
             ref={gridScrollContainerRef}
@@ -1059,13 +1398,48 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               className="data-table"
               style={{
                 width: '100%',
-                minWidth: '3550px',
+                minWidth: '4360px',
                 fontSize: '12px',
                 borderCollapse: 'separate',
                 borderSpacing: 0,
                 tableLayout: 'fixed'
               }}
             >
+              <colgroup>
+                {/* Section 1: Stock on Hand (6 cols) */}
+                <col style={{ width: '90px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '260px' }} />
+                <col style={{ width: '190px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '260px' }} />
+
+                {/* Section 2: Used Parts (5 cols) */}
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '260px' }} />
+                <col style={{ width: '190px' }} />
+                <col style={{ width: '240px' }} />
+
+                {/* Section 3: For Outtake (4 cols) */}
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '260px' }} />
+                <col style={{ width: '190px' }} />
+                <col style={{ width: '220px' }} />
+
+                {/* Section 4: Transferred Parts (5 cols) */}
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '260px' }} />
+                <col style={{ width: '190px' }} />
+                <col style={{ width: '240px' }} />
+
+                {/* Section 5: Site Stock Summary (4 cols) */}
+                <col style={{ width: '90px' }} />
+                <col style={{ width: '140px' }} />
+                <col style={{ width: '270px' }} />
+                <col style={{ width: '120px' }} />
+              </colgroup>
               <thead>
                 {/* Row 0: Sticky Section Headers */}
                 <tr style={{ textAlign: 'center', fontWeight: 800, fontSize: '12px', letterSpacing: '0.04em' }}>
@@ -1163,38 +1537,38 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 {/* Row 1: Sticky Column Subheaders */}
                 <tr style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   {/* Section 1: Stock on Hand */}
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Site</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>P/N</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Part Description</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Serial</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Date Rcvd</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '160px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', minWidth: '90px', maxWidth: '90px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Site</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', minWidth: '190px', maxWidth: '190px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', minWidth: '110px', maxWidth: '110px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Date Rcvd</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks</th>
 
                   {/* Section 2: Used Parts */}
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Date Used</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>P/N</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Part Description</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Serial</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '170px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks (OC#)</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', minWidth: '110px', maxWidth: '110px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Date Used</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', minWidth: '190px', maxWidth: '190px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '240px', minWidth: '240px', maxWidth: '240px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks (OC#)</th>
 
                   {/* Section 3: For Outtake */}
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>P/N</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>Part Description</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>Serial</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '160px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', minWidth: '190px', maxWidth: '190px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '220px', minWidth: '220px', maxWidth: '220px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks</th>
 
                   {/* Section 4: Transferred Parts */}
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Date Trans</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>P/N</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Part Description</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Serial</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '180px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks (TS#)</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', minWidth: '110px', maxWidth: '110px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Date Trans</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', minWidth: '190px', maxWidth: '190px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '240px', minWidth: '240px', maxWidth: '240px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks (TS#)</th>
 
                   {/* Section 5: Site Stock Summary */}
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>Site</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>P/N</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '270px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>Part Description</th>
-                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '120px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', textAlign: 'center', whiteSpace: 'nowrap' }}>In-Stock Qty</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', minWidth: '90px', maxWidth: '90px', boxSizing: 'border-box', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Site</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '270px', minWidth: '270px', maxWidth: '270px', boxSizing: 'border-box', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '120px', minWidth: '120px', maxWidth: '120px', boxSizing: 'border-box', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>In-Stock Qty</th>
                 </tr>
               </thead>
               <tbody>
@@ -1226,14 +1600,16 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#ffffff' : '#f8fafc'; }}
                     >
                       {/* Section 1: Stock on Hand */}
-                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>{oh ? activeSiteObj.code : ''}</td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh ? activeSiteObj.code : ''}>
+                        {oh ? activeSiteObj.code : ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.part_number || ''}>
                         {oh ? <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{oh.part_number}</strong> : ''}
                       </td>
-                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={oh?.description || ''}>
+                      <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.description || ''}>
                         {oh?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.serial_number || ''}>
                         {oh ? (
                           oh.is_summary_only ? (
                             <span style={{ color: '#64748b', fontStyle: 'italic', fontSize: '11px' }}>Summary (no serial)</span>
@@ -1261,24 +1637,36 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                           )
                         ) : ''}
                       </td>
-                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.received_at ? String(oh.received_at).substring(0, 10) : ''}>
                         {oh ? (oh.received_at ? String(oh.received_at).substring(0, 10) : '—') : ''}
                       </td>
-                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#475569', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td
+                        style={{
+                          borderRight: '3px solid #cbd5e1',
+                          color: '#475569',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '260px',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px'
+                        }}
+                        title={oh?.remarks || oh?.notes || (oh ? 'On-hand' : '')}
+                      >
                         {oh?.remarks || oh?.notes || (oh ? 'On-hand' : '')}
                       </td>
 
                       {/* Section 2: Used Parts */}
-                      <td style={{ color: '#b45309', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ color: '#b45309', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px', boxSizing: 'border-box', padding: '10px 12px' }} title={u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}>
                         {u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={u?.part_number || ''}>
                         {u ? <strong style={{ color: '#d97706', fontFamily: 'var(--font-mono)' }}>{u.part_number}</strong> : ''}
                       </td>
-                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={u?.description || ''}>
+                      <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={u?.description || ''}>
                         {u?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={u?.serial_number || ''}>
                         {u ? (
                           <span
                             onClick={() => handleCopySerial(u.serial_number)}
@@ -1302,18 +1690,30 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                           </span>
                         ) : ''}
                       </td>
-                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#92400e', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td
+                        style={{
+                          borderRight: '3px solid #cbd5e1',
+                          color: '#92400e',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '240px',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px'
+                        }}
+                        title={u?.work_order_number ? `Used to OC# ${u.work_order_number}` : (u?.remarks || u?.notes || (u ? 'Used' : ''))}
+                      >
                         {u?.work_order_number ? `Used to OC# ${u.work_order_number}` : (u?.remarks || u?.notes || (u ? 'Used' : ''))}
                       </td>
 
                       {/* Section 3: For Outtake */}
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.part_number || ''}>
                         {ot ? <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>{ot.part_number}</strong> : ''}
                       </td>
-                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={ot?.description || ''}>
+                      <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.description || ''}>
                         {ot?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.serial_number || ''}>
                         {ot ? (
                           <span
                             onClick={() => handleCopySerial(ot.serial_number)}
@@ -1337,21 +1737,33 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                           </span>
                         ) : ''}
                       </td>
-                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#6b21a8', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td
+                        style={{
+                          borderRight: '3px solid #cbd5e1',
+                          color: '#6b21a8',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '220px',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px'
+                        }}
+                        title={ot?.outtake_reason || ot?.remarks || ot?.notes || (ot ? 'For Outtake' : '')}
+                      >
                         {ot?.outtake_reason || ot?.remarks || ot?.notes || (ot ? 'For Outtake' : '')}
                       </td>
 
                       {/* Section 4: Transferred Parts */}
-                      <td style={{ color: '#0e7490', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ color: '#0e7490', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}>
                         {tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr?.part_number || ''}>
                         {tr ? <strong style={{ color: '#0891b2', fontFamily: 'var(--font-mono)' }}>{tr.part_number}</strong> : ''}
                       </td>
-                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={tr?.description || ''}>
+                      <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={tr?.description || ''}>
                         {tr?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr?.serial_number || ''}>
                         {tr ? (
                           <span
                             onClick={() => handleCopySerial(tr.serial_number)}
@@ -1375,19 +1787,33 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                           </span>
                         ) : ''}
                       </td>
-                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#155e75', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td
+                        style={{
+                          borderRight: '3px solid #cbd5e1',
+                          color: '#155e75',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '240px',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px'
+                        }}
+                        title={tr?.transfer_slip_number ? `${tr.transfer_slip_number} to ${tr.transferred_to_site_code || 'Branch'}` : (tr?.remarks || tr?.notes || (tr ? 'Transferred' : ''))}
+                      >
                         {tr?.transfer_slip_number ? `${tr.transfer_slip_number} to ${tr.transferred_to_site_code || 'Branch'}` : (tr?.remarks || tr?.notes || (tr ? 'Transferred' : ''))}
                       </td>
 
                       {/* Section 5: Site Stock Summary */}
-                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>{sum ? activeSiteObj.code : ''}</td>
-                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={sum ? activeSiteObj.code : ''}>
+                        {sum ? activeSiteObj.code : ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={sum?.partNumber || ''}>
                         {sum ? <strong style={{ color: '#059669', fontFamily: 'var(--font-mono)' }}>{sum.partNumber}</strong> : ''}
                       </td>
-                      <td style={{ maxWidth: '270px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={sum?.description || ''}>
+                      <td style={{ maxWidth: '270px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={sum?.description || ''}>
                         {sum?.description || ''}
                       </td>
-                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '120px', boxSizing: 'border-box', padding: '10px 12px' }}>
                         {sum ? (
                           <span className="badge" style={{ background: '#ecfdf5', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 800, padding: '3px 10px', fontSize: '11.5px', borderRadius: '999px' }}>
                             {sum.inStockCount}
@@ -1813,7 +2239,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   onChange={(e) => setSelectedUnitSerial(e.target.value)}
                   required
                 >
-                  <option value="">-- Choose Serialized Part --</option>
+                  <option value="">-- Select In-Stock Serialized Part --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
                       {u.part_number} — {u.serial_number} ({u.description})
@@ -1915,7 +2341,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   onChange={(e) => setSelectedUnitSerial(e.target.value)}
                   required
                 >
-                  <option value="">-- Choose Serialized Part --</option>
+                  <option value="">-- Select Serialized Part to Transfer --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
                       {u.part_number} — {u.serial_number} ({u.description})
@@ -2029,7 +2455,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   onChange={(e) => setSelectedUnitSerial(e.target.value)}
                   required
                 >
-                  <option value="">-- Choose Serialized Part --</option>
+                  <option value="">-- Select Serialized Part for Outtake --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
                       {u.part_number} — {u.serial_number} ({u.description})
@@ -2242,8 +2668,8 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
         </div>
       )}
 
-      {/* 8. Clear Parts Confirmation Modal */}
-      {isClearPartsOpen && (
+      {/* 8. Clear Parts Confirmation Modal (Superadmin Only) */}
+      {isSuperadmin && isClearPartsOpen && (
         <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '12px', maxWidth: '520px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)', border: '1px solid #fecaca', overflow: 'hidden' }}>
             

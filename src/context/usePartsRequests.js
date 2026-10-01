@@ -5,6 +5,7 @@ import { barcodeAudio } from '../utils/barcodeAudio';
 import { isUUID, resolveSite, isDcSite } from '../utils/appContextHelpers';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { getCategoryForPart } from '../utils/categoryFilter';
+import { resolveCanonicalIPhoneModel } from '../utils/partResolver.js';
 
 const toValidUUID = (str) => (isUUID(str) ? str : null);
 
@@ -736,11 +737,18 @@ export function usePartsRequests({
       if (!cleanPN) return;
 
       if (!partsSummary[cleanPN]) {
-        const matchedPart = parts.find(p => p.part_number?.toUpperCase() === cleanPN);
+        const matchedPart = (parts || []).find(p => p.part_number?.trim().toUpperCase() === cleanPN);
         const catObj = getCategoryForPart(matchedPart || { description: u.description, category_id: u.category_id }, categories);
         const resolvedCategoryName = catObj?.name || (u.category && !isUUID(u.category) ? u.category : 'General');
         const resolvedCategoryId = catObj?.id || matchedPart?.category_id || u.category_id || 'cat-general';
         const resolvedCategoryCode = catObj?.code || 'GENERAL';
+
+        const resolvedModel = resolveCanonicalIPhoneModel(
+          matchedPart?.iphone_model || u.iphone_model,
+          matchedPart?.description || u.description
+        );
+
+        const isCatalogActive = matchedPart ? (matchedPart.is_active !== false && matchedPart.status !== 'inactive') : false;
 
         partsSummary[cleanPN] = {
           partNumber: cleanPN,
@@ -751,8 +759,9 @@ export function usePartsRequests({
           category_id: resolvedCategoryId,
           categoryId: resolvedCategoryId,
           categoryCode: resolvedCategoryCode,
-          model: matchedPart?.iphone_model || u.iphone_model || 'Apple iPhone',
+          model: resolvedModel,
           stockingPrice: matchedPart?.stocking_price || u.stocking_price || 0,
+          is_active: isCatalogActive,
           inStock: 0,
           allocated: 0,
           packed: 0,

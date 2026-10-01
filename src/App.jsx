@@ -69,7 +69,15 @@ function MainApp() {
       case 'orders':
         return <PurchaseOrders />;
       case 'scan-in':
-        return <ScanInReceiving initialTab="station" />;
+        return (
+          <ScanInReceiving
+            initialTab={
+              currentUser?.role === 'parts_management'
+                ? (pmgSubTab === 'station' ? 'station' : (pmgSubTab === 'stock_on_hand' ? 'stock' : null))
+                : 'station'
+            }
+          />
+        );
       case 'intake-records':
         return <ScanInReceiving initialTab="records" />;
       case 'allocation':
@@ -79,6 +87,9 @@ function MainApp() {
       case 'shipments':
         return <Shipments />;
       case 'request-parts':
+        if (currentUser?.role === 'parts_management' && pmgSubTab === 'stock_on_hand') {
+          return <ScanInReceiving initialTab="stock" />;
+        }
         return <RequestParts defaultTab={pmgSubTab || 'requests_table'} key="request-parts" />;
       case 'all-stocks':
         return <RequestParts defaultTab="all_stocks" key="all-stocks" />;

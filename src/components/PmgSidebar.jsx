@@ -4,18 +4,16 @@ import { resolveSite } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
 import {
   Inbox,
-  Barcode,
   Globe,
-  Package,
   Wrench,
   LogOut,
   ShieldCheck,
   X,
   MessageSquare,
-  Lock,
   ChevronRight,
   Building2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  PackageCheck
 } from 'lucide-react';
 
 export default function PmgSidebar() {
@@ -81,18 +79,18 @@ export default function PmgSidebar() {
       isActive: activeTab === 'request-parts' && pmgSubTab === 'requests_table'
     },
     {
-      id: 'stock',
-      label: 'Branch Stock On Hand',
-      description: 'Local inventory & parts',
+      id: 'stock-receive',
+      label: 'Stock On Hand & Receive',
+      description: 'Branch stock & scan-in station',
       section: 'Branch Operations',
-      icon: Package,
+      icon: PackageCheck,
       badge: branchStock.totalInStock,
       badgeColor: '#0284c7',
       onClick: () => {
-        setActiveTab('request-parts');
+        setActiveTab('scan-in');
         if (setPmgSubTab) setPmgSubTab('stock_on_hand');
       },
-      isActive: activeTab === 'request-parts' && pmgSubTab === 'stock_on_hand'
+      isActive: activeTab === 'scan-in' || (activeTab === 'request-parts' && pmgSubTab === 'stock_on_hand')
     },
     {
       id: 'site-monitoring',
@@ -107,17 +105,6 @@ export default function PmgSidebar() {
         if (setPmgSubTab) setPmgSubTab('site_monitoring');
       },
       isActive: activeTab === 'request-parts' && pmgSubTab === 'site_monitoring'
-    },
-    {
-      id: 'scan-in',
-      label: 'Receive Scan-In',
-      description: 'Scan incoming DC packages',
-      section: 'Branch Operations',
-      icon: Barcode,
-      onClick: () => {
-        setActiveTab('scan-in');
-      },
-      isActive: activeTab === 'scan-in'
     },
     {
       id: 'used-parts',
@@ -289,12 +276,8 @@ export default function PmgSidebar() {
             </div>
           </div>
 
-          <div className="pmg-station-footer-row">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#10b981', fontSize: '10.5px' }}>
-              <Lock size={10} />
-              <span>Serial Privacy Protected</span>
-            </div>
-            <span className="font-mono" style={{ fontSize: '10px', color: '#64748b' }}>
+          <div className="pmg-station-footer-row" style={{ justifyContent: 'center' }}>
+            <span className="font-mono" style={{ fontSize: '10.5px', color: '#94a3b8' }}>
               {userSite.name || 'MobileCare'}
             </span>
           </div>
