@@ -97,19 +97,20 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
   const isSuperadmin = currentUser?.role === 'superadmin';
   const isPmgUser = currentUser?.role === 'parts_management';
+  const currentUserSiteRef = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
 
   // User site resolution (Superadmin is explicitly Central DC, not retail branches)
   const userSiteObj = useMemo(() => {
     if (isSuperadmin || currentUser?.siteId === 'site-dc') {
       return sites.find(s => s.id === 'site-dc' || s.code === 'DC-MDC' || s.code === 'DC') || { id: 'site-dc', code: 'DC-MDC', name: 'Distribution Center (DC)' };
     }
-    return sites.find(s => s.id === currentUser?.siteId || s.code === currentUser?.siteId) || sites[0] || {};
-  }, [sites, currentUser?.siteId, isSuperadmin]);
+    return sites.find(s => s.id === currentUserSiteRef || s.code === currentUserSiteRef) || sites[0] || {};
+  }, [sites, currentUserSiteRef, isSuperadmin, currentUser?.siteId]);
 
   // Selected site filter
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
-    if (!isSuperadmin && currentUser?.siteId) {
-      return currentUser.siteId;
+    if (!isSuperadmin && currentUserSiteRef) {
+      return currentUserSiteRef;
     }
     return 'ALL';
   });
@@ -143,7 +144,11 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         }
       }
     } else if (pmgSubTab && pmgSubTab !== activeTab) {
-      setActiveTab(pmgSubTab);
+      if (defaultTab === 'all_stocks' && pmgSubTab !== 'all_stocks') {
+        if (setPmgSubTab) setPmgSubTab('all_stocks');
+      } else {
+        setActiveTab(pmgSubTab);
+      }
     }
   }, [defaultTab, pmgSubTab, activeTab, setPmgSubTab]);
 
@@ -152,6 +157,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     if (setPmgSubTab) {
       setPmgSubTab(newTab);
     }
+    try {
+      localStorage.setItem('mdc_parts_subtab', newTab);
+    } catch (e) {}
     if (newTab === 'all_stocks' && setGlobalActiveTab && globalActiveTab !== 'all-stocks') {
       setGlobalActiveTab('all-stocks');
     } else if (newTab !== 'all_stocks' && setGlobalActiveTab && globalActiveTab === 'all-stocks') {
@@ -275,7 +283,9 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [stockSearchQuery, setStockSearchQuery] = useState('');
-  const [stockCategoryFilter, _setStockCategoryFilter] = useState('ALL');
+  const [stockCategoryFilter, setStockCategoryFilter] = useState('ALL');
+  const [stockAvailabilityFilter, setStockAvailabilityFilter] = useState('ALL');
+  const [isIncomingShipmentsCollapsed, setIsIncomingShipmentsCollapsed] = useState(false);
 
   // Multi-Site All Stocks Tab State
   const [allStocksRegionTab, setAllStocksRegionTab] = useState(() => {
@@ -803,6 +813,31 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     showToast(`Exported ${rows.length} request records to ${fileName}`, 'success');
   };
 
+  const handleExportStockOnHandToXlsx = () => {
+    if (stockRows.length === 0) {
+      showToast?.('No stock records to export for this branch', 'warning');
+      return;
+    }
+
+    const rows = stockRows.map(r => ({
+      'Branch Site': `${activeSiteObj.name} (${activeSiteObj.code})`,
+      'Part Number': r.partNumber,
+      'Description': r.description,
+      'Compatible Model': r.model,
+      'Category': r.category || 'General',
+      'Available On-Hand Stock': r.inStock || 0,
+      'Allocated Units': r.allocated || 0,
+      'In-Transit / Packed Units': r.packed || 0
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Branch Stock');
+    const fileName = `Branch_Stock_${activeSiteObj.code || 'MDC'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showToast?.(`Exported ${rows.length} stock items to ${fileName}`, 'success');
+  };
+
   // Available In-Stock serial numbers for the selected part in Mark as Used modal
   const availableSerialsForMarkUsed = useMemo(() => {
     if (!markUsedPartPn) return [];
@@ -901,19 +936,53 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   };
 
   // Stock on Hand Table Filtered Rows
-  const stockRows = useMemo(() => {
+  const stockRows = (() => {
     const items = Object.values(siteStockData.partsSummary || {});
     return items.filter(it => {
-      if (stockCategoryFilter !== 'ALL' && it.category !== stockCategoryFilter) return false;
+      if (stockCategoryFilter !== 'ALL') {
+        const itemCat = String(it.category || '').toUpperCase();
+        if (stockCategoryFilter === 'DISPLAY' && !itemCat.includes('DISP')) return false;
+        if (stockCategoryFilter === 'BATTERY' && !itemCat.includes('BATT')) return false;
+        if (stockCategoryFilter === 'OTHER' && (itemCat.includes('DISP') || itemCat.includes('BATT'))) return false;
+      }
+      if (stockAvailabilityFilter === 'in_stock' && (it.inStock || 0) <= 0) return false;
+      if (stockAvailabilityFilter === 'out_of_stock' && (it.inStock || 0) > 0) return false;
       if (stockSearchQuery.trim()) {
         const q = stockSearchQuery.toLowerCase().trim();
-        return it.partNumber.toLowerCase().includes(q) ||
-               it.description.toLowerCase().includes(q) ||
-               it.model.toLowerCase().includes(q);
+        return (it.partNumber || '').toLowerCase().includes(q) ||
+               (it.description || '').toLowerCase().includes(q) ||
+               (it.model || '').toLowerCase().includes(q);
       }
       return true;
-    }).sort((a, b) => b.inStock - a.inStock || a.partNumber.localeCompare(b.partNumber));
-  }, [siteStockData, stockCategoryFilter, stockSearchQuery]);
+    }).sort((a, b) => (b.inStock || 0) - (a.inStock || 0) || a.partNumber.localeCompare(b.partNumber));
+  })();
+
+  // Category & Availability counts for the filter tabs
+  const stockCategoryCounts = useMemo(() => {
+    const all = Object.values(siteStockData.partsSummary || {});
+    let displays = 0;
+    let batteries = 0;
+    let other = 0;
+    let inStock = 0;
+    let outOfStock = 0;
+    all.forEach(item => {
+      const cat = String(item.category || '').toUpperCase();
+      if (cat.includes('DISP')) displays++;
+      else if (cat.includes('BATT')) batteries++;
+      else other++;
+
+      if ((item.inStock || 0) > 0) inStock++;
+      else outOfStock++;
+    });
+    return {
+      total: all.length,
+      displays,
+      batteries,
+      other,
+      inStock,
+      outOfStock
+    };
+  }, [siteStockData]);
 
   // Regional Site Classification (Metro Manila vs Provincial vs DC)
   const { metroManilaSites, provincialSites } = useMemo(() => {
@@ -1036,7 +1105,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
   }, [allStocksSearchQuery, multiSiteStockData, sites]);
 
   // Flattened Multi-Site Parts Rows for All Stocks Tab fallback/count
-  const flattenedAllStocksRows = useMemo(() => {
+  const _flattenedAllStocksRows = useMemo(() => {
     const all = [];
     (multiSiteStockData || []).forEach(siteSummary => {
       const isDcSite = siteSummary.siteId === 'site-dc' || siteSummary.siteCode === 'DC-MDC' || siteSummary.siteCode === 'DC';
@@ -1082,8 +1151,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       case 'stock_on_hand':
         return {
           icon: Package,
-          iconBg: 'rgba(56, 189, 248, 0.2)',
-          iconColor: '#38bdf8',
+          iconBg: '#eff6ff',
+          iconColor: '#0284c7',
           title: 'Branch Stock On Hand',
           subtitle: `Live physical inventory, verified serialized units, and arriving shipments for ${activeSiteObj.name || activeSiteObj.code}`,
           badgeText: activeSiteObj.name || activeSiteObj.code || 'Service Center',
@@ -1092,8 +1161,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       case 'all_stocks':
         return {
           icon: Globe,
-          iconBg: 'rgba(129, 140, 248, 0.2)',
-          iconColor: '#818cf8',
+          iconBg: '#eef2ff',
+          iconColor: '#4f46e5',
           title: 'All Stocks & Multi-Site Inventory',
           subtitle: 'Directory-wide stock visibility across all MobileCare Authorized Service Points',
           badgeText: 'Network Directory',
@@ -1102,8 +1171,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       case 'usage_history':
         return {
           icon: Wrench,
-          iconBg: 'rgba(52, 211, 153, 0.2)',
-          iconColor: '#34d399',
+          iconBg: '#ecfdf5',
+          iconColor: '#059669',
           title: 'Parts Consumption Log',
           subtitle: `Serialized audit history of parts installed in repair work orders at ${activeSiteObj.name || activeSiteObj.code}`,
           badgeText: activeSiteObj.name || activeSiteObj.code || 'Service Center',
@@ -1113,8 +1182,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
       default:
         return {
           icon: Inbox,
-          iconBg: 'rgba(56, 189, 248, 0.2)',
-          iconColor: '#38bdf8',
+          iconBg: '#eff6ff',
+          iconColor: '#0284c7',
           title: isSuperadmin ? 'Branch Parts Requests & Replenishment Review' : 'Parts Requests & Replenishment',
           subtitle: isSuperadmin
             ? 'Master DC replenishment governance • Review, approve, and manage branch replenishment orders'
@@ -1335,32 +1404,34 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
       
       {/* 1. Header Hero Banner */}
-      <div
+      {activeTab !== 'site_monitoring' && (
+        <>
+        <div
         className="card"
         style={{
           marginBottom: '20px',
-          background: 'linear-gradient(135deg, #090f1d 0%, #0f172a 45%, #1e293b 100%)',
-          color: '#ffffff',
-          padding: '24px 28px',
+          background: '#ffffff',
+          color: '#0f172a',
+          padding: '20px 24px',
           borderRadius: '12px',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          boxShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.25)'
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px rgba(15, 23, 42, 0.05)'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
-              <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: viewHeaderMeta.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: viewHeaderMeta.iconColor }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: viewHeaderMeta.iconBg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: viewHeaderMeta.iconColor }}>
                 <HeaderIcon size={20} />
               </div>
-              <h2 style={{ color: '#fff', fontSize: '21px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
+              <h2 style={{ color: '#0f172a', fontSize: '20px', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>
                 {viewHeaderMeta.title}
               </h2>
               <span
                 style={{
-                  background: 'rgba(56, 189, 248, 0.12)',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  background: '#f0f9ff',
+                  color: '#0284c7',
+                  border: '1px solid #bae6fd',
                   padding: '3px 10px',
                   borderRadius: '999px',
                   fontSize: '11.5px',
@@ -1374,7 +1445,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 {viewHeaderMeta.badgeText}
               </span>
             </div>
-            <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0, lineHeight: 1.4 }}>
+            <p style={{ color: '#64748b', fontSize: '13px', margin: 0, lineHeight: 1.4 }}>
               {viewHeaderMeta.subtitle}
             </p>
           </div>
@@ -1383,19 +1454,21 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             {/* Site Picker (Superadmin Only) */}
             {isSuperadmin && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: '#cbd5e1', fontWeight: 600 }}>Branch:</span>
+                <Building2 size={14} color="#64748b" />
+                <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Branch:</span>
                 <select
                   className="form-select"
                   value={selectedSiteId}
                   onChange={(e) => setSelectedSiteId(e.target.value)}
                   style={{
-                    background: '#1e293b',
-                    color: '#f8fafc',
-                    borderColor: '#475569',
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    borderColor: '#cbd5e1',
                     fontSize: '12.5px',
                     padding: '6px 12px',
                     borderRadius: '6px',
-                    minWidth: '180px'
+                    minWidth: '190px',
+                    fontWeight: 600
                   }}
                 >
                   <option value="ALL">All Branch Sites (Master DC)</option>
@@ -1411,7 +1484,17 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
             {/* Sync / Refresh Button */}
             <button
               className="btn btn-secondary"
-              style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}
+              style={{
+                background: '#ffffff',
+                color: '#334155',
+                borderColor: '#cbd5e1',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                borderRadius: '6px'
+              }}
               onClick={() => {
                 if (autoRefreshData) {
                   autoRefreshData({ force: true, silent: false, reason: 'Parts requests refresh', tables: ['parts_requests', 'parts', 'inventory_units'] });
@@ -1433,10 +1516,10 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                   type="button"
                   className="btn btn-secondary"
                   onClick={handleExportRequestsToXlsx}
-                  style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px' }}
+                  style={{ background: '#ffffff', color: '#047857', borderColor: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600 }}
                   title="Export parts requests to Excel"
                 >
-                  <FileSpreadsheet size={14} color="#34d399" />
+                  <FileSpreadsheet size={14} color="#059669" />
                   <span>Export to Excel</span>
                 </button>
                 {!isSuperadmin && (
@@ -1457,9 +1540,19 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               <>
                 <button
                   type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExportStockOnHandToXlsx}
+                  style={{ background: '#ffffff', color: '#047857', borderColor: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
+                  title="Export current branch stock on hand to Excel"
+                >
+                  <FileSpreadsheet size={14} color="#059669" />
+                  <span>Export Excel</span>
+                </button>
+                <button
+                  type="button"
                   className="btn btn-primary"
                   onClick={() => openMarkUsedModal()}
-                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                  style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', borderRadius: '6px', boxShadow: '0 1px 2px rgba(5, 150, 105, 0.2)' }}
                   title="Record part consumed in customer repair"
                 >
                   <Wrench size={14} />
@@ -1470,7 +1563,7 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                     type="button"
                     className="btn btn-secondary"
                     onClick={() => setActiveTab('scan-in')}
-                    style={{ background: 'rgba(255, 255, 255, 0.08)', color: '#ffffff', borderColor: 'rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    style={{ background: '#ffffff', color: '#0f172a', borderColor: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
                     title="Open Receive Scan-In Station"
                   >
                     <Barcode size={14} />
@@ -1529,22 +1622,27 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
               className="card"
               style={{
                 padding: '16px 18px',
-                borderLeft: `4px solid ${card.accent}`,
                 background: '#ffffff',
-                borderRadius: '10px',
-                borderTop: '1px solid #e2e8f0',
-                borderRight: '1px solid #e2e8f0',
-                borderBottom: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                border: '1px solid #e2e8f0',
                 boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
-                gap: '8px',
+                gap: '10px',
                 transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 6px 16px -2px rgba(15, 23, 42, 0.08)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 1px 3px rgba(15, 23, 42, 0.04)';
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   {card.label}
                 </span>
                 <div style={{ padding: '6px', background: card.iconBg, color: card.iconColor, borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1552,11 +1650,12 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                <div style={{ fontSize: '26px', fontWeight: 800, color: '#0f172a', lineHeight: 1.15, letterSpacing: '-0.02em' }}>
                   {card.value}{' '}
-                  <span style={{ fontSize: '12px', fontWeight: 500, color: '#64748b' }}>{card.unit}</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 500, color: '#64748b' }}>{card.unit}</span>
                 </div>
-                <div style={{ fontSize: '11px', color: card.iconColor, marginTop: '4px', fontWeight: 600 }}>
+                <div style={{ fontSize: '11.5px', color: card.iconColor, marginTop: '5px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: card.iconColor }} />
                   {card.subtext}
                 </div>
               </div>
@@ -1564,6 +1663,8 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
           );
         })}
       </div>
+      </>
+      )}
 
       {/* 3. New Parts Request Submission Form Modal / Collapsible Section (Strictly PMG Users) */}
       {!isSuperadmin && isFormOpen && (
@@ -2055,71 +2156,6 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
         </div>
       )}
 
-      {/* 4. Sub-Navigation Tabs (Rendered strictly for Superadmin / non-PMG roles; PMG users navigate cleanly via sidebar) */}
-      {!isPmgUser && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-light)', marginBottom: '18px', flexWrap: 'wrap', gap: '10px' }}>
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className={`btn btn-sm ${activeTab === 'requests_table' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleTabChange('requests_table')}
-              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-            >
-              <Inbox size={15} />
-              <span>Parts Requests ({filteredRequests.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${activeTab === 'stock_on_hand' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleTabChange('stock_on_hand')}
-              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-            >
-              <Package size={15} />
-              <span>Branch Stock ({siteStockData.totalInStock})</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${activeTab === 'site_monitoring' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleTabChange('site_monitoring')}
-              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-            >
-              <FileSpreadsheet size={15} />
-              <span>Site Stock Monitoring (Excel)</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${activeTab === 'all_stocks' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleTabChange('all_stocks')}
-              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-            >
-              <Boxes size={15} />
-              <span>All Stocks &amp; Multi-Site ({flattenedAllStocksRows.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${activeTab === 'usage_history' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleTabChange('usage_history')}
-              style={{ borderRadius: '6px 6px 0 0', padding: '8px 16px', fontWeight: 700 }}
-            >
-              <TrendingDown size={15} />
-              <span>Used Parts History ({siteUsageData.recordsCount})</span>
-            </button>
-          </div>
-
-          {activeTab === 'requests_table' && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={handleExportRequestsToXlsx}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}
-            >
-              <FileSpreadsheet size={14} color="#059669" />
-              <span>Export to Excel</span>
-            </button>
-          )}
-        </div>
-      )}
-
       {/* 5. TAB 1: Parts Requests List */}
       {activeTab === 'requests_table' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
@@ -2479,330 +2515,583 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
 
       {/* 6. TAB 2: Branch Stock on Hand View */}
       {activeTab === 'stock_on_hand' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
-          <div style={{ padding: '14px 18px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '240px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
-                <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                <input
-                  type="text"
-                  className="form-input"
-                  style={{ paddingLeft: '32px', fontSize: '12.5px', borderRadius: '8px' }}
-                  placeholder="Filter stock by part number or model..."
-                  value={stockSearchQuery}
-                  onChange={(e) => setStockSearchQuery(e.target.value)}
-                />
-                {stockSearchQuery && (
+          {/* Incoming / In-Transit Shipments Card (Dedicated Card, Separated from Catalog) */}
+          {incomingShipments.length > 0 && (
+            <div
+              className="card"
+              style={{
+                borderRadius: '12px',
+                border: '1px solid #bae6fd',
+                background: '#ffffff',
+                boxShadow: '0 2px 8px -2px rgba(2, 132, 199, 0.08)',
+                overflow: 'hidden',
+                padding: 0
+              }}
+            >
+              <div
+                style={{
+                  padding: '14px 20px',
+                  background: 'linear-gradient(90deg, #f0f9ff 0%, #f8fafc 100%)',
+                  borderBottom: isIncomingShipmentsCollapsed ? 'none' : '1px solid #e0f2fe',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#0284c7', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Truck size={17} />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                        Incoming Shipments &amp; Arriving Packages
+                      </h4>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '999px',
+                          background: '#e0f2fe',
+                          color: '#0369a1',
+                          border: '1px solid #bae6fd'
+                        }}
+                      >
+                        {incomingShipments.length} Manifest{incomingShipments.length > 1 ? 's' : ''} • {incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} Parts
+                      </span>
+                      <span
+                        className="badge"
+                        style={{
+                          background: incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? '#f0fdf4' : '#fffbeb',
+                          color: incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? '#166534' : '#b45309',
+                          border: `1px solid ${incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? '#bbf7d0' : '#fde68a'}`,
+                          fontWeight: 700,
+                          fontSize: '11px'
+                        }}
+                      >
+                        {incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? 'Ongoing Delivery (Awaiting Receipt Confirmation)' : 'Packed (Awaiting DC Dispatch)'}
+                      </span>
+                    </div>
+                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
+                      Parts are packed and dispatched from DC. Confirm physical arrival to activate stock immediately.
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
                     type="button"
-                    onClick={() => setStockSearchQuery('')}
-                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setIsIncomingShipmentsCollapsed(prev => !prev)}
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      padding: '5px 12px',
+                      fontSize: '12px',
+                      color: '#475569',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
                   >
-                    <X size={13} />
+                    <span>{isIncomingShipmentsCollapsed ? `Show Shipments (${incomingShipments.length})` : 'Collapse'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {!isIncomingShipmentsCollapsed && (
+                <div style={{ padding: '16px 20px', background: '#fafbfc' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '14px' }}>
+                    {incomingShipments.map(sh => {
+                      const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || activeSiteObj;
+                      const itemCount = sh.items?.length || 0;
+                      const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
+                      return (
+                        <div
+                          key={sh.id}
+                          style={{
+                            background: '#ffffff',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: '8px',
+                            padding: '14px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            boxShadow: '0 1px 3px rgba(15, 23, 42, 0.03)'
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                  {sh.invoice_ref || sh.shipment_number}
+                                </strong>
+                                <span className="badge" style={{
+                                  fontSize: '10.5px',
+                                  background: isShipped ? '#e0f2fe' : (sh.status === 'draft' || sh.status === 'packing' ? '#f1f5f9' : '#fef3c7'),
+                                  color: isShipped ? '#0369a1' : (sh.status === 'draft' || sh.status === 'packing' ? '#475569' : '#b45309'),
+                                  border: `1px solid ${isShipped ? '#bae6fd' : (sh.status === 'draft' || sh.status === 'packing' ? '#cbd5e1' : '#fde68a')}`
+                                }}>
+                                  {isShipped ? 'In Transit' : (sh.status === 'draft' || sh.status === 'packing' ? 'Draft' : 'Ready for Pickup')}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0f172a', background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px' }}>
+                                {itemCount} item{itemCount !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '12px', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <MapPin size={12} color="#94a3b8" />
+                                <span>Destination: <strong style={{ color: '#1e293b' }}>{destSite.name} ({destSite.code})</strong></span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <Truck size={12} color="#94a3b8" />
+                                <span>
+                                  Courier:{' '}
+                                  <strong style={{ color: '#1e293b' }}>
+                                    {formatCourierWithMode(sh.carrier || sh.courier || 'Lite Express', sh.shipping_mode)}{' '}
+                                    {sh.tracking_number ? (
+                                      <span
+                                        className="font-mono"
+                                        onClick={() => handleCopyWaybill(sh.tracking_number)}
+                                        style={{
+                                          cursor: 'pointer',
+                                          fontWeight: 600,
+                                          color: copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? '#15803d' : '#0284c7',
+                                          padding: '1px 5px',
+                                          borderRadius: '3px',
+                                          background: '#f8fafc',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '3px',
+                                          transition: 'background-color 0.15s ease'
+                                        }}
+                                        title="Click to copy Waybill number"
+                                      >
+                                        #{sh.tracking_number}
+                                        {copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? (
+                                          <Check size={11} strokeWidth={2.5} color="#15803d" />
+                                        ) : (
+                                          <Copy size={10} color="#64748b" style={{ opacity: 0.7 }} />
+                                        )}
+                                      </span>
+                                    ) : ''}
+                                  </strong>
+                                </span>
+                              </div>
+                              <div>Packed by: <span style={{ color: '#1e293b' }}>{sh.prepared_by_name || 'Warehouse Staff'}</span></div>
+                            </div>
+
+                            {/* Part numbers preview */}
+                            <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {(sh.items || []).slice(0, 4).map((it, idx) => (
+                                <span key={idx} style={{ fontSize: '11px', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 7px', borderRadius: '4px', color: '#334155', fontFamily: 'var(--font-mono)' }}>
+                                  {it.part_number}
+                                </span>
+                              ))}
+                              {itemCount > 4 && (
+                                <span style={{ fontSize: '11px', color: '#64748b', alignSelf: 'center', padding: '2px 4px' }}>
+                                  +{itemCount - 4} more
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                            {isShipped ? (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-primary"
+                                style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 700, padding: '6px 12px', borderRadius: '6px' }}
+                                onClick={() => handleOpenReceiveModal(sh)}
+                                title="Confirm physical arrival of this package and activate parts in branch inventory"
+                              >
+                                <PackageCheck size={14} />
+                                <span>Confirm Site Package</span>
+                              </button>
+                            ) : (
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: '#b45309', fontWeight: 600, padding: '4px 8px', background: '#fffbeb', borderRadius: '4px', border: '1px solid #fef3c7' }}>
+                                <Clock size={12} />
+                                <span>Awaiting DC Dispatch</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Main Inventory Catalog Card */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)', background: '#ffffff' }}>
+            
+            {/* Toolbar: Search, Category Filters, Status Filter */}
+            <div style={{ padding: '16px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                
+                {/* Search Bar */}
+                <div style={{ position: 'relative', width: '100%', maxWidth: '380px' }}>
+                  <Search size={15} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ paddingLeft: '34px', fontSize: '13px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                    placeholder="Search part number, description, or model..."
+                    value={stockSearchQuery}
+                    onChange={(e) => setStockSearchQuery(e.target.value)}
+                  />
+                  {stockSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setStockSearchQuery('')}
+                      style={{ position: 'absolute', right: '9px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Right Metadata & Availability Filter */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Stock Status:</span>
+                    <select
+                      className="form-select"
+                      style={{ fontSize: '12px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600 }}
+                      value={stockAvailabilityFilter}
+                      onChange={(e) => setStockAvailabilityFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Items ({stockCategoryCounts.total})</option>
+                      <option value="in_stock">In Stock Only ({stockCategoryCounts.inStock})</option>
+                      <option value="out_of_stock">Out of Stock ({stockCategoryCounts.outOfStock})</option>
+                    </select>
+                  </div>
+
+                  <span style={{ fontSize: '12px', color: '#64748b' }}>
+                    Showing: <strong style={{ color: '#0f172a' }}>{stockRows.length}</strong> SKUs for <strong style={{ color: '#0f172a' }}>{activeSiteObj.name} ({activeSiteObj.code})</strong>
+                  </span>
+                </div>
+              </div>
+
+              {/* Category Filter Tabs */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
+                <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '4px' }}>
+                  Category:
+                </span>
+                {[
+                  { id: 'ALL', label: 'All Parts', count: stockCategoryCounts.total },
+                  { id: 'DISPLAY', label: 'Displays', count: stockCategoryCounts.displays },
+                  { id: 'BATTERY', label: 'Batteries', count: stockCategoryCounts.batteries },
+                  { id: 'OTHER', label: 'Other Components', count: stockCategoryCounts.other }
+                ].map(cat => {
+                  const isActive = stockCategoryFilter === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setStockCategoryFilter(cat.id)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: isActive ? 700 : 500,
+                        border: isActive ? '1px solid #0284c7' : '1px solid #e2e8f0',
+                        background: isActive ? '#f0f9ff' : '#ffffff',
+                        color: isActive ? '#0284c7' : '#475569',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <span>{cat.label}</span>
+                      <span
+                        style={{
+                          fontSize: '10.5px',
+                          padding: '1px 6px',
+                          borderRadius: '999px',
+                          background: isActive ? '#bae6fd' : '#f1f5f9',
+                          color: isActive ? '#0369a1' : '#64748b',
+                          fontWeight: 700
+                        }}
+                      >
+                        {cat.count}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStockSearchQuery('');
+                      setStockCategoryFilter('ALL');
+                      setStockAvailabilityFilter('ALL');
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#dc2626',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      padding: '4px 8px',
+                      marginLeft: 'auto'
+                    }}
+                  >
+                    Reset Filters
                   </button>
                 )}
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '12px', color: '#64748b' }}>
-                Showing stock for: <strong style={{ color: '#0f172a' }}>{activeSiteObj.name} ({activeSiteObj.code})</strong>
-              </span>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, padding: '6px 12px', borderRadius: '6px' }}
-                onClick={() => openMarkUsedModal()}
-                title="Record part used/consumed in customer repair"
-              >
-                <Wrench size={13} />
-                <span>Record Part Used</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Incoming / In-Transit Shipments Banner (Awaiting Superadmin Site Receipt Confirmation) */}
-          {incomingShipments.length > 0 && (
-            <div
-              style={{
-                margin: '16px 18px',
-                padding: '16px 20px',
-                borderRadius: '8px',
-                background: 'linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)',
-                border: '1px solid #bfdbfe',
-                boxShadow: '0 2px 6px rgba(2, 132, 199, 0.06)'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ padding: '6px', background: '#0284c7', color: '#fff', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Truck size={16} />
-                  </div>
-                  <div>
-                    <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
-                      Incoming Shipments &amp; Arriving Packages ({incomingShipments.length} Manifest{incomingShipments.length > 1 ? 's' : ''} • {incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} Parts)
-                    </h4>
-                    <p style={{ margin: 0, fontSize: '11.5px', color: '#475569' }}>
-                      Parts are packed and in-transit / dispatched from DC. Confirm physical package arrival at your branch below to activate stock immediately.
-                    </p>
-                  </div>
-                </div>
-
-                <span className="badge" style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', fontWeight: 700, fontSize: '11px' }}>
-                  {incomingShipments.some(s => s.status === 'shipped' || s.status === 'in_transit') ? 'Awaiting Receipt Confirmation' : 'Awaiting DC Dispatch'}
-                </span>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-                {incomingShipments.map(sh => {
-                  const destSite = sites.find(s => s.id === sh.site_id || s.code === sh.site_code) || activeSiteObj;
-                  const itemCount = sh.items?.length || 0;
-                  const isShipped = sh.status === 'shipped' || sh.status === 'in_transit';
-                  return (
-                    <div
-                      key={sh.id}
-                      style={{
-                        background: '#ffffff',
-                        border: '1px solid #cbd5e1',
-                        borderRadius: '6px',
-                        padding: '12px 14px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        gap: '10px'
+            {/* Table Area */}
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              {stockRows.length === 0 ? (
+                <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                  <Package size={40} color="#cbd5e1" style={{ marginBottom: '12px' }} />
+                  <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px', fontWeight: 700 }}>
+                    No Parts Found Matching Current Filters
+                  </h4>
+                  <p style={{ margin: '0 0 16px', fontSize: '13px' }}>
+                    {stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL'
+                      ? 'Try clearing your search query or selecting a different category filter.'
+                      : `There are currently no serialized inventory units recorded in stock for ${activeSiteObj.name}.`}
+                  </p>
+                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockAvailabilityFilter !== 'ALL') && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        setStockSearchQuery('');
+                        setStockCategoryFilter('ALL');
+                        setStockAvailabilityFilter('ALL');
                       }}
                     >
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                              {sh.invoice_ref || sh.shipment_number}
+                      Clear All Filters
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: '160px' }}>
+                        Part Number
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: '240px' }}>
+                        Part Description
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', width: '160px' }}>
+                        Compatible Model
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '140px' }}>
+                        Available Stock
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '100px' }}>
+                        Allocated
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '110px' }}>
+                        In-Transit
+                      </th>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '160px' }}>
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stockRows.map(row => {
+                      const isDc = isSuperadmin || currentUser?.siteId === 'site-dc' || userSiteObj?.code === 'DC-MDC' || userSiteObj?.code === 'DC';
+                      const isUserSameSite = !isDc && Boolean(
+                        currentUser?.siteId && (
+                          selectedSiteId === currentUser.siteId ||
+                          selectedSiteId === userSiteObj?.id ||
+                          activeSiteObj?.code === userSiteObj?.code ||
+                          activeSiteObj?.id === userSiteObj?.id
+                        )
+                      );
+
+                      return (
+                        <tr
+                          key={row.partNumber}
+                          style={{ borderBottom: '1px solid #f1f5f9', transition: 'background-color 0.12s ease' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <td style={{ padding: '12px 16px' }}>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                              {row.partNumber}
                             </strong>
-                            <span className="badge" style={{ fontSize: '10px', background: isShipped ? '#e0f2fe' : '#fef3c7', color: isShipped ? '#0369a1' : '#b45309' }}>
-                              {isShipped ? 'In Transit / Shipped' : 'Packed / Ready for Pickup'}
+                          </td>
+                          <td style={{ padding: '12px 16px', fontSize: '12.5px', color: '#1e293b', fontWeight: 500 }}>
+                            {row.description}
+                          </td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                background: '#f8fafc',
+                                color: '#475569',
+                                border: '1px solid #e2e8f0',
+                                fontSize: '11.5px',
+                                fontWeight: 600,
+                                padding: '2px 8px',
+                                borderRadius: '6px'
+                              }}
+                            >
+                              <Smartphone size={11} color="#64748b" />
+                              <span>{row.model || 'Universal'}</span>
                             </span>
-                          </div>
-                          <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#0f172a' }}>
-                            {itemCount} item{itemCount !== 1 ? 's' : ''}
-                          </span>
-                        </div>
-
-                        <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <div>Destination: <strong style={{ color: '#334155' }}>{destSite.name} ({destSite.code})</strong></div>
-                          <div>
-                            Courier / Tracking:{' '}
-                            <strong style={{ color: '#334155' }}>
-                              {formatCourierWithMode(sh.carrier || sh.courier || 'Lite Express', sh.shipping_mode)}{' '}
-                              {sh.tracking_number ? (
-                                <span
-                                  className="font-mono"
-                                  onClick={() => handleCopyWaybill(sh.tracking_number)}
-                                  style={{
-                                    cursor: 'pointer',
-                                    fontWeight: 600,
-                                    color: copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? '#15803d' : '#0f172a',
-                                    padding: '1px 4px',
-                                    borderRadius: '3px',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '2px',
-                                    transition: 'background-color 0.15s ease'
-                                  }}
-                                  title="Click to copy Waybill number"
-                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f1f5f9'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                >
-                                  • #{sh.tracking_number}
-                                  {copiedWaybill === String(sh.tracking_number).replace(/^#\s*/, '').trim() ? (
-                                    <Check size={11} strokeWidth={2.5} color="#15803d" />
-                                  ) : (
-                                    <Copy size={10} color="#64748b" style={{ opacity: 0.7 }} />
-                                  )}
-                                </span>
-                              ) : ''}
-                            </strong>
-                          </div>
-                          <div>Packed by: <span style={{ color: '#334155' }}>{sh.prepared_by_name || 'Warehouse Staff'}</span></div>
-                        </div>
-
-                        {/* Part numbers preview */}
-                        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                          {(sh.items || []).slice(0, 4).map((it, idx) => (
-                            <span key={idx} style={{ fontSize: '10.5px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', color: '#475569', fontFamily: 'var(--font-mono)' }}>
-                              {it.part_number}
-                            </span>
-                          ))}
-                          {itemCount > 4 && (
-                            <span style={{ fontSize: '10.5px', color: '#64748b', alignSelf: 'center' }}>
-                              +{itemCount - 4} more
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px' }}>
-                        {isShipped ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 700 }}
-                            onClick={() => handleOpenReceiveModal(sh)}
-                            title="Confirm physical arrival of this package and activate parts in branch inventory"
-                          >
-                            <PackageCheck size={13} />
-                            <span>Confirm Site Package</span>
-                          </button>
-                        ) : (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#b45309', fontWeight: 600, padding: '4px 8px', background: '#fffbeb', borderRadius: '4px', border: '1px solid #fef3c7' }}>
-                            <Clock size={12} />
-                            <span>Awaiting DC Dispatch</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="table-container" style={{ overflowX: 'auto' }}>
-            {stockRows.length === 0 ? (
-              <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
-                <Package size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
-                <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Live Stock Found For This Branch</h4>
-                <p style={{ margin: 0, fontSize: '12.5px' }}>
-                  There are currently no serialized inventory units recorded in stock for {activeSiteObj.name}.
-                </p>
-              </div>
-            ) : (
-              <table className="data-table" style={{ width: '100%' }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    <th style={{ minWidth: '160px' }}>Part Number</th>
-                    <th style={{ minWidth: '240px' }}>Part Description</th>
-                    <th style={{ width: '160px' }}>Compatible Model</th>
-                    <th style={{ textAlign: 'center', width: '130px' }}>Available Stock</th>
-                    <th style={{ textAlign: 'center', width: '110px' }}>Allocated</th>
-                    <th style={{ textAlign: 'center', width: '110px' }}>Packed</th>
-                    <th style={{ textAlign: 'center', width: '150px' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockRows.map(row => {
-                    const isDc = isSuperadmin || currentUser?.siteId === 'site-dc' || userSiteObj?.code === 'DC-MDC' || userSiteObj?.code === 'DC';
-                    const isUserSameSite = !isDc && Boolean(
-                      currentUser?.siteId && (
-                        selectedSiteId === currentUser.siteId ||
-                        selectedSiteId === userSiteObj?.id ||
-                        activeSiteObj?.code === userSiteObj?.code ||
-                        activeSiteObj?.id === userSiteObj?.id
-                      )
-                    );
-
-                    return (
-                      <tr key={row.partNumber}>
-                        <td>
-                          <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                            {row.partNumber}
-                          </strong>
-                        </td>
-                        <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
-                          {row.description}
-                        </td>
-                        <td>
-                          <span className="badge" style={{ background: '#f1f5f9', color: '#475569', fontSize: '11px' }}>
-                            {row.model}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span
-                            className="badge"
-                            style={{
-                              background: row.inStock > 0 ? '#dcfce7' : '#fee2e2',
-                              color: row.inStock > 0 ? '#059669' : '#dc2626',
-                              fontWeight: 800,
-                              fontSize: '12px',
-                              padding: '4px 10px'
-                            }}
-                          >
-                            {row.inStock} units
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                          {row.allocated || 0}
-                        </td>
-                        <td style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                          {row.packed || 0}
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          {isUserSameSite ? (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                              {row.inStock > 0 ? (
-                                <>
-                                  <span
-                                    className="badge"
-                                    style={{
-                                      background: '#f0fdf4',
-                                      color: '#166534',
-                                      border: '1px solid #bbf7d0',
-                                      fontSize: '11px',
-                                      fontWeight: 600,
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                      padding: '3px 8px'
-                                    }}
-                                    title="This part is currently in your branch inventory"
-                                  >
-                                    <CheckCircle2 size={11} color="#16a34a" />
-                                    <span>In Stock</span>
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-sm"
-                                    style={{
-                                      fontSize: '11px',
-                                      padding: '3px 8px',
-                                      color: '#059669',
-                                      borderColor: '#86efac',
-                                      background: '#f0fdf4',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                      fontWeight: 700
-                                    }}
-                                    onClick={() => openMarkUsedModal(row.partNumber)}
-                                    title={`Record #${row.partNumber} as used in a repair work order`}
-                                  >
-                                    <Wrench size={11} />
-                                    <span>Mark Used</span>
-                                  </button>
-                                </>
-                              ) : (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                                  {row.packed > 0 ? (
+                          </td>
+                          <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                            {row.inStock > 0 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  background: '#ecfdf5',
+                                  color: '#065f46',
+                                  border: '1px solid #a7f3d0',
+                                  fontWeight: 800,
+                                  fontSize: '12px',
+                                  padding: '3px 10px',
+                                  borderRadius: '999px'
+                                }}
+                              >
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#059669' }} />
+                                <span>{row.inStock} units</span>
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#fef2f2',
+                                  color: '#991b1b',
+                                  border: '1px solid #fecaca',
+                                  fontWeight: 600,
+                                  fontSize: '11.5px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px'
+                                }}
+                              >
+                                <span>0 units (OOS)</span>
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', color: row.allocated > 0 ? '#0f172a' : '#94a3b8', fontWeight: row.allocated > 0 ? 700 : 400 }}>
+                            {row.allocated || '—'}
+                          </td>
+                          <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                            {row.packed > 0 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#eff6ff',
+                                  color: '#0284c7',
+                                  border: '1px solid #bae6fd',
+                                  borderRadius: '6px',
+                                  padding: '2px 8px',
+                                  fontSize: '11px',
+                                  fontWeight: 700
+                                }}
+                                title={`${row.packed} unit(s) packed / en route from Central DC`}
+                              >
+                                <Truck size={11} />
+                                <span>{row.packed} in-transit</span>
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: '12px' }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                            {isUserSameSite ? (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                {row.inStock > 0 ? (
+                                  <>
                                     <span
                                       className="badge"
                                       style={{
-                                        background: '#eff6ff',
-                                        color: '#0284c7',
-                                        border: '1px solid #bfdbfe',
+                                        background: '#f0fdf4',
+                                        color: '#166534',
+                                        border: '1px solid #bbf7d0',
                                         fontSize: '11px',
-                                        fontWeight: 700,
+                                        fontWeight: 600,
                                         display: 'inline-flex',
                                         alignItems: 'center',
                                         gap: '3px',
                                         padding: '3px 8px'
                                       }}
-                                      title={`${row.packed} unit(s) are packed / in transit for this branch. Protected from zero-stock auto-cleaning.`}
+                                      title="This part is currently in your branch inventory"
                                     >
-                                      <Truck size={11} color="#0284c7" />
-                                      <span>{row.packed} In Transit</span>
+                                      <CheckCircle2 size={11} color="#16a34a" />
+                                      <span>In Stock</span>
                                     </span>
-                                  ) : (
-                                    <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{
+                                        fontSize: '11.5px',
+                                        padding: '4px 8px',
+                                        color: '#059669',
+                                        borderColor: '#86efac',
+                                        background: '#f0fdf4',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontWeight: 700,
+                                        borderRadius: '6px'
+                                      }}
+                                      onClick={() => openMarkUsedModal(row.partNumber)}
+                                      title={`Record #${row.partNumber} as used in a repair work order`}
+                                    >
+                                      <Wrench size={11} />
+                                      <span>Mark Used</span>
+                                    </button>
+                                  </>
+                                ) : (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                    {row.packed > 0 ? (
+                                      <span
+                                        className="badge"
+                                        style={{
+                                          background: '#eff6ff',
+                                          color: '#0284c7',
+                                          border: '1px solid #bfdbfe',
+                                          fontSize: '11px',
+                                          fontWeight: 700,
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '3px',
+                                          padding: '3px 8px'
+                                        }}
+                                        title={`${row.packed} unit(s) are packed / in transit for this branch. Protected from zero-stock auto-cleaning.`}
+                                      >
+                                        <Truck size={11} color="#0284c7" />
+                                        <span>{row.packed} In Transit</span>
+                                      </span>
+                                    ) : (
                                       <span
                                         className="badge"
                                         style={{
@@ -2821,39 +3110,40 @@ export default function RequestParts({ defaultTab = 'requests_table' }) {
                                         <AlertTriangle size={11} color="#dc2626" />
                                         <span>Out of Stock</span>
                                       </span>
-                                    </>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-sm"
-                                    style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                                    onClick={() => handleQuickRequestPart(row.partNumber)}
-                                    title="Create replenishment request for this part"
-                                  >
-                                    <Plus size={11} />
-                                    <span>Request</span>
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                              onClick={() => handleQuickRequestPart(row.partNumber)}
-                              title="Create replenishment request for this part"
-                            >
-                              <Plus size={12} />
-                              <span>Request</span>
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ fontSize: '11.5px', padding: '4px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600 }}
+                                      onClick={() => handleQuickRequestPart(row.partNumber)}
+                                      title="Create replenishment request for this part"
+                                    >
+                                      <Plus size={11} />
+                                      <span>Request</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '11.5px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                onClick={() => handleQuickRequestPart(row.partNumber)}
+                                title="Create replenishment request for this part"
+                              >
+                                <Plus size={12} />
+                                <span>Request</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -25,7 +25,9 @@ import {
   Trash2,
   AlertTriangle,
   RefreshCw,
-  LayoutGrid
+  LayoutGrid,
+  Copy,
+  Check
 } from 'lucide-react';
 
 const INITIAL_GRID_ROW_LIMIT = 100;
@@ -85,6 +87,48 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
   const [viewSection, setViewSection] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [copiedSerial, setCopiedSerial] = useState(null);
+
+  // Spreadsheet Grid Horizontal Section Navigation Refs
+  const gridScrollContainerRef = useRef(null);
+  const sectionStockRef = useRef(null);
+  const sectionUsedRef = useRef(null);
+  const sectionOuttakeRef = useRef(null);
+  const sectionTransferredRef = useRef(null);
+  const sectionSummaryRef = useRef(null);
+
+  const scrollToSection = (sec) => {
+    let target = null;
+    if (sec === 'stock') target = sectionStockRef.current;
+    else if (sec === 'used') target = sectionUsedRef.current;
+    else if (sec === 'outtake') target = sectionOuttakeRef.current;
+    else if (sec === 'transferred') target = sectionTransferredRef.current;
+    else if (sec === 'summary') target = sectionSummaryRef.current;
+
+    if (target && gridScrollContainerRef.current) {
+      const left = target.offsetLeft;
+      gridScrollContainerRef.current.scrollTo({ left: Math.max(0, left - 10), behavior: 'smooth' });
+    }
+  };
+
+  const handleCopySerial = (serial) => {
+    if (!serial) return;
+    const clean = String(serial).trim().toUpperCase();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(clean);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = clean;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopiedSerial(clean);
+    setTimeout(() => {
+      setCopiedSerial(prev => prev === clean ? null : prev);
+    }, 1800);
+  };
 
   // Modals state
   const [isMarkUsedOpen, setIsMarkUsedOpen] = useState(false);
@@ -858,76 +902,299 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
 
       {/* VIEW A: SPREADSHEET GRID (Replicating exact Site Stock Monitoring.xlsx multi-table layout) */}
       {viewSection === 'grid' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#ffffff', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
-          <div style={{ padding: '12px 18px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <LayoutGrid size={15} color="#0284c7" />
-              <h3 style={{ margin: 0, fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
-                Google Sheets / Excel Structure View — {activeSiteObj.code}
-              </h3>
+        <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#ffffff', boxShadow: '0 2px 8px -2px rgba(15, 23, 42, 0.06)' }}>
+          {/* Card Title & Context Header */}
+          <div style={{ padding: '14px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#f0f9ff', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <LayoutGrid size={18} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                  Google Sheets / Excel Structure View — {activeSiteObj.code}
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Complete multi-sheet mirror of Google Sheets workbook. Showing first {Math.min(INITIAL_GRID_ROW_LIMIT, Math.max(filteredInStock.length, filteredUsed.length, filteredOuttake.length, filteredTransferred.length, filteredSummary.length))} rows per section.
+                </p>
+              </div>
             </div>
-            <span style={{ fontSize: '11.5px', color: '#64748b' }}>
-              Showing the first {Math.min(INITIAL_GRID_ROW_LIMIT, Math.max(filteredInStock.length, filteredUsed.length, filteredOuttake.length, filteredTransferred.length, filteredSummary.length))} rows of each lifecycle section for responsive loading. Use the section tabs for complete lists.
-            </span>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="badge" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', fontSize: '11.5px', fontWeight: 600 }}>
+                {activeSiteObj.name} ({activeSiteObj.code})
+              </span>
+            </div>
           </div>
 
-          <div style={{ overflowX: 'auto', maxHeight: '680px' }}>
-            <table className="data-table" style={{ width: '100%', minWidth: '1600px', fontSize: '11.5px' }}>
+          {/* Quick Jump & Section Navigation Bar */}
+          <div style={{ padding: '10px 18px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginRight: '4px' }}>
+                Quick Jump:
+              </span>
+              <button
+                type="button"
+                onClick={() => scrollToSection('stock')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  background: '#ffffff',
+                  color: '#0284c7',
+                  border: '1px solid #bae6fd',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(2, 132, 199, 0.05)'
+                }}
+              >
+                <Package size={12} />
+                <span>1. Stock on Hand ({filteredInStock.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('used')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  background: '#ffffff',
+                  color: '#d97706',
+                  border: '1px solid #fde68a',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(217, 119, 6, 0.05)'
+                }}
+              >
+                <Wrench size={12} />
+                <span>2. Used Parts ({filteredUsed.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('outtake')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  background: '#ffffff',
+                  color: '#7c3aed',
+                  border: '1px solid #ddd6fe',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(124, 58, 237, 0.05)'
+                }}
+              >
+                <LogOut size={12} />
+                <span>3. For Outtake ({filteredOuttake.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('transferred')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  background: '#ffffff',
+                  color: '#0891b2',
+                  border: '1px solid #a5f3fc',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(8, 145, 178, 0.05)'
+                }}
+              >
+                <ArrowRightLeft size={12} />
+                <span>4. Transferred Parts ({filteredTransferred.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('summary')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  background: '#ffffff',
+                  color: '#059669',
+                  border: '1px solid #a7f3d0',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(5, 150, 105, 0.05)'
+                }}
+              >
+                <Boxes size={12} />
+                <span>5. Stock Summary ({filteredSummary.length})</span>
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                Tip: Click any serial to copy to clipboard
+              </span>
+            </div>
+          </div>
+
+          {/* Sticky Table Viewport */}
+          <div
+            ref={gridScrollContainerRef}
+            style={{
+              overflowX: 'auto',
+              maxHeight: '680px',
+              position: 'relative'
+            }}
+          >
+            <table
+              className="data-table"
+              style={{
+                width: '100%',
+                minWidth: '3550px',
+                fontSize: '12px',
+                borderCollapse: 'separate',
+                borderSpacing: 0,
+                tableLayout: 'fixed'
+              }}
+            >
               <thead>
-                {/* Row 0: Section Headers */}
-                <tr style={{ background: '#0f172a', color: '#ffffff', textAlign: 'center', fontWeight: 800, fontSize: '11px', letterSpacing: '0.04em' }}>
-                  <th colSpan={6} style={{ background: '#0284c7', color: '#ffffff', borderRight: '2px solid #ffffff', padding: '8px' }}>
-                    1. Stock on hand ({filteredInStock.length})
+                {/* Row 0: Sticky Section Headers */}
+                <tr style={{ textAlign: 'center', fontWeight: 800, fontSize: '12px', letterSpacing: '0.04em' }}>
+                  <th
+                    ref={sectionStockRef}
+                    colSpan={6}
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 30,
+                      background: '#0284c7',
+                      color: '#ffffff',
+                      borderRight: '4px solid #ffffff',
+                      padding: '10px 14px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <Package size={14} />
+                      <span>1. Stock on hand ({filteredInStock.length})</span>
+                    </div>
                   </th>
-                  <th colSpan={5} style={{ background: '#d97706', color: '#ffffff', borderRight: '2px solid #ffffff', padding: '8px' }}>
-                    2. Used Parts ({filteredUsed.length})
+                  <th
+                    ref={sectionUsedRef}
+                    colSpan={5}
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 30,
+                      background: '#d97706',
+                      color: '#ffffff',
+                      borderRight: '4px solid #ffffff',
+                      padding: '10px 14px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <Wrench size={14} />
+                      <span>2. Used Parts ({filteredUsed.length})</span>
+                    </div>
                   </th>
-                  <th colSpan={4} style={{ background: '#7c3aed', color: '#ffffff', borderRight: '2px solid #ffffff', padding: '8px' }}>
-                    3. For Outtake ({filteredOuttake.length})
+                  <th
+                    ref={sectionOuttakeRef}
+                    colSpan={4}
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 30,
+                      background: '#7c3aed',
+                      color: '#ffffff',
+                      borderRight: '4px solid #ffffff',
+                      padding: '10px 14px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <LogOut size={14} />
+                      <span>3. For Outtake ({filteredOuttake.length})</span>
+                    </div>
                   </th>
-                  <th colSpan={5} style={{ background: '#0891b2', color: '#ffffff', borderRight: '2px solid #ffffff', padding: '8px' }}>
-                    4. Transferred Parts to Other Sites ({filteredTransferred.length})
+                  <th
+                    ref={sectionTransferredRef}
+                    colSpan={5}
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 30,
+                      background: '#0891b2',
+                      color: '#ffffff',
+                      borderRight: '4px solid #ffffff',
+                      padding: '10px 14px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <ArrowRightLeft size={14} />
+                      <span>4. Transferred Parts to Other Sites ({filteredTransferred.length})</span>
+                    </div>
                   </th>
-                  <th colSpan={4} style={{ background: '#059669', color: '#ffffff', padding: '8px' }}>
-                    5. Site Stock Summary ({filteredSummary.length})
+                  <th
+                    ref={sectionSummaryRef}
+                    colSpan={4}
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 30,
+                      background: '#059669',
+                      color: '#ffffff',
+                      padding: '10px 14px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <Boxes size={14} />
+                      <span>5. Site Stock Summary ({filteredSummary.length})</span>
+                    </div>
                   </th>
                 </tr>
 
-                {/* Row 1: Subheaders */}
-                <tr style={{ background: '#f1f5f9', color: '#334155', fontSize: '11px', fontWeight: 700 }}>
-                  {/* Stock on Hand */}
-                  <th style={{ width: '90px' }}>Site</th>
-                  <th style={{ width: '110px' }}>P/N</th>
-                  <th style={{ width: '180px' }}>Part Description</th>
-                  <th style={{ width: '150px' }}>Serial</th>
-                  <th style={{ width: '100px' }}>Date Rcvd</th>
-                  <th style={{ width: '110px', borderRight: '2px solid #cbd5e1' }}>Remarks</th>
+                {/* Row 1: Sticky Column Subheaders */}
+                <tr style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {/* Section 1: Stock on Hand */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Site</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', whiteSpace: 'nowrap' }}>Date Rcvd</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '160px', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks</th>
 
-                  {/* Used Parts */}
-                  <th style={{ width: '100px' }}>Date Used</th>
-                  <th style={{ width: '110px' }}>P/N</th>
-                  <th style={{ width: '170px' }}>Part Description</th>
-                  <th style={{ width: '150px' }}>Serial</th>
-                  <th style={{ width: '140px', borderRight: '2px solid #cbd5e1' }}>Remarks (OC#)</th>
+                  {/* Section 2: Used Parts */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Date Used</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '170px', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks (OC#)</th>
 
-                  {/* For Outtake */}
-                  <th style={{ width: '110px' }}>P/N</th>
-                  <th style={{ width: '170px' }}>Part Description</th>
-                  <th style={{ width: '150px' }}>Serial</th>
-                  <th style={{ width: '130px', borderRight: '2px solid #cbd5e1' }}>Remarks</th>
+                  {/* Section 3: For Outtake */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '160px', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks</th>
 
-                  {/* Transferred Parts */}
-                  <th style={{ width: '100px' }}>Date Trans</th>
-                  <th style={{ width: '110px' }}>P/N</th>
-                  <th style={{ width: '170px' }}>Part Description</th>
-                  <th style={{ width: '150px' }}>Serial</th>
-                  <th style={{ width: '150px', borderRight: '2px solid #cbd5e1' }}>Remarks (TS#)</th>
+                  {/* Section 4: Transferred Parts */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Date Trans</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '250px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap' }}>Serial</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '180px', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap' }}>Remarks (TS#)</th>
 
-                  {/* Site Stock Summary */}
-                  <th style={{ width: '90px' }}>Site</th>
-                  <th style={{ width: '110px' }}>P/N</th>
-                  <th style={{ width: '180px' }}>Part Description</th>
-                  <th style={{ width: '90px', textAlign: 'center' }}>In-Stock Qty</th>
+                  {/* Section 5: Site Stock Summary */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>Site</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>P/N</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '270px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', whiteSpace: 'nowrap' }}>Part Description</th>
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '120px', background: '#f0fdf4', color: '#166534', borderBottom: '2px solid #bbf7d0', textAlign: 'center', whiteSpace: 'nowrap' }}>In-Stock Qty</th>
                 </tr>
               </thead>
               <tbody>
@@ -948,48 +1215,181 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   const sum = filteredSummary[idx];
 
                   return (
-                    <tr key={idx} style={{ background: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                      {/* Stock on Hand */}
-                      <td style={{ color: '#64748b' }}>{oh ? activeSiteObj.code : ''}</td>
-                      <td>{oh ? <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{oh.part_number}</strong> : ''}</td>
-                      <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{oh?.description || ''}</td>
-                      <td>{oh ? (oh.is_summary_only
-                        ? <span style={{ color: '#64748b', fontStyle: 'italic' }}>Summary quantity (no serial)</span>
-                        : <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{oh.serial_number}</span>) : ''}</td>
-                      <td style={{ color: '#64748b' }}>{oh ? (oh.received_at ? String(oh.received_at).substring(0, 10) : '—') : ''}</td>
-                      <td style={{ borderRight: '2px solid #cbd5e1', color: '#475569' }}>{oh?.remarks || oh?.notes || (oh ? 'On-hand' : '')}</td>
+                    <tr
+                      key={idx}
+                      style={{
+                        background: idx % 2 === 0 ? '#ffffff' : '#f8fafc',
+                        borderBottom: '1px solid #e2e8f0',
+                        transition: 'background-color 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#ffffff' : '#f8fafc'; }}
+                    >
+                      {/* Section 1: Stock on Hand */}
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>{oh ? activeSiteObj.code : ''}</td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {oh ? <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{oh.part_number}</strong> : ''}
+                      </td>
+                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={oh?.description || ''}>
+                        {oh?.description || ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {oh ? (
+                          oh.is_summary_only ? (
+                            <span style={{ color: '#64748b', fontStyle: 'italic', fontSize: '11px' }}>Summary (no serial)</span>
+                          ) : (
+                            <span
+                              onClick={() => handleCopySerial(oh.serial_number)}
+                              style={{
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                color: copiedSerial === oh.serial_number ? '#15803d' : '#0f172a',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '2px 5px',
+                                borderRadius: '4px',
+                                background: copiedSerial === oh.serial_number ? '#dcfce7' : 'transparent',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title="Click to copy serial"
+                            >
+                              <span>{oh.serial_number}</span>
+                              {copiedSerial === oh.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                            </span>
+                          )
+                        ) : ''}
+                      </td>
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {oh ? (oh.received_at ? String(oh.received_at).substring(0, 10) : '—') : ''}
+                      </td>
+                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#475569', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {oh?.remarks || oh?.notes || (oh ? 'On-hand' : '')}
+                      </td>
 
-                      {/* Used Parts */}
-                      <td style={{ color: '#b45309' }}>{u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}</td>
-                      <td>{u ? <strong style={{ color: '#d97706', fontFamily: 'var(--font-mono)' }}>{u.part_number}</strong> : ''}</td>
-                      <td style={{ maxWidth: '170px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u?.description || ''}</td>
-                      <td>{u ? <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{u.serial_number}</span> : ''}</td>
-                      <td style={{ borderRight: '2px solid #cbd5e1', color: '#92400e' }}>
+                      {/* Section 2: Used Parts */}
+                      <td style={{ color: '#b45309', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {u ? <strong style={{ color: '#d97706', fontFamily: 'var(--font-mono)' }}>{u.part_number}</strong> : ''}
+                      </td>
+                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={u?.description || ''}>
+                        {u?.description || ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {u ? (
+                          <span
+                            onClick={() => handleCopySerial(u.serial_number)}
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              color: copiedSerial === u.serial_number ? '#15803d' : '#0f172a',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 5px',
+                              borderRadius: '4px',
+                              background: copiedSerial === u.serial_number ? '#dcfce7' : 'transparent',
+                              transition: 'all 0.15s ease'
+                            }}
+                            title="Click to copy serial"
+                          >
+                            <span>{u.serial_number}</span>
+                            {copiedSerial === u.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                          </span>
+                        ) : ''}
+                      </td>
+                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#92400e', whiteSpace: 'nowrap', padding: '10px 12px' }}>
                         {u?.work_order_number ? `Used to OC# ${u.work_order_number}` : (u?.remarks || u?.notes || (u ? 'Used' : ''))}
                       </td>
 
-                      {/* For Outtake */}
-                      <td>{ot ? <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>{ot.part_number}</strong> : ''}</td>
-                      <td style={{ maxWidth: '170px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ot?.description || ''}</td>
-                      <td>{ot ? <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{ot.serial_number}</span> : ''}</td>
-                      <td style={{ borderRight: '2px solid #cbd5e1', color: '#6b21a8' }}>{ot?.outtake_reason || ot?.remarks || ot?.notes || (ot ? 'For Outtake' : '')}</td>
+                      {/* Section 3: For Outtake */}
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {ot ? <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>{ot.part_number}</strong> : ''}
+                      </td>
+                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={ot?.description || ''}>
+                        {ot?.description || ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {ot ? (
+                          <span
+                            onClick={() => handleCopySerial(ot.serial_number)}
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              color: copiedSerial === ot.serial_number ? '#15803d' : '#0f172a',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 5px',
+                              borderRadius: '4px',
+                              background: copiedSerial === ot.serial_number ? '#dcfce7' : 'transparent',
+                              transition: 'all 0.15s ease'
+                            }}
+                            title="Click to copy serial"
+                          >
+                            <span>{ot.serial_number}</span>
+                            {copiedSerial === ot.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                          </span>
+                        ) : ''}
+                      </td>
+                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#6b21a8', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {ot?.outtake_reason || ot?.remarks || ot?.notes || (ot ? 'For Outtake' : '')}
+                      </td>
 
-                      {/* Transferred Parts */}
-                      <td style={{ color: '#0e7490' }}>{tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}</td>
-                      <td>{tr ? <strong style={{ color: '#0891b2', fontFamily: 'var(--font-mono)' }}>{tr.part_number}</strong> : ''}</td>
-                      <td style={{ maxWidth: '170px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tr?.description || ''}</td>
-                      <td>{tr ? <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{tr.serial_number}</span> : ''}</td>
-                      <td style={{ borderRight: '2px solid #cbd5e1', color: '#155e75' }}>
+                      {/* Section 4: Transferred Parts */}
+                      <td style={{ color: '#0e7490', whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {tr ? <strong style={{ color: '#0891b2', fontFamily: 'var(--font-mono)' }}>{tr.part_number}</strong> : ''}
+                      </td>
+                      <td style={{ maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={tr?.description || ''}>
+                        {tr?.description || ''}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {tr ? (
+                          <span
+                            onClick={() => handleCopySerial(tr.serial_number)}
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              color: copiedSerial === tr.serial_number ? '#15803d' : '#0f172a',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 5px',
+                              borderRadius: '4px',
+                              background: copiedSerial === tr.serial_number ? '#dcfce7' : 'transparent',
+                              transition: 'all 0.15s ease'
+                            }}
+                            title="Click to copy serial"
+                          >
+                            <span>{tr.serial_number}</span>
+                            {copiedSerial === tr.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                          </span>
+                        ) : ''}
+                      </td>
+                      <td style={{ borderRight: '3px solid #cbd5e1', color: '#155e75', whiteSpace: 'nowrap', padding: '10px 12px' }}>
                         {tr?.transfer_slip_number ? `${tr.transfer_slip_number} to ${tr.transferred_to_site_code || 'Branch'}` : (tr?.remarks || tr?.notes || (tr ? 'Transferred' : ''))}
                       </td>
 
-                      {/* Site Stock Summary */}
-                      <td style={{ color: '#64748b' }}>{sum ? activeSiteObj.code : ''}</td>
-                      <td>{sum ? <strong style={{ color: '#059669', fontFamily: 'var(--font-mono)' }}>{sum.partNumber}</strong> : ''}</td>
-                      <td style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sum?.description || ''}</td>
-                      <td style={{ textAlign: 'center' }}>
+                      {/* Section 5: Site Stock Summary */}
+                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', padding: '10px 12px' }}>{sum ? activeSiteObj.code : ''}</td>
+                      <td style={{ whiteSpace: 'nowrap', padding: '10px 12px' }}>
+                        {sum ? <strong style={{ color: '#059669', fontFamily: 'var(--font-mono)' }}>{sum.partNumber}</strong> : ''}
+                      </td>
+                      <td style={{ maxWidth: '270px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '10px 12px' }} title={sum?.description || ''}>
+                        {sum?.description || ''}
+                      </td>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap', padding: '10px 12px' }}>
                         {sum ? (
-                          <span className="badge" style={{ background: '#ecfdf5', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 800 }}>
+                          <span className="badge" style={{ background: '#ecfdf5', color: '#166534', border: '1px solid #bbf7d0', fontWeight: 800, padding: '3px 10px', fontSize: '11.5px', borderRadius: '999px' }}>
                             {sum.inStockCount}
                           </span>
                         ) : ''}

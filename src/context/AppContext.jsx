@@ -129,7 +129,26 @@ export function AppProvider({ children }) {
   }, [setSelectedCategories]);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [pmgSubTab, setPmgSubTab] = useState('requests_table');
+  const [pmgSubTab, setPmgSubTab] = useState(() => {
+    try {
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#\/?/, '').trim() : '';
+      if (hash === 'all-stocks') return 'all_stocks';
+      const activeTabSaved = localStorage.getItem('mdc_active_tab');
+      if (activeTabSaved === 'all-stocks') return 'all_stocks';
+      const savedSubTab = localStorage.getItem('mdc_parts_subtab');
+      if (savedSubTab) return savedSubTab;
+    } catch (e) {}
+    return 'requests_table';
+  });
+
+  // Persist pmgSubTab to localStorage
+  useEffect(() => {
+    if (pmgSubTab) {
+      try {
+        localStorage.setItem('mdc_parts_subtab', pmgSubTab);
+      } catch (e) {}
+    }
+  }, [pmgSubTab]);
   const [shipmentsFilterStatus, setShipmentsFilterStatus] = useState(null);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -194,7 +213,12 @@ export function AppProvider({ children }) {
       if (activeTab === 'all-stocks' && pmgSubTab !== 'all_stocks') {
         setPmgSubTab('all_stocks');
       } else if (activeTab === 'request-parts' && prev === 'all-stocks' && pmgSubTab === 'all_stocks') {
-        setPmgSubTab('requests_table');
+        const savedSubTab = localStorage.getItem('mdc_parts_subtab');
+        setPmgSubTab(savedSubTab && savedSubTab !== 'all_stocks' ? savedSubTab : 'requests_table');
+      }
+    } else {
+      if (activeTab === 'all-stocks' && pmgSubTab !== 'all_stocks') {
+        setPmgSubTab('all_stocks');
       }
     }
   }, [activeTab, pmgSubTab]);

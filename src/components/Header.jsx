@@ -61,16 +61,18 @@ export default function Header() {
     audit: { title: 'Serialized Audit Trail', section: 'Traceability', showCategories: false },
     settings: { title: 'Settings', section: 'Admin', showCategories: true },
     'user-access': { title: 'User Access Management', section: 'Admin', showCategories: false },
-    'request-parts': currentUser?.role === 'parts_management'
-      ? (pmgSubTab === 'stock_on_hand'
-          ? { title: 'Branch Stock On Hand', section: 'Branch Operations', showCategories: false }
-          : pmgSubTab === 'usage_history'
-            ? { title: 'Parts Consumption Log', section: 'Branch Operations', showCategories: false }
-            : { title: 'Parts Requests', section: 'Branch Operations', showCategories: false })
-      : { title: 'Parts Requests & Replenishment', section: 'Operations & Logistics', showCategories: false },
+    'request-parts': (pmgSubTab === 'stock_on_hand')
+      ? { title: 'Branch Stock On Hand', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
+      : (pmgSubTab === 'site_monitoring')
+        ? { title: 'Site Stock Monitoring (Excel)', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
+        : (pmgSubTab === 'usage_history')
+          ? { title: currentUser?.role === 'parts_management' ? 'Parts Consumption Log' : 'Used Parts History', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
+          : (pmgSubTab === 'all_stocks')
+            ? { title: 'All Stocks & Multi-Site', section: 'Operations & Logistics', showCategories: false }
+            : { title: currentUser?.role === 'parts_management' ? 'Parts Requests' : 'Parts Requests & Replenishment', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false },
     'all-stocks': { 
       title: 'All Stocks & Multi-Site', 
-      section: 'Network Visibility', 
+      section: 'Operations & Logistics', 
       showCategories: false 
     },
     feedback: {

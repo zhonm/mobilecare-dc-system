@@ -287,8 +287,8 @@ export default function Shipments() {
     try {
       await updateShipmentStatus(shipmentId, newStatus);
       const elapsed = Date.now() - startTime;
-      if (elapsed < 350) {
-        await new Promise(r => setTimeout(r, 350 - elapsed));
+      if (elapsed < 120) {
+        await new Promise(r => setTimeout(r, 120 - elapsed));
       }
     } finally {
       setStatusLoadingState(null);

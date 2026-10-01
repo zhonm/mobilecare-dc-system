@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber, isDraftSupersededOrFulfilled, reconcileShipmentsAndDrafts } from '../utils/appContextHelpers';
-import { unmarkDeletedShipmentIds } from '../services/deletionRegistryService';
+import { unmarkDeletedShipmentIds, unmarkDeletedSerials } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
 import { getTodayDateString } from '../utils/shipmentHelpers';
@@ -707,6 +707,14 @@ export function useShipments({
     // Unmark any previous accidental deletion markers so this shipment is never hidden
     await unmarkDeletedShipmentIds([newShipment.id, newShipment.invoice_ref, newShipment.shipment_number]);
 
+    // When shipment is received or confirmed, unmark all its unit serials so they are active stock at branch
+    if (newShipment.items && newShipment.items.length > 0) {
+      const serialsToUnmark = newShipment.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean);
+      if (serialsToUnmark.length > 0 && (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered')) {
+        await unmarkDeletedSerials(serialsToUnmark);
+      }
+    }
+
     let computedNextList = [];
     setShipments(prev => {
       const currentList = Array.isArray(prev) ? prev : [];
@@ -1014,8 +1022,29 @@ export function useShipments({
               },
               updated_at: new Date().toISOString()
             }, { debounceMs: 1200 });
+
+            // Also persist retail branch units to master_branch_inventory_registry for PMG branches
+            const branchUnits = updatedInv.filter(u => {
+              const sId = String(u.current_site_id || u.site_id || '').toLowerCase();
+              const sCode = String(u.site_code || '').toUpperCase();
+              return sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && !u.is_dc;
+            });
+            await queuedSavedRecordsUpsert(supabase, {
+              id: 'master_branch_inventory_registry',
+              record_type: 'inventory_master',
+              period_label: 'Master Branch Inventory Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Authoritative In-Stock branch inventory across all retail ASP sites',
+              saved_by_name: currentUser?.fullName || 'Branch Staff',
+              snapshot_data: {
+                units: branchUnits
+              },
+              updated_at: new Date().toISOString()
+            }, { debounceMs: 1200 });
           } catch (invErr) {
-            console.warn('live_master_dc_inventory update note:', invErr.message);
+            console.warn('Inventory registry updates note:', invErr.message);
           }
         }
 
@@ -1110,8 +1139,8 @@ export function useShipments({
     }
 
     const normStatus = String(target.status || '').toLowerCase();
-    if (normStatus !== 'shipped' && normStatus !== 'in_transit') {
-      showToast?.('Package must be shipped from DC before site receipt can be confirmed.', 'warning');
+    if (normStatus !== 'shipped' && normStatus !== 'in_transit' && normStatus !== 'pending_pickup') {
+      showToast?.('Package must be packed or shipped from DC before site receipt can be confirmed.', 'warning');
       return { success: false, error: 'Package must be shipped before confirmation' };
     }
 
@@ -1143,7 +1172,19 @@ export function useShipments({
       updated_at: new Date().toISOString()
     };
 
+    if (target.items && target.items.length > 0) {
+      const serials = target.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean);
+      if (serials.length > 0) {
+        await unmarkDeletedSerials(serials);
+      }
+    }
+
     await saveShipment(updatedShipment);
+
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('SHIPMENT_RECEIVED', { shipmentId: updatedShipment.id, siteId: updatedShipment.site_id });
+      broadcastCloudEvent('BRANCH_STOCK_UPDATED', { siteId: updatedShipment.site_id });
+    }
 
     // Automatically fulfill linked parts requests for this destination site and parts
     if (typeof updatePartsRequestStatus === 'function' && Array.isArray(partsRequests) && partsRequests.length > 0) {
@@ -1205,6 +1246,70 @@ export function useShipments({
       } : {}),
       updated_at: new Date().toISOString()
     };
+
+    const isLightweightStatusChange = Object.keys(extraData).length === 0 &&
+      (resolvedStatus === 'draft' || resolvedStatus === 'pending_pickup');
+
+    if (isLightweightStatusChange) {
+      setShipments(prev => {
+        const nextList = (prev || []).map(shipment => (
+          shipment.id === target.id ? updatedShipment : shipment
+        ));
+        try { localStorage.setItem('mdc_shipments', JSON.stringify(nextList)); } catch (e) {}
+        dbStorage.setItem('mdc_shipments', nextList);
+        return nextList;
+      });
+
+      if (supabase) {
+        if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          const savedRecordPromise = supabase.from('saved_records').upsert({
+            id: updatedShipment.id,
+            record_type: 'shipment',
+            period_label: updatedShipment.invoice_ref || updatedShipment.shipment_number,
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: updatedShipment.week_number || 1,
+            notes: updatedShipment.remarks || '',
+            saved_by_name: updatedShipment.prepared_by_name || currentUser?.fullName || 'Warehouse Staff',
+            saved_by_user_id: safeUUID(currentUser?.id),
+            snapshot_data: updatedShipment,
+            created_at: updatedShipment.created_at || new Date().toISOString(),
+            updated_at: updatedShipment.updated_at
+          }, { onConflict: 'id' });
+
+          const shipmentQuery = isUUID(target.id)
+            ? supabase.from('shipments').update({ status: resolvedStatus, updated_at: updatedShipment.updated_at }).eq('id', target.id)
+            : supabase.from('shipments').update({ status: resolvedStatus, updated_at: updatedShipment.updated_at }).eq('shipment_number', target.shipment_number || target.invoice_ref);
+
+          const [{ error: savedRecordError }, { error: shipmentError }] = await Promise.all([
+            savedRecordPromise,
+            shipmentQuery
+          ]);
+
+          if (savedRecordError) throw savedRecordError;
+          if (shipmentError) throw shipmentError;
+          if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } catch (dbErr) {
+          console.warn('Fast shipment status update failed; using full save fallback:', dbErr.message);
+          await saveShipment(updatedShipment);
+        }
+      }
+
+      if (broadcastCloudEvent) {
+        broadcastCloudEvent('SHIPMENT_SAVED', { shipmentId: updatedShipment.id });
+        broadcastCloudEvent('DRAFT_UPDATED', { count: 0 });
+        broadcastCloudEvent('SHIPMENT_STATUS_UPDATED', {
+          id: updatedShipment.id,
+          invoice_ref: updatedShipment.invoice_ref,
+          status: resolvedStatus
+        });
+      }
+
+      const readableLabel = resolvedStatus === 'pending_pickup' ? 'Ready for Pickup' : 'Draft';
+      showToast?.(`Updated status of ${updatedShipment.invoice_ref || updatedShipment.shipment_number} to "${readableLabel}".`, 'success');
+      return updatedShipment;
+    }
 
     await saveShipment(updatedShipment);
 

@@ -594,23 +594,16 @@ export function toValidUUID(str) {
 export function formatShipmentForDb(s, sitesList = []) {
   if (!s) return null;
 
-  let validSiteId = null;
-  if (Array.isArray(sitesList) && sitesList.length > 0) {
-    const matchedSite = sitesList.find(st => 
-      st.id === s.site_id || 
-      (st.code && s.site_code && String(st.code).toUpperCase() === String(s.site_code).toUpperCase()) ||
-      (st.code && s.destination_site_code && String(st.code).toUpperCase() === String(s.destination_site_code).toUpperCase()) ||
-      (st.name && s.site_name && String(st.name).toLowerCase() === String(s.site_name).toLowerCase()) ||
-      (st.name && s.destination_site_name && String(st.name).toLowerCase() === String(s.destination_site_name).toLowerCase())
-    );
-    if (matchedSite && isUUID(matchedSite.id)) {
-      validSiteId = matchedSite.id;
-    } else if (sitesList[0] && isUUID(sitesList[0].id)) {
-      validSiteId = sitesList[0].id;
-    }
-  }
-  if (!validSiteId) {
-    validSiteId = isUUID(s.site_id) ? s.site_id : toValidUUID(s.site_id || s.site_code || 'site-hub');
+  const resolved = resolveSite(s.site_id || s.site_code || s.destination_site_code || s.destination_site_name || s.site_name, sitesList);
+  let validSiteId;
+  if (resolved && isUUID(resolved.id)) {
+    validSiteId = resolved.id;
+  } else if (isUUID(s.site_id)) {
+    validSiteId = s.site_id;
+  } else if (resolved?.id) {
+    validSiteId = toValidUUID(resolved.id);
+  } else {
+    validSiteId = toValidUUID(s.site_id || s.site_code || 'site-hub');
   }
 
   const shipmentId = isUUID(s.id) ? s.id : toValidUUID(s.id || s.shipment_number || s.invoice_ref);
@@ -1907,39 +1900,18 @@ export function isDraftSupersededOrFulfilled(draft, allShipments = [], sitesList
     }
   }
 
-  // Check 2: Same sequence letter and/or destination branch match
+  // Check 2: Same sequence letter and destination branch match with later/same date
   for (const comp of completedShipments) {
     const compRef = String(comp.invoice_ref || comp.shipment_number || '').trim().toUpperCase();
     const compLetter = extractInvoiceSequenceLetter(compRef);
     const sitesMatch = areShipmentSitesEquivalent(draft, comp, effectiveSites);
     const compItemCount = Array.isArray(comp.items) ? comp.items.length : (Array.isArray(comp.shipment_items) ? comp.shipment_items.length : 0);
 
-    // Rule A: If sequence letter matches AND destination branch matches
-    if (draftLetter && compLetter && draftLetter === compLetter && sitesMatch) {
-      return true;
-    }
+    // Site MUST match for any sequence/heuristic rule to apply (never supersede across different sites!)
+    if (!sitesMatch) continue;
 
-    // Rule B: If sequence letter matches AND item count matches
+    // Rule A: Destination branch matches AND sequence letter matches AND item count matches, with completed dispatch dated later or same
     if (draftLetter && compLetter && draftLetter === compLetter && draftItemCount > 0 && compItemCount === draftItemCount) {
-      return true;
-    }
-
-    // Rule C: If destination branch matches AND item count matches
-    if (sitesMatch && draftItemCount > 0 && compItemCount === draftItemCount) {
-      return true;
-    }
-
-    // Rule D: If destination branch matches and the completed shipment is on a later/same date
-    if (sitesMatch) {
-      const draftDateStr = draft.created_date || draft.created_at || draft.shipment_date || '';
-      const compDateStr = comp.shipment_date || comp.created_at || comp.dispatched_at || '';
-      if (draftDateStr && compDateStr) {
-        const dDate = new Date(draftDateStr);
-        const cDate = new Date(compDateStr);
-        if (!isNaN(dDate.getTime()) && !isNaN(cDate.getTime()) && cDate >= dDate) {
-          return true;
-        }
-      }
       const draftCodeM = draftRef.match(/DCOWNED#?(\d{6})/);
       const compCodeM = compRef.match(/DCOWNED#?(\d{6})/);
       if (draftCodeM && compCodeM) {
@@ -1947,19 +1919,23 @@ export function isDraftSupersededOrFulfilled(draft, allShipments = [], sitesList
         if (toYymmdd(compCodeM[1]) >= toYymmdd(draftCodeM[1])) {
           return true;
         }
+      } else {
+        const draftDateStr = draft.created_date || draft.created_at || draft.shipment_date || '';
+        const compDateStr = comp.shipment_date || comp.created_at || comp.dispatched_at || '';
+        if (draftDateStr && compDateStr) {
+          const dDate = new Date(draftDateStr);
+          const cDate = new Date(compDateStr);
+          if (!isNaN(dDate.getTime()) && !isNaN(cDate.getTime()) && cDate >= dDate) {
+            return true;
+          }
+        }
       }
     }
 
-    // Rule E: If sequence letter matches AND both invoice references follow DCOWNED# pattern and comp is later
-    if (draftLetter && compLetter && draftLetter === compLetter) {
-      const draftCodeM = draftRef.match(/DCOWNED#?(\d{6})/);
-      const compCodeM = compRef.match(/DCOWNED#?(\d{6})/);
-      if (draftCodeM && compCodeM) {
-        const toYymmdd = (code) => code.slice(4, 6) + code.slice(0, 2) + code.slice(2, 4);
-        if (toYymmdd(compCodeM[1]) >= toYymmdd(draftCodeM[1])) {
-          return true;
-        }
-      }
+    // Rule B: Un-serialized draft (status === 'draft') matching destination branch and sequence letter
+    const hasSerials = draftItems.some(it => String(it.serial_number || it.serialNumber || '').trim());
+    if (!hasSerials && status === 'draft' && draftLetter && compLetter && draftLetter === compLetter) {
+      return true;
     }
   }
 

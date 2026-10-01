@@ -33,6 +33,7 @@ function MainApp() {
     isInitialSyncing,
     pendingFirstTimeUser,
     activeTab,
+    pmgSubTab,
     canAccess,
     toast,
     isCommandPaletteOpen,
@@ -78,7 +79,7 @@ function MainApp() {
       case 'shipments':
         return <Shipments />;
       case 'request-parts':
-        return <RequestParts defaultTab="requests_table" key="request-parts" />;
+        return <RequestParts defaultTab={pmgSubTab || 'requests_table'} key="request-parts" />;
       case 'all-stocks':
         return <RequestParts defaultTab="all_stocks" key="all-stocks" />;
       case 'reports':

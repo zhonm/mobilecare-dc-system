@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
@@ -20,13 +20,19 @@ import {
   X,
   Inbox,
   GitCompare,
-  Globe
+  Globe,
+  ChevronDown,
+  ChevronRight,
+  Package,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export default function Sidebar() {
   const {
     activeTab,
     setActiveTab,
+    pmgSubTab,
+    setPmgSubTab,
     currentUser,
     canAccess,
     signOut,
@@ -55,6 +61,64 @@ export default function Sidebar() {
     return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
   }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode]);
 
+  const isPartsActive = activeTab === 'request-parts' || activeTab === 'all-stocks';
+
+  const [isPartsDropdownOpen, setIsPartsDropdownOpen] = useState(() => isPartsActive);
+
+  // Automatically open dropdown when inside any parts sub-page, and close when accessing any other page
+  useEffect(() => {
+    if (isPartsActive) {
+      setIsPartsDropdownOpen(true);
+    } else {
+      setIsPartsDropdownOpen(false);
+    }
+  }, [isPartsActive]);
+
+  const handleDropdownParentClick = (_item) => {
+    if (!isPartsActive) {
+      setIsPartsDropdownOpen(true);
+      setActiveTab('request-parts');
+      if (setPmgSubTab) setPmgSubTab(pmgSubTab || 'requests_table');
+      setIsMobileNavOpen(false);
+    } else {
+      setIsPartsDropdownOpen(prev => !prev);
+    }
+  };
+
+  const handleChevronToggle = (e) => {
+    e.stopPropagation();
+    setIsPartsDropdownOpen(prev => !prev);
+  };
+
+  const handleSubItemClick = (child) => {
+    if (child.id === 'all-stocks') {
+      setActiveTab('all-stocks');
+      if (setPmgSubTab) setPmgSubTab('all_stocks');
+      try { localStorage.setItem('mdc_parts_subtab', 'all_stocks'); } catch (e) {}
+    } else {
+      setActiveTab(child.id);
+      if (setPmgSubTab && child.subTab) {
+        setPmgSubTab(child.subTab);
+        try { localStorage.setItem('mdc_parts_subtab', child.subTab); } catch (e) {}
+      }
+    }
+    setIsMobileNavOpen(false);
+  };
+
+  const isChildActive = (child) => {
+    if (child.id === 'all-stocks') {
+      return activeTab === 'all-stocks' || (activeTab === 'request-parts' && pmgSubTab === 'all_stocks');
+    }
+    if (child.id === 'request-parts') {
+      if (activeTab !== 'request-parts') return false;
+      if (child.subTab === 'requests_table') {
+        return !pmgSubTab || pmgSubTab === 'requests_table';
+      }
+      return pmgSubTab === child.subTab;
+    }
+    return activeTab === child.id;
+  };
+
   const navItems = [
     // 1. Planning & Allocation (Placed prominently at top)
     { id: 'dashboard', label: 'DC Overview', icon: LayoutDashboard, section: 'Planning & Allocation' },
@@ -63,32 +127,73 @@ export default function Sidebar() {
     { id: 'import', label: 'Fixably / GSX Data Import', icon: UploadCloud, section: 'Planning & Allocation' },
     { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning & Allocation' },
 
-    // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out & Shipments)
-    { id: 'request-parts', label: 'Parts Requests', icon: Inbox, badge: pendingRequestsCount, section: 'Operations & Logistics' },
+    // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out, Shipments, & Parts Inventory)
+    {
+      id: 'parts-group',
+      label: 'Parts Requests & Stock',
+      icon: Inbox,
+      badge: pendingRequestsCount,
+      section: 'Operations & Logistics',
+      isDropdown: true,
+      children: [
+        {
+          id: 'request-parts',
+          subTab: 'requests_table',
+          label: 'Parts Requests',
+          icon: Inbox,
+          badge: pendingRequestsCount
+        },
+        {
+          id: 'request-parts',
+          subTab: 'stock_on_hand',
+          label: 'Branch Stock',
+          icon: Package
+        },
+        {
+          id: 'request-parts',
+          subTab: 'site_monitoring',
+          label: 'Site Stock Monitoring',
+          icon: FileSpreadsheet
+        },
+        {
+          id: 'all-stocks',
+          subTab: 'all_stocks',
+          label: 'All Stocks & Multi-Site',
+          icon: Globe
+        },
+        {
+          id: 'request-parts',
+          subTab: 'usage_history',
+          label: 'Used Parts History',
+          icon: History
+        }
+      ]
+    },
     { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, section: 'Operations & Logistics' },
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, badge: pendingShipmentsCount, section: 'Operations & Logistics' },
     { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
 
-    // 3. Network Visibility
-    { id: 'all-stocks', label: 'All Stocks & Multi-Site', icon: Globe, section: 'Network Visibility' },
-
-    // 4. Reports & Traceability
+    // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
     { id: 'site-transfers-fifo', label: 'Site Transfers & FIFO Audit', icon: GitCompare, section: 'Reports & Traceability' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
 
-    // 5. Administration
+    // 4. Administration
     { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
   ];
 
   // Filter items by permitted access
-  const visibleItems = navItems.filter(item => canAccess(item.id));
+  const visibleItems = navItems.filter(item => {
+    if (item.isDropdown) {
+      return item.children.some(child => canAccess(child.id));
+    }
+    return canAccess(item.id);
+  });
 
   const sections = [
     'Planning & Allocation',
     'Operations & Logistics',
-    'Network Visibility',
     'Reports & Traceability',
     'Administration'
   ];
@@ -141,6 +246,65 @@ export default function Sidebar() {
               <div key={secName} className="nav-section-group">
                 <div className="nav-section-title">{secName}</div>
                 {items.map(item => {
+                  if (item.isDropdown) {
+                    const visibleChildren = item.children ? item.children.filter(child => canAccess(child.id)) : [];
+                    if (visibleChildren.length === 0) return null;
+
+                    const isDropdownActive = visibleChildren.some(child => isChildActive(child));
+
+                    return (
+                      <div key={item.id} className="nav-dropdown-wrapper">
+                        <div
+                          className={`nav-item nav-dropdown-header ${isDropdownActive ? 'active-group' : ''}`}
+                          onClick={() => handleDropdownParentClick(item)}
+                          title={`${item.label} (Click to ${isPartsDropdownOpen ? 'collapse' : 'expand'})`}
+                        >
+                          <div className="nav-item-left">
+                            <item.icon size={17} className={`nav-icon ${isDropdownActive ? 'active-icon' : ''}`} />
+                            <span className="nav-label">{item.label}</span>
+                          </div>
+                          <div className="nav-item-right">
+                            {(!isPartsDropdownOpen && item.badge > 0) && (
+                              <span className="nav-badge">{item.badge}</span>
+                            )}
+                            <button
+                              type="button"
+                              className="nav-dropdown-chevron-btn"
+                              onClick={handleChevronToggle}
+                              aria-label={isPartsDropdownOpen ? 'Collapse menu' : 'Expand menu'}
+                            >
+                              {isPartsDropdownOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {isPartsDropdownOpen && (
+                          <div className="nav-sub-menu">
+                            {visibleChildren.map(child => {
+                              const ChildIcon = child.icon;
+                              const isChildItemActive = isChildActive(child);
+                              return (
+                                <div
+                                  key={`${child.id}-${child.subTab || child.id}`}
+                                  className={`nav-sub-item ${isChildItemActive ? 'active' : ''}`}
+                                  onClick={() => handleSubItemClick(child)}
+                                >
+                                  <div className="nav-item-left">
+                                    <ChildIcon size={14} className={`nav-icon ${isChildItemActive ? 'active-icon' : ''}`} />
+                                    <span className="nav-label">{child.label}</span>
+                                  </div>
+                                  <div className="nav-item-right">
+                                    {child.badge > 0 && <span className="nav-badge">{child.badge}</span>}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
                   const Icon = item.icon;
                   const isActive = activeTab === item.id;
                   return (
@@ -148,6 +312,7 @@ export default function Sidebar() {
                       key={item.id}
                       className={`nav-item ${isActive ? 'active' : ''}`}
                       onClick={() => {
+                        setIsPartsDropdownOpen(false);
                         setActiveTab(item.id);
                         setIsMobileNavOpen(false);
                       }}

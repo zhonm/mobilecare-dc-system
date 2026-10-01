@@ -20,7 +20,8 @@ import {
   consolidateDcIntakeRecordsList,
   isExplicitlyCleared,
   formatAuditEntityDisplay,
-  reconcileShipmentsAndDrafts
+  reconcileShipmentsAndDrafts,
+  resolveSite
 } from '../utils/appContextHelpers';
 import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
@@ -386,7 +387,7 @@ export function useCloudSync({
 
     try {
       const isPmgUser = curUser?.role === 'parts_management';
-      const userSiteId = curUser?.siteId;
+      const userSiteId = curUser?.siteId || curUser?.site_id || curUser?.siteCode || curUser?.site_code;
       const isSiteRestrictedPmg = Boolean(isPmgUser && userSiteId && userSiteId !== 'site-dc');
 
       const shouldFetch = (tbl) => {
@@ -698,17 +699,35 @@ export function useCloudSync({
         // Egress optimization: Scope by site_id destination for PMG branch users & filter active/open or recent manifests (<60 days)
         shouldFetch('shipments') ? (
           isSiteRestrictedPmg
-            ? supabase.from('shipments')
-                .select('*, shipment_items(*)')
-                .eq('site_id', userSiteId)
-                .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
-                .order('created_at', { ascending: false })
-                .limit(50)
+            ? (() => {
+                const resolvedPmgSite = resolveSite(userSiteId || curUser?.site_id || curUser?.siteCode, sites);
+                const candidateIds = Array.from(new Set([
+                  userSiteId,
+                  curUser?.site_id,
+                  curUser?.siteCode,
+                  resolvedPmgSite?.id,
+                  resolvedPmgSite?.code,
+                  resolvedPmgSite?.id ? toValidUUID(resolvedPmgSite.id) : null
+                ].filter(Boolean)));
+                const uuidCandidates = candidateIds.filter(id => isUUID(id));
+                const targetFilterId = uuidCandidates.length === 1 ? uuidCandidates[0] : (resolvedPmgSite?.id && isUUID(resolvedPmgSite.id) ? resolvedPmgSite.id : userSiteId);
+                
+                let q = supabase.from('shipments').select('*, shipment_items(*)');
+                if (uuidCandidates.length > 1) {
+                  q = q.in('site_id', uuidCandidates);
+                } else if (targetFilterId) {
+                  q = q.eq('site_id', targetFilterId);
+                }
+                return q
+                  .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
+                  .order('created_at', { ascending: false })
+                  .limit(100);
+              })()
             : supabase.from('shipments')
                 .select('*, shipment_items(*)')
                 .or(`status.not.in.(received_confirmed,delivered),shipment_date.gte.${archiveCutoffIsoDate},created_at.gte.${archiveCutoffIsoTimestamp}`)
                 .order('created_at', { ascending: false })
-                .limit(80)
+                .limit(200)
         ) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id for PMG branch users
         shouldFetch('parts_requests') ? (
@@ -3038,9 +3057,11 @@ export function useCloudSync({
                 if (ev.data.payload?.period && setActivePeriod) {
                   setActivePeriod(ev.data.payload.period);
                 }
-                const targetTables = ['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED'].includes(ev.data.type)
-                  ? ['shipments', 'saved_records']
-                  : ['saved_records'];
+                const targetTables = ['SHIPMENT_RECEIVED', 'BRANCH_STOCK_UPDATED'].includes(ev.data.type)
+                  ? ['shipments', 'saved_records', 'inventory_units']
+                  : (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED'].includes(ev.data.type)
+                      ? ['shipments', 'saved_records']
+                      : ['saved_records']);
                 autoRefreshData({ force: true, silent: true, isManual: false, reason: `Local Broadcast [${ev.data.type}]`, tables: targetTables });
               }
             } else if (ev.data.type === 'MASTER_DATA_UPDATED') {
@@ -3148,7 +3169,9 @@ export function useCloudSync({
                   });
                 }
               }
-            } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
+            } else if (['SHIPMENT_RECEIVED', 'BRANCH_STOCK_UPDATED'].includes(bType)) {
+              autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records', 'inventory_units'] });
+            } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
               if (['STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
                 triggerDebouncedRealtimeSync(`WebSocket Broadcast [${bType}]`, 'inventory_units');
               } else {
