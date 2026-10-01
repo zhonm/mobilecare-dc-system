@@ -29,7 +29,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authent
 
 -- Ensure profiles.role column is flexible TEXT instead of rigid enum (prevents 22P02 error)
 DO $$
+DECLARE
+    policy_record RECORD;
 BEGIN
+    -- PostgreSQL does not allow changing a column type while any RLS policy
+    -- depends on that column, including policies on other tables that inspect
+    -- profiles.role. Policies are recreated below after the change.
+    FOR policy_record IN
+        SELECT schemaname, tablename, policyname
+        FROM pg_policies
+        WHERE schemaname = 'public'
+    LOOP
+        EXECUTE format('DROP POLICY IF EXISTS %I ON %I.%I;',
+          policy_record.policyname,
+          policy_record.schemaname,
+          policy_record.tablename);
+    END LOOP;
+
     IF EXISTS (
         SELECT 1 FROM information_schema.columns 
         WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'role'
@@ -76,7 +92,11 @@ SECURITY DEFINER
 SET search_path = public, auth, extensions, pg_temp
 AS $$
   SELECT COALESCE(
-    NULLIF(auth.jwt() -> 'user_metadata' ->> 'site_id', '')::UUID,
+        CASE
+            WHEN (auth.jwt() -> 'user_metadata' ->> 'site_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+            THEN (auth.jwt() -> 'user_metadata' ->> 'site_id')::UUID
+            ELSE NULL
+        END,
     (SELECT site_id FROM public.profiles WHERE id = auth.uid() AND is_active = true LIMIT 1)
   );
 $$;

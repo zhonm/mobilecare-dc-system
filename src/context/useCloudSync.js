@@ -388,7 +388,14 @@ export function useCloudSync({
     try {
       const isPmgUser = curUser?.role === 'parts_management';
       const userSiteId = curUser?.siteId || curUser?.site_id || curUser?.siteCode || curUser?.site_code;
-      const isSiteRestrictedPmg = Boolean(isPmgUser && userSiteId && userSiteId !== 'site-dc');
+      const resolvedUserSite = resolveSite(userSiteId, sites);
+      const resolvedUserSiteId = isUUID(userSiteId)
+        ? userSiteId
+        : (isUUID(resolvedUserSite?.id) ? resolvedUserSite.id : null);
+      const userSiteRef = String(userSiteId || '').trim().toLowerCase();
+      const isCentralDcUser = userSiteRef === 'site-dc' || userSiteRef === 'dc' || userSiteRef === 'dc-mdc' ||
+        resolvedUserSite?.is_dc === true || ['DC', 'DC-MDC'].includes(String(resolvedUserSite?.code || '').toUpperCase());
+      const isSiteRestrictedPmg = Boolean(isPmgUser && !isCentralDcUser && resolvedUserSiteId);
 
       const shouldFetch = (tbl) => {
         if (tbl === 'profiles' || tbl === 'user_page_permissions') {
@@ -700,17 +707,13 @@ export function useCloudSync({
         shouldFetch('shipments') ? (
           isSiteRestrictedPmg
             ? (() => {
-                const resolvedPmgSite = resolveSite(userSiteId || curUser?.site_id || curUser?.siteCode, sites);
                 const candidateIds = Array.from(new Set([
-                  userSiteId,
-                  curUser?.site_id,
-                  curUser?.siteCode,
-                  resolvedPmgSite?.id,
-                  resolvedPmgSite?.code,
-                  resolvedPmgSite?.id ? toValidUUID(resolvedPmgSite.id) : null
+                  resolvedUserSiteId
                 ].filter(Boolean)));
                 const uuidCandidates = candidateIds.filter(id => isUUID(id));
-                const targetFilterId = uuidCandidates.length === 1 ? uuidCandidates[0] : (resolvedPmgSite?.id && isUUID(resolvedPmgSite.id) ? resolvedPmgSite.id : userSiteId);
+                const targetFilterId = uuidCandidates.length === 1 ? uuidCandidates[0] : resolvedUserSiteId;
+
+                if (!targetFilterId) return Promise.resolve({ data: [] });
                 
                 let q = supabase.from('shipments').select('*, shipment_items(*)');
                 if (uuidCandidates.length > 1) {
@@ -732,7 +735,9 @@ export function useCloudSync({
         // Egress optimization: Scope by site_id for PMG branch users
         shouldFetch('parts_requests') ? (
           isSiteRestrictedPmg
-            ? supabase.from('parts_requests').select('*').eq('site_id', userSiteId).order('created_at', { ascending: false }).limit(300)
+            ? (resolvedUserSiteId
+              ? supabase.from('parts_requests').select('*').eq('site_id', resolvedUserSiteId).order('created_at', { ascending: false }).limit(300)
+              : Promise.resolve({ data: [] }))
             : supabase.from('parts_requests').select('*').order('created_at', { ascending: false }).limit(300)
         ) : Promise.resolve({ data: null })
       ]);
@@ -3106,14 +3111,21 @@ export function useCloudSync({
 
       if (supabase && typeof supabase.channel === 'function') {
         const isPmg = currentUser?.role === 'parts_management';
-        const userSiteId = currentUser?.siteId;
-        const isSiteRestricted = Boolean(isPmg && userSiteId && userSiteId !== 'site-dc');
+        const userSiteId = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
+        const realtimeSite = resolveSite(userSiteId, sites);
+        const realtimeSiteId = isUUID(userSiteId)
+          ? userSiteId
+          : (isUUID(realtimeSite?.id) ? realtimeSite.id : null);
+        const userSiteRef = String(userSiteId || '').trim().toLowerCase();
+        const isCentralDcUser = userSiteRef === 'site-dc' || userSiteRef === 'dc' || userSiteRef === 'dc-mdc' ||
+          realtimeSite?.is_dc === true || ['DC', 'DC-MDC'].includes(String(realtimeSite?.code || '').toUpperCase());
+        const isSiteRestricted = Boolean(isPmg && !isCentralDcUser && realtimeSiteId);
 
         // Partition channels to isolate traffic and prevent global message fan-out (§2.1):
         // - PMG users join their branch channel: `mdc-site-sync-${userSiteId}`
         // - Superadmins and DC staff join `mdc-admin-sync-room`
         const primaryRoomName = isSiteRestricted
-          ? `mdc-site-sync-${userSiteId}`
+          ? `mdc-site-sync-${realtimeSiteId}`
           : 'mdc-admin-sync-room';
 
         console.debug(`[Realtime WebSocket] Connecting primary room [${primaryRoomName}] and global alerts room.`);
@@ -3299,7 +3311,7 @@ export function useCloudSync({
 
         REALTIME_POSTGRES_TABLES.forEach(tbl => {
           const filterParam = (isSiteRestricted && (tbl === 'parts_requests' || tbl === 'shipments'))
-            ? `site_id=eq.${userSiteId}`
+            ? `site_id=eq.${realtimeSiteId}`
             : undefined;
 
           const subConfig = {
