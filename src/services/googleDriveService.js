@@ -8,7 +8,12 @@
  * completely dependency-free and compatible across both Browser and Node.js.
  */
 
-import { GOOGLE_SERVICE_ACCOUNT_KEY } from '../config/googleDriveCredentials.js';
+// Credentials are supplied through deployment environment variables. The local
+// service-account file is intentionally ignored and must never enter the bundle.
+const GOOGLE_SERVICE_ACCOUNT_KEY = {
+  client_email: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
+  private_key: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY || ''
+};
 
 // Shared Drive & Folder Configurations
 export const GOOGLE_DRIVE_CONFIG = {
@@ -41,12 +46,7 @@ export function isGoogleDriveConfigured() {
  */
 function resolvePrivateKeyPem() {
   if (GOOGLE_SERVICE_ACCOUNT_KEY?.private_key) {
-    return GOOGLE_SERVICE_ACCOUNT_KEY.private_key;
-  }
-
-  const envKey = import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (envKey) {
-    return envKey.replace(/\\n/g, '\n');
+    return GOOGLE_SERVICE_ACCOUNT_KEY.private_key.replace(/\\n/g, '\n');
   }
 
   // Node.js fallback during testing or script runs
