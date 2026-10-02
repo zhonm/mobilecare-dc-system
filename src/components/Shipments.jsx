@@ -27,8 +27,12 @@ import {
   Calendar,
   Loader2,
   Archive,
-  Eye
+  Eye,
+  Cloud,
+  FolderCheck
 } from 'lucide-react';
+import ConfirmReceiveModal from './ConfirmReceiveModal';
+import { autoArchivePackingListToDrive } from '../services/driveAutoSyncService';
 import { exportPackingListXLSX } from '../utils/excelParser';
 import { isLockedConfirmedShipment, resolveSite, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
@@ -285,7 +289,33 @@ export default function Shipments() {
 
     const startTime = Date.now();
     try {
-      await updateShipmentStatus(shipmentId, newStatus);
+      let extraData = {};
+      if ((newStatus === 'pending_pickup' || newStatus === 'ready_for_pickup') && target) {
+        try {
+          const dest = resolveSite(target.site_id || target.site_name, sites);
+          const sourceItems = target.items && target.items.length > 0 ? target.items : [];
+          const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
+          const resolvedRider = getShipmentRiderName(target, shipments);
+          const pdfOptions = {
+            supervisorName: supervisorSettings?.supervisor_name || target.verified_by_name || 'Anjo Alcazar',
+            supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+            guardOnDuty: target.guard_on_duty || supervisorSettings?.guard_on_duty,
+            pickupDate: target.pickup_date || target.shipment_date,
+            pickupByName: resolvedRider,
+            allShipments: shipments
+          };
+          const driveResult = await autoArchivePackingListToDrive(target, resolvedItems, dest || {}, pdfOptions);
+          if (driveResult?.success && driveResult?.webViewLink) {
+            extraData.google_drive_link = driveResult.webViewLink;
+            extraData.google_drive_file_id = driveResult.fileId;
+            showToast(`Auto-archived Packing List to Google Drive (${driveResult.filename})`, 'success');
+          }
+        } catch (driveErr) {
+          console.warn('[Google Drive] Auto-archive on status change failed:', driveErr);
+        }
+      }
+
+      await updateShipmentStatus(shipmentId, newStatus, extraData);
       const elapsed = Date.now() - startTime;
       if (elapsed < 120) {
         await new Promise(r => setTimeout(r, 120 - elapsed));
@@ -302,23 +332,28 @@ export default function Shipments() {
       ? (customOptions?.includeDeclarationForm !== undefined ? customOptions.includeDeclarationForm : true)
       : false;
 
+    const targetShipment = (shipments || []).find(s => s.id === shipmentObj?.id) || shipmentObj;
+    const resolvedRider = customOptions.pickupByName || getShipmentRiderName(targetShipment, shipments) || getShipmentRiderName(shipmentObj, shipments);
+
     const pdfOptions = {
-      supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
+      supervisorName: supervisorSettings?.supervisor_name || targetShipment.verified_by_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date,
+      guardOnDuty: targetShipment.guard_on_duty || shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
+      pickupDate: targetShipment.pickup_date || targetShipment.shipment_date || shipmentObj.pickup_date || shipmentObj.shipment_date,
+      pickupByName: resolvedRider,
+      allShipments: shipments,
       ...customOptions,
       includeDeclarationForm: includeDeclaration
     };
 
-    const sourceItems = items && items.length > 0 ? items : (shipmentObj?.items || []);
+    const sourceItems = items && items.length > 0 ? items : (targetShipment?.items || shipmentObj?.items || []);
     const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
 
-    generatePackingListPDF(shipmentObj, resolvedItems, siteObj || {}, pdfOptions);
+    generatePackingListPDF(targetShipment, resolvedItems, siteObj || {}, pdfOptions);
     if (includeDeclaration) {
-      showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+      showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${targetShipment.invoice_ref || shipmentObj.invoice_ref || 'manifest'}`, 'info');
     } else {
-      showToast(`Downloaded Packing List PDF (PL Only) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+      showToast(`Downloaded Packing List PDF (PL Only) for ${targetShipment.invoice_ref || shipmentObj.invoice_ref || 'manifest'}`, 'info');
     }
   };
 
@@ -746,11 +781,10 @@ export default function Shipments() {
   };
 
   // --- Site Receipt: Submit Receive Action ---
-  const handleConfirmSiteReceive = async (e) => {
-    e.preventDefault();
+  const handleConfirmSiteReceive = async (receiveDetails = {}) => {
     if (!receiveModalState) return;
 
-    const trimmedReceiver = String(receiveModalState.receivedByName || '').trim();
+    const trimmedReceiver = String(receiveDetails.receivedByName || receiveModalState.receivedByName || '').trim();
     if (!trimmedReceiver) {
       showToast?.('Please enter the name of the staff member who received the package.', 'warning');
       return;
@@ -777,15 +811,19 @@ export default function Shipments() {
           targetShipment.id,
           {
             receivedByName: trimmedReceiver,
-            receivedDate: receiveModalState.receivedDate,
-            receivedCondition: receiveModalState.receivedCondition,
-            receivingNotes: receiveModalState.receivingNotes
+            receivedDate: receiveDetails.receivedDate || receiveModalState.receivedDate,
+            receivedCondition: receiveDetails.receivedCondition || receiveModalState.receivedCondition,
+            receivingNotes: receiveDetails.receivingNotes || receiveModalState.receivingNotes,
+            signedPlDriveLink: receiveDetails.signedPlDriveLink,
+            signedPlFileId: receiveDetails.signedPlFileId,
+            signedPlFilename: receiveDetails.signedPlFilename,
+            siteFolder: receiveDetails.siteFolder
           },
           { partsRequests, updatePartsRequestStatus }
         );
       } else {
         const cleanReceiver = trimmedReceiver || 'Branch Staff';
-        const cleanDate = String(receiveModalState.receivedDate || '').trim() || getTodayDateString();
+        const cleanDate = String(receiveDetails.receivedDate || receiveModalState.receivedDate || '').trim() || getTodayDateString();
 
         const updatedShipment = {
           ...targetShipment,
@@ -794,8 +832,12 @@ export default function Shipments() {
           received_date: cleanDate,
           received_by_name: cleanReceiver,
           receiving_signature: cleanReceiver,
-          receiving_condition: receiveModalState.receivedCondition,
-          receiving_notes: receiveModalState.receivingNotes,
+          receiving_condition: receiveDetails.receivedCondition || receiveModalState.receivedCondition,
+          receiving_notes: receiveDetails.receivingNotes || receiveModalState.receivingNotes,
+          signed_pl_drive_link: receiveDetails.signedPlDriveLink || null,
+          signed_pl_file_id: receiveDetails.signedPlFileId || null,
+          signed_pl_filename: receiveDetails.signedPlFilename || null,
+          signed_pl_site_folder: receiveDetails.siteFolder || null,
           updated_at: new Date().toISOString()
         };
 
@@ -879,11 +921,14 @@ export default function Shipments() {
 
       showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
 
+      const resolvedRider = cleanCourierName || getShipmentRiderName(updatedShipment, shipments);
       const pdfOptions = {
         supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
         supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
         guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
-        pickupDate: updatedShipment.pickup_date
+        pickupDate: updatedShipment.pickup_date,
+        pickupByName: resolvedRider,
+        allShipments: shipments
       };
 
       const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));
@@ -2923,209 +2968,19 @@ export default function Shipments() {
         </div>
       )}
 
-      {/* --- MODAL 2: Site Receive Confirmation (Shipped -> Received Confirmed) --- */}
-      {receiveModalState && (
-        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setReceiveModalState(null); }}>
-          <div className="modal-content" style={{ maxWidth: '580px', width: '95%' }}>
-            <div className="modal-header" style={{ background: '#065f46' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ background: '#10b981', padding: '7px', borderRadius: '6px', color: '#fff' }}>
-                  <PackageCheck size={20} />
-                </div>
-                <div>
-                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
-                    Confirm Site Package Receipt
-                  </h3>
-                  <p style={{ color: '#a7f3d0', fontSize: '11.5px', margin: '2px 0 0 0' }}>
-                    Destination: <strong>{receiveModalState.site?.name || receiveModalState.shipment?.site_name}</strong>
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setReceiveModalState(null)} style={{ background: 'transparent', border: 'none', color: '#a7f3d0', cursor: 'pointer', padding: '4px' }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmSiteReceive}>
-              <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
-                {/* Manifest Summary Box */}
-                <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 600 }}>
-                      Invoice Ref: {receiveModalState.shipment?.invoice_ref || receiveModalState.shipment?.shipment_number}
-                    </span>
-                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 700 }}>
-                      {receiveModalState.shipment?.items?.length || 0} Total Units ({receiveModalState.shipment?.total_boxes || 1} Box)
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '11.5px', color: '#047857' }}>
-                    Courier: <strong>{getShipmentCourierDisplay(receiveModalState.shipment)}</strong> • Waybill: <strong
-                      className="font-mono select-all"
-                      style={{
-                        fontSize: '13px',
-                        color: '#065f46',
-                        cursor: receiveModalState.shipment?.tracking_number ? 'pointer' : 'default',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '3px',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        transition: 'background-color 0.15s ease'
-                      }}
-                      title={receiveModalState.shipment?.tracking_number ? (copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? "Copied to clipboard!" : "Click to copy Waybill number") : ""}
-                      onClick={() => {
-                        if (receiveModalState.shipment?.tracking_number) {
-                          handleCopyWaybill(receiveModalState.shipment.tracking_number);
-                        }
-                      }}
-                      onMouseEnter={(e) => {
-                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = '#d1fae5';
-                      }}
-                      onMouseLeave={(e) => {
-                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                    >
-                      #{receiveModalState.shipment?.tracking_number || 'N/A'}
-                      {receiveModalState.shipment?.tracking_number && (
-                        copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? (
-                          <Check size={11} strokeWidth={2.5} color="#15803d" style={{ marginLeft: '2px' }} />
-                        ) : (
-                          <Copy size={11} color="#047857" style={{ opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
-                        )
-                      )}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                      Received By (Staff Name) <span style={{ color: '#dc2626' }}>*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder={(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) ? 'Enter branch staff name (required)' : 'e.g. Maria Santos'}
-                      value={receiveModalState.receivedByName}
-                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
-                      required
-                      autoFocus
-                      style={{
-                        fontSize: '12.5px',
-                        height: '36px',
-                        borderColor: ((currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) && !receiveModalState.receivedByName?.trim()) ? '#f59e0b' : undefined
-                      }}
-                    />
-                    {(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin) && !receiveModalState.receivedByName?.trim() && (
-                      <div style={{ fontSize: '11px', color: '#b45309', marginTop: '3px' }}>
-                        Please enter the name of the branch staff receiving the package.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                      Date of Receipt <span style={{ color: '#dc2626' }}>*</span>
-                    </label>
-                    <input
-                      type="date"
-                      className="form-input"
-                      value={receiveModalState.receivedDate}
-                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedDate: e.target.value }))}
-                      required
-                      style={{ fontSize: '12.5px', height: '36px' }}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                    Package & Parts Condition Status
-                  </label>
-                  <select
-                    className="form-select"
-                    value={receiveModalState.receivedCondition}
-                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedCondition: e.target.value }))}
-                    style={{ fontSize: '12.5px', height: '36px' }}
-                  >
-                    <option value="Good Condition (All parts intact & verified)">Good Condition (All parts intact & verified)</option>
-                    <option value="Minor box wear, all parts complete">Minor box wear, all parts complete</option>
-                    <option value="Discrepancy / damage noted for inspection">Discrepancy / damage noted for inspection</option>
-                  </select>
-                </div>
-
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label" style={{ fontSize: '12px' }}>
-                    Receipt Remarks & Verification Notes
-                  </label>
-                  <textarea
-                    className="form-input"
-                    rows={2}
-                    placeholder="e.g. Received intact, verified all serial numbers matched manifest."
-                    value={receiveModalState.receivingNotes}
-                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivingNotes: e.target.value }))}
-                    style={{ fontSize: '12px', resize: 'vertical' }}
-                  />
-                </div>
-
-                {/* Serial checklist preview */}
-                {receiveModalState.shipment?.items && receiveModalState.shipment.items.length > 0 && (
-                  <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px' }}>
-                    <div style={{ fontSize: '11.5px', fontWeight: 600, color: '#475569', marginBottom: '6px' }}>
-                      Included Parts to be Confirmed at Site ({receiveModalState.shipment.items.length}):
-                    </div>
-                    <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#334155' }}>
-                      {receiveModalState.shipment.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)).map((it, idx) => (
-                        <div key={idx} style={{ padding: '2px 0', borderBottom: '1px dashed #e2e8f0' }}>
-                          • {it.part_number || it.description} - <strong>{it.serial_number || it.serialNumber}</strong> (Box {it.box_number || 1})
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setReceiveModalState(null)}
-                  disabled={Boolean(statusLoadingState?.isOpen)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={Boolean(statusLoadingState?.isOpen) || !receiveModalState.receivedByName?.trim()}
-                  style={{
-                    background: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
-                    borderColor: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    opacity: (statusLoadingState?.isOpen || !receiveModalState.receivedByName?.trim()) ? 0.75 : 1,
-                    cursor: (statusLoadingState?.isOpen || !receiveModalState.receivedByName?.trim()) ? 'not-allowed' : 'pointer'
-                  }}
-                  title={!receiveModalState.receivedByName?.trim() ? 'Received By (Staff Name) must be completed before confirming.' : undefined}
-                >
-                  {statusLoadingState?.isOpen ? (
-                    <>
-                      <Loader2 size={14} className="spin" />
-                      <span>Confirming Receipt...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle size={14} />
-                      <span>Confirm Receipt & Archive Manifest</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* --- MODAL 2: Site Receive Confirmation with Signed PL Upload & Google Drive Auto-Sync --- */}
+      <ConfirmReceiveModal
+        isOpen={Boolean(receiveModalState)}
+        shipment={receiveModalState?.shipment}
+        site={receiveModalState?.site}
+        shipments={shipments}
+        currentUser={currentUser}
+        isSuperadmin={isSuperadmin}
+        supervisorSettings={supervisorSettings}
+        onClose={() => setReceiveModalState(null)}
+        onConfirmed={handleConfirmSiteReceive}
+        showToast={showToast}
+      />
 
       {/* --- Delivered / Package Full Details Pop-up Modal --- */}
       {viewPackageModalState && (() => {
@@ -3632,6 +3487,40 @@ export default function Shipments() {
                         )}
                       </div>
                     </div>
+
+                    {isReceivedConfirmed && sh?.signed_pl_drive_link && (
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ fontSize: '11px', color: '#15803d', fontWeight: 600, marginBottom: '4px' }}>
+                          Signed Packing List (Google Drive Archive)
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <a
+                            href={sh.signed_pl_drive_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: '#ffffff',
+                              border: '1px solid #86efac',
+                              color: '#065f46',
+                              padding: '5px 12px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              textDecoration: 'none'
+                            }}
+                          >
+                            <FolderCheck size={14} color="#059669" />
+                            <span>{sh.signed_pl_filename || 'View Signed PL Document'}</span>
+                          </a>
+                          <span style={{ fontSize: '11.5px', color: '#047857' }}>
+                            Folder: <strong>DC- MSPI- PACKING LIST / {sh.signed_pl_site_folder || 'Site'}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -4134,6 +4023,60 @@ export default function Shipments() {
                   <FileSpreadsheet size={14} color="#16a34a" />
                   <span>Download XLSX</span>
                 </button>
+
+                {isSuperadmin && viewPackageModalState.shipment?.google_drive_link && (
+                  <a
+                    href={viewPackageModalState.shipment.google_drive_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      padding: '7px 14px',
+                      borderRadius: '6px',
+                      background: '#eff6ff',
+                      color: '#1d4ed8',
+                      borderColor: '#bfdbfe',
+                      textDecoration: 'none',
+                      cursor: 'pointer'
+                    }}
+                    title="Open in Company Google Drive"
+                  >
+                    <Cloud size={14} color="#2563eb" />
+                    <span>View in Drive</span>
+                  </a>
+                )}
+
+                {viewPackageModalState.shipment?.signed_pl_drive_link && (
+                  <a
+                    href={viewPackageModalState.shipment.signed_pl_drive_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      padding: '7px 14px',
+                      borderRadius: '6px',
+                      background: '#ecfdf5',
+                      color: '#065f46',
+                      borderColor: '#a7f3d0',
+                      textDecoration: 'none',
+                      cursor: 'pointer'
+                    }}
+                    title={`Open Signed PL in Google Drive (${viewPackageModalState.shipment?.signed_pl_site_folder || 'Site'} Folder)`}
+                  >
+                    <FolderCheck size={14} color="#059669" />
+                    <span>Signed PL (Drive)</span>
+                  </a>
+                )}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

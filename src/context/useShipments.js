@@ -1169,6 +1169,10 @@ export function useShipments({
       receiving_signature: cleanReceiver,
       receiving_condition: cleanCondition,
       receiving_notes: cleanNotes,
+      signed_pl_drive_link: receiveDetails.signedPlDriveLink || target.signed_pl_drive_link || null,
+      signed_pl_file_id: receiveDetails.signedPlFileId || target.signed_pl_file_id || null,
+      signed_pl_filename: receiveDetails.signedPlFilename || target.signed_pl_filename || null,
+      signed_pl_site_folder: receiveDetails.siteFolder || target.signed_pl_site_folder || null,
       updated_at: new Date().toISOString()
     };
 

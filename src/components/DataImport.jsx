@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
+import DriveAutoSyncModal from './DriveAutoSyncModal';
+import { autoArchiveDatasetToDrive } from '../services/driveAutoSyncService';
 import {
   UploadCloud,
   TrendingUp,
@@ -41,6 +43,14 @@ export default function DataImport() {
   const [parsedData, setParsedData] = useState(null);
   const [fileName, setFileName] = useState('');
   const [lastFileObj, setLastFileObj] = useState(null);
+  const [driveModalState, setDriveModalState] = useState({
+    isOpen: false,
+    stage: 'saving',
+    statusMessage: '',
+    forecastResult: null,
+    allocationResult: null,
+    errorMessage: ''
+  });
   const [filterScope, setFilterScope] = useState(() => {
     try {
       return localStorage.getItem('mdc_filter_scope') || 'ALL_IPHONE_PARTS';
@@ -242,20 +252,68 @@ export default function DataImport() {
     };
 
     setIsProcessing(true);
+    setDriveModalState({
+      isOpen: true,
+      stage: 'saving',
+      statusMessage: 'Applying dataset & archiving workbooks to Google Drive...',
+      forecastResult: null,
+      allocationResult: null,
+      errorMessage: ''
+    });
+
     try {
       await applyParsedDataset(parsedData, auditMeta);
-      setParsedData(null);
-      setFileName('');
-      setLastFileObj(null);
-      setIsProcessing(false);
-      showToast('Master dataset applied and synced to cloud successfully!', 'success');
-      if (typeof setActiveTab === 'function') {
-        setActiveTab('forecast');
+
+      const itemsForForecast = parsedData.payload?.forecastItems || parsedData.forecastItems || [];
+      const itemsForAlloc = parsedData.payload?.allocations || parsedData.allocations || [];
+
+      // Auto-archive both workbooks to Google Drive
+      const archiveRes = await autoArchiveDatasetToDrive({
+        forecastItems: itemsForForecast,
+        allocations: itemsForAlloc,
+        sites: sites || [],
+        periodLabel: targetMonthName,
+        onProgress: ({ message }) => {
+          setDriveModalState(prev => ({ ...prev, statusMessage: message }));
+        }
+      });
+
+      if (archiveRes.success) {
+        setDriveModalState({
+          isOpen: true,
+          stage: 'completed',
+          statusMessage: 'Archived to Google Drive!',
+          forecastResult: archiveRes.forecastResult,
+          allocationResult: archiveRes.allocationResult,
+          errorMessage: ''
+        });
+      } else {
+        setDriveModalState({
+          isOpen: true,
+          stage: 'error',
+          statusMessage: 'Dataset applied with Drive note',
+          forecastResult: archiveRes.forecastResult,
+          allocationResult: archiveRes.allocationResult,
+          errorMessage: archiveRes.error || 'Failed to auto-archive workbooks to Google Drive'
+        });
       }
     } catch (err) {
       console.error('Error during dataset import:', err);
       showToast(`Error applying dataset: ${err.message}`, 'error');
+      setDriveModalState(prev => ({ ...prev, isOpen: false }));
       setIsProcessing(false);
+    }
+  };
+
+  const handleProceedAfterDriveSync = () => {
+    setParsedData(null);
+    setFileName('');
+    setLastFileObj(null);
+    setIsProcessing(false);
+    setDriveModalState(prev => ({ ...prev, isOpen: false }));
+    showToast('Master dataset applied and synced to Google Drive!', 'success');
+    if (typeof setActiveTab === 'function') {
+      setActiveTab('forecast');
     }
   };
 
@@ -776,6 +834,18 @@ export default function DataImport() {
           title="Reset System to Fresh Empty State"
         />
       )}
+
+      {/* Google Drive Automated Import Sync & Archiving Modal */}
+      <DriveAutoSyncModal
+        isOpen={driveModalState.isOpen}
+        stage={driveModalState.stage}
+        statusMessage={driveModalState.statusMessage}
+        forecastResult={driveModalState.forecastResult}
+        allocationResult={driveModalState.allocationResult}
+        errorMessage={driveModalState.errorMessage}
+        onClose={handleProceedAfterDriveSync}
+        onProceed={handleProceedAfterDriveSync}
+      />
     </div>
   );
 }

@@ -62,7 +62,7 @@ import {
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
 import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';
-import { filterActiveOutboundShipments, calculateActiveQueuePartsCount } from '../utils/shipmentHelpers';
+import { filterActiveOutboundShipments, calculateActiveQueuePartsCount, getShipmentRiderName } from '../utils/shipmentHelpers';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 
 const USD_TO_PHP_RATE = 57;
@@ -111,21 +111,26 @@ export default function Dashboard() {
       ? (customOptions?.includeDeclarationForm !== undefined ? customOptions.includeDeclarationForm : true)
       : false;
 
+    const targetShipment = (shipments || []).find(s => s.id === shipmentObj?.id) || shipmentObj;
+    const resolvedRider = customOptions.pickupByName || getShipmentRiderName(targetShipment, shipments) || getShipmentRiderName(shipmentObj, shipments);
+
     const pdfOptions = {
-      supervisorName: supervisorSettings?.supervisor_name || shipmentObj?.verified_by_name || 'Anjo Alcazar',
+      supervisorName: supervisorSettings?.supervisor_name || targetShipment?.verified_by_name || shipmentObj?.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      guardOnDuty: shipmentObj?.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: shipmentObj?.pickup_date || shipmentObj?.shipment_date,
+      guardOnDuty: targetShipment?.guard_on_duty || shipmentObj?.guard_on_duty || supervisorSettings?.guard_on_duty,
+      pickupDate: targetShipment?.pickup_date || targetShipment?.shipment_date || shipmentObj?.pickup_date || shipmentObj?.shipment_date,
+      pickupByName: resolvedRider,
+      allShipments: shipments,
       ...customOptions,
       includeDeclarationForm: includeDeclaration
     };
 
-    const sourceItems = items && items.length > 0 ? items : (shipmentObj?.items || []);
-    generatePackingListPDF(shipmentObj, sourceItems, siteObj || {}, pdfOptions);
+    const sourceItems = items && items.length > 0 ? items : (targetShipment?.items || shipmentObj?.items || []);
+    generatePackingListPDF(targetShipment, sourceItems, siteObj || {}, pdfOptions);
     if (includeDeclaration) {
-      showToast?.(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+      showToast?.(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${targetShipment?.invoice_ref || shipmentObj?.invoice_ref || 'manifest'}`, 'info');
     } else {
-      showToast?.(`Downloaded Packing List PDF (PL Only) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+      showToast?.(`Downloaded Packing List PDF (PL Only) for ${targetShipment?.invoice_ref || shipmentObj?.invoice_ref || 'manifest'}`, 'info');
     }
   };
 

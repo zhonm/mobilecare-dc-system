@@ -34,7 +34,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Eye,
-  EyeOff
+  EyeOff,
 } from 'lucide-react';
 
 // Helper for generating pagination number array with ellipsis (e.g. [1, 2, 3, 4, 5, '...', 9])

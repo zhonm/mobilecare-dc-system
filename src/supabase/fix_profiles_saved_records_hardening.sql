@@ -934,9 +934,9 @@ BEGIN
     -- 4. Update public.profiles
     UPDATE public.profiles
     SET full_name = TRIM(p_full_name),
-        role = p_role,
+        role = COALESCE(p_role::user_role, role),
         role_position = COALESCE(p_role_position, role_position),
-        site_id = COALESCE(p_site_id, site_id),
+        site_id = p_site_id,
         is_active = COALESCE(p_is_active, is_active),
         updated_at = NOW()
     WHERE id = v_target_id;

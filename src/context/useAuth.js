@@ -67,7 +67,7 @@ export function useAuth({
         persistUserSession(currentUser);
         dbStorage.setItem('mdc_current_user', currentUser);
         if (!getSessionAuthTimestamp()) setSessionAuthTimestamp(Date.now());
-        return;
+        if (!supabase) return;
       }
 
       // 1. Recover from Supabase Auth active cloud session if available
@@ -343,6 +343,13 @@ export function useAuth({
           const payload = event.data?.payload;
           if (event.data?.type === 'USER_REGISTRY_UPDATED' && payload?.action === 'DELETE') {
             revokeIfCurrentUser(payload.userId, payload.email, 'Account deleted');
+          } else if (event.data?.type === 'USER_REGISTRY_UPDATED' &&
+            ((payload?.userId && matchesCurrentUser(payload.userId, payload.email)) ||
+              (!payload?.userId && matchesCurrentUser(null, payload?.email)))) {
+            const remoteSiteId = payload.siteId || payload.site_id;
+            if (remoteSiteId) {
+              setCurrentUser(prev => prev ? { ...prev, siteId: remoteSiteId } : prev);
+            }
           } else if (event.data?.type === 'FORCE_LOGOUT_USER') {
             revokeIfCurrentUser(payload?.userId, payload?.email, payload?.reason || 'Terminated by administrator');
           }
@@ -360,6 +367,8 @@ export function useAuth({
                 record.email,
                 event.eventType === 'DELETE' || record.is_deleted ? 'Account deleted' : record.is_active === false ? 'Account deactivated' : 'Password creation required'
               );
+            } else if (event.eventType === 'UPDATE' && matchesCurrentUser(record.id, record.email) && record.site_id) {
+              setCurrentUser(prev => prev ? { ...prev, siteId: record.site_id } : prev);
             }
           })
           .subscribe();

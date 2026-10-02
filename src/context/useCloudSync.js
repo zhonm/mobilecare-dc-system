@@ -34,7 +34,7 @@ import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
-import { buildSerialDictionary, healShipmentItem } from '../utils/shipmentHelpers';
+import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName } from '../utils/shipmentHelpers';
 import {
   ARCHIVE_CUTOFF_DAYS,
   getArchiveCutoffDate,
@@ -441,7 +441,7 @@ export function useCloudSync({
         shouldFetch('profiles') ? supabase.from('profiles').select('id, email, full_name, role, role_position, site_id, has_set_password, is_active, is_deleted, created_at, updated_at').order('created_at', { ascending: true }).limit(100) : Promise.resolve({ data: null }),
         shouldFetch('user_page_permissions') ? supabase.from('user_page_permissions').select('*').limit(200) : Promise.resolve({ data: null }),
         shouldFetch('saved_records') ? (async () => {
-          // Egress Defense: PMG branch users only need shared metadata registries (no heavy DC master states or stock transfers)
+          // Egress Defense: PMG branch users fetch metadata registries plus recent shipment manifests for snapshot parity
           if (isSiteRestrictedPmg) {
             const PMG_DOC_IDS = [
               'master_supervisor_settings_registry',
@@ -451,8 +451,15 @@ export function useCloudSync({
               'cleared_sites_registry',
               'deleted_unit_serials_registry'
             ];
-            const resPmgDocs = await supabase.from('saved_records').select('*').in('id', PMG_DOC_IDS);
-            return { data: resPmgDocs.data || [] };
+            const [resPmgDocs, resPmgShipments] = await Promise.all([
+              supabase.from('saved_records').select('*').in('id', PMG_DOC_IDS),
+              supabase.from('saved_records')
+                .select('*')
+                .eq('record_type', 'shipment')
+                .order('created_at', { ascending: false })
+                .limit(200)
+            ]);
+            return { data: [...(resPmgDocs.data || []), ...(resPmgShipments?.data || [])] };
           }
 
           const SYSTEM_DOC_IDS = [
@@ -926,8 +933,8 @@ export function useCloudSync({
               const prevEntry = profileMap.get(cleanEmail) || {};
               const passHash = u.passwordHash || prevEntry.passwordHash || null;
               profileMap.set(cleanEmail, {
-                ...prevEntry,
                 ...u,
+                ...prevEntry,
                 passwordHash: passHash,
                 hasSetPassword: Boolean(u.hasSetPassword || prevEntry.hasSetPassword || passHash)
               });
@@ -986,11 +993,22 @@ export function useCloudSync({
             const cleanCurId = currentUser.id?.toLowerCase();
             const isUserExplicitlyDeleted = mergedDeletedUserIds.includes(cleanCurEmail) ||
               (cleanCurId && mergedDeletedUserIds.includes(cleanCurId));
+            const hasFreshCurrentProfile = effectiveDbProfiles.some(p =>
+              p.email?.toLowerCase() === cleanCurEmail ||
+              (cleanCurId && p.id?.toLowerCase() === cleanCurId)
+            );
 
             if (!isUserExplicitlyDeleted) {
               const existingInMap = profileMap.get(cleanCurEmail);
               if (!existingInMap) {
                 profileMap.set(cleanCurEmail, currentUser);
+              } else if (!hasFreshCurrentProfile) {
+                profileMap.set(cleanCurEmail, {
+                  ...existingInMap,
+                  ...currentUser,
+                  passwordHash: currentUser.passwordHash || existingInMap.passwordHash || null,
+                  hasSetPassword: Boolean(currentUser.hasSetPassword || existingInMap.hasSetPassword || currentUser.passwordHash)
+                });
               } else if (currentUser.hasSetPassword && !existingInMap.hasSetPassword) {
                 profileMap.set(cleanCurEmail, {
                   ...existingInMap,
@@ -1591,8 +1609,8 @@ export function useCloudSync({
                   const matchingUnit = (dbUnits || []).find(u => String(u.serial_number || '').trim().toUpperCase() === cleanSerial);
                   const matchingPart = (dbParts || []).find(p => (it.part_id && p.id === it.part_id) || (matchingUnit?.part_id && p.id === matchingUnit.part_id) || (matchingUnit?.part_number && p.part_number === matchingUnit.part_number));
                   
-                  const candidatePn = it.parts?.part_number || it.part_number || existingItem?.part_number || matchingUnit?.part_number || matchingPart?.part_number;
-                  const candidateDesc = it.parts?.description || it.description || existingItem?.description || matchingUnit?.description || matchingPart?.description;
+                  const candidatePn = it.parts?.part_number || (!isUnknownPn(it.part_number) ? it.part_number : null) || (!isUnknownPn(existingItem?.part_number) ? existingItem?.part_number : null) || matchingUnit?.part_number || matchingPart?.part_number || it.part_number || existingItem?.part_number;
+                  const candidateDesc = it.parts?.description || (!isUnknownDesc(it.description) ? it.description : null) || (!isUnknownDesc(existingItem?.description) ? existingItem?.description : null) || matchingUnit?.description || matchingPart?.description || it.description || existingItem?.description;
                   const candidateCost = it.unit_cost || existingItem?.cost || matchingPart?.stocking_price || 0;
 
                   const rawItem = {
@@ -1612,7 +1630,7 @@ export function useCloudSync({
 
               const resolvedSiteName = dbS.destination_site_name || dbS.sites?.name || existing?.destination_site_name || existing?.site_name;
               const resolvedSiteCode = dbS.destination_site_code || dbS.sites?.code || existing?.destination_site_code || existing?.site_code;
-              const resolvedPickupByName = (dbS.pickup_by_name && String(dbS.pickup_by_name).trim()) || existing?.pickup_by_name || (dbS.courier_name && String(dbS.courier_name).trim()) || existing?.courier_name || '';
+              const resolvedPickupByName = (dbS.pickup_by_name && String(dbS.pickup_by_name).trim()) || existing?.pickup_by_name || (dbS.courier_name && String(dbS.courier_name).trim()) || existing?.courier_name || getShipmentRiderName(dbS) || getShipmentRiderName(existing) || '';
               const resolvedCourierName = (dbS.courier_name && String(dbS.courier_name).trim()) || existing?.courier_name || resolvedPickupByName;
               const resolvedTs = dbS.transfer_slip_number || dbS.transfer_slip || existing?.transfer_slip_number || existing?.transfer_slip || '';
               const resolvedPhone = dbS.rider_phone || existing?.rider_phone || '';
@@ -1626,6 +1644,10 @@ export function useCloudSync({
               const resolvedReceivingSignature = dbS.receiving_signature || existing?.receiving_signature || resolvedReceivedByName || '';
               const resolvedReceivingCondition = dbS.receiving_condition || existing?.receiving_condition || '';
               const resolvedReceivingNotes = dbS.receiving_notes || existing?.receiving_notes || '';
+
+              const hasValidFormatted = formattedItems.length > 0 && !formattedItems.every(it => isUnknownPn(it.part_number));
+              const hasValidExisting = existingItems.length > 0 && !existingItems.every(it => isUnknownPn(it.part_number));
+              const finalItems = hasValidFormatted ? formattedItems : (hasValidExisting ? existingItems : (formattedItems.length > 0 ? formattedItems : existingItems));
 
               shipmentMap.set(canonicalRef, {
                 ...(existing || {}),
@@ -1647,7 +1669,7 @@ export function useCloudSync({
                 receiving_signature: resolvedReceivingSignature,
                 receiving_condition: resolvedReceivingCondition,
                 receiving_notes: resolvedReceivingNotes,
-                items: formattedItems.length > 0 ? formattedItems : existingItems
+                items: finalItems
               });
             }
           });

@@ -1951,7 +1951,7 @@ export function processRawUsageSheet(
   };
 }
 
-export async function exportAllocationToExcel(allocations, sites, period = 'August 2026') {
+export async function exportAllocationToExcel(allocations, sites, period = 'August 2026', options = {}) {
   const effectiveAllocations = balanceCatalogWeeklyAllocations(
     (allocations || []).map(a => ({ ...a })),
     sites
@@ -2592,7 +2592,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && options?.saveFile !== false) {
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2606,7 +2606,7 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   return { workbook, buffer };
 }
 
-export async function exportForecastToExcel(forecastItems, period = 'September 2026') {
+export async function exportForecastToExcel(forecastItems, period = 'September 2026', options = {}) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Mobile Care Services Phils. Inc.';
   workbook.lastModifiedBy = 'MDC DC System 2';
@@ -2738,7 +2738,7 @@ export async function exportForecastToExcel(forecastItems, period = 'September 2
   worksheet.getColumn(fOffset + 2).width = 24;
 
   const buffer = await workbook.xlsx.writeBuffer();
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && options?.saveFile !== false) {
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

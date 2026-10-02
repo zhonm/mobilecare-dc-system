@@ -6,9 +6,10 @@ import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilt
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
-import { formatCourierWithMode } from '../utils/shipmentHelpers';
+import { formatCourierWithMode, buildSerialDictionary, healShipmentItem, getShipmentRiderName } from '../utils/shipmentHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import SiteStockMonitoring from './SiteStockMonitoring';
+import ConfirmReceiveModal from './ConfirmReceiveModal';
 import {
   Inbox,
   Send,
@@ -94,7 +95,8 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     isAutoRefreshing,
     autoRefreshData,
     pmgSubTab,
-    setPmgSubTab
+    setPmgSubTab,
+    supervisorSettings
   } = useApp();
 
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
@@ -325,7 +327,6 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
 
   // Superadmin Site Receipt Confirmation Modal State
   const [receiveModalState, setReceiveModalState] = useState(null);
-  const [isSubmittingReceive, setIsSubmittingReceive] = useState(false);
   const [statusLoadingState, setStatusLoadingState] = useState(null);
 
   const handleOpenReceiveModal = (shipment) => {
@@ -350,11 +351,10 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     });
   };
 
-  const handleConfirmSiteReceiveSubmit = async (e) => {
-    if (e) e.preventDefault();
+  const handleConfirmSiteReceiveSubmit = async (payload = {}) => {
     if (!receiveModalState) return;
 
-    const trimmedReceiver = String(receiveModalState.receivedByName || '').trim();
+    const trimmedReceiver = String(payload?.receivedByName || receiveModalState.receivedByName || '').trim();
     if (!trimmedReceiver) {
       showToast?.('Please enter the name of the staff member who received the package.', 'warning');
       return;
@@ -370,7 +370,6 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     const invRef = targetShipment?.invoice_ref || targetShipment?.shipment_number || 'Shipment';
     const siteName = targetSite?.name || targetShipment?.site_name || '';
 
-    setIsSubmittingReceive(true);
     setStatusLoadingState({
       isOpen: true,
       title: 'Confirming Site Package Receipt...',
@@ -387,9 +386,13 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
           targetShipment.id,
           {
             receivedByName: trimmedReceiver,
-            receivedDate: receiveModalState.receivedDate,
-            receivedCondition: receiveModalState.receivedCondition,
-            receivingNotes: receiveModalState.receivingNotes
+            receivedDate: payload?.receivedDate || receiveModalState.receivedDate,
+            receivedCondition: payload?.receivedCondition || receiveModalState.receivedCondition,
+            receivingNotes: payload?.receivingNotes || receiveModalState.receivingNotes,
+            signedPlDriveLink: payload?.signedPlDriveLink,
+            signedPlFileId: payload?.signedPlFileId,
+            signedPlFilename: payload?.signedPlFilename,
+            siteFolder: payload?.siteFolder
           },
           { partsRequests, updatePartsRequestStatus }
         );
@@ -404,10 +407,17 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     } catch (err) {
       console.error('Error confirming site receipt:', err);
     } finally {
-      setIsSubmittingReceive(false);
       setStatusLoadingState(null);
     }
   };
+
+  const { serialDict, partsMapByPn } = useMemo(() => {
+    return buildSerialDictionary({
+      inventoryUnits,
+      parts,
+      shipments
+    });
+  }, [inventoryUnits, parts, shipments]);
 
   // Derive Incoming & In-Transit Shipments for this branch (Awaiting Superadmin confirmation)
   const incomingShipments = useMemo(() => {
@@ -417,7 +427,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
       ? (sites.find(s => s.id === selectedSiteId)?.code || selectedSiteId)
       : (activeSiteObj?.code || userResolved.code);
 
-    return (shipments || []).filter(sh => {
+    const filtered = (shipments || []).filter(sh => {
       if (!sh.items || sh.items.length === 0) return false;
       const isPending = sh.status === 'pending_pickup' || sh.status === 'shipped' || sh.status === 'in_transit' || sh.status === 'draft';
       if (!isPending) return false;
@@ -431,7 +441,18 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                           (sh.site_code && (sh.site_code === targetSiteCode || sh.site_code === targetSiteId));
       return matchesSite;
     });
-  }, [shipments, isSuperadmin, selectedSiteId, currentUser, sites, activeSiteObj]);
+
+    return filtered.map(sh => {
+      const healedItems = (sh.items || []).map(it => healShipmentItem(it, serialDict, partsMapByPn));
+      const resolvedRider = getShipmentRiderName(sh, shipments);
+      return {
+        ...sh,
+        items: healedItems,
+        pickup_by_name: resolvedRider || sh.pickup_by_name || sh.courier_name || '',
+        courier_name: resolvedRider || sh.courier_name || sh.pickup_by_name || ''
+      };
+    });
+  }, [shipments, isSuperadmin, selectedSiteId, currentUser, sites, activeSiteObj, serialDict, partsMapByPn]);
 
   const handleConfirmDeleteUnit = async () => {
     if (!unitToDelete) return;
@@ -5856,213 +5877,19 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
         </div>
       )}
 
-      {/* 10. Site Receipt Confirmation Modal */}
-      {receiveModalState && (
-        <div className="modal-backdrop" style={{ zIndex: 9999 }} onClick={(e) => { if (e.target === e.currentTarget) setReceiveModalState(null); }}>
-          <div className="modal-content" style={{ maxWidth: '580px', width: '95%' }}>
-            <div className="modal-header" style={{ background: '#065f46' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ background: '#10b981', padding: '7px', borderRadius: '6px', color: '#fff' }}>
-                  <PackageCheck size={20} />
-                </div>
-                <div>
-                  <h3 style={{ color: '#fff', fontSize: '16px', margin: 0 }}>
-                    Confirm Site Package Receipt
-                  </h3>
-                  <p style={{ color: '#a7f3d0', fontSize: '11.5px', margin: '2px 0 0 0' }}>
-                    Destination: <strong>{receiveModalState.site?.name || receiveModalState.shipment?.site_name}</strong>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setReceiveModalState(null)}
-                disabled={isSubmittingReceive}
-                style={{ background: 'transparent', border: 'none', color: '#a7f3d0', cursor: isSubmittingReceive ? 'not-allowed' : 'pointer', padding: '4px' }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmSiteReceiveSubmit}>
-              <div className="modal-body" style={{ maxHeight: '72vh', overflowY: 'auto', padding: '20px' }}>
-                {/* Manifest Summary Box */}
-                <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 600 }}>
-                      Invoice Ref: {receiveModalState.shipment?.invoice_ref || receiveModalState.shipment?.shipment_number}
-                    </span>
-                    <span style={{ fontSize: '12px', color: '#065f46', fontWeight: 700 }}>
-                      {receiveModalState.shipment?.items?.length || 0} Total Units ({receiveModalState.shipment?.total_boxes || 1} Box)
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '11.5px', color: '#047857' }}>
-                    Courier: <strong>{receiveModalState.shipment?.carrier || receiveModalState.shipment?.courier || 'Lite Express'}</strong> • Waybill: <strong
-                      className="font-mono select-all"
-                      style={{
-                        fontSize: '13px',
-                        color: '#065f46',
-                        cursor: receiveModalState.shipment?.tracking_number ? 'pointer' : 'default',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '3px',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        transition: 'background-color 0.15s ease'
-                      }}
-                      title={receiveModalState.shipment?.tracking_number ? (copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? "Copied to clipboard!" : "Click to copy Waybill number") : ""}
-                      onClick={() => {
-                        if (receiveModalState.shipment?.tracking_number) {
-                          handleCopyWaybill(receiveModalState.shipment.tracking_number);
-                        }
-                      }}
-                      onMouseEnter={(e) => {
-                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = '#d1fae5';
-                      }}
-                      onMouseLeave={(e) => {
-                        if (receiveModalState.shipment?.tracking_number) e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                    >
-                      #{receiveModalState.shipment?.tracking_number || 'N/A'}
-                      {receiveModalState.shipment?.tracking_number && (
-                        copiedWaybill === String(receiveModalState.shipment.tracking_number).replace(/^#\s*/, '').trim() ? (
-                          <Check size={11} strokeWidth={2.5} color="#15803d" style={{ marginLeft: '2px' }} />
-                        ) : (
-                          <Copy size={11} color="#047857" style={{ opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
-                        )
-                      )}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* Items in Package */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label className="form-label" style={{ fontWeight: 700, fontSize: '12px', color: '#475569', marginBottom: '6px' }}>
-                    Parts Included in Manifest ({receiveModalState.shipment.items?.length || 0})
-                  </label>
-                  <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '6px 10px', background: '#f8fafc', fontSize: '11.5px' }}>
-                    {(receiveModalState.shipment.items || []).map((it, idx) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: idx < (receiveModalState.shipment.items.length - 1) ? '1px solid #e2e8f0' : 'none' }}>
-                        <div>
-                          <strong style={{ fontFamily: 'var(--font-mono)', color: '#0284c7' }}>{it.part_number}</strong>
-                          <span style={{ color: '#64748b', marginLeft: '6px' }}>{it.description}</span>
-                        </div>
-                        <span style={{ fontFamily: 'var(--font-mono)', color: '#0f172a', fontWeight: 600 }}>
-                          {it.serial_number || it.serialNumber || 'Serialized Unit'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="modal-form-grid-2" style={{ marginBottom: '14px' }}>
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                      Received By (Staff Name) <span style={{ color: '#dc2626' }}>*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder={isSuperadmin ? 'Enter branch staff name (required)' : 'e.g. Maria Santos'}
-                      value={receiveModalState.receivedByName}
-                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedByName: e.target.value }))}
-                      required
-                      autoFocus
-                      style={{
-                        fontSize: '12.5px',
-                        height: '36px',
-                        borderColor: (isSuperadmin && !receiveModalState.receivedByName?.trim()) ? '#f59e0b' : undefined
-                      }}
-                    />
-                    {isSuperadmin && !receiveModalState.receivedByName?.trim() && (
-                      <div style={{ fontSize: '11px', color: '#b45309', marginTop: '3px' }}>
-                        Please enter the name of the branch staff receiving the package.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="form-group" style={{ margin: 0 }}>
-                    <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                      Date of Receipt <span style={{ color: '#dc2626' }}>*</span>
-                    </label>
-                    <input
-                      type="date"
-                      className="form-input"
-                      value={receiveModalState.receivedDate}
-                      onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedDate: e.target.value }))}
-                      required
-                      style={{ fontSize: '12.5px', height: '36px' }}
-                    />
-                  </div>
-                </div>
-
-                {/* Package Condition */}
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label font-bold" style={{ fontSize: '12px' }}>
-                    Package &amp; Parts Condition Status
-                  </label>
-                  <select
-                    className="form-select"
-                    value={receiveModalState.receivedCondition}
-                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivedCondition: e.target.value }))}
-                    style={{ fontSize: '12.5px', height: '36px' }}
-                  >
-                    <option value="Good Condition (All parts intact & verified)">Good Condition (All parts intact &amp; verified)</option>
-                    <option value="Minor box wear, all parts complete">Minor box wear, all parts complete</option>
-                    <option value="Discrepancy / damage noted for inspection">Discrepancy / damage noted for inspection</option>
-                  </select>
-                </div>
-
-                {/* Receiving Notes */}
-                <div className="form-group" style={{ marginBottom: '14px' }}>
-                  <label className="form-label" style={{ fontSize: '12px' }}>
-                    Receipt Remarks &amp; Verification Notes
-                  </label>
-                  <textarea
-                    className="form-input"
-                    rows={2}
-                    placeholder="e.g. Received intact, verified all serial numbers matched manifest."
-                    value={receiveModalState.receivingNotes}
-                    onChange={(e) => setReceiveModalState(prev => ({ ...prev, receivingNotes: e.target.value }))}
-                    style={{ fontSize: '12px', resize: 'vertical' }}
-                  />
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="modal-footer" style={{ justifyContent: 'flex-end', gap: '8px' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setReceiveModalState(null)}
-                  disabled={isSubmittingReceive}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  style={{
-                    background: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
-                    borderColor: (!receiveModalState.receivedByName?.trim()) ? '#9ca3af' : '#059669',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontWeight: 800,
-                    opacity: (isSubmittingReceive || !receiveModalState.receivedByName?.trim()) ? 0.75 : 1,
-                    cursor: (isSubmittingReceive || !receiveModalState.receivedByName?.trim()) ? 'not-allowed' : 'pointer'
-                  }}
-                  disabled={isSubmittingReceive || !receiveModalState.receivedByName?.trim()}
-                  title={!receiveModalState.receivedByName?.trim() ? 'Received By (Staff Name) must be completed before confirming.' : undefined}
-                >
-                  <PackageCheck size={16} />
-                  <span>{isSubmittingReceive ? 'Confirming...' : 'Confirm Receipt & Archive Manifest'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* 10. Site Receipt Confirmation Modal with Signed PL Upload & Google Drive Auto-Sync */}
+      <ConfirmReceiveModal
+        isOpen={Boolean(receiveModalState)}
+        shipment={receiveModalState?.shipment}
+        site={receiveModalState?.site}
+        shipments={shipments}
+        currentUser={currentUser}
+        isSuperadmin={isSuperadmin}
+        supervisorSettings={supervisorSettings}
+        onClose={() => setReceiveModalState(null)}
+        onConfirmed={handleConfirmSiteReceiveSubmit}
+        showToast={showToast}
+      />
 
       {/* Lightweight Status Transition / Confirm Package Loading Screen */}
       <StatusChangeLoadingModal {...statusLoadingState} />

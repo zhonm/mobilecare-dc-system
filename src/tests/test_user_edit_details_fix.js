@@ -43,6 +43,9 @@ const canonicalSqlPath = path.resolve(__dirname, '../supabase/fix_profiles_saved
 const canonicalSql = fs.readFileSync(canonicalSqlPath, 'utf8');
 assert.ok(canonicalSql.includes("CURRENT_SETTING('app.bypass_profile_integrity', true) = 'on'"), 'Canonical migration must include bypass check in trigger');
 assert.ok(canonicalSql.includes("set_config('app.bypass_profile_integrity', 'on', true)"), 'Canonical migration must activate bypass in admin_update_user');
+assert.ok(canonicalSql.includes('role = COALESCE(p_role::user_role, role)'), 'Canonical admin_update_user must cast text roles before COALESCE with the user_role enum');
+assert.ok(!canonicalSql.includes('role = COALESCE(p_role, role)'), 'Canonical admin_update_user must not mix text and user_role in COALESCE');
+assert.ok(canonicalSql.includes('site_id = p_site_id'), 'Canonical admin_update_user must persist the selected site UUID');
 
 console.log('  ✓ PASS: Canonical migration file is fully aligned with the trigger bypass');
 
@@ -127,14 +130,23 @@ console.log('  ✓ PASS: Edited details (name, role, job title, site assignment)
 console.log('\n--- Test 5: AppContext and useUserManagement Integration ---');
 const appContextCode = fs.readFileSync(path.resolve(__dirname, '../context/AppContext.jsx'), 'utf8');
 const userMgmtCode = fs.readFileSync(path.resolve(__dirname, '../context/useUserManagement.js'), 'utf8');
+const authCode = fs.readFileSync(path.resolve(__dirname, '../context/useAuth.js'), 'utf8');
+const cloudSyncCode = fs.readFileSync(path.resolve(__dirname, '../context/useCloudSync.js'), 'utf8');
 
 assert.ok(appContextCode.includes('sites: catalogAndSites.sites'), 'AppContext must pass sites to useUserManagement');
 assert.ok(userMgmtCode.includes('sites,') && userMgmtCode.includes('export function useUserManagement({'), 'useUserManagement must accept sites parameter');
 assert.ok(userMgmtCode.includes('p_caller_email: callerEmail'), 'useUserManagement must supply callerEmail alias to RPC');
 assert.ok(userMgmtCode.includes('p_admin_email: callerEmail'), 'useUserManagement must supply adminEmail alias to RPC');
+assert.ok(authCode.includes('if (!supabase) return;'), 'Cached sessions must refresh from Supabase when available');
+assert.ok(cloudSyncCode.includes('...u,\n                ...prevEntry,'), 'Database profile fields must override stale registry fields during hydration');
+assert.ok(authCode.includes('const remoteSiteId = payload.siteId || payload.site_id;'), 'Remote user updates must carry the assigned site into the active session');
+assert.ok(authCode.includes("event.eventType === 'UPDATE' && matchesCurrentUser(record.id, record.email) && record.site_id"), 'Profile realtime updates must refresh the active user site');
+assert.ok(cloudSyncCode.includes('const hasFreshCurrentProfile = effectiveDbProfiles.some'), 'Restricted PMG hydration must detect whether a fresh profile was fetched');
+assert.ok(cloudSyncCode.includes('} else if (!hasFreshCurrentProfile) {'), 'Restricted PMG hydration must preserve the active session when the profile query is skipped');
 
 console.log('  ✓ PASS: AppContext passes sites catalog to useUserManagement');
 console.log('  ✓ PASS: useUserManagement correctly consumes sites and provides dual-alias RPC parameters\n');
+console.log('  ✓ PASS: Cached sessions and cloud hydration preserve the latest database site assignment\n');
 
 console.log('====================================================================');
 console.log('ALL USER EDIT DETAILS & 42501 FIX TESTS PASSED (100%)');

@@ -24,7 +24,7 @@ import {
   Layers,
   Sparkles,
   Sliders,
-  Boxes
+  Boxes,
 } from 'lucide-react';
 
 export default function Forecasting() {

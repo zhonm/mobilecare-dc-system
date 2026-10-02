@@ -4,7 +4,7 @@ import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/
 import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
-import { getShipmentCourierDisplay, getShipmentRiderName } from './shipmentHelpers.js';
+import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem } from './shipmentHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -21,6 +21,10 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
     unit: 'mm',
     format: 'a4'
   });
+
+  const rawItems = (items && items.length > 0) ? items : (shipment?.items || []);
+  const resolvedItems = rawItems.map(it => healShipmentItem(it, options.serialDict, options.partsMapByPn));
+  items = resolvedItems;
 
   const CHUNK_SIZE = 50;
   const totalItemsCount = items?.length || 0;
@@ -47,7 +51,20 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const trackingNumberStr = (rawTrackingNum && rawTrackingNum.toUpperCase() !== 'N/A') ? rawTrackingNum : '___________________';
 
   const supervisorName = options.supervisorName || shipment.verified_by_name || 'Anjo Alcazar';
-  const pickupByName = getShipmentRiderName(shipment) || shipment.pickup_by_name || shipment.courier_name || shipment.rider_name || (shipment.carrier === 'Utility' ? 'Utility' : '');
+  const allShipmentsList = options.allShipments || options.shipments || shipment.all_shipments || [];
+  const pickupByName = (options.pickupByName && typeof options.pickupByName === 'string' && options.pickupByName.trim())
+    ? options.pickupByName.trim()
+    : (
+        getShipmentRiderName(shipment, allShipmentsList) ||
+        shipment.pickup_by_name ||
+        shipment.courier_name ||
+        shipment.rider_name ||
+        shipment.driver_name ||
+        shipment.pickup_by ||
+        shipment.courier_rider ||
+        shipment.handover_to ||
+        (shipment.carrier === 'Utility' ? 'Utility' : '')
+      );
 
   // ══════════════════════════════════════════════════════════════════════════
   // RENDER PACKING LIST MANIFEST (50 items max per page)
@@ -379,7 +396,25 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.text('Receiving Branch Signature:', margin, sigRow2Y);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(51, 65, 85);
-      const receivingSig = shipment.receiving_signature || (site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM');
+
+      const defaultBranch = site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM';
+      const branchRef = options.receivingBranch || (typeof shipment.receiving_branch === 'string' ? shipment.receiving_branch : '');
+      const staffName = options.receivedByName || shipment.received_by_name || '';
+
+      let receivingSig = options.receivingSignature || '';
+      if (!receivingSig) {
+        if (staffName && branchRef && !staffName.includes(branchRef)) {
+          receivingSig = `${staffName} (${branchRef})`;
+        } else if (staffName) {
+          receivingSig = staffName;
+        } else if (shipment.receiving_signature) {
+          receivingSig = shipment.receiving_signature;
+        } else if (branchRef) {
+          receivingSig = branchRef;
+        } else {
+          receivingSig = defaultBranch;
+        }
+      }
       doc.text(receivingSig, margin + 44, sigRow2Y);
 
       // Row 2 - Right: Pickup By (always rendered & aligned under Verified By)
@@ -579,7 +614,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
-  doc.save(filename);
+  if (options?.saveFile !== false) {
+    doc.save(filename);
+  }
   return { doc, filename };
 }
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
+import { autoArchivePackingListToDrive } from '../services/driveAutoSyncService';
 import {
   PackageCheck,
   Download,
@@ -211,9 +212,40 @@ export default function ScanOutPacking() {
 
     const startTime = Date.now();
     try {
-      await updateShipmentStatus(shipmentId, newStatus);
+      let extraData = {};
+      if ((newStatus === 'pending_pickup' || newStatus === 'ready_for_pickup') && target) {
+        try {
+          const dest = (sites || []).find(s => s.id === target.site_id || s.name === target.site_name) || {};
+          const sourceItems = target.items && target.items.length > 0 ? target.items : [];
+          const resolvedRider = getShipmentRiderName(target, shipments);
+          const driveResult = await autoArchivePackingListToDrive(target, sourceItems, dest, {
+            supervisorName: supervisorSettings?.supervisor_name || target.verified_by_name || 'Anjo Alcazar',
+            supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+            guardOnDuty: target.guard_on_duty || supervisorSettings?.guard_on_duty,
+            pickupDate: target.pickup_date || target.shipment_date,
+            pickupByName: resolvedRider,
+            allShipments: shipments
+          });
+          if (driveResult?.success && driveResult?.webViewLink) {
+            extraData.google_drive_link = driveResult.webViewLink;
+            extraData.google_drive_file_id = driveResult.fileId;
+            showToast(`Auto-archived Packing List to Google Drive (${driveResult.filename})`, 'success');
+          }
+        } catch (driveErr) {
+          console.warn('[Google Drive] Auto-archive on status change failed:', driveErr);
+        }
+      }
+
+      await updateShipmentStatus(shipmentId, newStatus, extraData);
       if (currentShipment?.id === shipmentId) {
-        setCurrentShipment(prev => ({ ...prev, status: newStatus }));
+        setCurrentShipment(prev => ({
+          ...prev,
+          status: newStatus,
+          ...(extraData.google_drive_link ? {
+            google_drive_link: extraData.google_drive_link,
+            google_drive_file_id: extraData.google_drive_file_id
+          } : {})
+        }));
       }
       const elapsed = Date.now() - startTime;
       if (elapsed < 350) {
@@ -1339,20 +1371,48 @@ export default function ScanOutPacking() {
       await saveShipment(finalized);
 
       // 2. Automatically generate and download formatted corporate PDF
+      const resolvedFinalizedRider = getShipmentRiderName(finalized, shipments);
       try {
         generatePackingListPDF(finalized, finalized.items || [], selectedSite, {
           supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
           supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
           guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
-          pickupDate: finalized.pickup_date || finalized.shipment_date
+          pickupDate: finalized.pickup_date || finalized.shipment_date,
+          pickupByName: resolvedFinalizedRider,
+          allShipments: shipments
         });
         showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database with PDF downloaded!`, 'success');
       } catch (pdfErr) {
         console.warn('PDF generation note:', pdfErr);
         showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database!`, 'success');
       }
+
+      // 3. Automatically archive Packing List PDF to Google Drive with date & time in filename
+      try {
+        autoArchivePackingListToDrive(finalized, finalized.items || [], selectedSite, {
+          supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
+          supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+          guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
+          pickupDate: finalized.pickup_date || finalized.shipment_date,
+          pickupByName: resolvedFinalizedRider,
+          allShipments: shipments
+        }).then(async (driveRes) => {
+          if (driveRes?.success && driveRes?.webViewLink) {
+            await saveShipment({
+              ...finalized,
+              google_drive_link: driveRes.webViewLink,
+              google_drive_file_id: driveRes.fileId
+            });
+            showToast(`Auto-archived Packing List to Google Drive (${driveRes.filename})`, 'success');
+          }
+        }).catch((err) => {
+          console.warn('[Google Drive] Auto-archive background error:', err);
+        });
+      } catch (driveErr) {
+        console.warn('[Google Drive] Auto-archive note:', driveErr);
+      }
       
-      // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
+      // 4. Reset draft from localStorage and initialize fresh workstation for next shipment
       try {
         localStorage.removeItem(userDraftStorageKey);
         localStorage.removeItem('mdc_active_pack_draft');
@@ -1392,15 +1452,19 @@ export default function ScanOutPacking() {
 
   // --- Corporate PDF Download Handler (Generates exact 2-Page vector PDF) ---
   const handleRequestPrintOrPDF = (shipmentObj, items, siteObj, _action = 'pdf', _isDraft = false) => {
+    const targetShipment = (shipments || []).find(s => s.id === shipmentObj?.id) || shipmentObj;
+    const resolvedRider = getShipmentRiderName(targetShipment, shipments) || getShipmentRiderName(shipmentObj, shipments);
     const pdfOptions = {
-      supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
+      supervisorName: supervisorSettings?.supervisor_name || targetShipment.verified_by_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
       supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-      guardOnDuty: shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
-      pickupDate: shipmentObj.pickup_date || shipmentObj.shipment_date
+      guardOnDuty: targetShipment.guard_on_duty || shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
+      pickupDate: targetShipment.pickup_date || targetShipment.shipment_date || shipmentObj.pickup_date || shipmentObj.shipment_date,
+      pickupByName: resolvedRider,
+      allShipments: shipments
     };
 
-    generatePackingListPDF(shipmentObj, items || [], siteObj || {}, pdfOptions);
-    showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${shipmentObj.invoice_ref || 'manifest'}`, 'info');
+    generatePackingListPDF(targetShipment, items || targetShipment.items || [], siteObj || {}, pdfOptions);
+    showToast(`Downloaded 2-Page PDF (Packing List + Declaration Form) for ${targetShipment.invoice_ref || shipmentObj.invoice_ref || 'manifest'}`, 'info');
   };
 
   // --- Corporate Excel (.xlsx) Download Handler ---
@@ -1498,11 +1562,14 @@ export default function ScanOutPacking() {
 
       showToast(`Dispatch details & Booking ID #${cleanTrk} saved!`, 'success');
 
+      const resolvedRider = cleanCourierName || getShipmentRiderName(updatedShipment, shipments);
       const pdfOptions = {
         supervisorName: supervisorSettings?.supervisor_name || 'Anjo Alcazar',
         supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
         guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
-        pickupDate: updatedShipment.pickup_date
+        pickupDate: updatedShipment.pickup_date,
+        pickupByName: resolvedRider,
+        allShipments: shipments
       };
 
       generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
@@ -2958,8 +3025,19 @@ export default function ScanOutPacking() {
                   className="packing-inline-input packing-inline-input-left packing-sig-val"
                   value={currentShipment.receiving_signature ?? (selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}
                   placeholder={selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'}
-                  title="Click to edit Receiving Branch Signature"
+                  title="Click to edit Receiving Branch Signature (ASP, ABR, etc.)"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, receiving_signature: e.target.value }))}
+                />
+              </div>
+              <div className="packing-sig-item" style={{ marginTop: '3px' }}>
+                <strong className="packing-sig-title">Receiving Staff Name:</strong>
+                <input
+                  type="text"
+                  className="packing-inline-input packing-inline-input-left packing-sig-val"
+                  value={currentShipment.received_by_name ?? (currentUser?.role === 'parts_management' ? (currentUser?.fullName || currentUser?.name || '') : '')}
+                  placeholder={currentUser?.role === 'parts_management' ? (currentUser?.fullName || currentUser?.name || 'PMG Staff Name') : 'Branch Staff Name'}
+                  title="Click to edit Receiving Staff Name (auto-filled for PMG users)"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, received_by_name: e.target.value }))}
                 />
               </div>
             </div>
@@ -3029,9 +3107,37 @@ export default function ScanOutPacking() {
                     const startTime = Date.now();
                     try {
                       for (const ds of unreadyDrafts) {
-                        await updateShipmentStatus(ds.id, 'pending_pickup');
+                        let extraData = {};
+                        try {
+                          const dest = (sites || []).find(s => s.id === ds.site_id || s.name === ds.site_name) || {};
+                          const sourceItems = ds.items && ds.items.length > 0 ? ds.items : [];
+                          const resolvedRider = getShipmentRiderName(ds, shipments);
+                          const driveRes = await autoArchivePackingListToDrive(ds, sourceItems, dest, {
+                            supervisorName: supervisorSettings?.supervisor_name || ds.verified_by_name || 'Anjo Alcazar',
+                            supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
+                            guardOnDuty: ds.guard_on_duty || supervisorSettings?.guard_on_duty,
+                            pickupDate: ds.pickup_date || ds.shipment_date,
+                            pickupByName: resolvedRider,
+                            allShipments: shipments
+                          });
+                          if (driveRes?.success && driveRes?.webViewLink) {
+                            extraData.google_drive_link = driveRes.webViewLink;
+                            extraData.google_drive_file_id = driveRes.fileId;
+                          }
+                        } catch (e) {
+                          console.warn('[Google Drive] Batch archive error:', e);
+                        }
+
+                        await updateShipmentStatus(ds.id, 'pending_pickup', extraData);
                         if (currentShipment?.id === ds.id) {
-                          setCurrentShipment(prev => ({ ...prev, status: 'pending_pickup' }));
+                          setCurrentShipment(prev => ({
+                            ...prev,
+                            status: 'pending_pickup',
+                            ...(extraData.google_drive_link ? {
+                              google_drive_link: extraData.google_drive_link,
+                              google_drive_file_id: extraData.google_drive_file_id
+                            } : {})
+                          }));
                         }
                       }
                       const elapsed = Date.now() - startTime;
