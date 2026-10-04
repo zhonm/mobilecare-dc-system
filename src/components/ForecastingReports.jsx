@@ -317,14 +317,28 @@ export default function ForecastingReports() {
     return `${mName} ${activePeriod?.year || 2026}`;
   })();
 
-  // 26 Service Branches list (excluding Central DC)
+  // Dynamic Active Service Branches list (excluding Central DC)
   const serviceBranches = useMemo(() => {
-    return (sites || []).filter(s => !s.is_dc);
+    return (sites || []).filter(s => !s.is_dc && s.is_active !== false);
   }, [sites]);
 
   // ── Handle File Ingestion directly on the Report ──────────────────────────
   const handleFileUpload = async (file) => {
     if (!file) return;
+
+    // Security validation: file size limit (50MB) and allowed extensions
+    if (file.size > 50 * 1024 * 1024) {
+      showToast?.('File size exceeds the 50MB security threshold.', 'error');
+      return;
+    }
+
+    const validExtensions = ['.xlsx', '.xls', '.csv'];
+    const lowerName = (file.name || '').toLowerCase();
+    if (!validExtensions.some(ext => lowerName.endsWith(ext))) {
+      showToast?.('Invalid file format. Only .xlsx, .xls, and .csv files are permitted.', 'error');
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const result = await parseUniversalExcel(file, sites, parts);
@@ -733,6 +747,8 @@ export default function ForecastingReports() {
         provVal,
         mmPct,
         provPct,
+        mmCount: siteAllocationsList.filter(s => s.isMM).length,
+        provCount: siteAllocationsList.filter(s => !s.isMM).length,
         pieData: regionalPieData
       }
     };
@@ -973,7 +989,7 @@ export default function ForecastingReports() {
                     <FileSpreadsheet size={16} color="#15803d" />
                     <div>
                       <div>Export Master Workbook (.xlsx)</div>
-                      <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>5 sheets: Ledger, 26 branches, matrix, audit</div>
+                      <div style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 400 }}>5 sheets: Ledger, {serviceBranches.length} branches, matrix, audit</div>
                     </div>
                   </button>
 
@@ -2475,7 +2491,7 @@ export default function ForecastingReports() {
                     <strong style={{ color: '#0f172a' }}>{analytics.regionalSummary.mmUnits.toLocaleString()} units ({analytics.regionalSummary.mmPct}%)</strong>
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>
-                    11 ASP sites • Avg. {analytics.regionalSummary.mmUnits > 0 ? Math.round(analytics.regionalSummary.mmUnits / 11) : 0} units/site
+                    {analytics.regionalSummary.mmCount || 0} sites • Avg. {analytics.regionalSummary.mmCount > 0 ? Math.round(analytics.regionalSummary.mmUnits / analytics.regionalSummary.mmCount) : 0} units/site
                   </div>
                 </div>
 
@@ -2485,7 +2501,7 @@ export default function ForecastingReports() {
                     <strong style={{ color: '#0f172a' }}>{analytics.regionalSummary.provUnits.toLocaleString()} units ({analytics.regionalSummary.provPct}%)</strong>
                   </div>
                   <div style={{ fontSize: '11px', color: '#64748b' }}>
-                    17 ASP sites across Luzon, Visayas &amp; Mindanao
+                    {analytics.regionalSummary.provCount || 0} sites across Luzon, Visayas &amp; Mindanao
                   </div>
                 </div>
               </div>
@@ -2682,7 +2698,7 @@ export default function ForecastingReports() {
                   Service Branch Allocation Demand Matrix
                 </h3>
                 <p style={{ fontSize: '11.5px', color: '#64748b', margin: '2px 0 0 0' }}>
-                  Projected demand volume, estimated inventory cost, and share of total DC distribution across all 26 MobileCare branch service hubs
+                  Projected demand volume, estimated inventory cost, and share of total DC distribution across all {serviceBranches.length} MobileCare branch service hubs
                 </p>
               </div>
               <div style={{ fontSize: '11.5px', color: '#64748b' }}>

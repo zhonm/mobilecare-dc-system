@@ -232,6 +232,36 @@ testSerials.forEach(({ sn, expectedPn, expectedDesc }) => {
 });
 console.log(`  ✓ PASS: All 8 serials healed accurately from UNKNOWN-PN to authentic Apple part numbers`);
 
+// 11. Verify Google Service Account Configuration Resolution
+console.log('\nTest 11: Verify Google Service Account configuration & private key resolution');
+const { isGoogleDriveConfigured } = await import('../services/googleDriveService.js');
+assert.strictEqual(isGoogleDriveConfigured(), true, 'Google Drive must report configured with embedded key');
+console.log('  ✓ PASS: isGoogleDriveConfigured() returns true without manual environment variable injection');
+
+// 12. Verify Receiving Branch Resolution and Prevention of Erroneous APP RM on CDO
+console.log('\nTest 12: Verify resolveSiteBranchCode and CDO Receiving Branch Signature');
+const { resolveSiteBranchCode } = await import('../utils/shipmentHelpers.js');
+
+const cdoSite = { code: 'ASP CDO', name: 'MOBILECARE - CAGAYAN DE ORO' };
+const cdoShipment = { invoice_ref: 'DCOWNED#091226C', site_name: 'MOBILECARE - CAGAYAN DE ORO' };
+assert.strictEqual(resolveSiteBranchCode(cdoSite, cdoShipment), 'ASP CDO', 'CDO must resolve to ASP CDO');
+
+const rmSite = { code: 'APP RM', name: 'MOBILECARE - ROBINSONS MAGNOLIA' };
+const rmShipment = { invoice_ref: 'DCOWNED#091226D', site_name: 'MOBILECARE - ROBINSONS MAGNOLIA' };
+assert.strictEqual(resolveSiteBranchCode(rmSite, rmShipment), 'APP RM', 'Magnolia must resolve to APP RM');
+
+const abrSite = { code: 'ASP ABR', name: 'MOBILECARE - DAVAO' };
+assert.strictEqual(resolveSiteBranchCode(abrSite), 'ASP ABR', 'Davao must resolve to ASP ABR');
+
+// Test that PDF generation for CDO contains ASP CDO
+const plCdo = generatePackingListPDF(
+  cdoShipment,
+  [{ part_number: '661-21988', description: 'Display, iPhone 13', serial_number: 'F8Y6176C01013XCB6' }],
+  cdoSite
+);
+assert(plCdo && plCdo.doc, 'CDO PDF generation should succeed');
+console.log('  ✓ PASS: resolveSiteBranchCode correctly resolves ASP CDO, APP RM, ASP ABR, and prevents APP RM leaks');
+
 console.log('\n====================================================');
-console.log('ALL PMG SIGNED PL & GOOGLE DRIVE TESTS PASSED (10/10)!');
+console.log('ALL PMG SIGNED PL & GOOGLE DRIVE TESTS PASSED (12/12)!');
 console.log('====================================================\n');

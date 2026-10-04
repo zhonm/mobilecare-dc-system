@@ -47,7 +47,8 @@ import {
   detectRecommendedShippingMode,
   formatCourierWithMode,
   getShipmentCourierDisplay,
-  getShipmentRiderName
+  getShipmentRiderName,
+  resolveSiteBranchCode
 } from '../utils/shipmentHelpers';
 
 // Pure category & assignment classification helpers
@@ -94,7 +95,7 @@ export default function ScanOutPacking() {
   } = useApp();
 
   const serviceSites = useMemo(() => {
-    return (sites || []).filter(s => !s.is_dc);
+    return (sites || []).filter(s => !s.is_dc && s.is_active !== false);
   }, [sites]);
 
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
@@ -501,7 +502,7 @@ export default function ScanOutPacking() {
         carrier: finalCourier,
         courier: finalCourier,
         shipping_mode: resolvedMode,
-        receiving_signature: siteObj?.code || 'ASP NPM',
+        receiving_signature: resolveSiteBranchCode(siteObj, prev),
         pickup_by_name: isUtility ? 'Utility' : prev.pickup_by_name
       };
     });
@@ -3023,8 +3024,13 @@ export default function ScanOutPacking() {
                 <input
                   type="text"
                   className="packing-inline-input packing-inline-input-left packing-sig-val"
-                  value={currentShipment.receiving_signature ?? (selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}
-                  placeholder={selectedSite?.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM'}
+                  value={
+                    currentShipment.receiving_signature &&
+                    !((currentShipment.receiving_signature === 'APP RM' || currentShipment.receiving_signature === 'APP  RM') && resolveSiteBranchCode(selectedSite, currentShipment) !== 'APP RM')
+                      ? currentShipment.receiving_signature
+                      : resolveSiteBranchCode(selectedSite, currentShipment)
+                  }
+                  placeholder={resolveSiteBranchCode(selectedSite, currentShipment)}
                   title="Click to edit Receiving Branch Signature (ASP, ABR, etc.)"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, receiving_signature: e.target.value }))}
                 />

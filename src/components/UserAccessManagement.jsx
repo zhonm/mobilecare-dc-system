@@ -321,6 +321,11 @@ export default function UserAccessManagement() {
       return;
     }
 
+    if (!form.email.trim().toLowerCase().endsWith('@mobilecareph.com')) {
+      showToast('Only official @mobilecareph.com company email addresses are accepted.', 'error');
+      return;
+    }
+
     if (form.role === 'parts_management') {
       const isMissingSite = !form.siteId || !String(form.siteId).trim();
       if (isMissingSite || isDcSite(form.siteId, sites)) {
@@ -355,6 +360,11 @@ export default function UserAccessManagement() {
     e.preventDefault();
     if (!form.fullName.trim() || !form.email.trim()) {
       showToast('Please provide full name and company email', 'error');
+      return;
+    }
+
+    if (!form.email.trim().toLowerCase().endsWith('@mobilecareph.com')) {
+      showToast('Only official @mobilecareph.com company email addresses are accepted.', 'error');
       return;
     }
 

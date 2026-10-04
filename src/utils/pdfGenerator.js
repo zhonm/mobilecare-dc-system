@@ -4,7 +4,7 @@ import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/
 import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
-import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem } from './shipmentHelpers.js';
+import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode } from './shipmentHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -397,18 +397,28 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(51, 65, 85);
 
-      const defaultBranch = site.code ? `APP ${site.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM';
-      const branchRef = options.receivingBranch || (typeof shipment.receiving_branch === 'string' ? shipment.receiving_branch : '');
+      const defaultBranch = resolveSiteBranchCode(site, shipment);
+      const branchRef = options.receivingBranch || (typeof shipment.receiving_branch === 'string' ? shipment.receiving_branch : '') || defaultBranch;
       const staffName = options.receivedByName || shipment.received_by_name || '';
 
+      // Check if shipment.receiving_signature is valid and not a mismatched APP RM on a non-Magnolia site
+      const siteName = String(site?.name || shipment?.destination_site_name || shipment?.site_name || '').toUpperCase();
+      const isActuallyMagnolia = siteName.includes('MAGNOLIA');
+      const cleanShipmentSig = shipment.receiving_signature && !(String(shipment.receiving_signature).includes('RM') && !isActuallyMagnolia)
+        ? shipment.receiving_signature
+        : '';
+
       let receivingSig = options.receivingSignature || '';
+      if (receivingSig && !isActuallyMagnolia && (receivingSig.includes('RM') || receivingSig.includes('MAGNOLIA'))) {
+        receivingSig = '';
+      }
       if (!receivingSig) {
         if (staffName && branchRef && !staffName.includes(branchRef)) {
           receivingSig = `${staffName} (${branchRef})`;
         } else if (staffName) {
           receivingSig = staffName;
-        } else if (shipment.receiving_signature) {
-          receivingSig = shipment.receiving_signature;
+        } else if (cleanShipmentSig) {
+          receivingSig = cleanShipmentSig;
         } else if (branchRef) {
           receivingSig = branchRef;
         } else {
@@ -614,7 +624,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
 
   // Save / Export
   const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
-  if (options?.saveFile !== false) {
+  if (options?.saveFile === true || (options?.saveFile !== false && typeof window !== 'undefined' && typeof document !== 'undefined')) {
     doc.save(filename);
   }
   return { doc, filename };
@@ -900,7 +910,9 @@ export function exportAllocationToPDF(allocations = [], sites = [], period = 'Au
     margin: { left: margin, right: margin }
   });
 
-  doc.save(`Master_Allocation_${period.replace(/\s+/g, '_')}.pdf`);
+  if (typeof window !== 'undefined' && doc.save) {
+    doc.save(`Master_Allocation_${period.replace(/\s+/g, '_')}.pdf`);
+  }
 }
 
 /**
@@ -1589,7 +1601,9 @@ export function exportStockTransfersToPDF(records = [], metadata = {}) {
     }
   });
 
-  doc.save(`Stock_Transfers_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+  if (typeof window !== 'undefined' && doc.save) {
+    doc.save(`Stock_Transfers_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+  }
 }
 
 /**
@@ -2849,5 +2863,7 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
   }
 
   const fileName = `MDC_${auditType.toUpperCase()}_AUDIT_REPORT_${new Date().toISOString().split('T')[0]}.pdf`;
-  doc.save(fileName);
+  if (typeof window !== 'undefined' && doc.save) {
+    doc.save(fileName);
+  }
 }

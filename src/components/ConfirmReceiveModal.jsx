@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   PackageCheck,
   Download,
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import { uploadPmgSignedPackingListToDrive, resolvePmgSiteFolderName } from '../services/driveAutoSyncService';
-import { getTodayDateString, getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem } from '../utils/shipmentHelpers';
+import { getTodayDateString, getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode } from '../utils/shipmentHelpers';
 
 export default function ConfirmReceiveModal({
   isOpen,
@@ -27,9 +27,8 @@ export default function ConfirmReceiveModal({
   onConfirmed,
   showToast
 }) {
-  const rawBranchCode = site?.code || shipment?.site_code || '';
-  const defaultBranch = shipment?.receiving_branch || shipment?.receiving_signature || (rawBranchCode ? `APP ${rawBranchCode.toUpperCase()}` : 'APP RM');
-  const [receivingBranch, setReceivingBranch] = useState(defaultBranch);
+  const initialBranch = resolveSiteBranchCode(site, shipment);
+  const [receivingBranch, setReceivingBranch] = useState(initialBranch);
   const defaultReceiver = currentUser?.fullName || currentUser?.name || '';
   const [receivedByName, setReceivedByName] = useState(defaultReceiver);
   const [receivedDate, setReceivedDate] = useState(getTodayDateString());
@@ -43,6 +42,32 @@ export default function ConfirmReceiveModal({
   const [copiedWaybill, setCopiedWaybill] = useState(null);
 
   const fileInputRef = useRef(null);
+
+  // Synchronize state whenever modal opens or active shipment/site changes
+  useEffect(() => {
+    if (!isOpen || !shipment) return;
+
+    const resolvedBranch = resolveSiteBranchCode(site, shipment);
+    setReceivingBranch(resolvedBranch);
+
+    const isSuper = currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin;
+    const autoReceiver = isSuper ? '' : (currentUser?.fullName || currentUser?.name || '');
+    setReceivedByName(autoReceiver);
+
+    setReceivedDate(getTodayDateString());
+    setReceivedCondition('Good Condition (All parts intact & verified)');
+    setReceivingNotes('');
+    setHasDownloadedPL(false);
+    setSignedFile(null);
+  }, [
+    isOpen,
+    shipment,
+    site,
+    currentUser?.fullName,
+    currentUser?.name,
+    currentUser?.role,
+    currentUser?.isSuperAdmin
+  ]);
 
   if (!isOpen || !shipment) return null;
 
@@ -138,18 +163,24 @@ export default function ConfirmReceiveModal({
 
     try {
       // 1. Upload Signed PL to Google Drive under "DC- MSPI- PACKING LIST" / [SITE]
-      const driveResult = await uploadPmgSignedPackingListToDrive({
-        file: signedFile,
-        shipment,
-        site,
-        receivedByName: cleanReceiver
-      });
-
-      if (!driveResult.success) {
-        throw new Error(driveResult.error || 'Failed to upload signed Packing List to Google Drive');
+      let driveResult = null;
+      try {
+        driveResult = await uploadPmgSignedPackingListToDrive({
+          file: signedFile,
+          shipment,
+          site,
+          receivedByName: cleanReceiver
+        });
+      } catch (uploadErr) {
+        console.warn('[ConfirmReceiveModal] Google Drive upload error:', uploadErr);
+        driveResult = { success: false, error: uploadErr.message };
       }
 
       setUploadProgressMsg('Confirming package receipt and updating branch inventory...');
+
+      const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
+      const invoiceRef = String(shipment.invoice_ref || shipment.shipment_number || 'PL').replace(/[/\\:*?"<>|]/g, '_');
+      const fallbackFilename = `Signed_PackingList_${invoiceRef}_${timestampStr}.pdf`;
 
       // 2. Complete confirmation with drive links and signature details
       await onConfirmed({
@@ -159,13 +190,17 @@ export default function ConfirmReceiveModal({
         receivedDate,
         receivedCondition,
         receivingNotes,
-        signedPlDriveLink: driveResult.webViewLink,
-        signedPlFileId: driveResult.fileId,
-        signedPlFilename: driveResult.filename,
-        siteFolder: driveResult.siteFolder
+        signedPlDriveLink: driveResult?.success ? driveResult.webViewLink : null,
+        signedPlFileId: driveResult?.success ? driveResult.fileId : null,
+        signedPlFilename: driveResult?.success ? driveResult.filename : (signedFile?.name || fallbackFilename),
+        siteFolder: driveResult?.success ? driveResult.siteFolder : siteFolderName
       });
 
-      showToast?.(`Receipt confirmed! Signed PL stored in Google Drive under DC- MSPI- PACKING LIST / ${driveResult.siteFolder}`, 'success');
+      if (driveResult?.success) {
+        showToast?.(`Receipt confirmed! Signed PL stored in Google Drive under DC- MSPI- PACKING LIST / ${driveResult.siteFolder}`, 'success');
+      } else {
+        showToast?.(`Receipt confirmed & stock updated! (Note: Google Drive notice: ${driveResult?.error || 'Signed PL recorded locally'})`, 'info');
+      }
       onClose();
     } catch (err) {
       console.error('Confirmation error:', err);
@@ -519,28 +554,34 @@ export default function ConfirmReceiveModal({
                 className="btn btn-primary"
                 disabled={isSubmitting || !signedFile || !receivedByName?.trim()}
                 style={{
-                  background: (!signedFile || !receivedByName?.trim()) ? '#9ca3af' : '#059669',
-                  borderColor: (!signedFile || !receivedByName?.trim()) ? '#9ca3af' : '#059669',
+                  background: (!signedFile || !receivedByName?.trim()) 
+                    ? '#9ca3af' 
+                    : 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                  borderColor: (!signedFile || !receivedByName?.trim()) ? '#9ca3af' : '#047857',
+                  color: '#ffffff',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '8px',
                   fontWeight: 700,
-                  fontSize: '13px',
-                  padding: '7px 18px',
-                  borderRadius: '6px',
+                  fontSize: '13.5px',
+                  padding: '10px 22px',
+                  borderRadius: '8px',
+                  boxShadow: (!signedFile || !receivedByName?.trim()) ? 'none' : '0 4px 12px rgba(5, 150, 105, 0.32)',
                   cursor: (isSubmitting || !signedFile || !receivedByName?.trim()) ? 'not-allowed' : 'pointer',
-                  opacity: (isSubmitting || !signedFile || !receivedByName?.trim()) ? 0.75 : 1
+                  opacity: (isSubmitting || !signedFile || !receivedByName?.trim()) ? 0.75 : 1,
+                  minHeight: '40px',
+                  transition: 'all 0.15s ease'
                 }}
                 title={!signedFile ? 'You must upload the signed Packing List before confirming receipt' : undefined}
               >
                 {isSubmitting ? (
                   <>
-                    <Loader2 size={15} className="animate-spin" />
+                    <Loader2 size={16} className="animate-spin" />
                     <span>Archiving &amp; Confirming...</span>
                   </>
                 ) : (
                   <>
-                    <ShieldCheck size={16} />
+                    <ShieldCheck size={18} strokeWidth={2.4} />
                     <span>Confirm Receipt &amp; Save to Drive</span>
                   </>
                 )}

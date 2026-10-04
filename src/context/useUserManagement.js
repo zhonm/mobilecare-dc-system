@@ -237,11 +237,18 @@ export function useUserManagement({
 
   // 1. Create / Provision New User
   const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
+    const activeCaller = getActiveUser() || currentUser;
+    const isCallerAdmin = activeCaller?.role?.toLowerCase() === 'superadmin' || activeCaller?.role?.toLowerCase() === 'admin';
+    if (activeCaller && !isCallerAdmin) {
+      showToast('Unauthorized: Only administrators can provision users.', 'error');
+      return { success: false, error: 'Unauthorized: Admin privileges required.' };
+    }
+
     const cleanEmail = email.trim().toLowerCase();
 
     if (!isAllowedCompanyEmail(cleanEmail)) {
-      showToast('User email must belong to an official Mobile Care company domain (@mobilecareph.com, @mobilecare.com.ph).', 'error');
-      return { success: false, error: 'External email domains are prohibited for internal security.' };
+      showToast('User email must belong to the official company domain (@mobilecareph.com).', 'error');
+      return { success: false, error: 'Only @mobilecareph.com email domain is accepted for internal security.' };
     }
 
     const activeExisting = usersList.find(u => u.email?.toLowerCase() === cleanEmail && u.isActive !== false);
@@ -576,6 +583,13 @@ export function useUserManagement({
 
   // 4. Toggle User Active Status
   const toggleUserActiveStatus = async (userId) => {
+    const activeCaller = getActiveUser() || currentUser;
+    const isCallerAdmin = activeCaller?.role?.toLowerCase() === 'superadmin' || activeCaller?.role?.toLowerCase() === 'admin';
+    if (activeCaller && !isCallerAdmin) {
+      showToast('Unauthorized: Only administrators can modify user status.', 'error');
+      return;
+    }
+
     const target = usersList.find(u => u.id === userId);
     if (target?.id === currentUser?.id) {
       showToast('You cannot deactivate your own logged-in account', 'warning');
@@ -647,7 +661,28 @@ export function useUserManagement({
       return { success: false, error: 'User not found' };
     }
 
+    const activeCaller = getActiveUser() || currentUser;
+    const isCallerAdmin = activeCaller?.role?.toLowerCase() === 'superadmin' || activeCaller?.role?.toLowerCase() === 'admin';
+    const isSelf = activeCaller?.id === userId || activeCaller?.email?.toLowerCase() === target.email?.toLowerCase();
+
+    // Security guard: Only admins can edit others; regular users cannot elevate their own role
+    if (activeCaller && !isCallerAdmin) {
+      if (!isSelf) {
+        showToast('Unauthorized: Only administrators can edit other user accounts.', 'error');
+        return { success: false, error: 'Unauthorized: Admin privileges required.' };
+      }
+      if (role && role !== target.role) {
+        showToast('Unauthorized: You cannot modify your own assigned role.', 'error');
+        return { success: false, error: 'Unauthorized role escalation attempt.' };
+      }
+    }
+
     const cleanEmail = email.trim().toLowerCase();
+    if (!isAllowedCompanyEmail(cleanEmail)) {
+      showToast('User email must belong to the official company domain (@mobilecareph.com).', 'error');
+      return { success: false, error: 'Only @mobilecareph.com email domain is accepted for internal security.' };
+    }
+
     if (usersList.some(u => u.id !== userId && u.email.toLowerCase() === cleanEmail)) {
       showToast(`User with email ${cleanEmail} already exists!`, 'error');
       return { success: false, error: 'Email already in use' };
@@ -1026,6 +1061,13 @@ export function useUserManagement({
 
   // 8. Delete User
   const deleteUser = async (userId) => {
+    const activeCaller = getActiveUser() || currentUser;
+    const isCallerAdmin = activeCaller?.role?.toLowerCase() === 'superadmin' || activeCaller?.role?.toLowerCase() === 'admin';
+    if (activeCaller && !isCallerAdmin) {
+      showToast('Unauthorized: Only administrators can delete users.', 'error');
+      return { success: false, error: 'Unauthorized: Admin privileges required.' };
+    }
+
     const cleanUserId = String(userId || '').trim();
     const target = usersList.find(u => u.id === cleanUserId || u.email?.toLowerCase() === cleanUserId.toLowerCase());
     if (!target) {

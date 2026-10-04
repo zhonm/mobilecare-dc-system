@@ -88,6 +88,52 @@ export const CANONICAL_SITE_LIST = [
   { code: 'APP LAN', name: 'MOBILECARE - APP SM LANANG' }
 ];
 
+/**
+ * Merges the canonical 26 service branches with any custom sites added by Superadmin.
+ * Ensures the system dynamically includes all newly created sites across all matrices,
+ * masterlists, and allocation operations without being static.
+ */
+export function resolveMergedActiveServiceSites(liveSites = []) {
+  const canonicalCodes = new Set(CANONICAL_SITE_LIST.map(cs => cs.code));
+
+  const liveNonDc = (Array.isArray(liveSites) ? liveSites : []).filter(s =>
+    !s.is_dc &&
+    s.is_active !== false &&
+    !String(s.code || '').toUpperCase().includes('DC') &&
+    !String(s.code || '').toUpperCase().includes('MOBILEC') &&
+    !String(s.name || '').toLowerCase().includes('distribution') &&
+    s.code !== 'DC-MDC'
+  );
+
+  const canonicalSitesWithLive = CANONICAL_SITE_LIST.map((cs) => {
+    const existing = liveNonDc.find(s =>
+      s.code === cs.code ||
+      (s.name && cs.name.includes(s.name)) ||
+      (s.name && s.name.includes(cs.name))
+    );
+    return {
+      ...(existing || {}),
+      id: existing?.id || `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+      code: cs.code,
+      name: cs.name,
+      region: existing?.region || (/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila'),
+      address: existing?.address || `${cs.name} Service Branch, Philippines`,
+      is_dc: false,
+      is_active: existing?.is_active !== undefined ? existing.is_active : true
+    };
+  });
+
+  const newCustomSites = liveNonDc.filter(s =>
+    !canonicalCodes.has(s.code) &&
+    !CANONICAL_SITE_LIST.some(cs => cs.name === s.name)
+  ).map(s => ({
+    ...s,
+    id: s.id || `site-${(s.code || s.name || 'custom').toLowerCase().replace(/[^a-z0-9]/g, '')}`
+  }));
+
+  return [...canonicalSitesWithLive, ...newCustomSites];
+}
+
 export const MASTER_PART_PRICING = {
   // Displays
   '661-21988': { stocking: 279, exchange: 234, desc: 'Display, iPhone 13', category: 'cat-display' },
@@ -618,7 +664,12 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               const loc = siteCol >= 0 ? String(row[siteCol] || '').trim() : '';
               if (!loc || (!rawDesc && !rawPn)) continue;
 
-              const matchedSite = CANONICAL_SITE_LIST.find(s =>
+              const activeServiceSites = resolveMergedActiveServiceSites(currentSites);
+              const matchedSite = activeServiceSites.find(s =>
+                loc.toUpperCase().includes(s.code.toUpperCase()) ||
+                loc.toUpperCase().includes(s.name.toUpperCase()) ||
+                s.name.toUpperCase().includes(loc.toUpperCase())
+              ) || CANONICAL_SITE_LIST.find(s =>
                 loc.toUpperCase().includes(s.code.toUpperCase()) ||
                 loc.toUpperCase().includes(s.name.toUpperCase()) ||
                 s.name.toUpperCase().includes(loc.toUpperCase())
@@ -637,18 +688,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           }
 
           // Generate 2D Cumulative Box Quota allocations matching Google Sheet Master Allocation
-          const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
-            const existing = (currentSites || []).find(s => s.code === cs.code || cs.name.includes(s.name) || s.name.includes(cs.name));
-            return existing || {
-              id: `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-              code: cs.code,
-              name: cs.name,
-              region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila',
-              address: `${cs.name} Service Branch, Philippines`,
-              is_dc: false,
-              is_active: true
-            };
-          });
+          const activeServiceSites = resolveMergedActiveServiceSites(currentSites);
 
           const generatedAllocations = [];
           let curRow = 3;
@@ -814,18 +854,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         // 2. Is it a Pre-Aggregated Forecasting Sheet?
         if (isForecastingMatrixSheet(rawRows)) {
           const parsedForecast = parseForecastingSheet(rawRows, filterScope);
-          const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
-            const existing = (currentSites || []).find(s => s.code === cs.code || cs.name.includes(s.name) || s.name.includes(cs.name));
-            return existing || {
-              id: `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-              code: cs.code,
-              name: cs.name,
-              region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila',
-              address: `${cs.name} Service Branch, Philippines`,
-              is_dc: false,
-              is_active: true
-            };
-          });
+          const activeServiceSites = resolveMergedActiveServiceSites(currentSites);
 
           const generatedAllocations = [];
           let curRow = 3;
@@ -1426,20 +1455,8 @@ export function processRawUsageSheet(
     return null;
   }
 
-  // Build canonical site index for all 27 sites
-  const activeServiceSites = CANONICAL_SITE_LIST.map((cs) => {
-    const existing = (existingSites || []).find(s => s.code === cs.code || (s.name && cs.name.includes(s.name)) || (s.name && s.name.includes(cs.name)));
-    const siteId = existing?.id || `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-    return {
-      id: siteId,
-      code: cs.code,
-      name: cs.name,
-      region: existing?.region || (/cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila'),
-      address: existing?.address || `${cs.name} Service Branch, Philippines`,
-      is_dc: false,
-      is_active: true
-    };
-  });
+  // Build dynamic active service site index combining canonical sites and Superadmin-added sites
+  const activeServiceSites = resolveMergedActiveServiceSites(existingSites);
 
   const rawRepairRows = [];
   let totalRawRowsRead = 0;
@@ -1675,9 +1692,11 @@ export function processRawUsageSheet(
     } else {
       const allocResults = allocatePartToSites(computedForecast, { ...pEntry, description: desc }, activeServiceSites);
       allocResults.forEach(res => {
-        siteQuantities[res.siteId] = res.allocatedQty;
-        const sObj = activeServiceSites.find(s => s.id === res.siteId);
+        if (!res) return;
+        const sObj = activeServiceSites.find(s => s.id === res.siteId || s.code === res.siteId);
+        if (res.siteId) siteQuantities[res.siteId] = res.allocatedQty;
         if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+        if (sObj?.id) siteQuantities[sObj.id] = res.allocatedQty;
         totalAlloc += res.allocatedQty;
       });
     }
@@ -1775,9 +1794,11 @@ export function processRawUsageSheet(
     } else {
       const allocResults = allocatePartToSites(computedForecast, { ...pEntry, description: desc }, activeServiceSites);
       allocResults.forEach(res => {
-        siteQuantities[res.siteId] = res.allocatedQty;
-        const sObj = activeServiceSites.find(s => s.id === res.siteId);
+        if (!res) return;
+        const sObj = activeServiceSites.find(s => s.id === res.siteId || s.code === res.siteId);
+        if (res.siteId) siteQuantities[res.siteId] = res.allocatedQty;
         if (sObj?.code) siteQuantities[sObj.code] = res.allocatedQty;
+        if (sObj?.id) siteQuantities[sObj.id] = res.allocatedQty;
         totalAlloc += res.allocatedQty;
       });
     }

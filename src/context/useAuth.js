@@ -6,7 +6,8 @@ import {
   verifyPassword,
   getStoredUserSession,
   persistUserSession,
-  clearStoredUserSession
+  clearStoredUserSession,
+  loginRateLimiter
 } from '../utils/security';
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
@@ -423,10 +424,19 @@ export function useAuth({
   const verifyLoginEmail = async (rawEmail) => {
     const email = rawEmail.trim().toLowerCase();
 
+    // Security Guard: Rate limiter to block automated email harvesting & brute force
+    const rateCheck = loginRateLimiter.checkLimit(email);
+    if (!rateCheck.allowed) {
+      return {
+        success: false,
+        error: rateCheck.message
+      };
+    }
+
     if (!isAllowedCompanyEmail(email)) {
       return {
         success: false,
-        error: 'Access restricted: System is exclusively for authorized internal Mobile Care personnel. Please contact DC if you need access.'
+        error: 'Access restricted: Only official @mobilecareph.com email accounts are authorized.'
       };
     }
 
@@ -642,6 +652,22 @@ export function useAuth({
   const signInWithPassword = async (rawEmail, password, captchaToken = null) => {
     const cleanEmail = (rawEmail || '').trim().toLowerCase();
     const cleanPassword = (password || '').trim();
+
+    // Security Guard: Check brute-force lockout at engine layer
+    const rateCheck = loginRateLimiter.checkLimit(cleanEmail);
+    if (!rateCheck.allowed) {
+      return {
+        success: false,
+        error: rateCheck.message
+      };
+    }
+
+    if (!isAllowedCompanyEmail(cleanEmail)) {
+      return {
+        success: false,
+        error: 'Access restricted: Only official @mobilecareph.com email accounts are authorized.'
+      };
+    }
 
     let deletedSet = new Set();
     try {
@@ -864,6 +890,7 @@ export function useAuth({
     }
 
     if (!authPassed) {
+      loginRateLimiter.recordFailure(cleanEmail);
       barcodeAudio.playError();
       return {
         success: false,
@@ -872,6 +899,8 @@ export function useAuth({
           : 'Incorrect password. Please try again or contact DC if you need a password reset.'
       };
     }
+
+    loginRateLimiter.recordSuccess(cleanEmail);
 
     // Seamlessly promote authenticated user into native Supabase Auth session if not already acquired
     if (supabase && !hasNativeSession) {

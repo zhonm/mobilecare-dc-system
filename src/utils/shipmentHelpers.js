@@ -867,3 +867,81 @@ export const getShipmentRiderName = (sh, allShipments = []) => {
 
   return '';
 };
+
+/**
+ * Resolves the canonical Receiving Branch code (e.g. "ASP CDO", "ASP ABR", "APP BHS", "APP RM")
+ * for a destination site and shipment, preventing erroneous fallback to "APP RM" on non-Magnolia sites.
+ */
+export const resolveSiteBranchCode = (site, shipment = null) => {
+  const siteName = String(site?.name || shipment?.destination_site_name || shipment?.site_name || '').toUpperCase();
+  const rawCode = String(site?.code || shipment?.destination_site_code || shipment?.site_code || '').toUpperCase().trim();
+  const isActuallyMagnolia = siteName.includes('MAGNOLIA') || siteName.includes('ROBINSONS MAGNOLIA') || rawCode === 'APP RM' || rawCode === 'RM';
+
+  // 1. Direct semantic site match by name or keyword
+  if (siteName.includes('CAGAYAN DE ORO') || siteName.includes('CDO') || rawCode.includes('CDO')) return 'ASP CDO';
+  if (siteName.includes('DAVAO') || siteName.includes('ABREEZA') || rawCode.includes('DVO') || rawCode.includes('ABR')) return 'ASP ABR';
+  if (siteName.includes('LIMA') || rawCode.includes('LIM')) return 'ASP LIM';
+  if (siteName.includes('CEBU') || rawCode.includes('CEB')) return 'ASP CEB';
+  if (siteName.includes('ILOILO') || rawCode.includes('ILO')) return 'ASP ILO';
+  if (siteName.includes('BAGUIO') || rawCode.includes('BAG')) return 'ASP BAG';
+  if (siteName.includes('ZAMBOANGA') || rawCode.includes('ZAM')) return 'ASP ZAM';
+  if (siteName.includes('LA UNION') || rawCode.includes('LAU')) return 'ASP LAU';
+  if (siteName.includes('NAGA') || rawCode.includes('NAG')) return 'ASP NAG';
+  if (siteName.includes('PAMPANGA') || rawCode.includes('NPM')) return 'ASP NPM';
+  if (siteName.includes('TACLOBAN') || rawCode.includes('TAC')) return 'ASP TAC';
+  if (siteName.includes('PALAWAN') || rawCode.includes('PAL')) return 'ASP PAL';
+  if (siteName.includes('LANANG') || rawCode.includes('LAN')) return 'APP LAN';
+  if (isActuallyMagnolia) return 'APP RM';
+  if (siteName.includes('BONIFACIO') || rawCode.includes('BHS')) return 'APP BHS';
+  if (siteName.includes('MALL OF ASIA') || rawCode.includes('MOA')) return 'APP MOA';
+  if (siteName.includes('TRINOMA') || rawCode.includes('TRI')) return 'APP TRI';
+  if (siteName.includes('GREENBELT') || rawCode.includes('GB3')) return 'APP GB3';
+  if (siteName.includes('MEGAMALL') || rawCode.includes('MEG')) return 'APP MEG';
+  if (siteName.includes('FESTIVAL') || rawCode.includes('FES')) return 'APP FES';
+  if (siteName.includes('ALABANG') || rawCode.includes('ATC')) return 'APP ATC';
+  if (siteName.includes('NORTH EXCHANGE') || rawCode.includes('ANX')) return 'APP ANX';
+  if (siteName.includes('VERTIS') || rawCode.includes('VN')) return 'ASP VN';
+  if (siteName.includes('MARIKINA') || rawCode.includes('MRK')) return 'ASP MRK';
+  if (siteName.includes('NORTHEAST') || rawCode.includes('NES')) return 'ASP NES';
+  if (siteName.includes('POWER PLANT') || rawCode.includes('PPM')) return 'APP PPM';
+  if (siteName.includes('GLORIETTA') || rawCode.includes('GL5')) return 'ASP GL5';
+  if (siteName.includes('SAN LAZARO') || rawCode.includes('SMS')) return 'ASP SMS';
+  if (siteName.includes('MANILA') || rawCode.includes('MAN')) return 'ASP MAN';
+  if (siteName.includes('STA. LUCIA') || siteName.includes('STA LUCIA') || rawCode.includes('STA')) return 'ASP STA';
+
+  // 2. Normalize rawCode if provided (strip site- prefix, preserve APP/ASP prefix)
+  if (rawCode) {
+    let clean = rawCode.replace(/^SITE[-_]/i, '').replace(/[-_]+/g, ' ').trim();
+    if (clean.startsWith('ASP ') || clean.startsWith('APP ') || clean.startsWith('PMA ')) {
+      return clean.replace(/\s+/g, ' ');
+    }
+    // If it's a known provincial abbreviation without prefix, add ASP
+    if (['CDO', 'LIM', 'DVO', 'ABR', 'CEB', 'ILO', 'BAG', 'ZAM', 'LAU', 'NAG', 'NPM', 'TAC', 'PAL', 'GL5', 'SMS', 'MAN', 'STA', 'VN', 'MRK', 'NES'].includes(clean)) {
+      return `ASP ${clean}`;
+    }
+    const isProv = isProvincialSite(site) || isProvincialSite(shipment) ||
+      (site?.region && !String(site.region).toUpperCase().includes('METRO MANILA')) ||
+      (shipment?.region && !String(shipment.region).toUpperCase().includes('METRO MANILA'));
+    return isProv ? `ASP ${clean}` : (clean.length <= 4 ? `APP ${clean}` : clean);
+  }
+
+  // 3. Check existing shipment receiving_branch/signature if non-generic and matches context
+  const existingSig = String(shipment?.receiving_branch || shipment?.receiving_signature || '').trim();
+  if (existingSig && !existingSig.includes('APP RM') && !existingSig.includes('APP  RM')) {
+    return existingSig;
+  }
+
+  // 4. Derive dynamically from site name if available
+  if (siteName) {
+    const cleanName = siteName.replace(/^MOBILECARE\s*[-–—]?\s*/i, '').replace(/SERVICE\s*BRANCH/i, '').trim();
+    if (cleanName && !cleanName.includes('DISTRIBUTION') && !cleanName.includes('DC')) {
+      const isProv = isProvincialSite(site) || isProvincialSite(shipment) ||
+        (site?.region && !String(site.region).toUpperCase().includes('METRO MANILA')) ||
+        (shipment?.region && !String(shipment.region).toUpperCase().includes('METRO MANILA'));
+      return isProv ? `ASP ${cleanName}` : `APP ${cleanName}`;
+    }
+  }
+
+  return 'ASP BRANCH';
+};
+

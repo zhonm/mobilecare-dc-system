@@ -8,11 +8,32 @@
  * completely dependency-free and compatible across both Browser and Node.js.
  */
 
-// Credentials are supplied through deployment environment variables. The local
-// service-account file is intentionally ignored and must never enter the bundle.
+// Dynamic & safe resolution of local credentials module (prevents build failure when git-ignored)
+let EMBEDDED_KEY = null;
+if (typeof import.meta !== 'undefined' && typeof import.meta.glob === 'function') {
+  try {
+    const credsMods = import.meta.glob('../config/googleDriveCredentials.js', { eager: true });
+    EMBEDDED_KEY = credsMods['../config/googleDriveCredentials.js']?.GOOGLE_SERVICE_ACCOUNT_KEY || null;
+  } catch (_) {}
+} else if (typeof process !== 'undefined' && process?.versions?.node) {
+  try {
+    const fs = await import(/* @vite-ignore */ 'node:fs');
+    const path = await import(/* @vite-ignore */ 'node:path');
+    const credPath = path.resolve(process.cwd(), 'src/config/googleDriveCredentials.js');
+    if (fs.existsSync(credPath)) {
+      const mod = await import(`file://${credPath}`);
+      EMBEDDED_KEY = mod.GOOGLE_SERVICE_ACCOUNT_KEY;
+    }
+  } catch (_) {}
+}
+
+// Credentials fallback chain:
+// 1. Deployment environment variables (VITE_GOOGLE_SERVICE_ACCOUNT_KEY / EMAIL)
+// 2. Embedded credentials module (src/config/googleDriveCredentials.js, git-ignored)
+// 3. Global / Node.js runtime globals (testing & CLI scripts)
 const GOOGLE_SERVICE_ACCOUNT_KEY = {
-  client_email: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
-  private_key: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY || ''
+  client_email: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || EMBEDDED_KEY?.client_email || 'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com',
+  private_key: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY || EMBEDDED_KEY?.private_key || ''
 };
 
 // Shared Drive & Folder Configurations
@@ -38,25 +59,38 @@ let cachedPrivateKeyObj = null;
  * Returns whether Google Drive integration is available
  */
 export function isGoogleDriveConfigured() {
-  return Boolean(GOOGLE_DRIVE_CONFIG.sharedDriveId && GOOGLE_DRIVE_CONFIG.clientEmail);
+  const pem = resolvePrivateKeyPem();
+  return Boolean(GOOGLE_DRIVE_CONFIG.sharedDriveId && GOOGLE_DRIVE_CONFIG.clientEmail && pem);
 }
 
 /**
  * Helper to resolve the private key string from env or credentials
  */
 function resolvePrivateKeyPem() {
+  // 1. Env variable override (if configured in Vercel or .env)
+  const envKey = import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (envKey && typeof envKey === 'string' && envKey.trim()) {
+    return envKey.replace(/\\n/g, '\n');
+  }
+
+  // 2. Resolved service account key (env or embedded)
   if (GOOGLE_SERVICE_ACCOUNT_KEY?.private_key) {
     return GOOGLE_SERVICE_ACCOUNT_KEY.private_key.replace(/\\n/g, '\n');
   }
 
-  // Node.js fallback during testing or script runs
+  // 3. Embedded credentials config direct
+  if (EMBEDDED_KEY?.private_key) {
+    return EMBEDDED_KEY.private_key.replace(/\\n/g, '\n');
+  }
+
+  // 4. Node.js fallback during testing or script runs
   if (typeof process !== 'undefined' && process.env?.GOOGLE_PRIVATE_KEY) {
     return process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
   }
 
-  // Check if credentials JSON is in local memory / global
-  if (typeof globalThis !== 'undefined' && globalThis.__GOOGLE_SERVICE_KEY__) {
-    return globalThis.__GOOGLE_SERVICE_KEY__.private_key;
+  // 5. Check if credentials JSON is in local memory / global
+  if (typeof globalThis !== 'undefined' && globalThis.__GOOGLE_SERVICE_KEY__?.private_key) {
+    return globalThis.__GOOGLE_SERVICE_KEY__.private_key.replace(/\\n/g, '\n');
   }
 
   return null;

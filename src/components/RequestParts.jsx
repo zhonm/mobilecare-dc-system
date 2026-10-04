@@ -126,6 +126,8 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     return sites.find(s => s.id === selectedSiteId || s.code === selectedSiteId) || userSiteObj;
   }, [sites, selectedSiteId, userSiteObj]);
 
+  const branchSitesCount = useMemo(() => (sites || []).filter(s => !s.is_dc && s.is_active !== false).length, [sites]);
+
   // Active Sub-Tab: 'requests_table' | 'stock_on_hand' | 'all_stocks' | 'usage_history'
   const [activeTab, setActiveTab] = useState(() => {
     if (defaultTab === 'all_stocks') return 'all_stocks';
@@ -3039,21 +3041,43 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                             </div>
                           </div>
 
-                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9', paddingTop: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '12px', marginTop: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+                              <Package size={14} color="#059669" />
+                              <span>{isShipped ? 'Physical arrival verification required to activate stock' : 'Package being prepared for dispatch'}</span>
+                            </div>
+
                             {isShipped ? (
                               <button
                                 type="button"
-                                className="btn btn-sm btn-primary"
-                                style={{ background: '#059669', borderColor: '#059669', display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 700, padding: '6px 12px', borderRadius: '6px' }}
+                                className="btn"
+                                style={{
+                                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                                  color: '#ffffff',
+                                  border: '1px solid #047857',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '8px',
+                                  fontSize: '13.5px',
+                                  fontWeight: 700,
+                                  padding: '10px 20px',
+                                  borderRadius: '8px',
+                                  boxShadow: '0 4px 12px rgba(5, 150, 105, 0.32), 0 1px 2px rgba(0,0,0,0.06)',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                  minHeight: '40px',
+                                  letterSpacing: '0.01em'
+                                }}
                                 onClick={() => handleOpenReceiveModal(sh)}
                                 title="Confirm physical arrival of this package and activate parts in branch inventory"
                               >
-                                <PackageCheck size={14} />
+                                <PackageCheck size={18} strokeWidth={2.4} />
                                 <span>Confirm Site Package</span>
                               </button>
                             ) : (
-                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: '#b45309', fontWeight: 600, padding: '4px 8px', background: '#fffbeb', borderRadius: '4px', border: '1px solid #fef3c7' }}>
-                                <Clock size={12} />
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#b45309', fontWeight: 600, padding: '6px 12px', background: '#fffbeb', borderRadius: '6px', border: '1px solid #fef3c7' }}>
+                                <Clock size={14} />
                                 <span>Awaiting DC Dispatch</span>
                               </div>
                             )}
@@ -3797,7 +3821,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                       cursor: 'pointer'
                     }}
                     onClick={() => handleOpenClearPartsModal('ALL', 'ALL', 'All Retail Branches')}
-                    title="Clear old parts across all 26 retail branch sites prior to Excel import"
+                    title={`Clear old parts across all ${branchSitesCount} retail branch sites prior to Excel import`}
                   >
                     <Trash2 size={13} color="#dc2626" />
                     <span>Clear All Sites Parts</span>
@@ -5809,7 +5833,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
               <div style={{ fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
                 {clearPartsModalState.isAllSites ? (
                   <>
-                    Are you sure you want to clear <strong>all {clearPartsModalState.count} parts</strong> across all 26 retail branch sites?
+                    Are you sure you want to clear <strong>all {clearPartsModalState.count} parts</strong> across all {branchSitesCount} retail branch sites?
                     <div style={{ marginTop: '6px', color: '#64748b', fontSize: '11.5px' }}>
                       This will remove previous stock previously shipped by DC to all retail sites, creating a clean slate for importing <strong>Site Stock Monitoring.xlsx</strong>. <em>Central DC stock is strictly preserved.</em>
                     </div>

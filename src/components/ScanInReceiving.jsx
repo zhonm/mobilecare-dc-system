@@ -960,6 +960,20 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // --- XLSX / CSV File Import Handling ---
   const handleFileSelect = async (file) => {
     if (!file) return;
+
+    // Security validation: file size limit (50MB) and allowed extensions
+    if (file.size > 50 * 1024 * 1024) {
+      showToast?.('File size exceeds the 50MB security threshold.', 'error');
+      return;
+    }
+
+    const validExtensions = ['.xlsx', '.xls', '.csv'];
+    const lowerName = (file.name || '').toLowerCase();
+    if (!validExtensions.some(ext => lowerName.endsWith(ext))) {
+      showToast?.('Invalid file format. Only .xlsx, .xls, and .csv files are permitted.', 'error');
+      return;
+    }
+
     setIsParsing(true);
     try {
       const isSuperadminOrDc = !isPmgUser && (activeReceivingSite?.id === 'site-dc' || currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin');
@@ -1096,7 +1110,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         ? ` (${parsedBatch.summary.inStock || 0} In-Stock, ${parsedBatch.summary.used || 0} Used, ${parsedBatch.summary.transferred || 0} Transferred, ${parsedBatch.summary.outtake || 0} Outtake)`
         : '';
 
-      const destTargetName = isMulti ? 'all 26 branch sites' : activeReceivingSite.name;
+      const branchCount = (sites || []).filter(s => !s.is_dc && s.is_active !== false).length;
+      const destTargetName = isMulti ? `all ${branchCount} branch sites` : activeReceivingSite.name;
       setScanResult({
         type: 'success',
         message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts${breakdown} across ${destTargetName} database!`
@@ -1669,21 +1684,23 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   background: '#ffffff',
                   color: '#065f46',
                   fontWeight: 800,
-                  fontSize: '12px',
+                  fontSize: '13px',
                   border: 'none',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 14px',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
+                  gap: '8px',
+                  padding: '9px 18px',
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.1)',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
                 }}
                 onClick={() => {
                   if (setActiveTab) setActiveTab('request-parts');
                   if (setPmgSubTab) setPmgSubTab('stock_on_hand');
                 }}
               >
-                <PackageCheck size={14} />
+                <PackageCheck size={17} strokeWidth={2.4} />
                 <span>Confirm Site Package</span>
               </button>
             </div>

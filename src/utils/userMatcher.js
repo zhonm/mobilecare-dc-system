@@ -4,13 +4,11 @@
  */
 
 export const ALLOWED_COMPANY_DOMAINS = [
-  'mobilecareph.com',
-  'mobilecare.com.ph',
-  'mobilecare.com'
+  'mobilecareph.com'
 ];
 
 /**
- * Validates whether an email belongs to an authorized internal corporate domain.
+ * Validates whether an email belongs exclusively to the authorized corporate domain (@mobilecareph.com).
  */
 export const isAllowedCompanyEmail = (email) => {
   if (!email || typeof email !== 'string') return false;
@@ -18,7 +16,7 @@ export const isAllowedCompanyEmail = (email) => {
   const atIdx = clean.lastIndexOf('@');
   if (atIdx === -1) return false;
   const domain = clean.slice(atIdx + 1);
-  return ALLOWED_COMPANY_DOMAINS.includes(domain);
+  return domain === 'mobilecareph.com';
 };
 
 export const matchUserByEmail = (users, rawInputEmail) => {

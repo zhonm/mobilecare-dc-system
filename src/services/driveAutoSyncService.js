@@ -126,45 +126,70 @@ export async function autoArchiveDatasetToDrive({
  */
 export function resolvePmgSiteFolderName(siteOrCode) {
   if (!siteOrCode) return 'BRANCH';
-  let raw = '';
+  let rawName = '';
+  let rawCode = '';
+
   if (typeof siteOrCode === 'string') {
-    raw = siteOrCode;
+    rawName = siteOrCode;
+    rawCode = siteOrCode;
   } else if (typeof siteOrCode === 'object' && siteOrCode !== null) {
-    raw = siteOrCode.name || siteOrCode.code || siteOrCode.destination_site_name || siteOrCode.site_name || '';
+    rawName = siteOrCode.name || siteOrCode.destination_site_name || siteOrCode.site_name || '';
+    rawCode = siteOrCode.code || siteOrCode.destination_site_code || siteOrCode.site_code || '';
   }
-  const clean = raw.trim().toUpperCase();
 
-  if (clean.includes('LIMA') || clean === 'ASP LIM' || clean === 'LIM') return 'LIMA';
-  if (clean.includes('BONIFACIO') || clean === 'APP BHS' || clean === 'BHS') return 'BHS';
-  if (clean.includes('GREENBELT') || clean === 'APP GB3' || clean === 'GB3') return 'GB3';
-  if (clean.includes('POWER PLANT') || clean.includes('ROCKWELL') || clean === 'APP PPM' || clean === 'PPM') return 'PPM';
-  if (clean.includes('GLORIETTA') || clean === 'ASP GL5' || clean === 'GL5') return 'GL5';
-  if (clean.includes("S'MAISON") || clean.includes('S MAISON') || clean === 'ASP SMS' || clean === 'SMS') return 'SMS';
-  if (clean.includes('MALL OF ASIA') || clean === 'APP MOA' || clean === 'MOA') return 'MOA';
-  if (clean.includes('PODIUM') || clean === 'ASP POD' || clean === 'POD') return 'PODIUM';
-  if (clean.includes('MEGAMALL') || clean === 'APP MEG' || clean === 'MEG') return 'MEGAMALL';
-  if (clean.includes('ANNEX') || clean === 'APP ANX' || clean === 'ANX') return 'ANNEX';
-  if (clean.includes('TRINOMA') || clean === 'APP TRI' || clean === 'TRI') return 'TRINOMA';
-  if (clean.includes('VERTIS') || clean === 'ASP VN' || clean === 'VN') return 'VERTIS NORTH';
-  if (clean.includes('NORTHEAST') || clean === 'ASP NES' || clean === 'NES') return 'NORTHEAST SQUARE';
-  if (clean.includes('FESTIVAL') || clean === 'APP FES' || clean === 'FES') return 'FESTIVAL MALL';
-  if (clean.includes('MARIKINA') || clean === 'ASP MRK' || clean === 'MRK') return 'MARIKINA';
-  if (clean.includes('MAGNOLIA') || clean === 'APP RM' || clean === 'RM') return 'MAGNOLIA';
-  if (clean.includes('NEWPOINT') || clean === 'ASP NPM' || clean === 'NPM') return 'NEWPOINT';
-  if (clean.includes('NAGA') || clean === 'ASP NAG' || clean === 'NAG') return 'NAGA';
-  if (clean.includes('LA UNION') || clean === 'ASP LAU' || clean === 'LAU') return 'LA UNION';
-  if (clean.includes('ILOILO') || clean === 'ASP ILO' || clean === 'ILO') return 'ILOILO';
-  if (clean.includes('CEBU') || clean === 'ASP CEB' || clean === 'CEB') return 'CEBU';
-  if (clean.includes('ZAMBOANGA') || clean === 'ASP ZAM' || clean === 'ZAM') return 'ZAMBOANGA';
-  if (clean.includes('DAVAO') || clean.includes('ABREEZA') || clean === 'ASP ABR' || clean === 'ABR' || clean === 'ASP DVO' || clean === 'DVO') return 'DAVAO';
-  if (clean.includes('COTABATO') || clean === 'ASP COT' || clean === 'COT') return 'COTABATO';
-  if (clean.includes('CAGAYAN') || clean === 'ASP CDO' || clean === 'CDO') return 'CDO';
-  if (clean.includes('BAGUIO') || clean === 'ASP BAG' || clean === 'BAG') return 'BAGUIO';
-  if (clean.includes('LANANG') || clean === 'APP LAN' || clean === 'LAN') return 'LANANG';
+  const clean = `${rawName} ${rawCode}`.trim().toUpperCase();
 
-  // Fallback: extract short code by removing common prefixes
-  const stripped = clean.replace(/^(ASP|APP|MOBILECARE\s*-\s*|SITE-)\s*/i, '').trim();
-  return stripped.replace(/[/\\:*?"<>|]/g, '_') || 'BRANCH';
+  if (clean.includes('LIMA') || clean.includes('ASP LIM')) return 'LIMA';
+  if (clean.includes('BONIFACIO') || clean.includes('APP BHS')) return 'BHS';
+  if (clean.includes('GREENBELT') || clean.includes('APP GB3')) return 'GB3';
+  if (clean.includes('POWER PLANT') || clean.includes('ROCKWELL') || clean.includes('APP PPM')) return 'PPM';
+  if (clean.includes('GLORIETTA') || clean.includes('ASP GL5')) return 'GL5';
+  if (clean.includes("S'MAISON") || clean.includes('S MAISON') || clean.includes('ASP SMS')) return 'SMS';
+  if (clean.includes('MALL OF ASIA') || clean.includes('APP MOA')) return 'MOA';
+  if (clean.includes('PODIUM') || clean.includes('ASP POD')) return 'PODIUM';
+  if (clean.includes('MEGAMALL') || clean.includes('APP MEG')) return 'MEGAMALL';
+  if (clean.includes('ANNEX') || clean.includes('APP ANX')) return 'ANNEX';
+  if (clean.includes('TRINOMA') || clean.includes('APP TRI')) return 'TRINOMA';
+  if (clean.includes('VERTIS') || clean.includes('ASP VN')) return 'VERTIS NORTH';
+  if (clean.includes('NORTHEAST') || clean.includes('ASP NES')) return 'NORTHEAST SQUARE';
+  if (clean.includes('FESTIVAL') || clean.includes('APP FES')) return 'FESTIVAL MALL';
+  if (clean.includes('MARIKINA') || clean.includes('ASP MRK')) return 'MARIKINA';
+  if (clean.includes('MAGNOLIA') || clean.includes('APP RM')) return 'MAGNOLIA';
+  if (clean.includes('NEWPOINT') || clean.includes('ASP NPM')) return 'NEWPOINT';
+  if (clean.includes('NAGA') || clean.includes('ASP NAG')) return 'NAGA';
+  if (clean.includes('LA UNION') || clean.includes('ASP LAU')) return 'LA UNION';
+  if (clean.includes('ILOILO') || clean.includes('ASP ILO')) return 'ILOILO';
+  if (clean.includes('CEBU') || clean.includes('ASP CEB')) return 'CEBU';
+  if (clean.includes('ZAMBOANGA') || clean.includes('ASP ZAM')) return 'ZAMBOANGA';
+  if (clean.includes('DAVAO') || clean.includes('ABREEZA') || clean.includes('ASP ABR') || clean.includes('ASP DVO')) return 'DAVAO';
+  if (clean.includes('COTABATO') || clean.includes('ASP COT')) return 'COTABATO';
+  if (clean.includes('CAGAYAN') || clean.includes('ASP CDO') || clean.includes('CDO')) return 'CDO';
+  if (clean.includes('BAGUIO') || clean.includes('ASP BAG')) return 'BAGUIO';
+  if (clean.includes('LANANG') || clean.includes('APP LAN')) return 'LANANG';
+
+  // Dynamic fallback for any newly added site:
+  if (rawName) {
+    const strippedName = rawName.toUpperCase()
+      .replace(/^MOBILECARE\s*[-–—]?\s*/i, '')
+      .replace(/^(ASP|APP|PMA)\s+/i, '')
+      .replace(/SERVICE\s*BRANCH/i, '')
+      .trim();
+    if (strippedName && !strippedName.includes('DISTRIBUTION') && !strippedName.includes('DC')) {
+      return strippedName.replace(/[/\\:*?"<>|]/g, '_');
+    }
+  }
+
+  if (rawCode) {
+    const strippedCode = rawCode.toUpperCase()
+      .replace(/^SITE[-_]/i, '')
+      .replace(/^(ASP|APP|PMA)\s+/i, '')
+      .trim();
+    if (strippedCode) {
+      return strippedCode.replace(/[/\\:*?"<>|]/g, '_');
+    }
+  }
+
+  return 'BRANCH';
 }
 
 /**
@@ -234,4 +259,3 @@ export async function uploadPmgSignedPackingListToDrive({
     };
   }
 }
-

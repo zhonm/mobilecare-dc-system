@@ -137,6 +137,7 @@ export default function AllocationMatrix() {
   const nonDcSites = useMemo(() => {
     return (sites || []).filter(s =>
       !s.is_dc &&
+      s.is_active !== false &&
       !s.code.toUpperCase().includes('DC') &&
       !s.code.toUpperCase().includes('MOBILEC') &&
       !s.name.toLowerCase().includes('distribution') &&

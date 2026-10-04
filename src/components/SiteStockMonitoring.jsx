@@ -61,6 +61,8 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
   }, [sites, currentUser]);
 
+  const branchSitesCount = useMemo(() => (sites || []).filter(s => !s.is_dc && s.is_active !== false).length, [sites]);
+
   // Selected site for monitoring
   const [selectedSiteId, setSelectedSiteId] = useState(() => {
     if (!isSuperadmin && userSiteObj?.id) return userSiteObj.id;
@@ -582,7 +584,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
       isMulti ? 'All Retail Branches' : activeSiteObj.name
     );
     if (res.success) {
-      const targetMsg = isMulti ? 'all 26 branch sites' : activeSiteObj.name;
+      const targetMsg = isMulti ? `all ${branchSitesCount} branch sites` : activeSiteObj.name;
       showToast?.(
         `Successfully imported ${res.count} parts (${importParsedBatch.summary.inStock || 0} In-Stock, ${importParsedBatch.summary.used || 0} Used, ${importParsedBatch.summary.transferred || 0} Transferred, ${importParsedBatch.summary.outtake || 0} Outtake) across ${targetMsg}!`,
         'success'
@@ -658,7 +660,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   onChange={(e) => setSelectedSiteId(e.target.value)}
                 >
                   <option value="ALL">All Retail Branches</option>
-                  {sites.filter(s => !s.is_dc).map(s => (
+                  {sites.filter(s => !s.is_dc && s.is_active !== false).map(s => (
                     <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
                   ))}
                 </select>
@@ -2367,7 +2369,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   required
                 >
                   <option value="">-- Choose Destination Branch --</option>
-                  {sites.filter(s => !s.is_dc && s.id !== activeSiteObj.id && s.code !== activeSiteObj.code).map(s => (
+                  {sites.filter(s => !s.is_dc && s.is_active !== false && s.id !== activeSiteObj.id && s.code !== activeSiteObj.code).map(s => (
                     <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
                   ))}
                 </select>
@@ -2642,7 +2644,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                     />
                     <span>
                       {importParsedBatch.activeSheet === 'ALL_SHEETS' || activeSiteObj.id === 'ALL'
-                        ? 'Clear all old parts across all 26 retail branch sites before importing (recommended)'
+                        ? `Clear all old parts across all ${branchSitesCount} retail branch sites before importing (recommended)`
                         : `Clear existing old parts for ${activeSiteObj.name} before importing (recommended)`}
                     </span>
                   </label>
@@ -2758,13 +2760,13 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                     />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 800, fontSize: '13px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>Clear ALL Retail Branches (26 Sites)</span>
+                        <span>Clear ALL Retail Branches ({branchSitesCount} Sites)</span>
                         <span className="badge" style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5', fontSize: '10.5px' }}>
                           Network-wide
                         </span>
                       </div>
                       <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                        Clears all <strong>{allBranchUnitsCount}</strong> old parts across all 26 retail branch sites. <em>Central DC stock is strictly preserved.</em>
+                        Clears all <strong>{allBranchUnitsCount}</strong> old parts across all {branchSitesCount} retail branch sites. <em>Central DC stock is strictly preserved.</em>
                       </div>
                     </div>
                   </label>
@@ -2793,13 +2795,13 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                     />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 800, fontSize: '13px', color: '#991b1b', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>Clear ENTIRE System (All 26 Retail Sites + Central DC)</span>
+                        <span>Clear ENTIRE System (All {branchSitesCount} Retail Sites + Central DC)</span>
                         <span className="badge" style={{ background: '#991b1b', color: '#fff', fontSize: '10.5px' }}>
                           Superadmin Reset
                         </span>
                       </div>
                       <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
-                        Purges all parts system-wide ({inventoryUnits.length} total units across Central DC and all 26 retail sites) for a completely clean slate before importing the master Excel file.
+                        Purges all parts system-wide ({inventoryUnits.length} total units across Central DC and all {branchSitesCount} retail sites) for a completely clean slate before importing the master Excel file.
                       </div>
                     </div>
                   </label>

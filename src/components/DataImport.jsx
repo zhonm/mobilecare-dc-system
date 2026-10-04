@@ -128,6 +128,21 @@ export default function DataImport() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Security validation: file size limit (50MB) and allowed extensions
+    if (file.size > 50 * 1024 * 1024) {
+      showToast('File size exceeds the 50MB security threshold.', 'error');
+      if (e.target) e.target.value = '';
+      return;
+    }
+
+    const validExtensions = ['.xlsx', '.xls', '.csv'];
+    const lowerName = (file.name || '').toLowerCase();
+    if (!validExtensions.some(ext => lowerName.endsWith(ext))) {
+      showToast('Invalid file format. Only .xlsx, .xls, and .csv files are permitted.', 'error');
+      if (e.target) e.target.value = '';
+      return;
+    }
+
     setLastFileObj(file);
     setFileName(file.name);
     await processFile(file, filterScope, selectedMonth, allocationMode);

@@ -140,6 +140,15 @@ export default function PurchaseOrders() {
   const handleFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
+
+    // Security validation: file size limits (50MB max per file)
+    for (const f of files) {
+      if (f.size > 50 * 1024 * 1024) {
+        setParseError(`File "${f.name}" exceeds the 50MB security threshold.`);
+        return;
+      }
+    }
+
     setIsParsing(true);
     setParseError('');
 

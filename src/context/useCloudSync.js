@@ -708,7 +708,7 @@ export function useCloudSync({
           supabase.from('inventory_units').select('*').limit(2000)
         ) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').order('part_number', { ascending: true }) : Promise.resolve({ data: null }),
-        shouldFetch('sites') ? supabase.from('sites').select('*').limit(50) : Promise.resolve({ data: null }),
+        shouldFetch('sites') ? supabase.from('sites').select('*').order('code', { ascending: true }) : Promise.resolve({ data: null }),
         shouldFetch('part_categories') ? supabase.from('part_categories').select('*').limit(20) : Promise.resolve({ data: null }),
         // Egress optimization: Scope by site_id destination for PMG branch users & filter active/open or recent manifests (<60 days)
         shouldFetch('shipments') ? (
@@ -3096,22 +3096,38 @@ export function useCloudSync({
               if (Date.now() - lastLocalTime >= 3000) {
                 autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]', tables: ['saved_records'] });
               }
-            } else if (ev.data.type === 'STOCK_TRANSFERS_UPDATED') {
-              autoRefreshData({ force: true, silent: true, isManual: false, reason: 'Local Broadcast [STOCK_TRANSFERS_UPDATED]', tables: ['saved_records'] });
-            } else if (ev.data.type === 'STOCK_TRANSFERS_CLEARED') {
-              if (setStockTransferReports) setStockTransferReports([]);
-              if (setStockTransferMetadata) setStockTransferMetadata(null);
-              try {
-                localStorage.removeItem('mdc_stock_transfer_reports');
-                localStorage.removeItem('mdc_stock_transfer_metadata');
-                if (ev.data.payload?.updatedAt) {
-                  localStorage.setItem('mdc_stock_transfer_updated_at', ev.data.payload.updatedAt);
-                }
-              } catch (e) {}
-              dbStorage.setItem('mdc_stock_transfer_reports', []);
-              dbStorage.setItem('mdc_stock_transfer_metadata', null);
-              if (ev.data.payload?.updatedAt) {
-                dbStorage.setItem('mdc_stock_transfer_updated_at', ev.data.payload.updatedAt);
+            } else if (ev.data.type === 'SITE_SAVED' || ev.data.type === 'SITE_DELETED') {
+              if (supabase && setSites) {
+                supabase.from('sites').select('*').order('code', { ascending: true }).then(({ data: dbSites }) => {
+                  if (dbSites && dbSites.length > 0) {
+                    const authoritative = dbSites
+                      .filter(s =>
+                        !String(s.name || '').toUpperCase().includes('SM ILOILO') &&
+                        !String(s.address || '').toUpperCase().includes('SM ILOILO') &&
+                        (s.code || '').toUpperCase() !== 'APP ILO'
+                      )
+                      .map(s => enrichSiteWithDirectory({
+                        id: s.id,
+                        code: s.code,
+                        name: s.name,
+                        region: resolveSafeRegion(s.code, s.region),
+                        address: s.address || s.full_address || '',
+                        full_address: s.full_address || s.address || '',
+                        contact_person: s.contact_person || '',
+                        contact_phone: s.contact_phone || '',
+                        contact_email: s.contact_email || '',
+                        ship_to: s.ship_to || null,
+                        sold_to: s.sold_to || null,
+                        invoice_prefix: s.invoice_prefix || '',
+                        is_dc: s.is_dc ?? false,
+                        is_active: s.is_active ?? true
+                      }))
+                      .sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+                    setSites(authoritative);
+                    try { localStorage.setItem('mdc_sites', JSON.stringify(authoritative)); } catch (e) {}
+                    dbStorage.setItem('mdc_sites', authoritative);
+                  }
+                }).catch(() => {});
               }
             }
             const isLocalEventAlreadyHandled = [
@@ -3371,6 +3387,42 @@ export function useCloudSync({
                 });
               }
               // Instantaneously updated from Realtime event payload: skip redundant Supabase re-fetch
+              return;
+            }
+
+            if (tbl === 'sites' && setSites) {
+              if ((ev.eventType === 'INSERT' || ev.eventType === 'UPDATE') && ev.new?.code) {
+                const enriched = enrichSiteWithDirectory({
+                  id: ev.new.id,
+                  code: ev.new.code,
+                  name: ev.new.name,
+                  region: resolveSafeRegion(ev.new.code, ev.new.region),
+                  address: ev.new.address || ev.new.full_address || '',
+                  full_address: ev.new.full_address || ev.new.address || '',
+                  contact_person: ev.new.contact_person || '',
+                  contact_phone: ev.new.contact_phone || '',
+                  contact_email: ev.new.contact_email || '',
+                  ship_to: ev.new.ship_to || null,
+                  sold_to: ev.new.sold_to || null,
+                  invoice_prefix: ev.new.invoice_prefix || '',
+                  is_dc: ev.new.is_dc ?? false,
+                  is_active: ev.new.is_active ?? true
+                });
+                setSites(prev => {
+                  const filtered = (prev || []).filter(s => s.code !== enriched.code && s.id !== enriched.id);
+                  const next = [...filtered, enriched].sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+                  try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
+                  dbStorage.setItem('mdc_sites', next);
+                  return next;
+                });
+              } else if (ev.eventType === 'DELETE' && (ev.old?.id || ev.old?.code)) {
+                setSites(prev => {
+                  const next = (prev || []).filter(s => s.id !== ev.old.id && s.code !== ev.old.code);
+                  try { localStorage.setItem('mdc_sites', JSON.stringify(next)); } catch (e) {}
+                  dbStorage.setItem('mdc_sites', next);
+                  return next;
+                });
+              }
               return;
             }
 

@@ -80,6 +80,11 @@ export default function Login() {
       return;
     }
 
+    if (!emailInput.trim().toLowerCase().endsWith('@mobilecareph.com')) {
+      setErrorMessage('Access restricted: Only official @mobilecareph.com email accounts are authorized.');
+      return;
+    }
+
     // Check brute-force lockout status
     const rateCheck = loginRateLimiter.checkLimit(emailInput.trim().toLowerCase());
     if (!rateCheck.allowed) {
@@ -143,11 +148,15 @@ export default function Login() {
     try {
       const res = await signInWithPassword(emailInput, passwordInput, turnstileToken);
       if (!res.success) {
-        const failState = loginRateLimiter.recordFailure(emailInput.trim().toLowerCase());
-        if (failState.locked) {
-          setErrorMessage(`Too many failed attempts. Security lockout active for 60 seconds.`);
+        if (res.error?.includes('lockout active') || res.error?.includes('Too many failed')) {
+          setErrorMessage(res.error);
         } else {
-          setErrorMessage(`${res.error} (${failState.remainingAttempts} attempts remaining)`);
+          const failState = loginRateLimiter.recordFailure(emailInput.trim().toLowerCase());
+          if (failState.locked) {
+            setErrorMessage(`Too many failed attempts. Security lockout active for 60 seconds.`);
+          } else {
+            setErrorMessage(`${res.error} (${failState.remainingAttempts} attempts remaining)`);
+          }
         }
       } else {
         loginRateLimiter.recordSuccess(emailInput.trim().toLowerCase());
@@ -243,7 +252,7 @@ export default function Login() {
                   name="username"
                   type="email"
                   className="auth-input"
-                  placeholder="e.g. name@company.com"
+                  placeholder="e.g. name@mobilecareph.com"
                   value={emailInput}
                   onChange={(e) => {
                     setEmailInput(e.target.value);

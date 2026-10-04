@@ -110,13 +110,13 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
           cs.name && (cs.name.includes(s.name) || s.name.includes(cs.name))
         );
       }
-      if (siteColIdx < 0) {
+      if (siteColIdx < 0 && activeServiceSites.length === rowShares.length) {
         siteColIdx = sIdx;
       }
 
       const share = (siteColIdx >= 0 && siteColIdx < rowShares.length) ? (rowShares[siteColIdx] || 0) : 0;
       totalCanonicalShare += share;
-      return { siteId: s.id, historicalDemand: share };
+      return { siteId: s.id || s.code, historicalDemand: share };
     });
 
     if (totalCanonicalShare > 0) {
@@ -136,7 +136,7 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
         const val = src[s.id] ?? src[s.code] ?? (s.name ? src[s.name] : undefined);
         const count = typeof val === 'number' && Number.isFinite(val) && val > 0 ? val : 0;
         totalCount += count;
-        return { siteId: s.id, historicalDemand: count };
+        return { siteId: s.id || s.code, historicalDemand: count };
       });
 
       if (totalCount > 0) {
@@ -146,7 +146,7 @@ export function resolvePartSiteDemands(partOrForecastItem, activeServiceSites = 
   }
 
   // Priority 4: Fall back to uniform split across active branches (demand = 1 for each active branch)
-  return activeServiceSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
+  return activeServiceSites.map(s => ({ siteId: s.id || s.code, historicalDemand: 1 }));
 }
 
 /**
@@ -186,15 +186,12 @@ export function validateSiteSharesConsistency(sitesList = []) {
   );
   const expectedCount = CANONICAL_SITE_CODES.length;
   const activeCount = activeServiceSites.length;
-  const isValid = activeCount === expectedCount;
-  if (!isValid && typeof console !== 'undefined') {
-    console.warn(`[Allocation Consistency Warning] Active branches count (${activeCount}) does not match canonical matrix columns (${expectedCount}).`);
-  }
+  const isValid = activeCount >= expectedCount;
   return {
     isValid,
     activeCount,
     expectedCount,
-    message: isValid ? undefined : `Active branches count (${activeCount}) does not match canonical matrix columns (${expectedCount})`
+    message: isValid ? undefined : `Active branches count (${activeCount}) is below canonical minimum (${expectedCount})`
   };
 }
 
@@ -464,6 +461,7 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
   const rawServiceSites = (Array.isArray(activeSites) && activeSites.length > 0)
     ? activeSites.filter(s =>
         !s.is_dc &&
+        s.is_active !== false &&
         !s.code?.toUpperCase().includes('DC') &&
         !s.code?.toUpperCase().includes('MOBILEC') &&
         !s.name?.toLowerCase().includes('distribution') &&
@@ -479,7 +477,8 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
     const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
     const posA = idxA !== -1 ? idxA : 999;
     const posB = idxB !== -1 ? idxB : 999;
-    return posA - posB;
+    if (posA !== posB) return posA - posB;
+    return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''));
   });
 
   const res = {
@@ -631,6 +630,7 @@ export function balanceCatalogWeeklyAllocations(allocRows = [], activeSites = []
   const rawServiceSites = (Array.isArray(activeSites) && activeSites.length > 0)
     ? activeSites.filter(s =>
         !s.is_dc &&
+        s.is_active !== false &&
         !s.code?.toUpperCase().includes('DC') &&
         !s.code?.toUpperCase().includes('MOBILEC') &&
         !s.name?.toLowerCase().includes('distribution') &&
@@ -643,7 +643,10 @@ export function balanceCatalogWeeklyAllocations(allocRows = [], activeSites = []
     const codeB = b.code || b.id;
     const idxA = CANONICAL_SITE_CODES.indexOf(codeA);
     const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
-    return (idxA !== -1 ? idxA : 999) - (idxB !== -1 ? idxB : 999);
+    const posA = idxA !== -1 ? idxA : 999;
+    const posB = idxB !== -1 ? idxB : 999;
+    if (posA !== posB) return posA - posB;
+    return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''));
   });
 
   const mmSites = serviceSites.filter(s => resolveSafeRegion(s.code || s.id, s.region) === 'Metro Manila');

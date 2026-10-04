@@ -27,5 +27,7 @@ dist-ssr
 *.dump
 google-service-account*.json
 *credentials*.json
-lateral-journey*.json
+*credentials*.js
 src/config/googleDriveCredentials.js
+lateral-journey*.json
+*.pdf
