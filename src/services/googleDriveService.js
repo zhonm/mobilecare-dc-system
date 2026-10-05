@@ -10,12 +10,19 @@
 
 // Dynamic & safe resolution of local credentials module (prevents build failure when git-ignored)
 let EMBEDDED_KEY = null;
-if (typeof import.meta !== 'undefined' && typeof import.meta.glob === 'function') {
-  try {
-    const credsMods = import.meta.glob('../config/googleDriveCredentials.js', { eager: true });
-    EMBEDDED_KEY = credsMods['../config/googleDriveCredentials.js']?.GOOGLE_SERVICE_ACCOUNT_KEY || null;
-  } catch (_) {}
-} else if (typeof process !== 'undefined' && process?.versions?.node) {
+try {
+  // Vite static glob analysis (works in browser & Vite build)
+  const credsMods = import.meta.glob('../config/googleDriveCredentials.js', { eager: true });
+  for (const k in credsMods) {
+    if (credsMods[k]?.GOOGLE_SERVICE_ACCOUNT_KEY) {
+      EMBEDDED_KEY = credsMods[k].GOOGLE_SERVICE_ACCOUNT_KEY;
+      break;
+    }
+  }
+} catch (_) {}
+
+// Node.js runtime fallback (testing & CLI scripts)
+if (!EMBEDDED_KEY && typeof process !== 'undefined' && process?.versions?.node) {
   try {
     const fs = await import(/* @vite-ignore */ 'node:fs');
     const path = await import(/* @vite-ignore */ 'node:path');
@@ -27,13 +34,61 @@ if (typeof import.meta !== 'undefined' && typeof import.meta.glob === 'function'
   } catch (_) {}
 }
 
+/**
+ * Retrieves a credentials field from browser localStorage override
+ */
+export function getLocalStorageCredential(field) {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = window.localStorage.getItem('mdc_google_service_account_key');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (field in parsed) return parsed[field];
+        if (field === 'private_key' && parsed.private_key) return parsed.private_key;
+      }
+    } catch (_) {
+      const raw = window.localStorage.getItem('mdc_google_service_account_key');
+      if (field === 'private_key' && raw && raw.includes('BEGIN PRIVATE KEY')) {
+        return raw;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Allows Superadmin to persist service account credentials directly in browser storage
+ */
+export function setGoogleDriveCredentialsOverride(credentials) {
+  if (typeof window === 'undefined') return;
+  if (!credentials) {
+    localStorage.removeItem('mdc_google_service_account_key');
+  } else if (typeof credentials === 'string') {
+    localStorage.setItem('mdc_google_service_account_key', credentials);
+  } else {
+    localStorage.setItem('mdc_google_service_account_key', JSON.stringify(credentials));
+  }
+  cachedAccessToken = null;
+  cachedPrivateKeyObj = null;
+}
+
 // Credentials fallback chain:
 // 1. Deployment environment variables (VITE_GOOGLE_SERVICE_ACCOUNT_KEY / EMAIL)
-// 2. Embedded credentials module (src/config/googleDriveCredentials.js, git-ignored)
-// 3. Global / Node.js runtime globals (testing & CLI scripts)
-const GOOGLE_SERVICE_ACCOUNT_KEY = {
-  client_email: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || EMBEDDED_KEY?.client_email || 'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com',
-  private_key: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY || EMBEDDED_KEY?.private_key || ''
+// 2. Embedded credentials module (src/config/googleDriveCredentials.js)
+// 3. Browser localStorage override (set via Superadmin Settings)
+// 4. Global / Node.js runtime globals (testing & CLI scripts)
+export const GOOGLE_SERVICE_ACCOUNT_KEY = {
+  get client_email() {
+    return (
+      import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL ||
+      EMBEDDED_KEY?.client_email ||
+      getLocalStorageCredential('client_email') ||
+      'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com'
+    );
+  },
+  get private_key() {
+    return resolvePrivateKeyPem() || '';
+  }
 };
 
 // Shared Drive & Folder Configurations
@@ -48,7 +103,14 @@ export const GOOGLE_DRIVE_CONFIG = {
     forecasting: import.meta?.env?.VITE_GOOGLE_DRIVE_FORECASTING_FOLDER_ID || '1VI7qpWMPwH0oR8niHnpoijtVQWge-IVr',
     pmg_signed_pl: import.meta?.env?.VITE_GOOGLE_DRIVE_PMG_SIGNED_PL_FOLDER_ID || '1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW'
   },
-  clientEmail: import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL || GOOGLE_SERVICE_ACCOUNT_KEY?.client_email || 'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com'
+  get clientEmail() {
+    return (
+      import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL ||
+      EMBEDDED_KEY?.client_email ||
+      getLocalStorageCredential('client_email') ||
+      'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com'
+    );
+  }
 };
 
 let cachedAccessToken = null;
@@ -64,33 +126,34 @@ export function isGoogleDriveConfigured() {
 }
 
 /**
- * Helper to resolve the private key string from env or credentials
+ * Helper to resolve the private key string from env, module, localStorage, or globals
  */
-function resolvePrivateKeyPem() {
+export function resolvePrivateKeyPem() {
   // 1. Env variable override (if configured in Vercel or .env)
   const envKey = import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY;
   if (envKey && typeof envKey === 'string' && envKey.trim()) {
     return envKey.replace(/\\n/g, '\n');
   }
 
-  // 2. Resolved service account key (env or embedded)
-  if (GOOGLE_SERVICE_ACCOUNT_KEY?.private_key) {
-    return GOOGLE_SERVICE_ACCOUNT_KEY.private_key.replace(/\\n/g, '\n');
-  }
-
-  // 3. Embedded credentials config direct
+  // 2. Embedded credentials module (src/config/googleDriveCredentials.js)
   if (EMBEDDED_KEY?.private_key) {
     return EMBEDDED_KEY.private_key.replace(/\\n/g, '\n');
   }
 
-  // 4. Node.js fallback during testing or script runs
-  if (typeof process !== 'undefined' && process.env?.GOOGLE_PRIVATE_KEY) {
-    return process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+  // 3. LocalStorage override / configuration (Superadmin key setup)
+  const localKey = getLocalStorageCredential('private_key');
+  if (localKey && typeof localKey === 'string' && localKey.trim()) {
+    return localKey.replace(/\\n/g, '\n');
   }
 
-  // 5. Check if credentials JSON is in local memory / global
+  // 4. Global object fallback (Node.js runtime or window)
   if (typeof globalThis !== 'undefined' && globalThis.__GOOGLE_SERVICE_KEY__?.private_key) {
     return globalThis.__GOOGLE_SERVICE_KEY__.private_key.replace(/\\n/g, '\n');
+  }
+
+  // 5. Node.js process.env fallback
+  if (typeof process !== 'undefined' && process.env?.GOOGLE_PRIVATE_KEY) {
+    return process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
   }
 
   return null;
@@ -322,8 +385,192 @@ export async function getOrCreateDateFolder(parentFolderId, dateString = getLoca
  * @param {'shipments'|'reports'|'snapshots'|'backups'|'allocation'|'forecasting'} [params.folderType] - Named folder
  * @param {string} [params.folderId] - Explicit target folder ID (defaults to folderType or Shared Drive root)
  * @param {boolean} [params.useDateFolder=true] - Whether to organize files inside a date subfolder (e.g. "2026-10-01")
+/**
+ * Converts various data types (string, Blob, ArrayBuffer, Uint8Array, Object) to Uint8Array
+ */
+export async function normalizeToFileBytes(data) {
+  if (typeof data === 'string') {
+    return new TextEncoder().encode(data);
+  } else if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  } else if (data instanceof Uint8Array) {
+    return data;
+  } else if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    const buf = await data.arrayBuffer();
+    return new Uint8Array(buf);
+  } else {
+    return new TextEncoder().encode(JSON.stringify(data));
+  }
+}
+
+/**
+ * Resumable Chunked Upload to Google Drive (Feature C)
+ * Ideal for files > 5MB, poor connectivity, and large system backups.
+ * Chunks are transferred in 2MB blocks (multiples of 256KB) with automatic progress reporting.
+ * 
+ * @param {Object} params
+ * @param {string} params.name - Target file name
+ * @param {string} [params.mimeType] - File MIME type
+ * @param {Blob|ArrayBuffer|Uint8Array|string|Object} params.data - File data
+ * @param {'shipments'|'reports'|'snapshots'|'backups'|'allocation'|'forecasting'|'pmg_signed_pl'} [params.folderType]
+ * @param {string} [params.folderId] - Explicit folder ID
+ * @param {boolean} [params.useDateFolder=true] - Whether to organize into date subfolder
+ * @param {string} [params.dateString] - Date string for subfolder
+ * @param {number} [params.chunkSize] - Chunk size in bytes (must be multiple of 256KB, default 2MB)
+ * @param {Function} [params.onProgress] - Progress callback: ({ uploadedBytes, totalBytes, percent })
+ * @returns {Promise<{ success: boolean, fileId?: string, name?: string, webViewLink?: string, webContentLink?: string, parentFolderId?: string, isResumable?: boolean, error?: string }>}
+ */
+export async function uploadResumableToGoogleDrive({
+  name,
+  mimeType = 'application/octet-stream',
+  data,
+  folderType = 'shipments',
+  folderId,
+  useDateFolder = true,
+  dateString,
+  chunkSize = 2 * 1024 * 1024, // 2MB default (multiple of 256KB)
+  onProgress
+}) {
+  try {
+    const accessToken = await getGoogleDriveAccessToken();
+    const designatedFolder = folderId || GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
+
+    let targetFolder = designatedFolder;
+    let resolvedDateFolderName = null;
+
+    if (useDateFolder && designatedFolder) {
+      const todayDateStr = dateString || getLocalDateString();
+      resolvedDateFolderName = todayDateStr;
+      targetFolder = await getOrCreateDateFolder(designatedFolder, todayDateStr, accessToken);
+    }
+
+    const fileBytes = await normalizeToFileBytes(data);
+    const totalBytes = fileBytes.length;
+
+    // 1. Initiate Resumable Upload Session
+    const metadata = {
+      name,
+      parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId]
+    };
+
+    const initRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-Upload-Content-Type': mimeType,
+          'X-Upload-Content-Length': String(totalBytes)
+        },
+        body: JSON.stringify(metadata)
+      }
+    );
+
+    if (!initRes.ok) {
+      const errBody = await initRes.text();
+      throw new Error(`Failed to initiate resumable upload session: ${initRes.status} ${errBody}`);
+    }
+
+    const sessionUrl = initRes.headers.get('Location') || initRes.headers.get('location');
+    if (!sessionUrl) {
+      throw new Error('Google Drive API did not return a resumable session URI (Location header missing)');
+    }
+
+    // Ensure chunkSize is a positive multiple of 256KB (262,144 bytes)
+    const UNIT = 256 * 1024;
+    const cleanChunkSize = Math.max(UNIT, Math.floor(chunkSize / UNIT) * UNIT);
+
+    let offset = 0;
+    let uploadResult = null;
+
+    while (offset < totalBytes) {
+      const end = Math.min(offset + cleanChunkSize, totalBytes);
+      const chunkSlice = fileBytes.subarray(offset, end);
+      const isLastChunk = end === totalBytes;
+
+      let chunkSuccess = false;
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      while (!chunkSuccess && attempts < maxAttempts) {
+        attempts++;
+        try {
+          const chunkRes = await fetch(sessionUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Length': String(chunkSlice.length),
+              'Content-Range': `bytes ${offset}-${end - 1}/${totalBytes}`,
+              'Content-Type': mimeType
+            },
+            body: chunkSlice
+          });
+
+          if (isLastChunk && (chunkRes.status === 200 || chunkRes.status === 201)) {
+            uploadResult = await chunkRes.json();
+            chunkSuccess = true;
+            offset = end;
+            if (onProgress) {
+              onProgress({ uploadedBytes: totalBytes, totalBytes, percent: 100 });
+            }
+          } else if (!isLastChunk && chunkRes.status === 308) {
+            // Chunk accepted, resume incomplete
+            chunkSuccess = true;
+            offset = end;
+            if (onProgress) {
+              onProgress({
+                uploadedBytes: end,
+                totalBytes,
+                percent: Math.min(99, Math.round((end / totalBytes) * 100))
+              });
+            }
+          } else if (chunkRes.status >= 500 || chunkRes.status === 408) {
+            // Transient server error, retry with delay
+            await new Promise((r) => setTimeout(r, 1000 * attempts));
+          } else {
+            const errTxt = await chunkRes.text();
+            throw new Error(`Chunk upload failed with status ${chunkRes.status}: ${errTxt}`);
+          }
+        } catch (fetchErr) {
+          if (attempts >= maxAttempts) throw fetchErr;
+          await new Promise((r) => setTimeout(r, 1000 * attempts));
+        }
+      }
+    }
+
+    return {
+      success: true,
+      fileId: uploadResult?.id,
+      name: uploadResult?.name || name,
+      webViewLink: uploadResult?.webViewLink || `https://drive.google.com/file/d/${uploadResult?.id}/view`,
+      webContentLink: uploadResult?.webContentLink,
+      parentFolderId: targetFolder,
+      dateFolder: resolvedDateFolderName,
+      isResumable: true
+    };
+  } catch (err) {
+    console.error(`[Google Drive] Resumable upload failed for ${name}:`, err);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Uploads a file to Google Shared Drive inside a designated folder and date subfolder.
+ * Automatically delegates to resumable chunked upload if file size exceeds 5MB (Feature C).
+ * 
+ * @param {Object} params
+ * @param {string} params.name - File name (e.g. "PackingList_DC01.pdf")
+ * @param {string} params.mimeType - MIME type (e.g. "application/pdf", "application/json")
+ * @param {Blob|ArrayBuffer|string} params.data - File content
+ * @param {'shipments'|'reports'|'snapshots'|'backups'|'allocation'|'forecasting'|'pmg_signed_pl'} [params.folderType] - Named folder
+ * @param {string} [params.folderId] - Explicit target folder ID (defaults to folderType or Shared Drive root)
+ * @param {boolean} [params.useDateFolder=true] - Whether to organize files inside a date subfolder (e.g. "2026-10-01")
  * @param {string} [params.dateString] - Custom date string for subfolder (defaults to today YYYY-MM-DD)
- * @returns {Promise<{ success: boolean, fileId: string, name: string, webViewLink: string, webContentLink: string, parentFolderId?: string, dateFolder?: string }>}
+ * @param {Function} [params.onProgress] - Optional progress callback
+ * @returns {Promise<{ success: boolean, fileId: string, name: string, webViewLink: string, webContentLink: string, parentFolderId?: string, dateFolder?: string, isResumable?: boolean }>}
  */
 export async function uploadToGoogleDrive({
   name,
@@ -332,9 +579,27 @@ export async function uploadToGoogleDrive({
   folderType = 'shipments',
   folderId,
   useDateFolder = true,
-  dateString
+  dateString,
+  onProgress
 }) {
   try {
+    const fileBytes = await normalizeToFileBytes(data);
+
+    // Feature C: Auto-route files larger than 5MB to Resumable Chunked Upload protocol
+    const FIVE_MEGABYTES = 5 * 1024 * 1024;
+    if (fileBytes.length > FIVE_MEGABYTES) {
+      return await uploadResumableToGoogleDrive({
+        name,
+        mimeType,
+        data: fileBytes,
+        folderType,
+        folderId,
+        useDateFolder,
+        dateString,
+        onProgress
+      });
+    }
+
     const accessToken = await getGoogleDriveAccessToken();
     const designatedFolder = folderId || GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
 
@@ -355,20 +620,6 @@ export async function uploadToGoogleDrive({
     const boundary = '-------mdc_boundary_' + Math.random().toString(36).substring(2);
     const delimiter = `\r\n--${boundary}\r\n`;
     const closeDelim = `\r\n--${boundary}--`;
-
-    let fileBytes;
-    if (typeof data === 'string') {
-      fileBytes = new TextEncoder().encode(data);
-    } else if (data instanceof ArrayBuffer) {
-      fileBytes = new Uint8Array(data);
-    } else if (data instanceof Uint8Array) {
-      fileBytes = data;
-    } else if (typeof Blob !== 'undefined' && data instanceof Blob) {
-      const buf = await data.arrayBuffer();
-      fileBytes = new Uint8Array(buf);
-    } else {
-      fileBytes = new TextEncoder().encode(JSON.stringify(data));
-    }
 
     // Build multipart body with metadata and binary
     const metaPart = `${delimiter}Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`;
@@ -404,6 +655,10 @@ export async function uploadToGoogleDrive({
       throw new Error(result.error?.message || 'Google Drive upload failed');
     }
 
+    if (onProgress) {
+      onProgress({ uploadedBytes: fileBytes.length, totalBytes: fileBytes.length, percent: 100 });
+    }
+
     return {
       success: true,
       fileId: result.id,
@@ -411,7 +666,8 @@ export async function uploadToGoogleDrive({
       webViewLink: result.webViewLink,
       webContentLink: result.webContentLink,
       parentFolderId: targetFolder,
-      dateFolder: resolvedDateFolderName
+      dateFolder: resolvedDateFolderName,
+      isResumable: false
     };
   } catch (err) {
     console.error(`[Google Drive] Failed to upload ${name}:`, err);
@@ -439,6 +695,14 @@ export async function downloadFromGoogleDrive(fileId) {
   }
 
   return res;
+}
+
+/**
+ * Downloads and parses JSON file directly from Google Drive
+ */
+export async function downloadJsonFromGoogleDrive(fileId) {
+  const res = await downloadFromGoogleDrive(fileId);
+  return await res.json();
 }
 
 /**

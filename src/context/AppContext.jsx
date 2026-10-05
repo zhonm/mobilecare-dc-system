@@ -30,6 +30,7 @@ import { useAutoLogout } from '../hooks/useAutoLogout';
 import AutoLogoutWarningModal from '../components/AutoLogoutWarningModal';
 import { useInactivitySyncGuard } from '../hooks/useInactivitySyncGuard';
 import InactivityRefreshModal from '../components/InactivityRefreshModal';
+import { initOfflineDriveSyncListener } from '../services/driveOfflineQueueService';
 
 // Re-export constants and helpers for backward compatibility
 export {
@@ -476,6 +477,26 @@ export function AppProvider({ children }) {
   });
 
   const offlineQueue = [];
+
+  // Feature D: Background listener for offline Google Drive upload queue
+  useEffect(() => {
+    const cleanup = initOfflineDriveSyncListener(async (item, driveResult) => {
+      if (item.type === 'PMG_SIGNED_PL' && item.shipmentId && driveResult?.webViewLink) {
+        try {
+          if (typeof shipmentsDomain?.saveShipment === 'function') {
+            await shipmentsDomain.saveShipment({
+              id: item.shipmentId,
+              signed_pl_drive_link: driveResult.webViewLink,
+              signed_pl_file_id: driveResult.fileId,
+              signed_pl_filename: driveResult.filename,
+              signed_pl_site_folder: driveResult.siteFolder
+            });
+          }
+        } catch (_) {}
+      }
+    });
+    return cleanup;
+  }, [shipmentsDomain]);
 
   return (
     <AppContext.Provider

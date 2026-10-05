@@ -29,7 +29,8 @@ import {
   Archive,
   Eye,
   Cloud,
-  FolderCheck
+  FolderCheck,
+  ExternalLink
 } from 'lucide-react';
 import ConfirmReceiveModal from './ConfirmReceiveModal';
 import { autoArchivePackingListToDrive } from '../services/driveAutoSyncService';
@@ -3502,22 +3503,35 @@ export default function Shipments() {
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '6px',
-                              background: '#ffffff',
+                              background: '#ecfdf5',
                               border: '1px solid #86efac',
                               color: '#065f46',
-                              padding: '5px 12px',
+                              padding: '6px 14px',
                               borderRadius: '6px',
                               fontSize: '12px',
                               fontWeight: 700,
-                              textDecoration: 'none'
+                              textDecoration: 'none',
+                              cursor: 'pointer'
                             }}
+                            title="Open Signed Packing List in Google Drive"
                           >
                             <FolderCheck size={14} color="#059669" />
-                            <span>{sh.signed_pl_filename || 'View Signed PL Document'}</span>
+                            <span>{sh.signed_pl_filename || 'Open Signed PL in Google Drive'}</span>
+                            <ExternalLink size={12} color="#059669" />
                           </a>
-                          <span style={{ fontSize: '11.5px', color: '#047857' }}>
-                            Folder: <strong>DC- MSPI- PACKING LIST / {sh.signed_pl_site_folder || 'Site'}</strong>
-                          </span>
+                          {sh.signed_pl_site_folder && (
+                            <span
+                              style={{
+                                fontSize: '11.5px',
+                                color: '#047857',
+                                padding: '4px 8px',
+                                borderRadius: '4px',
+                                background: '#f0fdf4'
+                              }}
+                            >
+                              Folder: <strong>DC- MSPI- PACKING LIST / {sh.signed_pl_site_folder}</strong>
+                            </span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -4074,7 +4088,8 @@ export default function Shipments() {
                     title={`Open Signed PL in Google Drive (${viewPackageModalState.shipment?.signed_pl_site_folder || 'Site'} Folder)`}
                   >
                     <FolderCheck size={14} color="#059669" />
-                    <span>Signed PL (Drive)</span>
+                    <span>Open Signed PL in Drive</span>
+                    <ExternalLink size={13} color="#059669" />
                   </a>
                 )}
               </div>

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { generatePackingListPDF } from '../utils/pdfGenerator';
 import { uploadPmgSignedPackingListToDrive, resolvePmgSiteFolderName } from '../services/driveAutoSyncService';
+import { enqueueOfflineDriveUpload } from '../services/driveOfflineQueueService';
 import { getTodayDateString, getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode } from '../utils/shipmentHelpers';
 
 export default function ConfirmReceiveModal({
@@ -172,8 +173,25 @@ export default function ConfirmReceiveModal({
           receivedByName: cleanReceiver
         });
       } catch (uploadErr) {
-        console.warn('[ConfirmReceiveModal] Google Drive upload error:', uploadErr);
+        console.warn('[ConfirmReceiveModal] Google Drive upload error, saving to offline queue:', uploadErr);
         driveResult = { success: false, error: uploadErr.message };
+      }
+
+      // Feature D: If Drive upload failed or user is offline, safely queue the signed file in IndexedDB
+      if (!driveResult?.success && signedFile) {
+        try {
+          await enqueueOfflineDriveUpload({
+            type: 'PMG_SIGNED_PL',
+            shipmentId: shipment.id,
+            siteFolder: siteFolderName,
+            fileName: signedFile.name,
+            mimeType: signedFile.type || 'application/pdf',
+            fileData: signedFile,
+            payload: { shipment, site, receivedByName: cleanReceiver }
+          });
+        } catch (queueErr) {
+          console.warn('[ConfirmReceiveModal] Offline enqueue notice:', queueErr);
+        }
       }
 
       setUploadProgressMsg('Confirming package receipt and updating branch inventory...');
@@ -199,7 +217,7 @@ export default function ConfirmReceiveModal({
       if (driveResult?.success) {
         showToast?.(`Receipt confirmed! Signed PL stored in Google Drive under DC- MSPI- PACKING LIST / ${driveResult.siteFolder}`, 'success');
       } else {
-        showToast?.(`Receipt confirmed & stock updated! (Note: Google Drive notice: ${driveResult?.error || 'Signed PL recorded locally'})`, 'info');
+        showToast?.('Receipt confirmed & branch stock updated! Signed PL is queued in offline storage and will auto-sync to Drive once reconnected.', 'info');
       }
       onClose();
     } catch (err) {

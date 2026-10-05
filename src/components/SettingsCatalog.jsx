@@ -50,6 +50,7 @@ const PHILIPPINE_REGIONS = [
   'Quezon City', 'Rizal', 'South Luzon', 'Visayas', 'Zamboanga'
 ];
 import AutoLogoutSettings from './AutoLogoutSettings';
+import BackupRestoreSettings from './BackupRestoreSettings';
 
 const getCategoryBadgeStyle = (catName = '') => {
   const name = String(catName || '').toUpperCase();
@@ -99,6 +100,11 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
   const [activeTab, setActiveTab] = useState(defaultTab); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'egress' | 'sql' | 'feedback'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
+
+  const isSuperadmin =
+    currentUser?.role === 'superadmin' ||
+    (currentUser?.role || '').toLowerCase().includes('superadmin') ||
+    currentUser?.role === 'SUPERADMIN';
 
   useEffect(() => {
     if (defaultTab) {
@@ -580,6 +586,27 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
             <span>{realtimeConnected ? 'Live' : 'Standby'}</span>
           </span>
         </button>
+
+        {isSuperadmin && (
+          <button
+            type="button"
+            className={`settings-nav-item ${activeTab === 'backup' ? 'active' : ''}`}
+            onClick={() => setActiveTab('backup')}
+          >
+            <HardDrive size={17} />
+            <span>Backup &amp; Restore</span>
+            <span
+              className="settings-nav-pill-badge"
+              style={{
+                background: '#ecfdf5',
+                color: '#065f46',
+                border: '1px solid #a7f3d0'
+              }}
+            >
+              Drive
+            </span>
+          </button>
+        )}
 
         <div className="settings-nav-group-label">Support &amp; Help</div>
         <button
@@ -2481,6 +2508,11 @@ CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', '
       {/* 6. Feedback & Support Tab */}
       {activeTab === 'feedback' && (
         <Feedback />
+      )}
+
+      {/* 7. Superadmin Disaster Recovery & Backup/Restore Tab (Feature F) */}
+      {activeTab === 'backup' && (
+        <BackupRestoreSettings />
       )}
       </div>
     </div>

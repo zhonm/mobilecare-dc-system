@@ -259,3 +259,88 @@ export async function uploadPmgSignedPackingListToDrive({
     };
   }
 }
+
+/**
+ * Offload Heavy Monthly Snapshots to Google Drive (Feature B)
+ * Archives complete forecasting, allocation matrices, and masterlist states
+ * directly to the Google Drive "snapshots" folder, keeping Supabase free-tier database lean.
+ * 
+ * @param {Object} params
+ * @param {string} params.periodLabel - Month/Period name (e.g. "October 2026")
+ * @param {Object} params.dataset - Data payload (forecastItems, allocations, parts, sites, stats)
+ * @param {Object} [params.user] - Operator details
+ * @param {Function} [params.onProgress] - Optional upload progress callback
+ * @returns {Promise<{ success: boolean, fileId?: string, webViewLink?: string, filename?: string, error?: string }>}
+ */
+export async function archiveMonthlySnapshotToDrive({
+  periodLabel = 'Current Period',
+  dataset = {},
+  user = null,
+  onProgress
+}) {
+  try {
+    const timestampStr = getFormattedSaveTimestamp();
+    const cleanPeriod = String(periodLabel).replace(/[\s/\\:]+/g, '_');
+    const filename = `MDC_SNAPSHOT_${cleanPeriod}_${timestampStr}.json`;
+
+    const snapshotPayload = {
+      system: 'MDC DC Logistics System',
+      type: 'MONTHLY_DATASET_SNAPSHOT',
+      periodLabel,
+      createdAt: new Date().toISOString(),
+      archivedBy: user?.fullName || user?.email || 'MDC Specialist',
+      summary: {
+        forecastItemsCount: (dataset.forecastItems || []).length,
+        allocationsCount: (dataset.allocations || []).length,
+        partsCount: (dataset.parts || []).length,
+        sitesCount: (dataset.sites || []).length,
+        totalForecastUnits: (dataset.forecastItems || []).reduce((sum, item) => sum + (Number(item.forecast_qty || item.quantity) || 0), 0)
+      },
+      data: {
+        forecastItems: dataset.forecastItems || [],
+        allocations: dataset.allocations || [],
+        parts: dataset.parts || [],
+        sites: dataset.sites || []
+      }
+    };
+
+    const result = await uploadToGoogleDrive({
+      name: filename,
+      mimeType: 'application/json',
+      data: JSON.stringify(snapshotPayload, null, 2),
+      folderType: 'snapshots',
+      useDateFolder: false,
+      onProgress
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to archive snapshot to Google Drive');
+    }
+
+    return {
+      success: true,
+      fileId: result.fileId,
+      webViewLink: result.webViewLink,
+      filename,
+      summary: snapshotPayload.summary
+    };
+  } catch (err) {
+    console.error('[Google Drive] archiveMonthlySnapshotToDrive error:', err);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Downloads and parses an archived snapshot from Google Drive
+ * 
+ * @param {string} fileId - The Google Drive file ID
+ * @returns {Promise<Object>} The parsed snapshot object
+ */
+export async function loadSnapshotFromDrive(fileId) {
+  const { downloadJsonFromGoogleDrive } = await import('./googleDriveService.js');
+  return await downloadJsonFromGoogleDrive(fileId);
+}
+
