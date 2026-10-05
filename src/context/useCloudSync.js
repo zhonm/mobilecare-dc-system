@@ -1491,9 +1491,12 @@ export function useCloudSync({
           if (!s) return true;
           const sId = String(s.id || '').trim().toUpperCase();
           const cleanRef = String(s.invoice_ref || s.invoiceRef || '').replace(/[^A-Z0-9]/g, '');
+          const transferSlip = String(s.transfer_slip_number || s.transfer_slip || '').trim();
 
           // Explicitly block accidental test phantom shipments
           if (cleanRef === 'DCOWNED082726A' || cleanRef === 'DCOWNED082726B') return true;
+          // Permanent tombstone for the duplicate Cebu manifest removed from the database.
+          if (cleanRef === 'DCOWNED091226G' || transferSlip === '20227498') return true;
 
           return deletedShipmentIds.some(d => {
             if (!d) return false;
@@ -1675,25 +1678,46 @@ export function useCloudSync({
           });
         }
 
-        // 4. Overlay local storage shipments if present
-        try {
-          const localShipments = JSON.parse(localStorage.getItem('mdc_shipments') || '[]');
-          if (Array.isArray(localShipments)) {
-            localShipments.forEach(s => {
-              const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
-              if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
-                const existing = shipmentMap.get(canonicalRef);
-                if (!existing) {
-                  const healedItems = Array.isArray(s.items) ? s.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)) : [];
-                  shipmentMap.set(canonicalRef, {
-                    ...s,
-                    items: healedItems
-                  });
+        // When Supabase is configured, public.shipments and its joined items are
+        // authoritative. Do not reintroduce deleted/stale operational records
+        // from browser storage after a successful cloud sync.
+        if (!supabase) {
+          try {
+            const localShipments = JSON.parse(localStorage.getItem('mdc_shipments') || '[]');
+            if (Array.isArray(localShipments)) {
+              localShipments.forEach(s => {
+                const canonicalRef = String(s.invoice_ref || s.shipment_number || s.id || '').trim().toUpperCase();
+                if (canonicalRef && !isDeletedOrCorruptedShipment(s)) {
+                  const existing = shipmentMap.get(canonicalRef);
+                  if (!existing) {
+                    const healedItems = Array.isArray(s.items) ? s.items.map(it => healShipmentItem(it, serialDict, partsMapByPn)) : [];
+                    shipmentMap.set(canonicalRef, {
+                      ...s,
+                      items: healedItems
+                    });
+                  }
                 }
-              }
-            });
-          }
-        } catch (e) {}
+              });
+            }
+          } catch (e) {}
+        }
+
+        // The normalized shipments table is authoritative for lifecycle status.
+        // Saved-record snapshots and browser caches can legitimately lag after a
+        // status transition, so do not let them hide an active shipment.
+        if (Array.isArray(dbShipments) && dbShipments.length > 0) {
+          dbShipments.forEach(dbS => {
+            const canonicalRef = String(dbS.invoice_ref || dbS.shipment_number || dbS.id || '').trim().toUpperCase();
+            const existing = shipmentMap.get(canonicalRef);
+            if (existing && dbS.status) {
+              shipmentMap.set(canonicalRef, {
+                ...existing,
+                status: dbS.status,
+                updated_at: dbS.updated_at || existing.updated_at
+              });
+            }
+          });
+        }
 
         const mappedShipments = Array.from(shipmentMap.values())
           .filter(s => s && Array.isArray(s.items) && s.items.length > 0 && !isDeletedOrCorruptedShipment(s))
@@ -1764,10 +1788,12 @@ export function useCloudSync({
 
       // 5.5. Process Master Purchase Orders Registry
       let activeCloudOrLocalPOs = [];
-      try {
-        const localSavedPos = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
-        if (Array.isArray(localSavedPos)) activeCloudOrLocalPOs = [...localSavedPos];
-      } catch (e) {}
+      if (!supabase) {
+        try {
+          const localSavedPos = JSON.parse(localStorage.getItem('mdc_pos') || '[]');
+          if (Array.isArray(localSavedPos)) activeCloudOrLocalPOs = [...localSavedPos];
+        } catch (e) {}
+      }
 
       if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && setPurchaseOrders) {
         const cloudPoRegistryDoc = dbSavedRecords.find(r => r.id === 'master_purchase_orders_registry');
@@ -1782,11 +1808,13 @@ export function useCloudSync({
           cloudOrders.forEach(po => {
             if (po && (po.id || po.po_number)) orderMap.set(po.id || po.po_number, po);
           });
-          localOrders.forEach(po => {
-            if (po && (po.id || po.po_number) && !orderMap.has(po.id || po.po_number)) {
-              orderMap.set(po.id || po.po_number, po);
-            }
-          });
+          if (!supabase) {
+            localOrders.forEach(po => {
+              if (po && (po.id || po.po_number) && !orderMap.has(po.id || po.po_number)) {
+                orderMap.set(po.id || po.po_number, po);
+              }
+            });
+          }
 
           const mergedOrders = consolidatePurchaseOrdersList(Array.from(orderMap.values()));
           activeCloudOrLocalPOs = mergedOrders;

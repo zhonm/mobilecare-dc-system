@@ -34,6 +34,7 @@ END $$;
 DO $$ BEGIN
     ALTER TYPE shipment_status ADD VALUE IF NOT EXISTS 'ready_for_dispatch';
     ALTER TYPE shipment_status ADD VALUE IF NOT EXISTS 'pending_pickup';
+    ALTER TYPE shipment_status ADD VALUE IF NOT EXISTS 'in_transit';
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;

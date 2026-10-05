@@ -116,6 +116,25 @@ export const GOOGLE_DRIVE_CONFIG = {
 let cachedAccessToken = null;
 let tokenExpiresAt = 0;
 let cachedPrivateKeyObj = null;
+const DRIVE_REQUEST_TIMEOUT_MS = 30_000;
+
+async function fetchDrive(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DRIVE_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: options.signal || controller.signal });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(
+        `Google Drive request timed out after ${DRIVE_REQUEST_TIMEOUT_MS / 1000} seconds`,
+        { cause: err }
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 /**
  * Returns whether Google Drive integration is available
@@ -259,7 +278,7 @@ export async function getGoogleDriveAccessToken(forceRefresh = false) {
   const signature = arrayBufferToBase64Url(signatureBuffer);
   const jwt = `${unsignedToken}.${signature}`;
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetchDrive('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -319,7 +338,7 @@ export async function getOrCreateFolder(parentFolderId, folderName, customAccess
     const query = `mimeType = 'application/vnd.google-apps.folder' and name = '${cleanName.replace(/'/g, "\\'")}' and '${parentFolderId}' in parents and trashed = false`;
     const searchUrl = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(query)}&fields=files(id,name)`;
 
-    const searchRes = await fetch(searchUrl, {
+    const searchRes = await fetchDrive(searchUrl, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
@@ -331,7 +350,7 @@ export async function getOrCreateFolder(parentFolderId, folderName, customAccess
     }
 
     // 2. Folder does not exist, create it inside parentFolderId
-    const createRes = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name', {
+    const createRes = await fetchDrive('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -453,7 +472,7 @@ export async function uploadResumableToGoogleDrive({
       parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId]
     };
 
-    const initRes = await fetch(
+    const initRes = await fetchDrive(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true',
       {
         method: 'POST',
@@ -496,7 +515,7 @@ export async function uploadResumableToGoogleDrive({
       while (!chunkSuccess && attempts < maxAttempts) {
         attempts++;
         try {
-          const chunkRes = await fetch(sessionUrl, {
+          const chunkRes = await fetchDrive(sessionUrl, {
             method: 'PUT',
             headers: {
               'Content-Length': String(chunkSlice.length),
@@ -638,7 +657,7 @@ export async function uploadToGoogleDrive({
     combined.set(fileBytes, offset); offset += fileBytes.length;
     combined.set(closeBytes, offset);
 
-    const uploadRes = await fetch(
+    const uploadRes = await fetchDrive(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink,webContentLink',
       {
         method: 'POST',

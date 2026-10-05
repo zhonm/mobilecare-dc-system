@@ -471,7 +471,7 @@ export default function Shipments() {
       } else if (norm === 'pending_pickup') {
         pendingManifests++;
         pendingUnits += units;
-      } else if (norm === 'shipped') {
+      } else if (norm === 'shipped' || norm === 'in_transit') {
         shippedManifests++;
         shippedUnits += units;
       } else if (norm === 'received_confirmed') {
@@ -512,7 +512,7 @@ export default function Shipments() {
       const norm = getNormalizedStatus(s);
       if (filterStatus !== 'ALL') {
         if (filterStatus === 'pending_pickup' && norm !== 'pending_pickup') return false;
-        if (filterStatus === 'shipped' && norm !== 'shipped') return false;
+        if (filterStatus === 'shipped' && norm !== 'shipped' && norm !== 'in_transit') return false;
         if (filterStatus === 'received_confirmed' && norm !== 'received_confirmed') return false;
         if (filterStatus === 'draft' && norm !== 'draft') return false;
         if (filterStatus === 'today' && !isShipmentToday(s)) return false;

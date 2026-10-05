@@ -44,10 +44,12 @@ export function useShipments({
               const sId = String(s.id || '').trim().toUpperCase();
               const sRef = String(s.invoice_ref || s.invoiceRef || '').trim().toUpperCase();
               const sNorm = sRef.replace(/[^A-Z0-9]/g, '');
+              const transferSlip = String(s.transfer_slip_number || s.transfer_slip || '').trim();
 
               // Explicitly filter out accidental test shipments
               if (sNorm === 'DCOWNED082726A' || sNorm === 'DCOWNED082726B') return false;
               if (sRef.includes('082726A') || sRef.includes('082726B')) return false;
+              if (sNorm === 'DCOWNED091226G' || transferSlip === '20227498') return false;
 
               if (deletedTokensSet.has(sId)) {
                 return false;

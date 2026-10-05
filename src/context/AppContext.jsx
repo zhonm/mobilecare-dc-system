@@ -484,7 +484,11 @@ export function AppProvider({ children }) {
       if (item.type === 'PMG_SIGNED_PL' && item.shipmentId && driveResult?.webViewLink) {
         try {
           if (typeof shipmentsDomain?.saveShipment === 'function') {
+            const existingShipment = (shipmentsDomain.shipments || []).find(
+              shipment => shipment.id === item.shipmentId
+            );
             await shipmentsDomain.saveShipment({
+              ...(existingShipment || item.payload?.shipment || {}),
               id: item.shipmentId,
               signed_pl_drive_link: driveResult.webViewLink,
               signed_pl_file_id: driveResult.fileId,
