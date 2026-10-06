@@ -367,8 +367,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
       doc.setLineWidth(0.35);
       doc.line(margin, sigLineY, pageWidth - margin, sigLineY);
 
-      const sigRow1Y = sigLineY + 6;
-      const sigRow2Y = sigRow1Y + 5.5;
+      // Keep enough breathing room above the sign-off fields for handwritten signatures.
+      const sigRow1Y = sigLineY + 8;
+      const sigRow2Y = sigRow1Y + 6.5;
       doc.setFontSize(7.5);
 
       // Right column aligned with the right section / Totals Box (totalBoxX = 124)

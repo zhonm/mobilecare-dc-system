@@ -2922,8 +2922,8 @@
 }
 
 .packing-signatures {
-  margin-top: 18px;
-  padding-top: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
   border-top: 1px solid #cbd5e1;
   display: grid;
   grid-template-columns: 1fr 270px;

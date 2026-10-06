@@ -3976,43 +3976,6 @@ export default function Shipments() {
                   type="button"
                   className="btn btn-secondary"
                   onClick={() => {
-                    if (isSuperadmin) {
-                      setPdfSelectModalState({
-                        shipment: viewPackageModalState.shipment,
-                        items: viewPackageModalState.shipment?.items || [],
-                        site: viewPackageModalState.site
-                      });
-                    } else {
-                      handleRequestPrintOrPDF(
-                        viewPackageModalState.shipment,
-                        viewPackageModalState.shipment?.items || [],
-                        viewPackageModalState.site,
-                        'pdf',
-                        { includeDeclarationForm: false }
-                      );
-                    }
-                  }}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    padding: '7px 14px',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
-                  }}
-                  title={isSuperadmin ? "Select document download: PL Only or PL + Declaration Form" : "Download Packing List PDF (PL Only)"}
-                >
-                  <Download size={14} />
-                  <span>{isSuperadmin ? 'PDF Options' : 'Packing List PDF'}</span>
-                  {isSuperadmin && <ChevronDown size={12} style={{ opacity: 0.75 }} />}
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => {
                     handleDownloadXLSX(
                       viewPackageModalState.shipment,
                       viewPackageModalState.shipment?.items || [],
