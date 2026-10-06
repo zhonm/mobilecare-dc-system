@@ -88,7 +88,7 @@ export default function CreatePassword() {
     <div className="auth-page">
       <div className="auth-ambient-glow" />
 
-      <div className="auth-card" style={{ maxWidth: '490px' }}>
+      <div className="auth-card" style={{ maxWidth: '530px' }}>
         {/* Header */}
         <div className="auth-header">
           <div className="auth-logo-badge">
@@ -114,20 +114,42 @@ export default function CreatePassword() {
 
         {/* User Identity Chip */}
         <div className="auth-user-chip" style={{ marginBottom: '22px' }}>
-          <div className="auth-user-info">
-            <div className="auth-user-avatar">
+          <div className="auth-user-info" style={{ minWidth: 0, flex: 1 }}>
+            <div className="auth-user-avatar" style={{ flexShrink: 0 }}>
               {getUserInitials(pendingFirstTimeUser?.fullName)}
             </div>
-            <div style={{ textAlign: 'left', minWidth: 0 }}>
-              <div style={{ fontWeight: 600, color: '#f8fafc', fontSize: '13px', lineHeight: 1.2 }}>
+            <div style={{ textAlign: 'left', minWidth: 0, flex: 1, overflow: 'hidden' }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  color: '#f8fafc',
+                  fontSize: '13.5px',
+                  lineHeight: 1.25,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+                title={pendingFirstTimeUser?.fullName || 'Authorized Staff'}
+              >
                 {pendingFirstTimeUser?.fullName || 'Authorized Staff'}
               </div>
-              <div style={{ color: '#94a3b8', fontSize: '11.5px', lineHeight: 1.2, marginTop: '2px' }}>
+              <div
+                style={{
+                  color: '#94a3b8',
+                  fontSize: '12px',
+                  lineHeight: 1.25,
+                  marginTop: '2px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+                title={pendingFirstTimeUser?.email}
+              >
                 {pendingFirstTimeUser?.email}
               </div>
             </div>
           </div>
-          <div className="auth-user-chip-badge">
+          <div className="auth-user-chip-badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>
             <UserCheck size={12} />
             <span>First Setup</span>
           </div>

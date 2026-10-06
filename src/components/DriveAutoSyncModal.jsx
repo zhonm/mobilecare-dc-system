@@ -261,7 +261,7 @@ export default function DriveAutoSyncModal({
                 lineHeight: 1.4
               }}
             >
-              🎉 Both workbooks are permanently archived with date and time in your company <strong>MDC DC Logistics Archive</strong> Google Shared Drive!
+              🎉 Both workbooks are permanently archived with date and time in your company <strong>MDC DC System Archive</strong> Google Shared Drive!
             </div>
           )}
         </div>

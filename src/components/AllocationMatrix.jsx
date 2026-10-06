@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
-import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
+import { exportAllocationToPDF } from '../utils/pdfGenerator';
 import { calculateWeeklySplit, calculateWeeklySiteAllocations, generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { CANONICAL_SITE_CODES } from '../constants/config';
@@ -10,7 +10,6 @@ import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
   Split,
   Download,
-  Printer,
   FileText,
   UploadCloud,
   Layers,
@@ -466,18 +465,6 @@ export default function AllocationMatrix() {
     showToast(`Exported Allocation Matrix${filterNote} (${currentPeriodLabel}) to PDF`, 'success');
   };
 
-  const handlePrint = (scope) => {
-    const dataToExport = (scope === 'all')
-      ? (effectiveAllocations && effectiveAllocations.length > 0 ? effectiveAllocations : filteredAllocations)
-      : (filteredAllocations && filteredAllocations.length > 0 ? filteredAllocations : effectiveAllocations);
-    if (!dataToExport || dataToExport.length === 0) {
-      showToast('No allocations available to print', 'warning');
-      return;
-    }
-    const currentPeriodLabel = activePeriod?.label || 'September 2026';
-    printAllocationMatrixDirect(dataToExport, orderedServiceSites, currentPeriodLabel);
-  };
-
   // Render a Single Part Row (Unified across Master and Weekly Views)
   const renderItemRow = (item, commodityLabel, index, excelRowNumber = 3) => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
@@ -804,18 +791,6 @@ export default function AllocationMatrix() {
               >
                 <FileText size={14} />
                 <span>PDF</span>
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handlePrint()}
-                disabled={filteredAllocations.length === 0 && effectiveAllocations.length === 0}
-                title={isMatrixFiltered ? `Print filtered Allocation Matrix (${filteredAllocations.length} parts)` : 'Print formatted Allocation Matrix directly'}
-                style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}
-              >
-                <Printer size={14} />
-                <span>Print</span>
               </button>
             </div>
 

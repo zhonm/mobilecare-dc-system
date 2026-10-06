@@ -2,7 +2,7 @@
  * Google Drive Storage Integration Service for MDC DC System
  * 
  * Provides automated file archiving, document backups, and cold-storage offloading
- * using the company's Google Workspace Shared Drive ("MDC DC Logistics Archive").
+ * using the company's Google Workspace Shared Drive ("MDC DC System Archive").
  * 
  * Utilizes standard RS256 JWT assertion with Web Crypto (crypto.subtle),
  * completely dependency-free and compatible across both Browser and Node.js.

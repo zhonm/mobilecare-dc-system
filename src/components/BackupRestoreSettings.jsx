@@ -446,7 +446,7 @@ export default function BackupRestoreSettings() {
               }}
             >
               <div style={{ color: '#a7f3d0', fontSize: '11px' }}>Drive Cold Storage Target</div>
-              <div style={{ fontWeight: 700, color: '#ffffff' }}>MDC DC Logistics Archive / backups</div>
+              <div style={{ fontWeight: 700, color: '#ffffff' }}>MDC DC System Archive / backups</div>
             </div>
           </div>
         </div>
@@ -739,7 +739,7 @@ export default function BackupRestoreSettings() {
               Google Drive Remote Backup Archives
             </h3>
             <p style={{ margin: '2px 0 0 0', fontSize: '12.5px', color: '#64748b' }}>
-              Backups stored in Shared Drive "MDC DC Logistics Archive" / <code>backups</code>
+              Backups stored in Shared Drive "MDC DC System Archive" / <code>backups</code>
             </p>
           </div>
 
@@ -1124,7 +1124,7 @@ export default function BackupRestoreSettings() {
                     Google Drive Service Account Configuration
                   </h3>
                   <div style={{ fontSize: '11.5px', color: '#a7f3d0' }}>
-                    Shared Drive: MDC DC Logistics Archive (0AEWZPge3zfLtUk9PVA)
+                    Shared Drive: MDC DC System Archive (0AEWZPge3zfLtUk9PVA)
                   </div>
                 </div>
               </div>

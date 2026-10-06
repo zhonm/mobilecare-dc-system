@@ -6,7 +6,7 @@
  * 2. Forecasting & Master Allocation XLSX workbooks upon Masterlist Ingestion.
  */
 
-import { uploadToGoogleDrive, getOrCreateFolder, GOOGLE_DRIVE_CONFIG } from './googleDriveService.js';
+import { uploadToGoogleDrive, getOrCreateFolder, GOOGLE_DRIVE_CONFIG, listFilesInDriveFolder, isGoogleDriveConfigured } from './googleDriveService.js';
 import { generatePackingListPDF } from '../utils/pdfGenerator.js';
 import { exportForecastToExcel, exportAllocationToExcel } from '../utils/excelParser.js';
 
@@ -63,7 +63,55 @@ export async function autoArchivePackingListToDrive(shipment, items = [], site =
 }
 
 /**
- * Automatically archives both Forecasting and Master Allocation XLSX workbooks to Google Drive upon dataset import
+ * Persists a client-side backup receipt in localStorage for instantaneous status recovery
+ */
+export function saveLocalDriveBackupReceipt(periodLabel, { forecastResult, allocationResult }) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const cleanPeriod = String(periodLabel || '').trim();
+    const key = `mdc_drive_dataset_backup_${cleanPeriod.replace(/[\s/\\:]+/g, '_')}`;
+    const payload = {
+      periodLabel: cleanPeriod,
+      timestamp: new Date().toISOString(),
+      forecasting: forecastResult?.success ? {
+        uploaded: true,
+        fileName: forecastResult.name,
+        fileId: forecastResult.fileId,
+        webViewLink: forecastResult.webViewLink || (forecastResult.fileId ? `https://drive.google.com/file/d/${forecastResult.fileId}/view` : null),
+        updatedTime: new Date().toISOString()
+      } : { uploaded: false },
+      allocation: allocationResult?.success ? {
+        uploaded: true,
+        fileName: allocationResult.name,
+        fileId: allocationResult.fileId,
+        webViewLink: allocationResult.webViewLink || (allocationResult.fileId ? `https://drive.google.com/file/d/${allocationResult.fileId}/view` : null),
+        updatedTime: new Date().toISOString()
+      } : { uploaded: false }
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
+    return payload;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Retrieves the cached local backup receipt for a given period
+ */
+export function getLocalDriveBackupReceipt(periodLabel) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const cleanPeriod = String(periodLabel || '').trim();
+    const key = `mdc_drive_dataset_backup_${cleanPeriod.replace(/[\s/\\:]+/g, '_')}`;
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Automatically archives both Forecasting and Master Allocation XLSX workbooks to Google Drive
  * 
  * @param {Object} params
  * @param {Array} params.forecastItems - Computed forecasting items
@@ -82,42 +130,182 @@ export async function autoArchiveDatasetToDrive({
 }) {
   try {
     const timestampStr = getFormattedSaveTimestamp();
-    const cleanPeriod = periodLabel.replace(/[\s/\\:]+/g, '_');
+    const cleanPeriod = String(periodLabel || 'Current_Period').replace(/[\s/\\:]+/g, '_');
 
-    // 1. Generate & Upload Forecasting XLSX
-    if (onProgress) onProgress({ stage: 'forecasting', message: 'Generating & uploading Demand Forecasting (.xlsx) to Drive...' });
-    const forecastFileName = `Demand_Forecast_${cleanPeriod}_${timestampStr}.xlsx`;
-    const { buffer: forecastBuffer } = await exportForecastToExcel(forecastItems, periodLabel, { saveFile: false });
-    
-    const forecastResult = await uploadToGoogleDrive({
-      name: forecastFileName,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      data: forecastBuffer,
-      folderType: 'forecasting'
-    });
+    let forecastResult = null;
+    let allocationResult = null;
 
-    // 2. Generate & Upload Master Allocation XLSX
-    if (onProgress) onProgress({ stage: 'allocation', message: 'Generating & uploading Master Allocation (.xlsx) to Drive...' });
-    const allocFileName = `Master_Allocation_${cleanPeriod}_${timestampStr}.xlsx`;
-    const { buffer: allocBuffer } = await exportAllocationToExcel(allocations, sites, periodLabel, { saveFile: false });
+    // 1. Generate & Upload Forecasting XLSX (if items exist)
+    if (forecastItems && forecastItems.length > 0) {
+      if (onProgress) onProgress({ stage: 'forecasting', message: 'Generating & uploading Demand Forecasting (.xlsx) to Drive...' });
+      const forecastFileName = `Demand_Forecast_${cleanPeriod}_${timestampStr}.xlsx`;
+      const { buffer: forecastBuffer } = await exportForecastToExcel(forecastItems, periodLabel, { saveFile: false });
+      
+      forecastResult = await uploadToGoogleDrive({
+        name: forecastFileName,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        data: forecastBuffer,
+        folderType: 'forecasting'
+      });
+    } else {
+      forecastResult = { success: true, skipped: true, name: 'No forecast items' };
+    }
 
-    const allocationResult = await uploadToGoogleDrive({
-      name: allocFileName,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      data: allocBuffer,
-      folderType: 'allocation'
-    });
+    // 2. Generate & Upload Master Allocation XLSX (if items exist)
+    if (allocations && allocations.length > 0) {
+      if (onProgress) onProgress({ stage: 'allocation', message: 'Generating & uploading Master Allocation (.xlsx) to Drive...' });
+      const allocFileName = `Master_Allocation_${cleanPeriod}_${timestampStr}.xlsx`;
+      const { buffer: allocBuffer } = await exportAllocationToExcel(allocations, sites, periodLabel, { saveFile: false });
+
+      allocationResult = await uploadToGoogleDrive({
+        name: allocFileName,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        data: allocBuffer,
+        folderType: 'allocation'
+      });
+    } else {
+      allocationResult = { success: true, skipped: true, name: 'No allocation items' };
+    }
 
     if (onProgress) onProgress({ stage: 'completed', message: 'Successfully archived to Google Drive!' });
 
+    // Persist local receipt
+    saveLocalDriveBackupReceipt(periodLabel, { forecastResult, allocationResult });
+
     return {
-      success: forecastResult.success && allocationResult.success,
+      success: Boolean(forecastResult?.success && allocationResult?.success),
       forecastResult,
       allocationResult
     };
   } catch (err) {
     console.error('[Google Drive] Auto-archive dataset error:', err);
     return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Checks whether Forecasting and Allocation data for a specified month has been uploaded to Google Drive
+ * 
+ * @param {string} periodLabel - Month label (e.g. "October 2026")
+ * @returns {Promise<{
+ *   isConfigured: boolean,
+ *   checked: boolean,
+ *   periodLabel: string,
+ *   forecasting: { uploaded: boolean, file?: Object, fileName?: string, webViewLink?: string, updatedTime?: string },
+ *   allocation: { uploaded: boolean, file?: Object, fileName?: string, webViewLink?: string, updatedTime?: string },
+ *   allUploaded: boolean,
+ *   error?: string
+ * }>}
+ */
+export async function checkDriveDatasetStatusForPeriod(periodLabel = 'October 2026') {
+  const cleanPeriod = String(periodLabel || 'Current Period').trim();
+  const normalizedPeriod = cleanPeriod.replace(/[\s/\\:]+/g, '_');
+  const isConfigured = isGoogleDriveConfigured();
+
+  // Extract month and year components (e.g. "October" and "2026")
+  const parts = cleanPeriod.split(/[\s_/-]+/);
+  const monthWord = parts.find(p => /^[a-zA-Z]+$/.test(p))?.toLowerCase() || '';
+  const yearDigits = parts.find(p => /^\d{4}$/.test(p)) || '';
+
+  // Local cached receipt fallback
+  const localReceipt = getLocalDriveBackupReceipt(cleanPeriod);
+
+  if (!isConfigured) {
+    const hasForecast = Boolean(localReceipt?.forecasting?.uploaded);
+    const hasAlloc = Boolean(localReceipt?.allocation?.uploaded);
+    return {
+      isConfigured: false,
+      checked: true,
+      period: cleanPeriod,
+      periodLabel: cleanPeriod,
+      forecasting: localReceipt?.forecasting ? { ...localReceipt.forecasting, latestFile: { name: localReceipt.forecasting.fileName, webViewLink: localReceipt.forecasting.webViewLink } } : { uploaded: false },
+      allocation: localReceipt?.allocation ? { ...localReceipt.allocation, latestFile: { name: localReceipt.allocation.fileName, webViewLink: localReceipt.allocation.webViewLink } } : { uploaded: false },
+      allUploaded: Boolean(hasForecast && hasAlloc),
+      anyUploaded: Boolean(hasForecast || hasAlloc)
+    };
+  }
+
+  try {
+    const [forecastFiles, allocFiles] = await Promise.all([
+      listFilesInDriveFolder('forecasting', 40),
+      listFilesInDriveFolder('allocation', 40)
+    ]);
+
+    const isMatch = (file) => {
+      if (!file || !file.name) return false;
+      const lower = file.name.toLowerCase();
+      if (lower.includes(normalizedPeriod.toLowerCase()) || lower.includes(cleanPeriod.toLowerCase())) {
+        return true;
+      }
+      if (monthWord && yearDigits && lower.includes(monthWord) && lower.includes(yearDigits)) {
+        return true;
+      }
+      return false;
+    };
+
+    const matchingForecast = (forecastFiles || []).find(isMatch);
+    const matchingAlloc = (allocFiles || []).find(isMatch);
+
+    const forecastStatus = matchingForecast ? {
+      uploaded: true,
+      file: matchingForecast,
+      fileName: matchingForecast.name,
+      fileId: matchingForecast.id,
+      webViewLink: matchingForecast.webViewLink || `https://drive.google.com/file/d/${matchingForecast.id}/view`,
+      updatedTime: matchingForecast.createdTime || matchingForecast.modifiedTime || new Date().toISOString()
+    } : (localReceipt?.forecasting?.uploaded ? localReceipt.forecasting : { uploaded: false });
+
+    const allocStatus = matchingAlloc ? {
+      uploaded: true,
+      file: matchingAlloc,
+      fileName: matchingAlloc.name,
+      fileId: matchingAlloc.id,
+      webViewLink: matchingAlloc.webViewLink || `https://drive.google.com/file/d/${matchingAlloc.id}/view`,
+      updatedTime: matchingAlloc.createdTime || matchingAlloc.modifiedTime || new Date().toISOString()
+    } : (localReceipt?.allocation?.uploaded ? localReceipt.allocation : { uploaded: false });
+
+    // Update local cache if files found in cloud
+    if (matchingForecast || matchingAlloc) {
+      saveLocalDriveBackupReceipt(cleanPeriod, {
+        forecastResult: forecastStatus.uploaded ? { success: true, name: forecastStatus.fileName, fileId: forecastStatus.fileId, webViewLink: forecastStatus.webViewLink } : null,
+        allocationResult: allocStatus.uploaded ? { success: true, name: allocStatus.fileName, fileId: allocStatus.fileId, webViewLink: allocStatus.webViewLink } : null
+      });
+    }
+
+    const forecastReturn = {
+      ...forecastStatus,
+      latestFile: matchingForecast || (forecastStatus.uploaded ? { name: forecastStatus.fileName, webViewLink: forecastStatus.webViewLink } : null)
+    };
+    const allocReturn = {
+      ...allocStatus,
+      latestFile: matchingAlloc || (allocStatus.uploaded ? { name: allocStatus.fileName, webViewLink: allocStatus.webViewLink } : null)
+    };
+
+    return {
+      isConfigured: true,
+      checked: true,
+      period: cleanPeriod,
+      periodLabel: cleanPeriod,
+      forecasting: forecastReturn,
+      allocation: allocReturn,
+      allUploaded: Boolean(forecastStatus.uploaded && allocStatus.uploaded),
+      anyUploaded: Boolean(forecastStatus.uploaded || allocStatus.uploaded)
+    };
+  } catch (err) {
+    console.warn('[Google Drive] Status check error:', err);
+    const hasForecast = Boolean(localReceipt?.forecasting?.uploaded);
+    const hasAlloc = Boolean(localReceipt?.allocation?.uploaded);
+    return {
+      isConfigured: true,
+      checked: true,
+      period: cleanPeriod,
+      periodLabel: cleanPeriod,
+      forecasting: localReceipt?.forecasting ? { ...localReceipt.forecasting, latestFile: { name: localReceipt.forecasting.fileName, webViewLink: localReceipt.forecasting.webViewLink } } : { uploaded: false },
+      allocation: localReceipt?.allocation ? { ...localReceipt.allocation, latestFile: { name: localReceipt.allocation.fileName, webViewLink: localReceipt.allocation.webViewLink } } : { uploaded: false },
+      allUploaded: Boolean(hasForecast && hasAlloc),
+      anyUploaded: Boolean(hasForecast || hasAlloc),
+      error: err.message
+    };
   }
 }
 

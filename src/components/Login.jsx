@@ -308,15 +308,37 @@ export default function Login() {
 
             {/* User identification chip */}
             <div className="auth-user-chip">
-              <div className="auth-user-info">
-                <div className="auth-user-avatar">
+              <div className="auth-user-info" style={{ minWidth: 0, flex: 1 }}>
+                <div className="auth-user-avatar" style={{ flexShrink: 0 }}>
                   {verifiedUser?.fullName ? verifiedUser.fullName.charAt(0).toUpperCase() : 'U'}
                 </div>
-                <div>
-                  <div style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '13px', lineHeight: 1.2 }}>
+                <div style={{ textAlign: 'left', minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      color: '#f1f5f9',
+                      fontSize: '13.5px',
+                      lineHeight: 1.25,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title={verifiedUser?.fullName || 'Authorized Staff'}
+                  >
                     {verifiedUser?.fullName || 'Authorized Staff'}
                   </div>
-                  <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.2 }}>
+                  <div
+                    style={{
+                      color: '#94a3b8',
+                      fontSize: '12px',
+                      lineHeight: 1.25,
+                      marginTop: '2px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title={verifiedUser?.email}
+                  >
                     {verifiedUser?.email}
                   </div>
                 </div>
@@ -330,13 +352,17 @@ export default function Login() {
                   setTurnstileToken('');
                 }}
                 style={{
-                  background: 'transparent',
-                  border: 'none',
+                  background: 'rgba(56, 189, 248, 0.1)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
                   color: '#38bdf8',
                   fontSize: '12px',
                   cursor: 'pointer',
-                  fontWeight: 500,
-                  padding: '4px 8px'
+                  fontWeight: 600,
+                  padding: '5px 10px',
+                  borderRadius: '7px',
+                  flexShrink: 0,
+                  marginLeft: 'auto',
+                  whiteSpace: 'nowrap'
                 }}
               >
                 Switch
@@ -624,6 +650,15 @@ export default function Login() {
         </div>
       </div>
 
+      {/* Apple-style subtle system copyright & network info footer */}
+      <div className="auth-apple-page-footer">
+        <span>© {new Date().getFullYear()} Mobile Care Services Phils. Inc.</span>
+        <span className="auth-footer-dot">•</span>
+        <span>Apple Authorized Service Provider</span>
+        <span className="auth-footer-dot">•</span>
+        <span>Internal Distribution Center Network</span>
+      </div>
+
       {/* Mobile Screen Notice Popup */}
       <MobileNoticeModal
         forceOpen={showMobileNoticeModal}
@@ -637,8 +672,9 @@ export default function Login() {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(8px)',
+            background: 'rgba(15, 23, 42, 0.6)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -646,7 +682,7 @@ export default function Login() {
             padding: '20px'
           }}
         >
-          <div className="card" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px', padding: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.5)' }}>
+          <div className="card" style={{ maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto', background: 'linear-gradient(180deg, #0f172a 0%, #131d35 45%, #0f172a 100%)', color: '#fff', border: '1px solid rgba(51, 65, 85, 0.85)', borderRadius: '22px', padding: '26px', boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

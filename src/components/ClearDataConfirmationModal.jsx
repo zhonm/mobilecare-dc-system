@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   AlertTriangle,
@@ -12,9 +12,16 @@ import {
   CheckCircle2,
   Lock,
   Download,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Cloud,
+  CloudUpload,
+  AlertCircle,
+  ExternalLink,
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 import { exportForecastToExcel, exportAllocationToExcel } from '../utils/excelParser';
+import { autoArchiveDatasetToDrive, checkDriveDatasetStatusForPeriod } from '../services/driveAutoSyncService';
 
 export default function ClearDataConfirmationModal({
   isOpen,
@@ -40,8 +47,33 @@ export default function ClearDataConfirmationModal({
   const [inputError, setInputError] = useState('');
   const [isExportingForecast, setIsExportingForecast] = useState(false);
   const [isExportingAllocation, setIsExportingAllocation] = useState(false);
+  
+  // Google Drive Automated Cloud Backup States
+  const [driveStatus, setDriveStatus] = useState(null);
+  const [isCheckingDrive, setIsCheckingDrive] = useState(false);
+  const [isBackingUpToDrive, setIsBackingUpToDrive] = useState(false);
+  const [backupStepMessage, setBackupStepMessage] = useState('');
 
-  // Reset state when opening modal
+  const totalForecastCount = forecastItems?.length || 0;
+  const totalAllocCount = allocations?.length || 0;
+  const totalForecastUnits = (forecastItems || []).reduce((sum, it) => sum + (it.final_forecast || it.computed_forecast || 0), 0);
+  const totalAllocUnits = (allocations || []).reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
+  const currentPeriodLabel = activePeriod?.label || 'September 2026';
+
+  // Check whether Forecasting and Allocation data for that month has been uploaded to Drive
+  const fetchDriveStatus = useCallback(async () => {
+    setIsCheckingDrive(true);
+    try {
+      const status = await checkDriveDatasetStatusForPeriod(currentPeriodLabel);
+      setDriveStatus(status);
+    } catch (err) {
+      console.warn('Failed to check Google Drive backup status:', err);
+    } finally {
+      setIsCheckingDrive(false);
+    }
+  }, [currentPeriodLabel]);
+
+  // Reset state and check Drive when opening modal
   useEffect(() => {
     if (isOpen) {
       setConfirmationInput('');
@@ -50,14 +82,42 @@ export default function ClearDataConfirmationModal({
       setInputError('');
       setIsExportingForecast(false);
       setIsExportingAllocation(false);
+      setIsBackingUpToDrive(false);
+      setBackupStepMessage('');
+      fetchDriveStatus();
     }
-  }, [isOpen, customReason]);
+  }, [isOpen, customReason, fetchDriveStatus]);
 
-  const totalForecastCount = forecastItems?.length || 0;
-  const totalAllocCount = allocations?.length || 0;
-  const totalForecastUnits = (forecastItems || []).reduce((sum, it) => sum + (it.final_forecast || it.computed_forecast || 0), 0);
-  const totalAllocUnits = (allocations || []).reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
-  const currentPeriodLabel = activePeriod?.label || 'September 2026';
+  // Manual one-click backup to Google Drive
+  const handleBackupToDrive = async () => {
+    if (totalForecastCount === 0 && totalAllocCount === 0) {
+      showToast('No active forecasting or allocation records to back up', 'warning');
+      return;
+    }
+    setIsBackingUpToDrive(true);
+    setBackupStepMessage('Uploading workbooks to Google Drive...');
+    try {
+      const res = await autoArchiveDatasetToDrive({
+        forecastItems: forecastItems || [],
+        allocations: allocations || [],
+        sites: sites || [],
+        periodLabel: currentPeriodLabel,
+        onProgress: ({ message }) => setBackupStepMessage(message)
+      });
+      if (res.success) {
+        showToast(`Successfully backed up ${currentPeriodLabel} datasets to Google Drive!`, 'success');
+        await fetchDriveStatus();
+      } else {
+        showToast(res.error || 'Failed to complete Google Drive backup', 'error');
+      }
+    } catch (err) {
+      console.error('Error backing up to Google Drive:', err);
+      showToast('Google Drive backup error: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsBackingUpToDrive(false);
+      setBackupStepMessage('');
+    }
+  };
 
   const handleExportForecast = async () => {
     if (!forecastItems || forecastItems.length === 0) {
@@ -106,13 +166,32 @@ export default function ClearDataConfirmationModal({
     setInputError('');
 
     try {
+      // Automatic safety backup to Google Drive before purge
+      if (totalForecastCount > 0 || totalAllocCount > 0) {
+        setBackupStepMessage('Auto-uploading safety backup to Google Drive...');
+        try {
+          const autoRes = await autoArchiveDatasetToDrive({
+            forecastItems: forecastItems || [],
+            allocations: allocations || [],
+            sites: sites || [],
+            periodLabel: currentPeriodLabel,
+            onProgress: ({ message }) => setBackupStepMessage(message)
+          });
+          if (autoRes?.success) {
+            showToast(`Safely archived ${currentPeriodLabel} data to Google Drive before purge.`, 'info');
+          }
+        } catch (backupErr) {
+          console.warn('[Google Drive] Pre-deletion auto-backup warning:', backupErr);
+        }
+      }
+
       if (clearAllData) {
         await clearAllData({
           reason: reason.trim() || 'User confirmed data purge via security phrase ("Delete Data")',
           securityPhraseVerified: true
         });
       }
-      showToast('Operational data cleared and logged to Audit Trail successfully.', 'success');
+      showToast('Operational data backed up to Google Drive and cleared successfully.', 'success');
       onClose();
     } catch (err) {
       console.error('Error clearing data:', err);
@@ -120,6 +199,7 @@ export default function ClearDataConfirmationModal({
       showToast('Failed to clear operational data', 'error');
     } finally {
       setIsDeleting(false);
+      setBackupStepMessage('');
     }
   };
 
@@ -257,69 +337,243 @@ export default function ClearDataConfirmationModal({
             </div>
           </div>
 
-          {/* Optional Pre-Deletion Backup Card */}
+          {/* Google Drive Automated Cloud Backup & Monthly Status Card */}
           <div
             style={{
-              background: '#f0fdf4',
-              border: '1px solid #bbf7d0',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
               borderRadius: '8px',
-              padding: '12px 14px',
+              padding: '14px',
               marginBottom: '18px'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <FileSpreadsheet size={16} color="#16a34a" />
-              <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#15803d' }}>
-                Optional Backup: Export Current Data (XLSX)
-              </span>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CloudUpload size={18} color="#2563eb" />
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>
+                  Google Drive Cloud Backup & Safety Check
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {isCheckingDrive ? (
+                  <span style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <RefreshCw size={12} className="animate-spin" /> Checking Drive...
+                  </span>
+                ) : driveStatus?.allUploaded ? (
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <CheckCircle2 size={12} /> Backed Up to Drive
+                  </span>
+                ) : driveStatus?.anyUploaded ? (
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#d97706', background: '#fef3c7', padding: '2px 8px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertCircle size={12} /> Partially Backed Up
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569', background: '#f1f5f9', padding: '2px 8px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Cloud size={12} /> Not Backed Up on Drive
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={fetchDriveStatus}
+                  disabled={isCheckingDrive || isDeleting}
+                  title="Re-check Google Drive status"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: isCheckingDrive || isDeleting ? 'not-allowed' : 'pointer',
+                    padding: '2px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#64748b'
+                  }}
+                >
+                  <RefreshCw size={13} className={isCheckingDrive ? 'animate-spin' : ''} />
+                </button>
+              </div>
             </div>
-            <p style={{ fontSize: '11.5px', color: '#166534', margin: '0 0 10px 0', lineHeight: 1.4 }}>
-              Before clearing the masterlist, you may optionally download a backup spreadsheet of the current forecasting models and allocation matrices. This export is completely optional, but recommended if you need an external record before deletion.
-            </p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={handleExportForecast}
-                disabled={isDeleting || isExportingForecast || totalForecastCount === 0}
-                className="btn btn-secondary btn-sm"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '11.5px',
-                  padding: '6px 10px',
-                  background: '#ffffff',
-                  borderColor: '#86efac',
-                  color: '#15803d',
-                  cursor: (isDeleting || isExportingForecast || totalForecastCount === 0) ? 'not-allowed' : 'pointer'
-                }}
-                title={totalForecastCount === 0 ? 'No forecasting data to export' : 'Export current forecasting to Excel'}
-              >
-                <Download size={13} className={isExportingForecast ? 'animate-spin' : ''} />
-                <span>{isExportingForecast ? 'Exporting Forecasting...' : 'Export Forecasting (.xlsx)'}</span>
-              </button>
 
+            <p style={{ fontSize: '11.5px', color: '#475569', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              Active data is automatically uploaded and safely archived to Google Drive folders upon deletion. You can also trigger an immediate cloud backup or verify if <strong>{currentPeriodLabel}</strong> data has already been saved to Drive below.
+            </p>
+
+            {/* Live Monthly Status Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', marginBottom: '12px' }}>
+              {/* Forecasting Status */}
+              <div
+                style={{
+                  background: '#ffffff',
+                  border: driveStatus?.forecasting?.uploaded ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  padding: '8px 10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#334155' }}>
+                    Forecasting ({currentPeriodLabel})
+                  </span>
+                  {driveStatus?.forecasting?.uploaded ? (
+                    <span style={{ fontSize: '10.5px', color: '#16a34a', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <CheckCircle2 size={12} /> Uploaded
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock size={12} /> Pending Drive Backup
+                    </span>
+                  )}
+                </div>
+                {driveStatus?.forecasting?.uploaded && driveStatus?.forecasting?.latestFile && (
+                  <div style={{ fontSize: '10px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span>{driveStatus.forecasting.latestFile.name}</span>
+                    {driveStatus.forecasting.latestFile.webViewLink && (
+                      <a
+                        href={driveStatus.forecasting.latestFile.webViewLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#2563eb', display: 'inline-flex', alignItems: 'center' }}
+                        title="Open file in Google Drive"
+                      >
+                        <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Allocation Status */}
+              <div
+                style={{
+                  background: '#ffffff',
+                  border: driveStatus?.allocation?.uploaded ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  padding: '8px 10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#334155' }}>
+                    Allocation ({currentPeriodLabel})
+                  </span>
+                  {driveStatus?.allocation?.uploaded ? (
+                    <span style={{ fontSize: '10.5px', color: '#16a34a', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <CheckCircle2 size={12} /> Uploaded
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock size={12} /> Pending Drive Backup
+                    </span>
+                  )}
+                </div>
+                {driveStatus?.allocation?.uploaded && driveStatus?.allocation?.latestFile && (
+                  <div style={{ fontSize: '10px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span>{driveStatus.allocation.latestFile.name}</span>
+                    {driveStatus.allocation.latestFile.webViewLink && (
+                      <a
+                        href={driveStatus.allocation.latestFile.webViewLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#2563eb', display: 'inline-flex', alignItems: 'center' }}
+                        title="Open file in Google Drive"
+                      >
+                        <ExternalLink size={10} />
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Cloud Action Button */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
               <button
                 type="button"
-                onClick={handleExportAllocation}
-                disabled={isDeleting || isExportingAllocation || totalAllocCount === 0}
-                className="btn btn-secondary btn-sm"
+                onClick={handleBackupToDrive}
+                disabled={isDeleting || isBackingUpToDrive || (totalForecastCount === 0 && totalAllocCount === 0)}
+                className="btn btn-primary btn-sm"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   fontSize: '11.5px',
-                  padding: '6px 10px',
-                  background: '#ffffff',
-                  borderColor: '#86efac',
-                  color: '#15803d',
-                  cursor: (isDeleting || isExportingAllocation || totalAllocCount === 0) ? 'not-allowed' : 'pointer'
+                  padding: '6px 12px',
+                  background: '#2563eb',
+                  borderColor: '#1d4ed8',
+                  color: '#ffffff',
+                  cursor: (isDeleting || isBackingUpToDrive || (totalForecastCount === 0 && totalAllocCount === 0)) ? 'not-allowed' : 'pointer'
                 }}
-                title={totalAllocCount === 0 ? 'No allocation data to export' : 'Export current allocation matrix to Excel'}
               >
-                <Download size={13} className={isExportingAllocation ? 'animate-spin' : ''} />
-                <span>{isExportingAllocation ? 'Exporting Allocation...' : 'Export Allocation (.xlsx)'}</span>
+                <CloudUpload size={14} className={isBackingUpToDrive ? 'animate-spin' : ''} />
+                <span>
+                  {isBackingUpToDrive
+                    ? (backupStepMessage || 'Uploading to Drive...')
+                    : driveStatus?.allUploaded
+                    ? 'Re-Upload Backup to Google Drive'
+                    : 'Backup to Google Drive Now'}
+                </span>
               </button>
+            </div>
+
+            {/* Optional Pre-Deletion Backup Notice and Local XLSX Export Fallback */}
+            <div style={{ borderTop: '1px dashed #cbd5e1', paddingTop: '10px', marginTop: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                <FileSpreadsheet size={13} color="#64748b" />
+                <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>
+                  Optional Backup: Export Current Data (XLSX)
+                </span>
+              </div>
+              <p style={{ fontSize: '10.5px', color: '#64748b', margin: '0 0 8px 0', lineHeight: 1.35 }}>
+                Before clearing the masterlist, you may optionally download a backup spreadsheet of the current forecasting models and allocation matrices to your local computer.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={handleExportForecast}
+                  disabled={isDeleting || isExportingForecast || totalForecastCount === 0}
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '11px',
+                    padding: '4px 8px',
+                    background: '#ffffff',
+                    borderColor: '#cbd5e1',
+                    color: '#475569',
+                    cursor: (isDeleting || isExportingForecast || totalForecastCount === 0) ? 'not-allowed' : 'pointer'
+                  }}
+                  title={totalForecastCount === 0 ? 'No forecasting data to export' : 'Export current forecasting to Excel'}
+                >
+                  <Download size={12} className={isExportingForecast ? 'animate-spin' : ''} />
+                  <span>{isExportingForecast ? 'Exporting Forecasting...' : 'Export Forecasting (.xlsx)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportAllocation}
+                  disabled={isDeleting || isExportingAllocation || totalAllocCount === 0}
+                  className="btn btn-secondary btn-sm"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontSize: '11px',
+                    padding: '4px 8px',
+                    background: '#ffffff',
+                    borderColor: '#cbd5e1',
+                    color: '#475569',
+                    cursor: (isDeleting || isExportingAllocation || totalAllocCount === 0) ? 'not-allowed' : 'pointer'
+                  }}
+                  title={totalAllocCount === 0 ? 'No allocation data to export' : 'Export current allocation matrix to Excel'}
+                >
+                  <Download size={12} className={isExportingAllocation ? 'animate-spin' : ''} />
+                  <span>{isExportingAllocation ? 'Exporting Allocation...' : 'Export Allocation (.xlsx)'}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -448,7 +702,7 @@ export default function ClearDataConfirmationModal({
               {isDeleting ? (
                 <>
                   <RotateCcw size={14} className="spin" />
-                  <span>Clearing Data...</span>
+                  <span>{backupStepMessage || 'Clearing Data...'}</span>
                 </>
               ) : (
                 <>

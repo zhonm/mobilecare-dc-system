@@ -2,7 +2,7 @@
  * Full Enterprise System Backup & Disaster Recovery Service (Feature F)
  * 
  * Provides automated & manual full-state database backup to the company's
- * Google Workspace Shared Drive ("MDC DC Logistics Archive" / backups folder)
+ * Google Workspace Shared Drive ("MDC DC System Archive" / backups folder)
  * and safe, verified system state restoration.
  * 
  * Preserves 100% of system records:
@@ -78,7 +78,7 @@ export function compileSystemBackupPackage(appState = {}, currentUser = null) {
       role: currentUser?.role || 'superadmin'
     },
     storageTarget: {
-      driveName: 'MDC DC Logistics Archive',
+      driveName: 'MDC DC System Archive',
       folder: 'backups',
       folderId: GOOGLE_DRIVE_CONFIG.folders.backups
     },
