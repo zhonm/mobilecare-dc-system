@@ -13,7 +13,9 @@ import {
   getBasePoNumber,
   normalizeDateToIso,
   consolidatePurchaseOrdersList,
-  consolidateDcIntakeRecordsList
+  consolidateDcIntakeRecordsList,
+  saveInventoryToLocalStorage,
+  readInventoryFromLocalStorage
 } from '../utils/appContextHelpers';
 import { getPartCategory } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert, flushSavedRecordsQueue } from '../utils/savedRecordsQueue';
@@ -50,20 +52,17 @@ export function useInventory({
         deletedSerialsSet = new Set(deletedSerials.map(s => String(s).trim().toUpperCase()));
       } catch (e) {}
 
-      const saved = localStorage.getItem('mdc_inventory');
+      const parsed = readInventoryFromLocalStorage();
       let baseUnits = [];
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // If parsed has fewer than 100 units, but cloud records exist (system has thousands of units),
-          // do NOT initialize with truncated partial 29 units as it flashes misleading 0 used parts!
-          const hasCloudRecord = Boolean(
-            localStorage.getItem('mdc_live_inventory_updated_at') ||
-            localStorage.getItem('mdc_masterlist_data')
-          );
-          if (!(parsed.length < 100 && hasCloudRecord)) {
-            baseUnits = parsed;
-          }
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // If parsed has fewer than 100 units, but cloud records exist (system has thousands of units),
+        // do NOT initialize with truncated partial 29 units as it flashes misleading 0 used parts!
+        const hasCloudRecord = Boolean(
+          localStorage.getItem('mdc_live_inventory_updated_at') ||
+          localStorage.getItem('mdc_masterlist_data')
+        );
+        if (!(parsed.length < 100 && hasCloudRecord)) {
+          baseUnits = parsed;
         }
       }
 
@@ -87,11 +86,8 @@ export function useInventory({
   const [isInventoryLoaded, setIsInventoryLoaded] = useState(() => {
     try {
       if (isExplicitlyCleared()) return true;
-      const saved = localStorage.getItem('mdc_inventory');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length >= 100) return true;
-      }
+      const parsed = readInventoryFromLocalStorage();
+      if (Array.isArray(parsed) && parsed.length >= 100) return true;
     } catch (e) {}
     return false;
   });
@@ -164,7 +160,9 @@ export function useInventory({
           }
         });
 
-        return Array.from(map.values());
+        const mergedUnits = Array.from(map.values());
+        saveInventoryToLocalStorage(mergedUnits);
+        return mergedUnits;
       });
       setIsInventoryLoaded(true);
     }).catch(err => {
@@ -517,7 +515,7 @@ export function useInventory({
         dcSiteId = siteList[0].id;
       }
 
-      const { data: existingParts } = await supabase.from('parts').select('id, part_number');
+      const { data: existingParts } = await supabase.from('parts').select('id, part_number').limit(10000);
       const pMap = new Map((existingParts || []).map(p => [p.part_number.toUpperCase(), p.id]));
 
       // Batch create any missing parts in a single query
@@ -526,11 +524,11 @@ export function useInventory({
         const cleanPN = String(u.part_number || '').trim().toUpperCase();
         if (cleanPN && !pMap.has(cleanPN) && !missingPartsMap.has(cleanPN)) {
           const catCode = getPartCategory({ part_number: cleanPN, description: u.description });
-          const partCatId = catMap.get(catCode) || defaultCatId;
+          const partCatId = catMap.get(catCode) || defaultCatId || 'cat-display';
           missingPartsMap.set(cleanPN, {
             part_number: cleanPN,
             description: u.description || `Part ${cleanPN}`,
-            ...(partCatId ? { category_id: partCatId } : {})
+            category_id: partCatId
           });
         }
       }
@@ -627,7 +625,7 @@ export function useInventory({
             const completedCount = Math.min(i + batch.length * CHUNK_SIZE, uniqueUnitRows.length);
             const pct = Math.min(98, Math.round(85 + (completedCount / uniqueUnitRows.length) * 13));
             options.onProgress({
-              stage: `Synchronizing cloud records (${completedCount.toLocaleString()} / ${uniqueUnitRows.length.toLocaleString()})...`,
+              stage: 'Synchronizing cloud records...',
               detail: 'Saving inventory records to database',
               percent: pct,
               current: completedCount,
@@ -641,8 +639,14 @@ export function useInventory({
       try {
         let currentInv = [];
         try {
-          currentInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+          currentInv = readInventoryFromLocalStorage();
         } catch (e) {}
+        if (!Array.isArray(currentInv) || currentInv.length === 0) {
+          try {
+            const idbInv = await dbStorage.getItem('mdc_inventory');
+            if (Array.isArray(idbInv) && idbInv.length > 0) currentInv = idbInv;
+          } catch (e) {}
+        }
         const mergedMap = new Map();
         currentInv.forEach(u => {
           const s = String(u.serial_number || '').toUpperCase();
@@ -687,6 +691,11 @@ export function useInventory({
           }
         });
         const allPoolUnits = Array.from(mergedMap.values());
+        const nowIso = new Date().toISOString();
+
+        saveInventoryToLocalStorage(allPoolUnits);
+        dbStorage.setItem('mdc_inventory', allPoolUnits);
+
         await queuedSavedRecordsUpsert({
           id: 'live_master_dc_inventory',
           record_type: 'inventory_master',
@@ -699,7 +708,7 @@ export function useInventory({
           snapshot_data: {
             units: allPoolUnits
           },
-          updated_at: new Date().toISOString()
+          updated_at: nowIso
         }, { debounceMs: options.immediate ? 0 : 1200, immediate: Boolean(options.immediate) });
 
         // Synchronize dedicated retail branch inventory registry for PMG Users & multi-site tracking
@@ -710,6 +719,10 @@ export function useInventory({
         };
         const branchUnitsList = allPoolUnits.filter(item => !isDcUnit(item));
         if (branchUnitsList.length > 0) {
+          dbStorage.setItem('mdc_branch_inventory_units', branchUnitsList);
+          try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
+          dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+
           await queuedSavedRecordsUpsert({
             id: 'master_branch_inventory_registry',
             record_type: 'branch_inventory',
@@ -717,12 +730,12 @@ export function useInventory({
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             period_week: 1,
-            notes: 'Master In-Stock & Site Stock Monitoring branch inventory across all MobileCare ASP service points',
+            notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
             saved_by_name: currentUser?.fullName || 'Warehouse Staff',
             snapshot_data: {
               units: branchUnitsList
             },
-            updated_at: new Date().toISOString()
+            updated_at: nowIso
           }, { debounceMs: options.immediate ? 0 : 1200, immediate: Boolean(options.immediate) });
         }
       } catch (poolErr) {
@@ -899,7 +912,7 @@ export function useInventory({
       const normalized = normalizeInventoryUnits(updated, parts);
       try {
         localStorage.removeItem('mdc_is_cleared');
-        localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
+        saveInventoryToLocalStorage(normalized);
         localStorage.setItem('mdc_parts', JSON.stringify(parts));
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {
@@ -1091,7 +1104,7 @@ export function useInventory({
       const normalized = normalizeInventoryUnits(updated, parts);
       updatedUnits = normalized;
       try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
+        saveInventoryToLocalStorage(normalized);
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', normalized);
@@ -1100,7 +1113,7 @@ export function useInventory({
 
     if (updatedUnits.length === 0) {
       try {
-        const saved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        const saved = readInventoryFromLocalStorage();
         if (Array.isArray(saved) && saved.length > 0) {
           updatedUnits = saved.map(u => {
             if (String(u.serial_number || '').toUpperCase() === cleanSerial) {
@@ -1276,9 +1289,7 @@ export function useInventory({
         return u;
       });
       const normalized = normalizeInventoryUnits(updated, parts);
-      try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(normalized));
-      } catch (e) {}
+      saveInventoryToLocalStorage(normalized);
       dbStorage.setItem('mdc_inventory', normalized);
       return normalized;
     });
@@ -1391,8 +1402,8 @@ export function useInventory({
       const serialValidation = item.summary_only
         ? { isValid: true, cleanSerial }
         : validateAppleSerialNumber(serialToValidate, cleanPN, currentParts);
-      if (!serialValidation.isValid) continue;
-      const validatedSerial = cleanSerial;
+      // For batch inventory imports, never drop parts if technician serial is non-standard
+      const validatedSerial = (serialValidation.isValid ? serialValidation.cleanSerial : null) || cleanSerial;
 
       let effectivePoId = item.poId || defaultPoId || null;
       if (effectivePoId) {
@@ -1426,7 +1437,7 @@ export function useInventory({
 
       if (options?.onProgress && itemsList.length > 300 && seenSerials.size % 800 === 0) {
         options.onProgress({
-          stage: `Indexing & validating parts (${seenSerials.size.toLocaleString()} / ${itemsList.length.toLocaleString()})...`,
+          stage: 'Indexing & validating parts...',
           detail: 'Assigning branch locations and verifying serial numbers',
           percent: Math.min(70, Math.round(35 + (seenSerials.size / itemsList.length) * 35)),
           current: seenSerials.size,
@@ -1521,13 +1532,25 @@ export function useInventory({
       const updated = [...untouchedUnits, ...newUnits];
       try {
         localStorage.removeItem('mdc_is_cleared');
-        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        saveInventoryToLocalStorage(updated);
         localStorage.setItem('mdc_parts', JSON.stringify(currentParts));
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {
         console.warn('LocalStorage batch save error:', e);
       }
       dbStorage.setItem('mdc_inventory', updated);
+      const nowIso = new Date().toISOString();
+      const isDc = (item) => {
+        const sId = String(item.current_site_id || '').toLowerCase();
+        const sCode = String(item.site_code || '').toUpperCase();
+        return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
+      };
+      const branchOnly = updated.filter(item => !isDc(item));
+      if (branchOnly.length > 0) {
+        dbStorage.setItem('mdc_branch_inventory_units', branchOnly);
+        try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
+        dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+      }
       return updated;
     });
 
@@ -1540,8 +1563,12 @@ export function useInventory({
         delete updatedClearedSites['ENTIRE_SYSTEM'];
       }
       newUnits.forEach(u => {
-        if (u.current_site_id) delete updatedClearedSites[u.current_site_id];
-        if (u.site_code) delete updatedClearedSites[u.site_code];
+        const sId = String(u.current_site_id || '').trim();
+        const sCode = String(u.site_code || '').trim();
+        const cleanCode = sCode.replace(/^(ASP|APP)\s+/i, '');
+        [sId, sId.toLowerCase(), sId.toUpperCase(), sCode, sCode.toLowerCase(), sCode.toUpperCase(), cleanCode, cleanCode.toLowerCase(), cleanCode.toUpperCase()].forEach(k => {
+          if (k) delete updatedClearedSites[k];
+        });
       });
       localStorage.setItem('mdc_cleared_site_timestamps', JSON.stringify(updatedClearedSites));
       dbStorage.setItem('mdc_cleared_site_timestamps', updatedClearedSites);
@@ -1577,10 +1604,23 @@ export function useInventory({
 
     await saveUnitsToSupabase(newUnits, {
       immediate: true,
-      skipBroadcast: true,
+      skipBroadcast: false,
       onProgress: options?.onProgress
     });
     await flushSavedRecordsQueue();
+
+    // Immediately notify all clients (PMG branch portals and admin tabs) to invalidate cache and refresh
+    if (broadcastCloudEvent) {
+      broadcastCloudEvent('INVENTORY_CACHE_INVALIDATED', {
+        scope: isMultiSite ? 'ALL' : resolvedSiteCode,
+        siteId: resolvedSiteId,
+        siteCode: resolvedSiteCode,
+        count: newUnits.length,
+        timestamp: Date.now()
+      });
+      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, timestamp: Date.now() });
+      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, timestamp: Date.now() });
+    }
 
     if (poMap.size > 0) {
       setPurchaseOrders(prev => {
@@ -1669,7 +1709,7 @@ export function useInventory({
       allUpdatedUnits = Array.from(map.values());
       try {
         localStorage.removeItem('mdc_is_cleared');
-        localStorage.setItem('mdc_inventory', JSON.stringify(allUpdatedUnits));
+        saveInventoryToLocalStorage(allUpdatedUnits);
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', allUpdatedUnits);
@@ -1702,7 +1742,7 @@ export function useInventory({
 
     if (!existing) {
       try {
-        const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        const localInv = readInventoryFromLocalStorage();
         existing = localInv.find(u =>
           String(u.serial_number || '').toUpperCase() === cleanSerial ||
           String(u.id || '').toUpperCase() === cleanSerial
@@ -1756,7 +1796,7 @@ export function useInventory({
         (!existing?.id || u.id !== existing.id)
       );
       try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
+        saveInventoryToLocalStorage(nextUnits);
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', nextUnits);
@@ -1904,7 +1944,7 @@ export function useInventory({
     clearAllSites = false,
     clearEntireSystem = false,
     onlyInStock = false,
-    reason = 'Old shipped parts cleared by user prior to Site Stock Monitoring Excel import'
+    reason = 'Old shipped parts cleared by user prior to multi-site inventory import'
   } = {}) => {
     // Resolve matching target site object
     const targetSite = (sites || []).find(s =>
@@ -1947,7 +1987,7 @@ export function useInventory({
 
     let localUnits = [];
     try {
-      localUnits = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+      localUnits = readInventoryFromLocalStorage();
     } catch (e) {}
     const unitsToClearIds = new Set(unitsToClear.map(u => u.id).filter(Boolean));
     const unitsToClearSerials = new Set(unitsToClear.map(u => u.serial_number ? String(u.serial_number).trim().toUpperCase() : null).filter(Boolean));
@@ -2070,7 +2110,7 @@ export function useInventory({
     const nextUnits = currentUnits.filter(u => !isMatch(u));
     setInventoryUnits(nextUnits);
     try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
+      saveInventoryToLocalStorage(nextUnits);
       localStorage.removeItem('mdc_recent_scans');
     } catch (e) {}
     dbStorage.setItem('mdc_inventory', nextUnits);
@@ -2211,7 +2251,7 @@ export function useInventory({
             period_year: new Date().getFullYear(),
             period_month: new Date().getMonth() + 1,
             period_week: 1,
-            notes: 'Master In-Stock & Site Stock Monitoring branch inventory across all MobileCare ASP service points',
+            notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
             saved_by_name: currentUser?.fullName || 'Warehouse Staff',
             snapshot_data: { units: remainingBranchUnits },
             updated_at: new Date().toISOString()
@@ -2350,7 +2390,7 @@ export function useInventory({
         return u;
       });
       try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        saveInventoryToLocalStorage(updated);
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', updated);
       return updated;
@@ -2468,7 +2508,7 @@ export function useInventory({
         return match ? match : u;
       });
       try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+        saveInventoryToLocalStorage(updatedInventory);
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', updatedInventory);
       return updatedInventory;
@@ -2575,7 +2615,7 @@ export function useInventory({
       }
 
       try {
-        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        saveInventoryToLocalStorage(updated);
       } catch (e) {}
       dbStorage.setItem('mdc_inventory', updated);
       return updated;

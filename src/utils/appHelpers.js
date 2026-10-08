@@ -176,7 +176,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
       null;
 
     if (uClearTime) {
-      const uDateStr = u.received_at || u.created_at;
+      const uDateStr = u.updated_at || u.received_at || u.created_at;
       if (!uDateStr || new Date(uDateStr).getTime() <= new Date(uClearTime).getTime()) {
         return false;
       }

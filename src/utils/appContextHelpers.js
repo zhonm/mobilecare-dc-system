@@ -288,7 +288,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
       null;
 
     if (uClearTime) {
-      const uDateStr = u.received_at || u.created_at;
+      const uDateStr = u.updated_at || u.received_at || u.created_at;
       if (!uDateStr || new Date(uDateStr).getTime() <= new Date(uClearTime).getTime()) {
         return false;
       }
@@ -409,6 +409,127 @@ export const isExplicitlyCleared = () => {
     return false;
   }
 };
+
+/**
+ * Compacts a unit object into a lightweight representation (~120 bytes vs ~800 bytes).
+ * Ensures thousands of units fit safely within Safari's 5MB localStorage origin quota.
+ */
+export function compactInventoryUnit(u) {
+  if (!u) return null;
+  const s = String(u.serial_number || u.s || '').trim().toUpperCase();
+  if (!s) return null;
+  const p = String(u.part_number || u.p || '').trim().toUpperCase();
+  const siteCode = String(u.site_code || u.c || 'BRANCH').trim().toUpperCase();
+  const c = {
+    s,
+    p,
+    d: u.description || u.d || 'Service Replacement Part',
+    c: siteCode,
+    t: u.status || u.t || 'in_stock'
+  };
+  if (u.current_site_id && u.current_site_id !== u.i) c.i = u.current_site_id;
+  if (u.work_order_number) c.w = u.work_order_number;
+  if (u.used_at) c.u = u.used_at;
+  if (u.usage_notes) c.n = u.usage_notes;
+  if (u.notes && u.notes !== `${siteCode} Stock`) c.nt = u.notes;
+  if (u.intake_assignment && u.intake_assignment !== `${siteCode} Stock`) c.ia = u.intake_assignment;
+  if (u.received_at) c.r = u.received_at;
+  if (u.stocking_price && Number(u.stocking_price) !== 99) c.pr = Number(u.stocking_price);
+  if (u.raw_serial && u.raw_serial !== s) c.rs = u.raw_serial;
+  if (u.po_id) c.po = u.po_id;
+  if (u.po_number) c.pn = u.po_number;
+  if (u.outtake_at) c.oa = u.outtake_at;
+  if (u.outtake_reason) c.or = u.outtake_reason;
+  if (u.transferred_at) c.ta = u.transferred_at;
+  if (u.transfer_slip_number) c.ts = u.transfer_slip_number;
+  if (u.transferred_to_site_code) c.tc = u.transferred_to_site_code;
+  if (u.box_number && u.box_number !== 1) c.b = u.box_number;
+  if (u.updated_at) c.up = u.updated_at;
+  return c;
+}
+
+/**
+ * Re-expands a compact unit representation back into a full unit object.
+ */
+export function expandInventoryUnit(c) {
+  if (!c) return null;
+  if (c.serial_number) return c; // Already a full unit object
+  const s = String(c.s || '').trim().toUpperCase();
+  if (!s) return null;
+  const siteCode = String(c.c || 'BRANCH').trim().toUpperCase();
+  return {
+    id: `unit-${s}`,
+    serial_number: s,
+    part_number: c.p || '',
+    description: c.d || 'Service Replacement Part',
+    site_code: siteCode,
+    current_site_id: c.i || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+    status: c.t || 'in_stock',
+    work_order_number: c.w || null,
+    used_at: c.u || null,
+    usage_notes: c.n || null,
+    notes: c.nt || `${siteCode} Stock`,
+    intake_assignment: c.ia || `${siteCode} Stock`,
+    received_at: c.r || new Date().toISOString(),
+    stocking_price: c.pr || 99,
+    raw_serial: c.rs || s,
+    raw_serial_number: c.rs || s,
+    display_serial: s,
+    po_id: c.po || null,
+    po_number: c.pn || null,
+    outtake_at: c.oa || null,
+    outtake_reason: c.or || null,
+    transferred_at: c.ta || null,
+    transfer_slip_number: c.ts || null,
+    transferred_to_site_code: c.tc || null,
+    box_number: c.b || 1,
+    updated_at: c.up || c.r || new Date().toISOString()
+  };
+}
+
+/**
+ * Safely persists inventory units to localStorage without triggering QuotaExceededError in WebKit/Safari.
+ * Automatically falls back to compact serialization if JSON payload is large.
+ */
+export function saveInventoryToLocalStorage(units) {
+  if (typeof localStorage === 'undefined' || !Array.isArray(units)) return;
+  try {
+    const fullJson = JSON.stringify(units);
+    // Safari origin quota is ~5MB total. If payload is > 1.2MB, directly compact to stay under quota safely
+    if (fullJson.length > 1200000) {
+      const compacted = units.map(compactInventoryUnit).filter(Boolean);
+      localStorage.setItem('mdc_inventory', JSON.stringify(compacted));
+      return;
+    }
+    localStorage.setItem('mdc_inventory', fullJson);
+  } catch (err) {
+    try {
+      const compacted = units.map(compactInventoryUnit).filter(Boolean);
+      localStorage.setItem('mdc_inventory', JSON.stringify(compacted));
+    } catch (e2) {
+      console.warn('[LocalStorage] Could not save inventory even in compact mode:', e2?.message);
+    }
+  }
+}
+
+/**
+ * Reads and rehydrates inventory units from localStorage, transparently expanding compact representations.
+ */
+export function readInventoryFromLocalStorage() {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem('mdc_inventory');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return [];
+    if (parsed[0] && parsed[0].s && !parsed[0].serial_number) {
+      return parsed.map(expandInventoryUnit).filter(Boolean);
+    }
+    return parsed;
+  } catch {
+    return [];
+  }
+}
 
 // Authority check helper: Superadmins and Admins have full operational delete authority, and users can delete their own records
 export function canUserDeleteRecord(record, user) {

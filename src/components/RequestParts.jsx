@@ -8,11 +8,14 @@ import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
 import { formatCourierWithMode, buildSerialDictionary, healShipmentItem, getShipmentRiderName } from '../utils/shipmentHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
-import SiteStockMonitoring from './SiteStockMonitoring';
 import ConfirmReceiveModal from './ConfirmReceiveModal';
+import AllStocksImportModal from './AllStocksImportModal';
+import SerialDossierModal from './SerialDossierModal';
+import { searchSerialsWithFullDetails } from '../utils/serialTracker';
 import {
   Inbox,
   Send,
+  UploadCloud,
   Plus,
   Search,
   Filter,
@@ -75,6 +78,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     inventoryUnits = [],
     partsRequests = [],
     shipments = [],
+    repairUsageRecords = [],
     confirmSiteReceive,
     submitPartsRequest,
     submitBatchPartsRequests,
@@ -96,8 +100,16 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     autoRefreshData,
     pmgSubTab,
     setPmgSubTab,
-    supervisorSettings
+    setParts,
+    batchAddScanInUnits,
+    supervisorSettings,
+    broadcastCloudEvent
   } = useApp();
+
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importModalFileType, setImportModalFileType] = useState('csv');
+  const [inspectedSerialDetails, setInspectedSerialDetails] = useState(null);
+  const [copiedSerial, setCopiedSerial] = useState(null);
 
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
@@ -1393,6 +1405,30 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     return partsList;
   }, [currentActiveMultiSiteStock, allStocksSearchQuery]);
 
+  // Serial Number Location Tracker across network for Superadmins / Admins
+  const allStocksSerialSearchResults = useMemo(() => {
+    const q = allStocksSearchQuery?.trim();
+    if (!q || q.length < 3) return [];
+
+    const resolvedSerials = searchSerialsWithFullDetails(q, {
+      inventoryUnits,
+      shipments,
+      repairUsageRecords,
+      sites,
+      parts
+    }, 12);
+
+    return resolvedSerials.filter(sd => {
+      if (isSuperadmin || isAdmin) return true;
+      return (
+        sd.siteId === currentUser?.siteId ||
+        sd.siteCode === userSiteObj?.code ||
+        sd.linkedShipment?.site_id === currentUser?.siteId ||
+        sd.linkedShipment?.site_code === userSiteObj?.code
+      );
+    });
+  }, [allStocksSearchQuery, inventoryUnits, shipments, repairUsageRecords, sites, parts, isSuperadmin, isAdmin, currentUser, userSiteObj]);
+
   // Network-wide availability search results across ALL branches
   const networkPartSearchResults = useMemo(() => {
     if (!allStocksSearchQuery.trim()) return null;
@@ -1735,9 +1771,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
       
       {/* 1. Header Hero Banner */}
-      {activeTab !== 'site_monitoring' && (
-        <>
-        <div
+      <div
         className="card"
         style={{
           marginBottom: '20px',
@@ -2000,8 +2034,6 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
           );
         })}
       </div>
-      </>
-      )}
 
       {/* 3. New Parts Request Submission Form Modal / Collapsible Section (Strictly PMG Users) */}
       {!isSuperadmin && isFormOpen && (
@@ -2845,10 +2877,6 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
         </div>
       )}
 
-      {/* Site Stock Monitoring (Excel Structure Tracking) */}
-      {activeTab === 'site_monitoring' && (
-        <SiteStockMonitoring initialSiteId={activeSiteObj.id} />
-      )}
 
       {/* 6. TAB 2: Branch Stock on Hand View */}
       {activeTab === 'stock_on_hand' && (
@@ -3779,7 +3807,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                     type="text"
                     className="form-input"
                     style={{ paddingLeft: '36px', paddingRight: allStocksSearchQuery ? '30px' : '12px', fontSize: '13px', height: '38px', borderRadius: '8px' }}
-                    placeholder="Search part # (e.g. 661-22294), model, or branch name..."
+                    placeholder="Search serial # (e.g. F8Y6272C...), part #, model, or branch..."
                     value={allStocksSearchQuery}
                     onChange={(e) => setAllStocksSearchQuery(e.target.value)}
                   />
@@ -3802,9 +3830,77 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                   <span>Network Multi-Site Visibility</span>
                 </div>
                 <div style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '5px', background: '#f1f5f9', padding: '6px 12px', borderRadius: '6px' }}>
-                  <Lock size={13} color="#0284c7" />
-                  <span>Serial Privacy: <strong>Enforced</strong></span>
+                  {isSuperadmin || isAdmin ? (
+                    <>
+                      <Barcode size={13} color="#0284c7" />
+                      <span>Serial Tracking: <strong style={{ color: '#0369a1' }}>Full Network</strong></span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={13} color="#0284c7" />
+                      <span>Serial Privacy: <strong>Enforced</strong></span>
+                    </>
+                  )}
                 </div>
+
+                {/* Separate Import Options for XLSX and CSV */}
+                {(isSuperadmin || isPmgUser || isAdmin) && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      style={{
+                        fontSize: '11.5px',
+                        padding: '6px 12px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontWeight: 700,
+                        color: '#ffffff',
+                        border: '1px solid #0284c7',
+                        background: '#0284c7',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        boxShadow: '0 1px 2px rgba(2, 132, 199, 0.15)'
+                      }}
+                      onClick={() => {
+                        setImportModalFileType('xlsx');
+                        setIsImportModalOpen(true);
+                      }}
+                      title="Import All Stocks via Excel Workbook (.xlsx)"
+                    >
+                      <FileSpreadsheet size={13} color="#ffffff" />
+                      <span>Import XLSX</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      style={{
+                        fontSize: '11.5px',
+                        padding: '6px 12px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontWeight: 700,
+                        color: '#ffffff',
+                        border: '1px solid #059669',
+                        background: '#059669',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        boxShadow: '0 1px 2px rgba(5, 150, 105, 0.15)'
+                      }}
+                      onClick={() => {
+                        setImportModalFileType('csv');
+                        setIsImportModalOpen(true);
+                      }}
+                      title="Import & Update All Parts via Fixably / GSX Inventory Value CSV (.csv)"
+                    >
+                      <UploadCloud size={13} color="#ffffff" />
+                      <span>Import CSV (GSX)</span>
+                    </button>
+                  </div>
+                )}
                 {isSuperadmin && (
                   <button
                     type="button"
@@ -3833,7 +3929,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
             </div>
           </div>
 
-          {/* Network-Wide Part Number Search Availability Result Panel */}
+          {/* Network-Wide Search Result Panel (Serial Location Tracker & Part Availability) */}
           {allStocksSearchQuery.trim() && (
             <div
               className="card"
@@ -3845,23 +3941,41 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                 boxShadow: '0 8px 20px -4px rgba(2, 132, 199, 0.15)'
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '10px', borderBottom: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ padding: '6px', background: '#e0f2fe', borderRadius: '6px', color: '#0284c7' }}>
-                    <Search size={16} />
+              {/* Top Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ padding: '7px', background: '#e0f2fe', borderRadius: '8px', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {allStocksSerialSearchResults.length > 0 ? <Barcode size={18} /> : <Search size={18} />}
                   </div>
-                  <h4 style={{ margin: 0, fontSize: '15px', color: '#0f172a', fontWeight: 800 }}>
-                    Network Stock Availability for &quot;{allStocksSearchQuery}&quot;
-                  </h4>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '15px', color: '#0f172a', fontWeight: 800 }}>
+                      {allStocksSerialSearchResults.length > 0
+                        ? `Exact Serial Location Tracker for "${allStocksSearchQuery}"`
+                        : `Network Stock Availability for "${allStocksSearchQuery}"`}
+                    </h4>
+                    <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                      {allStocksSerialSearchResults.length > 0
+                        ? `${allStocksSerialSearchResults.length} serial record${allStocksSerialSearchResults.length === 1 ? '' : 's'} located across service points`
+                        : `${networkPartSearchResults?.length || 0} stock location${(networkPartSearchResults?.length || 0) === 1 ? '' : 's'} found`}
+                    </span>
+                  </div>
                 </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="badge badge-primary" style={{ fontSize: '11.5px', padding: '4px 10px' }}>
-                    {networkPartSearchResults?.length || 0} stock location{(networkPartSearchResults?.length || 0) === 1 ? '' : 's'} found
-                  </span>
+                  {allStocksSerialSearchResults.length > 0 && (
+                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontWeight: 800, fontSize: '11.5px', padding: '4px 10px' }}>
+                      🎯 {allStocksSerialSearchResults.length} Serial Located
+                    </span>
+                  )}
+                  {networkPartSearchResults && networkPartSearchResults.length > 0 && (
+                    <span className="badge badge-primary" style={{ fontSize: '11.5px', padding: '4px 10px' }}>
+                      {networkPartSearchResults.length} Part Location{networkPartSearchResults.length === 1 ? '' : 's'}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
-                    style={{ fontSize: '11px', padding: '3px 8px' }}
+                    style={{ fontSize: '11px', padding: '4px 10px' }}
                     onClick={() => setAllStocksSearchQuery('')}
                   >
                     Close Search
@@ -3869,95 +3983,301 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                 </div>
               </div>
 
-              {networkPartSearchResults && networkPartSearchResults.length > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-                  {networkPartSearchResults.map((match, idx) => (
-                    <div
-                      key={`${match.siteId}-${match.partNumber}-${idx}`}
-                      style={{
-                        border: '1px solid #cbd5e1',
-                        borderRadius: '8px',
-                        padding: '12px 14px',
-                        background: match.isOwnSite ? '#f0fdf4' : '#f8fafc',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        gap: '10px'
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                          <span
-                            className="badge"
-                            style={{
-                              fontSize: '10.5px',
-                              background: match.isDc ? '#f3e8ff' : (match.isProv ? '#fef3c7' : '#e0f2fe'),
-                              color: match.isDc ? '#7e22ce' : (match.isProv ? '#b45309' : '#0369a1'),
-                              fontWeight: 700
-                            }}
-                          >
-                            {match.regionLabel}
-                          </span>
-                          <span
-                            className="badge"
-                            style={{
-                              background: '#dcfce7',
-                              color: '#15803d',
-                              fontWeight: 800,
-                              fontSize: '11.5px',
-                              padding: '2px 8px'
-                            }}
-                          >
-                            {match.inStock} units in stock
-                          </span>
-                        </div>
-                        <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
-                          {match.siteCode} — {match.siteName}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700, marginTop: '4px' }}>
-                          {match.partNumber}
-                        </div>
-                        <div style={{ fontSize: '11.5px', color: '#475569', marginTop: '2px' }}>
-                          {match.description}
-                        </div>
-                      </div>
+              {/* SECTION A: Exact Serial Number Location Matches (Superadmin / Network Tracker) */}
+              {allStocksSerialSearchResults.length > 0 && (
+                <div style={{ marginBottom: (networkPartSearchResults && networkPartSearchResults.length > 0) ? '24px' : '0' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <MapPin size={14} color="#0284c7" />
+                    <span>Exact Branch Location Tracker (Real-Time Physical Location):</span>
+                  </div>
 
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '8px' }}>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                          onClick={() => {
-                            setAllStocksRegionTab(match.regionKey);
-                            setAllStocksSelectedSiteId(match.siteId);
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '14px' }}>
+                    {allStocksSerialSearchResults.map((serialMatch, sIdx) => {
+                      const siteObj = sites.find(s => s.id === serialMatch.siteId || s.code === serialMatch.siteCode);
+                      const isProv = isProvincialSite(siteObj);
+                      const regKey = isProv ? 'provincial' : 'metro_manila';
+                      const isCopied = copiedSerial === serialMatch.serialNumber;
+
+                      const statusBadge = serialMatch.isUsed
+                        ? { bg: '#fef2f2', color: '#b91c1c', border: '#fca5a5', text: `Used in Repair (WO: ${serialMatch.workOrderNumber})` }
+                        : serialMatch.statusKey === 'in_transit'
+                        ? { bg: '#fffbeb', color: '#b45309', border: '#fcd34d', text: 'In Transit via Dispatch' }
+                        : serialMatch.isDcSite
+                        ? { bg: '#f3e8ff', color: '#7e22ce', border: '#d8b4fe', text: 'In Stock at Central DC' }
+                        : { bg: '#f0fdf4', color: '#15803d', border: '#86efac', text: 'In Stock at Branch' };
+
+                      return (
+                        <div
+                          key={`serial-match-${serialMatch.serialNumber}-${sIdx}`}
+                          style={{
+                            border: '2px solid #38bdf8',
+                            borderRadius: '10px',
+                            padding: '16px',
+                            background: 'linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            boxShadow: '0 4px 12px rgba(2, 132, 199, 0.08)'
                           }}
                         >
-                          <ChevronRight size={12} />
-                          <span>View Site Stock</span>
-                        </button>
-                        {!isSuperadmin && (
+                          <div>
+                            {/* Top Badges */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  padding: '3px 8px',
+                                  borderRadius: '6px',
+                                  background: statusBadge.bg,
+                                  color: statusBadge.color,
+                                  border: `1px solid ${statusBadge.border}`
+                                }}
+                              >
+                                {statusBadge.text}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: '10.5px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: serialMatch.isDcSite ? '#e9d5ff' : (isProv ? '#fef3c7' : '#e0f2fe'),
+                                  color: serialMatch.isDcSite ? '#6b21a8' : (isProv ? '#92400e' : '#0369a1')
+                                }}
+                              >
+                                {serialMatch.isDcSite ? 'Central DC' : (isProv ? 'Provincial ASP' : 'Metro Manila ASP')}
+                              </span>
+                            </div>
+
+                            {/* Exact Location Header */}
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
+                              <Building2 size={18} color="#0284c7" style={{ marginTop: '2px', flexShrink: 0 }} />
+                              <div>
+                                <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                                  {serialMatch.siteCode} — {serialMatch.siteName}
+                                </div>
+                                <div style={{ fontSize: '11.5px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                                  <MapPin size={11} color="#94a3b8" />
+                                  <span>{siteObj?.full_address || siteObj?.address || 'Standard Authorized Service Facility'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Serial Number Pill with Copy Button */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                background: '#ffffff',
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '6px',
+                                padding: '6px 10px',
+                                margin: '8px 0',
+                                fontFamily: 'var(--font-mono)'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <Barcode size={15} color="#0284c7" />
+                                <span style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', letterSpacing: '0.04em' }}>
+                                  {serialMatch.serialNumber}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                style={{
+                                  border: 'none',
+                                  background: isCopied ? '#dcfce7' : '#f1f5f9',
+                                  color: isCopied ? '#15803d' : '#475569',
+                                  padding: '3px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                                onClick={() => {
+                                  if (navigator?.clipboard) {
+                                    navigator.clipboard.writeText(serialMatch.serialNumber);
+                                    setCopiedSerial(serialMatch.serialNumber);
+                                    setTimeout(() => setCopiedSerial(null), 2000);
+                                    showToast?.(`Copied serial #${serialMatch.serialNumber} to clipboard`, 'info');
+                                  }
+                                }}
+                                title="Copy Serial Number"
+                              >
+                                {isCopied ? <Check size={11} /> : <Copy size={11} />}
+                                <span>{isCopied ? 'Copied' : 'Copy'}</span>
+                              </button>
+                            </div>
+
+                            {/* Part Telemetry */}
+                            <div style={{ fontSize: '12px', color: '#1e293b', fontWeight: 600 }}>
+                              <span style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 800 }}>{serialMatch.partNumber}</span>
+                              <span style={{ margin: '0 6px', color: '#cbd5e1' }}>•</span>
+                              <span>{serialMatch.description}</span>
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
+                              <span>Model: <strong>{serialMatch.iphoneModel || 'Universal Component'}</strong></span>
+                              <span style={{ margin: '0 6px', color: '#cbd5e1' }}>•</span>
+                              <span>Arrival: <strong>{serialMatch.siteArrivalStatus || 'Active'}</strong></span>
+                              {serialMatch.boxNumber && (
+                                <>
+                                  <span style={{ margin: '0 6px', color: '#cbd5e1' }}>•</span>
+                                  <span>Box: <strong>#{serialMatch.boxNumber}</strong></span>
+                                </>
+                              )}
+                            </div>
+
+                            {/* Used in repair extra telemetry */}
+                            {serialMatch.isUsed && (
+                              <div style={{ marginTop: '6px', padding: '6px 8px', background: '#fff1f2', borderRadius: '4px', fontSize: '11px', color: '#9f1239' }}>
+                                <strong>Work Order:</strong> {serialMatch.workOrderNumber}
+                                {serialMatch.dateUsedFormatted && <span> • <strong>Date Used:</strong> {serialMatch.dateUsedFormatted}</span>}
+                                {serialMatch.usedByName && <span> • <strong>Specialist:</strong> {serialMatch.usedByName}</span>}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '10px' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{ fontSize: '11px', padding: '5px 10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}
+                              onClick={() => setInspectedSerialDetails(serialMatch)}
+                            >
+                              <History size={12} />
+                              <span>View Dossier</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              style={{ fontSize: '11.5px', padding: '5px 12px', background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 700 }}
+                              onClick={() => {
+                                setAllStocksRegionTab(regKey);
+                                setAllStocksSelectedSiteId(serialMatch.siteId);
+                                showToast?.(`Navigated to ${serialMatch.siteCode} (${serialMatch.siteName})`, 'info');
+                              }}
+                            >
+                              <MapPin size={12} />
+                              <span>Locate at Branch</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION B: Network Part Availability Matches */}
+              {networkPartSearchResults && networkPartSearchResults.length > 0 && (
+                <div>
+                  {allStocksSerialSearchResults.length > 0 && (
+                    <div style={{ fontSize: '12px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: '1px solid #e2e8f0' }}>
+                      <Package size={14} color="#0284c7" />
+                      <span>General Part Number Availability (Stock Counts by Branch):</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+                    {networkPartSearchResults.map((match, idx) => (
+                      <div
+                        key={`${match.siteId}-${match.partNumber}-${idx}`}
+                        style={{
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '8px',
+                          padding: '12px 14px',
+                          background: match.isOwnSite ? '#f0fdf4' : '#f8fafc',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          gap: '10px'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span
+                              className="badge"
+                              style={{
+                                fontSize: '10.5px',
+                                background: match.isDc ? '#f3e8ff' : (match.isProv ? '#fef3c7' : '#e0f2fe'),
+                                color: match.isDc ? '#7e22ce' : (match.isProv ? '#b45309' : '#0369a1'),
+                                fontWeight: 700
+                              }}
+                            >
+                              {match.regionLabel}
+                            </span>
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#dcfce7',
+                                color: '#15803d',
+                                fontWeight: 800,
+                                fontSize: '11.5px',
+                                padding: '2px 8px'
+                              }}
+                            >
+                              {match.inStock} units in stock
+                            </span>
+                          </div>
+                          <div style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a' }}>
+                            {match.siteCode} — {match.siteName}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700, marginTop: '4px' }}>
+                            {match.partNumber}
+                          </div>
+                          <div style={{ fontSize: '11.5px', color: '#475569', marginTop: '2px' }}>
+                            {match.description}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid #e2e8f0', paddingTop: '8px' }}>
                           <button
                             type="button"
-                            className="btn btn-primary btn-sm"
-                            style={{ fontSize: '11px', padding: '4px 10px', background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                            onClick={() => handleQuickRequestPart(match.partNumber, match.siteName)}
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '11px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            onClick={() => {
+                              setAllStocksRegionTab(match.regionKey);
+                              setAllStocksSelectedSiteId(match.siteId);
+                            }}
                           >
-                            <Send size={11} />
-                            <span>Request Transfer</span>
+                            <ChevronRight size={12} />
+                            <span>View Site Stock</span>
                           </button>
-                        )}
+                          {!isSuperadmin && (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              style={{ fontSize: '11px', padding: '4px 10px', background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                              onClick={() => handleQuickRequestPart(match.partNumber, match.siteName)}
+                            >
+                              <Send size={11} />
+                              <span>Request Transfer</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              ) : (
+              )}
+
+              {/* SECTION C: Clean Empty State when neither serial nor part matches exist */}
+              {allStocksSerialSearchResults.length === 0 && (!networkPartSearchResults || networkPartSearchResults.length === 0) && (
                 <div style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b' }}>
                   <SearchX size={32} color="#94a3b8" style={{ marginBottom: '8px' }} />
                   <p style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
-                    No branch currently has &quot;{allStocksSearchQuery}&quot; in available stock.
+                    No branch stock or serial number found matching &quot;{allStocksSearchQuery}&quot;.
                   </p>
                   <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
-                    You can submit a replenishment request directly to DC Superadmin to procure this part.
+                    Verify the serial number or part SKU, or submit a replenishment request directly to DC Superadmin.
                   </p>
                   {!isSuperadmin && (
                     <button
@@ -5854,14 +6174,14 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                   <>
                     Are you sure you want to clear <strong>all {clearPartsModalState.count} parts</strong> across all {branchSitesCount} retail branch sites?
                     <div style={{ marginTop: '6px', color: '#64748b', fontSize: '11.5px' }}>
-                      This will remove previous stock previously shipped by DC to all retail sites, creating a clean slate for importing <strong>Site Stock Monitoring.xlsx</strong>. <em>Central DC stock is strictly preserved.</em>
+                      This will remove previous stock previously shipped by DC to all retail sites, creating a clean slate for importing updated inventory records (CSV / XLSX). <em>Central DC stock is strictly preserved.</em>
                     </div>
                   </>
                 ) : (
                   <>
                     Are you sure you want to clear <strong>{clearPartsModalState.count} parts</strong> from <strong>{clearPartsModalState.siteName} ({clearPartsModalState.siteCode})</strong>?
                     <div style={{ marginTop: '6px', color: '#64748b', fontSize: '11.5px' }}>
-                      This will remove previous DC-shipped stock for this branch so you can import the latest records from <strong>Site Stock Monitoring.xlsx</strong> without duplicates.
+                      This will remove previous DC-shipped stock for this branch so you can import the latest records without duplicates.
                     </div>
                   </>
                 )}
@@ -5936,6 +6256,42 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
 
       {/* Lightweight Status Transition / Confirm Package Loading Screen */}
       <StatusChangeLoadingModal {...statusLoadingState} />
+
+      {/* 11. All Stocks & Multi-Site XLSX / CSV Import Modal */}
+      <AllStocksImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        defaultFileType={importModalFileType}
+        sites={sites}
+        parts={parts}
+        setParts={setParts}
+        inventoryUnits={inventoryUnits}
+        batchAddScanInUnits={batchAddScanInUnits}
+        clearSiteParts={clearSiteParts}
+        isSuperadmin={isSuperadmin}
+        showToast={showToast}
+        broadcastCloudEvent={broadcastCloudEvent}
+        onSuccess={() => {
+          if (typeof autoRefreshData === 'function') autoRefreshData();
+          if (typeof fetchPartsRequests === 'function') fetchPartsRequests();
+        }}
+      />
+
+      {/* 12. Serial Number Intelligence Dossier Modal */}
+      {inspectedSerialDetails && (
+        <SerialDossierModal
+          serialDetails={inspectedSerialDetails}
+          onClose={() => setInspectedSerialDetails(null)}
+          onNavigateTab={(tab) => {
+            if (tab === 'all-stocks' && inspectedSerialDetails?.siteId) {
+              const sObj = sites.find(s => s.id === inspectedSerialDetails.siteId || s.code === inspectedSerialDetails.siteCode);
+              const rKey = isProvincialSite(sObj) ? 'provincial' : 'metro_manila';
+              setAllStocksRegionTab(rKey);
+              setAllStocksSelectedSiteId(inspectedSerialDetails.siteId);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

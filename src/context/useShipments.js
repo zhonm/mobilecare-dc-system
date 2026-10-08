@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber, isDraftSupersededOrFulfilled, reconcileShipmentsAndDrafts } from '../utils/appContextHelpers';
+import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord, isLockedConfirmedShipment, formatShipmentForDb, formatShipmentItemsForDb, generateNextInvoiceRef, generateNextShipmentNumber, isDraftSupersededOrFulfilled, reconcileShipmentsAndDrafts, saveInventoryToLocalStorage } from '../utils/appContextHelpers';
 import { unmarkDeletedShipmentIds, unmarkDeletedSerials } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
@@ -212,7 +212,7 @@ export function useShipments({
 
       setInventoryUnits(updatedInventory);
       dbStorage.setItem('mdc_inventory', updatedInventory);
-      try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
+      try { saveInventoryToLocalStorage(updatedInventory); } catch (e) {}
     }
 
     if (targetShipmentId) {
@@ -316,7 +316,7 @@ export function useShipments({
       updatedInventory = (inventoryUnits || []).filter(u => !serialsSet.has(String(u.serial_number || '').toUpperCase()));
       if (setInventoryUnits) setInventoryUnits(updatedInventory);
       dbStorage.setItem('mdc_inventory', updatedInventory);
-      try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
+      try { saveInventoryToLocalStorage(updatedInventory); } catch (e) {}
 
       // Register deleted serials in local deletion registry
       try {
@@ -620,7 +620,7 @@ export function useShipments({
     setShipments([]);
 
     try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+      saveInventoryToLocalStorage(updatedInventory);
       localStorage.removeItem('mdc_shipments');
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {
@@ -802,7 +802,7 @@ export function useShipments({
           });
         }
 
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInv)); } catch (e) {}
+        try { saveInventoryToLocalStorage(updatedInv); } catch (e) {}
         dbStorage.setItem('mdc_inventory', updatedInv);
         return updatedInv;
       });

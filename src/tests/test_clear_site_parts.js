@@ -105,7 +105,7 @@ assert.ok(clearAllResult.remainingUnits.every(u => u.site_code === 'DC-MDC'), 'E
 console.log('  ✓ PASS: Network-wide clear purges all branch inventory while 100% preserving Central DC');
 
 console.log('\n--- 4. CLEAN IMPORT AFTER CLEARING ---');
-// Simulate user importing updated records from Site Stock Monitoring.xlsx
+// Simulate user importing updated records from multi-site inventory file
 const freshBhsImport = [
   { id: 'fresh-1', serial_number: 'BHS-NEW-2026-001', part_number: '661-22294', current_site_id: 'site-bhs', site_code: 'APP BHS', status: 'in_stock' },
   { id: 'fresh-2', serial_number: 'BHS-NEW-2026-002', part_number: '661-30401', current_site_id: 'site-bhs', site_code: 'APP BHS', status: 'used', work_order_number: 'OC-99887' }
@@ -115,7 +115,7 @@ const postImportInventory = [...clearAllResult.remainingUnits, ...freshBhsImport
 assert.strictEqual(postImportInventory.length, 4, '2 DC units + 2 fresh BHS units = 4 total');
 assert.ok(postImportInventory.some(u => u.serial_number === 'BHS-NEW-2026-001'), 'New live records successfully populated');
 assert.ok(!postImportInventory.some(u => u.serial_number === 'BHS-OLD-SERIAL-1'), 'No obsolete leftovers present');
-console.log('  ✓ PASS: Fresh Site Stock Monitoring import successfully replaces cleared records');
+console.log('  ✓ PASS: Fresh inventory import successfully replaces cleared records');
 
 console.log('\n--- 5. CLEAR ENTIRE SYSTEM (SUPERADMIN COMPLETE RESET) ---');
 function simulateClearSystem(units, { clearEntireSystem = false, clearAllSites = false, siteId = null, siteCode = null }) {

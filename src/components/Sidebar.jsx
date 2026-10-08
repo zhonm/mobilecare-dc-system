@@ -23,8 +23,7 @@ import {
   Globe,
   ChevronDown,
   ChevronRight,
-  Package,
-  FileSpreadsheet
+  Package
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -148,12 +147,6 @@ export default function Sidebar() {
           subTab: 'stock_on_hand',
           label: 'Branch Stock',
           icon: Package
-        },
-        {
-          id: 'request-parts',
-          subTab: 'site_monitoring',
-          label: 'Site Stock Monitoring',
-          icon: FileSpreadsheet
         },
         {
           id: 'all-stocks',

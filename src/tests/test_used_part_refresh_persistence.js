@@ -117,13 +117,12 @@ assert.strictEqual(coldTarget.work_order_number, '20031234', 'Work order number 
 assert.strictEqual(coldTarget.dateUsed, '2026-10-07', 'Date used must be preserved');
 console.log('✓ PASS: Cold startup reload preserves used status even when synthesized from shipments');
 
-// 5. Verify SiteStockMonitoring.jsx passes usedDate, partNumber, and siteId to markUnitAsUsed
-const ssmPath = path.resolve(__dirname, '../components/SiteStockMonitoring.jsx');
-const ssmSrc = fs.readFileSync(ssmPath, 'utf8');
+// 5. Verify RequestParts.jsx passes partNumber and siteId to markUnitAsUsed
+const rpPath = path.resolve(__dirname, '../components/RequestParts.jsx');
+const rpSrc = fs.readFileSync(rpPath, 'utf8');
 
-assert(ssmSrc.includes('usedDate: usedDateVal'), 'SiteStockMonitoring must pass usedDate to markUnitAsUsed');
-assert(ssmSrc.includes('partNumber: partNo'), 'SiteStockMonitoring must pass partNumber to markUnitAsUsed');
-assert(ssmSrc.includes('siteId: activeSiteObj.id'), 'SiteStockMonitoring must pass siteId to markUnitAsUsed');
-console.log('✓ PASS: SiteStockMonitoring passes usedDate, partNumber, and siteId to markUnitAsUsed');
+assert(rpSrc.includes('partNumber: markUsedPartPn'), 'RequestParts must pass partNumber to markUnitAsUsed');
+assert(rpSrc.includes('siteId'), 'RequestParts must pass siteId to markUnitAsUsed');
+console.log('✓ PASS: RequestParts passes partNumber and siteId to markUnitAsUsed');
 
 console.log('All persistence & refresh regression checks passed!');

@@ -12,41 +12,9 @@ console.log('TEST SUITE: Used Parts Instant Load, Realtime Sync & PMG Restore Re
 console.log('========================================================================\n');
 
 // --------------------------------------------------------------------------
-// 1. Verify SiteStockMonitoring.jsx and RequestParts.jsx Restore UI Restrictions
+// 1. Verify RequestParts.jsx Restore UI Restrictions
 // --------------------------------------------------------------------------
 console.log('--- 1. Testing UI Role Restrictions for Restore Feature ---');
-
-const siteStockMonitoringPath = path.join(projectRoot, 'src/components/SiteStockMonitoring.jsx');
-const siteStockMonitoringContent = fs.readFileSync(siteStockMonitoringPath, 'utf8');
-
-assert.ok(
-  siteStockMonitoringContent.includes('const isAdmin = isSuperadmin || currentUser?.role === \'admin\'') ||
-  siteStockMonitoringContent.includes('canRestore = isAdmin'),
-  'SiteStockMonitoring.jsx must define isAdmin and canRestore'
-);
-
-assert.ok(
-  siteStockMonitoringContent.includes('{canRestore && <th style={{ width: \'120px\', textAlign: \'center\' }}>Action</th>}'),
-  'SiteStockMonitoring.jsx must conditionally render Action header in Used Parts table'
-);
-
-assert.ok(
-  siteStockMonitoringContent.includes('{canRestore && (') &&
-  siteStockMonitoringContent.includes('onClick={() => unmarkUnitAsUsed(unit.serial_number)}'),
-  'SiteStockMonitoring.jsx must conditionally render Restore button in Used Parts table for canRestore only'
-);
-
-assert.ok(
-  siteStockMonitoringContent.includes('onClick={() => unmarkUnitForOuttake(unit.serial_number)}'),
-  'SiteStockMonitoring.jsx must guard outtake Restore button with canRestore'
-);
-
-assert.ok(
-  siteStockMonitoringContent.includes('onClick={() => unmarkUnitTransfer(unit.serial_number)}'),
-  'SiteStockMonitoring.jsx must guard transfer Restore button with canRestore'
-);
-
-console.log('  ✓ PASS: SiteStockMonitoring.jsx hides Restore Part feature from PMG users');
 
 const requestPartsPath = path.join(projectRoot, 'src/components/RequestParts.jsx');
 const requestPartsContent = fs.readFileSync(requestPartsPath, 'utf8');

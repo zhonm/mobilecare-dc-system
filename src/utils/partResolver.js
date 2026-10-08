@@ -295,13 +295,11 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
 
   return units
     .filter(u => {
-      const s = String(u.serial_number || '').trim().toUpperCase();
-      const pn = String(u.part_number || '').trim().toUpperCase();
-      // Security Filter: Reject units where serial number is the part number or invalid
-      if (!s || s === pn) return false;
-      if (/^(?:ZP|PP|Z|1P|P|S|1S)?66[0-9]-?\d{4,6}$/i.test(s) || /^\d{3}-\d{4,6}$/.test(s)) return false;
-      if (fullCatalog && fullCatalog.some(p => p.part_number && p.part_number.toUpperCase() === s)) return false;
-      if (s.length < 8) return false;
+      if (!u || typeof u !== 'object') return false;
+      const s = String(u.serial_number || '').trim();
+      const pn = String(u.part_number || '').trim();
+      // Only reject units where serial number, part number, and description are all completely absent
+      if (!s && !pn && !u.description) return false;
       return true;
     })
     .map(u => {

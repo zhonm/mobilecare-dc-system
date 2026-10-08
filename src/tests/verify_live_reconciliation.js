@@ -79,7 +79,7 @@ async function verifyLiveReconciliation() {
   assert.notStrictEqual(target.current_site_id, annexSiteId, 'Target unit current_site_id must NOT be Annex');
   assert.strictEqual(target.current_site_id, '2cf62bf6-14cf-4d31-838e-9bff43fb9018', 'Target unit must belong to Central DC');
 
-  // Verify SiteStockMonitoring filter for Annex
+  // Verify branch stock filter for Annex
   const isDc = (u) => u.current_site_id === '2cf62bf6-14cf-4d31-838e-9bff43fb9018' || u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC';
   const annexStock = allInventory.filter(u => {
     if (u.status === 'packed' || u.status === 'draft') return false;

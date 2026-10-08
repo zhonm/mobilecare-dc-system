@@ -34,9 +34,8 @@ import {
 } from 'lucide-react';
 import {
   parseScanInPartsFile,
-  parseSiteStockMonitoringWorkbook,
-  downloadScanInTemplate,
-  downloadSiteStockMonitoringTemplate
+  parseMultiBranchInventoryWorkbook,
+  downloadScanInTemplate
 } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
 import { formatTo12HourTime } from '../utils/dateUtils';
@@ -974,7 +973,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     if (!parsedBatch?.workbook) return;
     const parseAll = sheetName === 'ALL_SHEETS';
     const siteObj = parseAll ? null : sites.find(s => s.code === sheetName || s.name?.includes(sheetName));
-    const res = parseSiteStockMonitoringWorkbook(parsedBatch.workbook, {
+    const res = parseMultiBranchInventoryWorkbook(parsedBatch.workbook, {
       existingParts: parts,
       existingUnits: inventoryUnits,
       purchaseOrders,
@@ -1013,11 +1012,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     showToast(`Downloaded sample template (${format.toUpperCase()})`, 'info');
   };
 
-  const handleDownloadMonitoringTemplate = () => {
-    downloadSiteStockMonitoringTemplate(activeReceivingSite?.code || 'APP BHS');
-    showToast('Downloaded Site Stock Monitoring Template (.xlsx)', 'info');
-  };
-
   const handleConfirmBatchImport = async () => {
     if (!parsedBatch || !parsedBatch.items) return;
 
@@ -1027,7 +1021,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       if (isMulti) {
         await clearSiteParts({
           clearAllSites: true,
-          reason: 'Pre-import clean slate for all retail branch sites prior to consolidated Site Stock Monitoring import'
+          reason: 'Pre-import clean slate for all retail branch sites prior to consolidated inventory import'
         });
       } else {
         await clearSiteParts({
@@ -1069,7 +1063,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const importedWithFlag = res.units.map(u => ({ ...u, isImported: true }));
       setSessionScans(prev => [...importedWithFlag, ...prev]);
 
-      const breakdown = parsedBatch.isSiteStockMonitoring
+      const breakdown = parsedBatch.isMultiBranchInventory
         ? ` (${parsedBatch.summary.inStock || 0} In-Stock, ${parsedBatch.summary.used || 0} Used, ${parsedBatch.summary.transferred || 0} Transferred, ${parsedBatch.summary.outtake || 0} Outtake)`
         : '';
 
@@ -1101,7 +1095,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       } else if (clearSiteScope === 'ALL') {
         await clearSiteParts({
           clearAllSites: true,
-          reason: 'Bulk cleared all retail branch sites prior to Site Stock Monitoring Excel import'
+          reason: 'Bulk cleared all retail branch sites prior to consolidated inventory import'
         });
       } else {
         await clearSiteParts({
@@ -3203,15 +3197,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)' }}>Need a formatted template?</span>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={handleDownloadMonitoringTemplate}
-                    style={{ background: '#ecfdf5', borderColor: '#bbf7d0', color: '#166534', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}
-                    title="Download Site Stock Monitoring template (.xlsx) matching Google Sheets structure"
-                  >
-                    <FileSpreadsheet size={13} color="#16a34a" />
-                    <span>Site Stock Monitoring (.xlsx)</span>
-                  </button>
+
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => handleDownloadTemplate('xlsx')}
@@ -3353,7 +3339,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   </div>
 
                   {/* Sheet Selector (for multi-sheet workbooks) */}
-                  {parsedBatch.isSiteStockMonitoring && parsedBatch.availableSheets?.length > 1 && (
+                  {parsedBatch.isMultiBranchInventory && parsedBatch.availableSheets?.length > 1 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', marginBottom: '14px' }}>
                       <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', minWidth: '85px', margin: 0 }}>
                         Active Sheet:
@@ -3377,7 +3363,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   )}
 
                   {/* Summary Metric Cards */}
-                  {parsedBatch.isSiteStockMonitoring ? (
+                  {parsedBatch.isMultiBranchInventory ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '10px', marginBottom: '16px' }}>
                       <div className="import-stat-card">
                         <span className="import-stat-label">Total Rows</span>
@@ -3439,7 +3425,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                     >
                       All Items ({parsedBatch.items.length})
                     </button>
-                    {parsedBatch.isSiteStockMonitoring ? (
+                    {parsedBatch.isMultiBranchInventory ? (
                       <>
                         <button
                           type="button"
@@ -3505,7 +3491,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                           <th>Part Number</th>
                           <th>Description</th>
                           <th>Serial Number</th>
-                          <th>{parsedBatch.isSiteStockMonitoring ? 'Lifecycle Category' : (isPmgUser ? 'Receiving Site' : 'Destination')}</th>
+                          <th>{parsedBatch.isMultiBranchInventory ? 'Lifecycle Category' : (isPmgUser ? 'Receiving Site' : 'Destination')}</th>
                           <th>Status</th>
                         </tr>
                       </thead>
@@ -3517,7 +3503,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             <td>{item.description}</td>
                             <td className="font-mono">{item.serialNumber}</td>
                             <td>
-                              {parsedBatch.isSiteStockMonitoring ? (
+                              {parsedBatch.isMultiBranchInventory ? (
                                 <span className="badge" style={{
                                   background: item.lifecycle_status === 'used' ? '#fffbeb' : item.lifecycle_status === 'outtake' ? '#faf5ff' : item.lifecycle_status === 'transferred' ? '#ecfeff' : '#eff6ff',
                                   color: item.lifecycle_status === 'used' ? '#b45309' : item.lifecycle_status === 'outtake' ? '#7c3aed' : item.lifecycle_status === 'transferred' ? '#0891b2' : '#1d4ed8',
@@ -3626,7 +3612,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
             <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div style={{ fontSize: '12.5px', color: '#334155', lineHeight: 1.5 }}>
-                Select the scope of parts to clear prior to importing <strong>Site Stock Monitoring.xlsx</strong>:
+                Select the scope of parts to clear prior to importing inventory records:
               </div>
 
               {/* Scope Selector */}

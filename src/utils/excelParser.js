@@ -11,9 +11,11 @@ import {
   getOrderRemark
 } from './allocationEngine.js';
 import { sanitizeForSpreadsheet } from './security.js';
-import { resolvePartInfo, validateAppleSerialNumber } from './partResolver.js';
+import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
 import { getShipmentRiderName } from './shipmentHelpers.js';
+import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
+import { normalizeSite } from './siteTransfersReconciler.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -2868,10 +2870,10 @@ export function parseExcelDateCell(val) {
 }
 
 /**
- * Detects whether a workbook follows the Site Stock Monitoring.xlsx structure
+ * Detects whether a workbook follows the multi-branch inventory workbook structure
  * (Contains branch sheets with Stock on Hand, Used Parts, For Outtake, Transferred Parts, etc.)
  */
-export function isSiteStockMonitoringWorkbook(workbook) {
+export function isMultiBranchInventoryWorkbook(workbook) {
   if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) return false;
   const names = workbook.SheetNames;
   const knownSheets = ['KGB Serial Lists', 'STOCKS', 'products', 'Search Bar'];
@@ -2894,14 +2896,8 @@ export function isSiteStockMonitoringWorkbook(workbook) {
   }
   return false;
 }
+export const isSiteStockMonitoringWorkbook = isMultiBranchInventoryWorkbook;
 
-/**
- * Parses a Site Stock Monitoring workbook and extracts parts across:
- * 1. Stock on hand (in_stock)
- * 2. Used Parts (used)
- * 3. For Outtake (outtake)
- * 4. Transferred Parts (transferred)
- */
 /**
  * Resolves a branch sheet name or site code to the system site object from seedData / context.
  * Gracefully handles naming discrepancies (e.g., 'ASP LIMA' -> 'ASP LIM', 'APP ILO' -> 'ASP ILO').
@@ -2917,7 +2913,7 @@ export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
   let match = sites.find(s => s.code?.toUpperCase() === clean);
   if (match) return match;
 
-  // Alias maps for known sheet names in Site Stock Monitoring.xlsx
+  // Alias maps for known sheet names in multi-branch workbooks
   if (norm === 'ASPLIMA' || norm === 'LIMA') {
     const lim = sites.find(s => s.code === 'ASP LIM');
     if (lim) return lim;
@@ -2947,7 +2943,7 @@ export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
 }
 
 /**
- * Extracts raw unit items from a single Site Stock Monitoring branch sheet
+ * Extracts raw unit items from a single multi-branch workbook sheet
  */
 export function extractRowsFromBranchSheet(ws, sheetName, siteObj = null) {
   if (!ws) return [];
@@ -3195,7 +3191,7 @@ function reconcileSheetStockItems(sheetItems, existingParts = []) {
 }
 
 /**
- * Parses a Site Stock Monitoring workbook and extracts parts across:
+ * Parses a multi-branch inventory workbook and extracts parts across:
  * 1. Stock on hand (in_stock)
  * 2. Used Parts (used)
  * 3. For Outtake (outtake)
@@ -3203,7 +3199,7 @@ function reconcileSheetStockItems(sheetItems, existingParts = []) {
  *
  * Supports single-sheet branch imports as well as network-wide consolidated parsing across all 27 branch sheets.
  */
-export function parseSiteStockMonitoringWorkbook(workbook, {
+export function parseMultiBranchInventoryWorkbook(workbook, {
   file = null,
   existingParts = [],
   existingUnits = [],
@@ -3392,8 +3388,8 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
 
   return {
     success: true,
-    fileName: file?.name || (shouldParseAll ? 'Site_Stock_Monitoring_All_Branches.xlsx' : `${activeSheetName}_Site_Stock_Monitoring.xlsx`),
-    isSiteStockMonitoring: true,
+    fileName: file?.name || (shouldParseAll ? 'Multi_Branch_Inventory_All_Branches.xlsx' : `${activeSheetName}_Inventory.xlsx`),
+    isMultiBranchInventory: true,
     activeSheet: activeSheetName,
     availableSheets: ['ALL_SHEETS', ...availableBranchSheets],
     isMultiSite: shouldParseAll,
@@ -3413,58 +3409,258 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
     }
   };
 }
+export const parseSiteStockMonitoringWorkbook = parseMultiBranchInventoryWorkbook;
+
+
 
 /**
- * Downloads a sample template specifically replicating Site Stock Monitoring.xlsx
+ * Detects whether a CSV / text content is a Fixably or GSX "Custom Reports - Inventory Value" export.
  */
-export function downloadSiteStockMonitoringTemplate(siteCode = 'APP BHS') {
-  const wb = XLSX.utils.book_new();
-  const cleanSite = String(siteCode || 'APP BHS').toUpperCase();
+export function isFixablyInventoryValueContent(content) {
+  if (!content || typeof content !== 'string') return false;
+  const first1000 = content.substring(0, 1000).toLowerCase();
+  return (
+    (first1000.includes('stock name') || first1000.includes('mspi-owned') || first1000.includes('stock type')) &&
+    first1000.includes('part number') &&
+    (first1000.includes('part description') || first1000.includes('part serial'))
+  );
+}
 
-  const r0 = [
-    '', 'Stock on hand', '', '', '', '', '', '',
-    'Used Parts', '', '', '', '', '',
-    'For Outtake', '', '', '', '',
-    'Transferred Parts to Other Sites', '', '', '', '', '',
-    'Site Stock'
-  ];
+/**
+ * Parses Fixably / GSX "Custom Reports - Inventory Value.csv".
+ * Accurately extracts all parts, serial numbers, quantities, unit values, and dates,
+ * mapping all branch stock names (e.g. GL5_MSPI-Owned, VER_MSPI-Owned, etc.) to the
+ * official MobileCare system sites.
+ */
+export async function parseFixablyInventoryValueCsv(
+  fileOrContent,
+  _existingParts = [],
+  _existingUnits = [],
+  options = {}
+) {
+  try {
+    let text = '';
+    let fileName = 'Fixably_Inventory_Value.csv';
+    if (typeof fileOrContent === 'string') {
+      text = fileOrContent;
+    } else if (fileOrContent && typeof fileOrContent.text === 'function') {
+      fileName = fileOrContent.name || fileName;
+      text = await fileOrContent.text();
+    } else if (fileOrContent instanceof ArrayBuffer) {
+      text = new TextDecoder().decode(fileOrContent);
+    } else if (fileOrContent && fileOrContent.data) {
+      text = String(fileOrContent.data);
+    } else {
+      return { success: false, error: 'Invalid file input for CSV parsing.' };
+    }
 
-  const r1 = [
-    'Site', 'P/N', 'Part Description', 'Serialized Count', 'Serial', 'Date Received', 'Remarks', '',
-    'Date Used', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
-    'P/N', 'Part Description', 'Serial', 'Remarks', '',
-    'Date Transferred', 'P/N', 'Part Description', 'Serial', 'Remarks', '',
-    'Site', 'P/N', 'Part Description', 'Serialized Count'
-  ];
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) {
+      return { success: false, error: 'CSV file is empty or contains no data rows.' };
+    }
 
-  const sampleRows = [
-    [
-      cleanSite, '661-21991', 'Battery, iPhone 13', 1, 'F8Y6173C4P118FKB8', '2026-03-01', 'On-hand', '',
-      '2026-03-02', '661-21988', 'Display, iPhone 13', 'G9Q5174CLKCPR5QAC', 'Used to OC# 20045111', '',
-      '661-13574', 'Battery, iPhone 11', 'F8Y4464C0QEM6YNDK', 'Damaged Pin Return', '',
-      '2026-03-04', '661-42726', 'Display, iPhone 16 Pro', 'G9PHL8T27E700005DP', 'TS526151 to GL5', '',
-      cleanSite, '661-21991', 'Battery, iPhone 13', 5
-    ],
-    [
-      cleanSite, '661-21996', 'Battery, iPhone 13 Pro', 1, 'F8Y5122C45C13RHCA', '2026-03-01', 'On-hand', '',
-      '2026-03-03', '661-22309', 'Display, iPhone 13 Pro Max', 'G9P5385MFKBPQCLA4', 'Used to OC# 20048363', '',
-      '', '', '', '', '',
-      '', '', '', '', '', '',
-      cleanSite, '661-21996', 'Battery, iPhone 13 Pro', 3
-    ]
-  ];
+    const delim = lines[0].includes(';') ? ';' : ',';
 
-  const ws = XLSX.utils.aoa_to_sheet([r0, r1, ...sampleRows]);
-  ws['!cols'] = [
-    { wch: 12 }, { wch: 15 }, { wch: 25 }, { wch: 8 }, { wch: 22 }, { wch: 13 }, { wch: 16 }, { wch: 4 },
-    { wch: 13 }, { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 24 }, { wch: 4 },
-    { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 18 }, { wch: 4 },
-    { wch: 13 }, { wch: 15 }, { wch: 25 }, { wch: 22 }, { wch: 24 }, { wch: 4 },
-    { wch: 12 }, { wch: 15 }, { wch: 25 }, { wch: 12 }
-  ];
+    function parseCSVLine(line) {
+      const regex = new RegExp(`(?:^|${delim})(?:"([^"]*(?:""[^"]*)*)"|([^"${delim}]*))`, 'g');
+      const row = [];
+      let match;
+      while ((match = regex.exec(line)) !== null) {
+        let val = match[1] !== undefined ? match[1].replace(/""/g, '"') : match[2];
+        row.push(val ? val.trim() : '');
+      }
+      return row;
+    }
 
-  XLSX.utils.book_append_sheet(wb, ws, cleanSite);
-  XLSX.writeFile(wb, `${cleanSite}_Site_Stock_Monitoring_Template.xlsx`);
+    const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+    const getIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+
+    const idxStock = getIdx(['stock name', 'location', 'site']);
+    const idxType = getIdx(['stock type', 'type']);
+    const idxPn = getIdx(['part number', 'part #', 'p/n', 'code']);
+    const idxDesc = getIdx(['part description', 'description', 'desc']);
+    const idxSerial = getIdx(['part serial', 'serial', 's/n']);
+    const idxDate = getIdx(['last received', 'received date', 'date']);
+    const idxQty = getIdx(['quantity', 'qty']);
+    const idxVal = getIdx(['part value', 'unit value', 'price', 'value']);
+    const idxTotVal = getIdx(['total value', 'total']);
+
+    if (idxPn === -1 && idxDesc === -1) {
+      return { success: false, error: 'CSV missing required "Part Number" column header.' };
+    }
+
+    const sites = options.sites || [];
+    const branchKeys = Object.keys(OFFICIAL_BRANCH_DIRECTORY);
+
+    function resolveBranchSite(stockName) {
+      const cleanStock = String(stockName || '').trim();
+      const norm = normalizeSite(cleanStock);
+
+      let siteMatch = (sites || []).find(s => {
+        if (!s) return false;
+        const sCode = String(s.code || '').toUpperCase();
+        const sClean = sCode.replace(/^(ASP|APP)\s+/, '');
+        return sCode === norm.code || sClean === norm.code ||
+               (norm.code === 'VER' && (sClean === 'VN' || sCode === 'ASP VN')) ||
+               (norm.code === 'MAG' && (sClean === 'RM' || sCode === 'APP RM')) ||
+               (norm.code === 'ILO' && (sClean === 'ILO' || sCode === 'ASP ILO'));
+      });
+
+      if (siteMatch) {
+        return {
+          id: siteMatch.id,
+          code: siteMatch.code,
+          name: siteMatch.name
+        };
+      }
+
+      const matchedKey = branchKeys.find(bk => {
+        const cleanBk = bk.replace(/^(ASP|APP)\s+/, '');
+        return bk === norm.code || cleanBk === norm.code ||
+               (norm.code === 'VER' && cleanBk === 'VN') ||
+               (norm.code === 'MAG' && cleanBk === 'RM') ||
+               (norm.code === 'ILO' && cleanBk === 'ILO');
+      });
+      const dirObj = matchedKey ? OFFICIAL_BRANCH_DIRECTORY[matchedKey] : null;
+      const finalCode = matchedKey || norm.code;
+      return {
+        id: `site-${finalCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+        code: finalCode,
+        name: dirObj?.name || norm.name || finalCode
+      };
+    }
+
+    const items = [];
+    const seenSerials = new Map();
+    const extractedPartsMap = new Map();
+    const siteBreakdown = {};
+    let totalValue = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (!cols || cols.length <= 1) continue;
+
+      const stockName = cols[idxStock] || '';
+      const stockType = cols[idxType] || '';
+      const rawPnFull = cols[idxPn] || '';
+      const rawDesc = cols[idxDesc] || '';
+      const rawSerial = cols[idxSerial] || '';
+      const dateRec = cols[idxDate] || new Date().toISOString().substring(0, 10);
+      const qty = parseInt(cols[idxQty], 10) || 1;
+      const partVal = parseFloat((cols[idxVal] || '0').replace(/[^0-9.]/g, '')) || 0;
+      const totVal = parseFloat((cols[idxTotVal] || '0').replace(/[^0-9.]/g, '')) || (partVal * qty);
+
+      if (!rawPnFull && !rawDesc) continue;
+
+      const cleanPn = rawPnFull.split(/[;,]/)[0].trim().toUpperCase();
+      const site = resolveBranchSite(stockName);
+      totalValue += totVal;
+
+      if (!extractedPartsMap.has(cleanPn)) {
+        const catCode = getPartCategory({ part_number: cleanPn, description: rawDesc });
+        const canonicalModel = resolveCanonicalIPhoneModel ? resolveCanonicalIPhoneModel(rawDesc) : null;
+        extractedPartsMap.set(cleanPn, {
+          part_number: cleanPn,
+          description: rawDesc || `Apple Service Part (${cleanPn})`,
+          category_id: catCode === 'DISPLAY' ? 'cat-display' : 'cat-battery',
+          stocking_price: partVal > 0 ? partVal : 99,
+          iphone_model: canonicalModel || 'iPhone Model',
+          is_active: true
+        });
+      }
+
+      if (!siteBreakdown[site.code]) {
+        siteBreakdown[site.code] = { count: 0, name: site.name, value: 0 };
+      }
+      siteBreakdown[site.code].count += 1;
+      siteBreakdown[site.code].value += totVal;
+
+      const cleanSerial = String(rawSerial || '').trim().toUpperCase();
+      const isInvalidOrBlankSerial = !cleanSerial || cleanSerial === 'NOT VISIBLE' || cleanSerial === 'N/A' || cleanSerial === 'N//A' || cleanSerial === 'NONE' || cleanSerial === 'UNKNOWN' || cleanSerial === 'FOR DELETE';
+
+      if (!isInvalidOrBlankSerial) {
+        const seenCount = seenSerials.get(cleanSerial) || 0;
+        seenSerials.set(cleanSerial, seenCount + 1);
+        const storageSerial = seenCount > 0 ? `${cleanSerial}-DUP${seenCount + 1}` : cleanSerial;
+
+        items.push({
+          partNumber: cleanPn,
+          part_number: cleanPn,
+          description: rawDesc,
+          serialNumber: storageSerial,
+          serial_number: storageSerial,
+          raw_serial: cleanSerial,
+          display_serial: cleanSerial,
+          dateReceived: dateRec,
+          received_at: dateRec,
+          stocking_price: partVal,
+          lifecycle_status: 'in_stock',
+          status: 'VALID',
+          statusMessage: 'Ready to import',
+          summary_only: false,
+          is_summary_only: false,
+          site_code: site.code,
+          site_name: site.name,
+          current_site_id: site.id,
+          sheetName: site.code,
+          stockName,
+          stockType
+        });
+      } else {
+        const syntheticSerial = `SUMMARY-${site.code.replace(/[^A-Z0-9]/g, '')}-${cleanPn.replace(/[^A-Z0-9]/g, '')}-${items.length + 1}`;
+        items.push({
+          partNumber: cleanPn,
+          part_number: cleanPn,
+          description: rawDesc,
+          serialNumber: syntheticSerial,
+          serial_number: syntheticSerial,
+          raw_serial: cleanSerial || syntheticSerial,
+          display_serial: cleanSerial || syntheticSerial,
+          dateReceived: dateRec,
+          received_at: dateRec,
+          stocking_price: partVal,
+          lifecycle_status: 'in_stock',
+          status: 'VALID',
+          statusMessage: 'Ready to import (Non-serialized)',
+          summary_only: true,
+          is_summary_only: true,
+          site_code: site.code,
+          site_name: site.name,
+          current_site_id: site.id,
+          sheetName: site.code,
+          stockName,
+          stockType
+        });
+      }
+    }
+
+    return {
+      success: true,
+      fileType: 'csv',
+      fileName,
+      items,
+      activeSheet: 'ALL_SHEETS',
+      availableSheets: ['ALL_SHEETS', ...Object.keys(siteBreakdown)],
+      summary: {
+        total: items.length,
+        valid: items.length,
+        inStock: items.length,
+        used: 0,
+        outtake: 0,
+        transferred: 0,
+        serialized: items.filter(i => !i.summary_only).length,
+        nonSerialized: items.filter(i => i.summary_only).length,
+        uniqueParts: extractedPartsMap.size,
+        sitesCount: Object.keys(siteBreakdown).length,
+        totalValue: totalValue,
+        siteBreakdown
+      },
+      extractedParts: Array.from(extractedPartsMap.values())
+    };
+  } catch (err) {
+    console.error('parseFixablyInventoryValueCsv error:', err);
+    return { success: false, error: 'Error parsing Fixably CSV: ' + err.message };
+  }
 }
 
 /**
@@ -3480,12 +3676,20 @@ export async function parseScanInPartsFile(
   options = {}
 ) {
   try {
+    const isCsvFile = file?.name?.toLowerCase().endsWith('.csv') || file?.type?.includes('csv');
+    if (isCsvFile && typeof file?.text === 'function') {
+      const text = await file.text();
+      if (isFixablyInventoryValueContent(text)) {
+        return parseFixablyInventoryValueCsv(text, existingParts, existingUnits, options);
+      }
+    }
+
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
 
-    // Check if the uploaded file follows the Site Stock Monitoring.xlsx structure
-    if (isSiteStockMonitoringWorkbook(workbook)) {
-      return parseSiteStockMonitoringWorkbook(workbook, {
+    // Check if the uploaded file follows the multi-branch inventory structure
+    if (isMultiBranchInventoryWorkbook(workbook)) {
+      return parseMultiBranchInventoryWorkbook(workbook, {
         file,
         existingParts,
         existingUnits,

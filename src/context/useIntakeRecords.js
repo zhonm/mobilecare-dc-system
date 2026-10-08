@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList } from '../utils/appContextHelpers';
+import { safeUUID, canUserDeleteRecord, consolidateDcIntakeRecordsList, readInventoryFromLocalStorage } from '../utils/appContextHelpers';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isIntakeRecordArchived, fetchArchivedIntakesFromCloud } from '../utils/archiveManager';
 
@@ -25,7 +25,7 @@ export function useIntakeRecords({
       } catch (e) {}
       let inv = [];
       try {
-        inv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+        inv = readInventoryFromLocalStorage();
       } catch (e) {}
       const { consolidatedRecords } = consolidateDcIntakeRecordsList(parsed, pos, null, inv);
       return consolidatedRecords;

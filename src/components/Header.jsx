@@ -63,13 +63,11 @@ export default function Header() {
     'user-access': { title: 'User Access Management', section: 'Admin', showCategories: false },
     'request-parts': (pmgSubTab === 'stock_on_hand')
       ? { title: 'Branch Stock On Hand', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
-      : (pmgSubTab === 'site_monitoring')
-        ? { title: 'Site Stock Monitoring (Excel)', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
-        : (pmgSubTab === 'usage_history')
-          ? { title: currentUser?.role === 'parts_management' ? 'Parts Consumption Log' : 'Used Parts History', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
-          : (pmgSubTab === 'all_stocks')
-            ? { title: 'All Stocks & Multi-Site', section: 'Operations & Logistics', showCategories: false }
-            : { title: currentUser?.role === 'parts_management' ? 'Parts Requests' : 'Parts Requests & Replenishment', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false },
+      : (pmgSubTab === 'usage_history')
+        ? { title: currentUser?.role === 'parts_management' ? 'Parts Consumption Log' : 'Used Parts History', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
+        : (pmgSubTab === 'all_stocks')
+          ? { title: 'All Stocks & Multi-Site', section: 'Operations & Logistics', showCategories: false }
+          : { title: currentUser?.role === 'parts_management' ? 'Parts Requests' : 'Parts Requests & Replenishment', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false },
     'all-stocks': { 
       title: 'All Stocks & Multi-Site', 
       section: 'Operations & Logistics', 

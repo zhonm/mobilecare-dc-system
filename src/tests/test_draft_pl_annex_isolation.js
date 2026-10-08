@@ -59,8 +59,8 @@ async function runTests() {
     }
   ];
 
-  // Helper getSiteMonitoringData logic matching updated implementation
-  const getSiteMonitoringData = (siteCode, units) => {
+  // Helper getBranchStockOnHand logic
+  const getBranchStockOnHand = (siteCode, units) => {
     const isDc = (u) => u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.is_dc;
     const siteUnits = units.filter(u => {
       if (u.status === 'packed' || u.status === 'draft') return false;
@@ -71,7 +71,7 @@ async function runTests() {
   };
 
   // Check Annex stock before draft PL
-  let anxStockBefore = getSiteMonitoringData('APP ANX', inventoryUnits);
+  let anxStockBefore = getBranchStockOnHand('APP ANX', inventoryUnits);
   assert.strictEqual(anxStockBefore.length, 0, 'Annex has 0 stock before draft PL');
 
   // User packs unit into a DRAFT PL for APP ANX
@@ -102,8 +102,8 @@ async function runTests() {
   assert.strictEqual(packedUnit.status, 'packed');
   assert.strictEqual(packedUnit.current_site_id, 'site-dc', 'Unit current_site_id must remain site-dc during draft packing');
 
-  // Verify Annex Stock Monitoring during Draft mode
-  let anxStockDuringDraft = getSiteMonitoringData('APP ANX', inventoryUnits);
+  // Verify Annex Stock during Draft mode
+  let anxStockDuringDraft = getBranchStockOnHand('APP ANX', inventoryUnits);
   assert.strictEqual(anxStockDuringDraft.length, 0, 'Annex MUST have 0 stock while PL is in draft mode');
   console.log('✓ PASS: While PL is in draft mode, Annex has 0 stock on hand');
 

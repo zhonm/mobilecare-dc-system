@@ -3,6 +3,7 @@ import dbStorage from '../utils/dbStorage';
 import { unmarkDeletedSerials } from './deletionRegistryService';
 import { getPartCategory } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
+import { saveInventoryToLocalStorage } from '../utils/appContextHelpers';
 
 export const executeSaveUnitsToSupabase = async ({
   units,
@@ -114,7 +115,7 @@ export const executeSaveUnitsToSupabase = async ({
         period_year: new Date().getFullYear(),
         period_month: new Date().getMonth() + 1,
         period_week: 1,
-        notes: 'Master In-Stock & Site Stock Monitoring branch inventory across all MobileCare ASP service points',
+        notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
         saved_by_name: currentUser?.fullName || 'Warehouse Staff',
         snapshot_data: { units: branchUnits },
         updated_at: new Date().toISOString()
@@ -165,7 +166,7 @@ export const executeUpdateUnitAssignment = async ({
       }
       return u;
     });
-    try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedUnits)); } catch (e) {}
+    try { saveInventoryToLocalStorage(updatedUnits); } catch (e) {}
     dbStorage.setItem('mdc_inventory', updatedUnits);
     return updatedUnits;
   });

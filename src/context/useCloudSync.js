@@ -21,7 +21,9 @@ import {
   isExplicitlyCleared,
   formatAuditEntityDisplay,
   reconcileShipmentsAndDrafts,
-  resolveSite
+  resolveSite,
+  saveInventoryToLocalStorage,
+  readInventoryFromLocalStorage
 } from '../utils/appContextHelpers';
 import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
@@ -177,6 +179,9 @@ export function useCloudSync({
       'FORCE_LOGOUT_USER',
       'SUPERVISOR_SETTINGS_UPDATED',
       'GLOBAL_FORCE_CACHE_REFRESH',
+      'INVENTORY_CACHE_INVALIDATED',
+      'STOCK_UPDATED',
+      'UNITS_IMPORTED',
       'MASTER_DATA_UPDATED',
       'MASTER_DATA_CLEARED',
       'FIFO_AUDIT_UPDATED',
@@ -416,13 +421,20 @@ export function useCloudSync({
           }
           return false;
         }
-        // Master lookup tables: sites, part_categories rarely change
+        // Master lookup tables: sites, part_categories, parts rarely change
         if (tbl === 'sites' || tbl === 'part_categories') {
           if (selectiveTables && selectiveTables.includes(tbl)) return true;
           if (isForce) return true;
           // Skip routine background polling if already loaded in memory to prevent log ingestion waste
           if (tbl === 'sites' && Array.isArray(sites) && sites.length > 0) return false;
           if (tbl === 'part_categories' && Array.isArray(categories) && categories.length > 0) return false;
+          return true;
+        }
+        if (tbl === 'parts') {
+          if (selectiveTables && selectiveTables.includes(tbl)) return true;
+          if (isForce) return true;
+          // Egress defense: Skip routine background polling if parts catalog is already populated
+          if (Array.isArray(parts) && parts.length > 0) return false;
           return true;
         }
         if (!selectiveTables) return true;
@@ -433,13 +445,57 @@ export function useCloudSync({
       const archiveCutoffIsoDate = getArchiveCutoffIso(ARCHIVE_CUTOFF_DAYS);
       const archiveCutoffIsoTimestamp = getArchiveCutoffDate(ARCHIVE_CUTOFF_DAYS).toISOString();
       const fetchAllInventoryUnits = async () => {
+        // Egress Quota Defense: Probe latest updated_at and total count before downloading thousands of rows
+        let localInvUpdatedAt = null;
+        let localInvCount = 0;
+        try {
+          localInvUpdatedAt = localStorage.getItem('mdc_live_inventory_updated_at');
+          localInvCount = parseInt(localStorage.getItem('mdc_live_inventory_count') || '0', 10);
+        } catch (e) {}
+
+        let cachedUnits = null;
+        if (Array.isArray(inventoryUnits) && inventoryUnits.length > 0) {
+          cachedUnits = inventoryUnits;
+        } else {
+          try {
+            cachedUnits = await dbStorage.getItem('mdc_inventory');
+          } catch (e) {}
+        }
+
+        const hasValidLocalCache = Array.isArray(cachedUnits) && cachedUnits.length > 0;
+
+        if (!isForce && hasValidLocalCache && localInvUpdatedAt) {
+          try {
+            const { data: latestRow, count: totalDbCount, error: probeErr } = await supabase
+              .from('inventory_units')
+              .select('updated_at', { count: 'exact' })
+              .order('updated_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (!probeErr && latestRow?.updated_at) {
+              const remoteUpdatedAt = latestRow.updated_at;
+              const countsMatch = (totalDbCount === null || totalDbCount === localInvCount || totalDbCount === cachedUnits.length);
+              const timestampsMatch = (remoteUpdatedAt === localInvUpdatedAt);
+
+              if (timestampsMatch && countsMatch) {
+                console.debug(`[CloudSync Egress Defense] inventory_units unchanged (${cachedUnits.length} units, ${remoteUpdatedAt}). Skipped bulk download.`);
+                return { data: cachedUnits, error: null, fromCache: true };
+              }
+            }
+          } catch (probeEx) {
+            console.debug('[CloudSync Egress Defense] Probe check note:', probeEx?.message);
+          }
+        }
+
         const pageSize = 1000;
         const rows = [];
+        const INVENTORY_COLUMNS = 'id, part_id, serial_number, current_site_id, po_id, status, box_number, received_at, received_by, allocated_at, allocated_by, allocated_site_id, is_deleted, updated_at, notes, work_order_number, usage_notes, used_at, outtake_at, outtake_reason, transferred_at, transfer_slip_number, transferred_to_site_code, site_code, site_name, part_number, description';
 
         for (let offset = 0; ; offset += pageSize) {
           const response = await supabase
             .from('inventory_units')
-            .select('*')
+            .select(INVENTORY_COLUMNS)
             .order('created_at', { ascending: true })
             .range(offset, offset + pageSize - 1);
 
@@ -447,6 +503,23 @@ export function useCloudSync({
           const page = response.data || [];
           rows.push(...page);
           if (page.length < pageSize) break;
+        }
+
+        if (rows.length > 0) {
+          let maxUpdatedAt = rows[0]?.updated_at;
+          for (let i = 1; i < rows.length; i++) {
+            if (rows[i]?.updated_at && (!maxUpdatedAt || rows[i].updated_at > maxUpdatedAt)) {
+              maxUpdatedAt = rows[i].updated_at;
+            }
+          }
+          if (maxUpdatedAt) {
+            try {
+              localStorage.setItem('mdc_live_inventory_updated_at', maxUpdatedAt);
+              localStorage.setItem('mdc_live_inventory_count', String(rows.length));
+            } catch (e) {}
+            dbStorage.setItem('mdc_live_inventory_updated_at', maxUpdatedAt);
+            dbStorage.setItem('mdc_live_inventory_count', rows.length);
+          }
         }
 
         return { data: rows, error: null };
@@ -513,7 +586,8 @@ export function useCloudSync({
           const HEAVY_DOC_IDS = [
             LIVE_MASTER_RECORD_ID,
             'master_masterlist_data_registry',
-            'live_master_dc_inventory'
+            'live_master_dc_inventory',
+            'master_branch_inventory_registry'
           ];
           const LIGHTWEIGHT_SYSTEM_DOC_IDS = SYSTEM_DOC_IDS.filter(id => !HEAVY_DOC_IDS.includes(id));
 
@@ -530,7 +604,7 @@ export function useCloudSync({
               .eq('record_type', 'shipment')
               .gte('created_at', archiveCutoffIsoTimestamp)
               .order('created_at', { ascending: false })
-              .limit(500)
+              .limit(150)
           ]);
           const systemRows = resSystem.data || [];
           const heavyHeaders = resHeavyHeaders?.data || [];
@@ -664,7 +738,10 @@ export function useCloudSync({
                     try { await dbStorage.setItem('mdc_live_inventory_updated_at', fullInvDoc.updated_at); } catch (e) {}
                   }
                   if (Array.isArray(fullInvDoc?.snapshot_data?.units)) {
-                    dbStorage.setItem('mdc_inventory', fullInvDoc.snapshot_data.units);
+                    const currentIdb = await dbStorage.getItem('mdc_inventory');
+                    if (!Array.isArray(currentIdb) || fullInvDoc.snapshot_data.units.length >= currentIdb.length) {
+                      dbStorage.setItem('mdc_inventory', fullInvDoc.snapshot_data.units);
+                    }
                   }
                 }
               } catch (err) {
@@ -675,6 +752,53 @@ export function useCloudSync({
               systemRows.push({
                 ...remoteLiveInvHeader,
                 snapshot_data: { units: effectiveCachedUnits }
+              });
+            }
+          }
+
+          // 2.6. Conditional Egress Optimization for master_branch_inventory_registry:
+          const remoteBranchInvHeader = heavyHeaders.find(h => h.id === 'master_branch_inventory_registry');
+          if (remoteBranchInvHeader) {
+            let localBranchInvUpdatedAt = null;
+            try { localBranchInvUpdatedAt = localStorage.getItem('mdc_branch_inventory_updated_at'); } catch (e) {}
+            if (!localBranchInvUpdatedAt) {
+              try { localBranchInvUpdatedAt = await dbStorage.getItem('mdc_branch_inventory_updated_at'); } catch (e) {}
+            }
+            let cachedBranchUnits = null;
+            try { cachedBranchUnits = await dbStorage.getItem('mdc_branch_inventory_units'); } catch (e) {}
+            const hasLocalBranchUnits = Array.isArray(cachedBranchUnits) && cachedBranchUnits.length > 0;
+            const isTimestampMismatch = Boolean(remoteBranchInvHeader.updated_at && remoteBranchInvHeader.updated_at !== localBranchInvUpdatedAt);
+            const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('inventory_units')));
+            const needsBranchInvDownload = (isForce || !hasLocalBranchUnits || isTimestampMismatch || isTargetedSync) && remoteBranchInvHeader.notes !== '__CLEARED__';
+
+            if (needsBranchInvDownload) {
+              try {
+                const { data: fullBranchDoc } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'master_branch_inventory_registry')
+                  .maybeSingle();
+                if (fullBranchDoc) {
+                  systemRows.push(fullBranchDoc);
+                  if (fullBranchDoc.updated_at) {
+                    try { localStorage.setItem('mdc_branch_inventory_updated_at', fullBranchDoc.updated_at); } catch (e) {}
+                    try { await dbStorage.setItem('mdc_branch_inventory_updated_at', fullBranchDoc.updated_at); } catch (e) {}
+                  }
+                  if (Array.isArray(fullBranchDoc?.snapshot_data?.units)) {
+                    const currentIdbBranch = await dbStorage.getItem('mdc_branch_inventory_units');
+                    if (!Array.isArray(currentIdbBranch) || fullBranchDoc.snapshot_data.units.length >= currentIdbBranch.length) {
+                      dbStorage.setItem('mdc_branch_inventory_units', fullBranchDoc.snapshot_data.units);
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn('Full branch inventory fetch note:', err);
+                systemRows.push(remoteBranchInvHeader);
+              }
+            } else {
+              systemRows.push({
+                ...remoteBranchInvHeader,
+                snapshot_data: { units: cachedBranchUnits || [] }
               });
             }
           }
@@ -2175,7 +2299,7 @@ export function useCloudSync({
 
         let activeLocalSerials = new Set();
         try {
-          const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+          const localInv = readInventoryFromLocalStorage();
           (localInv || []).forEach(u => {
             const s = String(u.serial_number || '').trim().toUpperCase();
             if (s && !u.is_deleted && u.status !== 'deleted') activeLocalSerials.add(s);
@@ -2304,7 +2428,13 @@ export function useCloudSync({
         }
 
         let idbUsedReg = null;
-        try { idbUsedReg = await dbStorage.getItem('mdc_master_used_parts_registry'); } catch (e) {}
+        let idbCachedUnits = null;
+        let idbBranchCachedUnits = null;
+        try {
+          idbUsedReg = await dbStorage.getItem('mdc_master_used_parts_registry');
+          idbCachedUnits = await dbStorage.getItem('mdc_inventory');
+          idbBranchCachedUnits = await dbStorage.getItem('mdc_branch_inventory_units');
+        } catch (e) {}
 
         setInventoryUnits(prev => {
           const hasCloudInventoryRows = Array.isArray(dbUnits) && dbUnits.length > 0;
@@ -2611,7 +2741,7 @@ export function useCloudSync({
           // Offline fallback ONLY when Supabase query is completely unavailable
           if (!dbUnits) {
             try {
-              const localSaved = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+              const localSaved = readInventoryFromLocalStorage();
               if (Array.isArray(localSaved)) {
                 localSaved.forEach(u => {
                   const s = String(u.serial_number || '').trim().toUpperCase();
@@ -2634,12 +2764,22 @@ export function useCloudSync({
             } catch (e) {}
           }
 
-          // Preserve active local inventory units (including freshly scanned units, session drafts, or optimistic additions not yet indexed in dbUnits)
-          (prev || []).forEach(u => {
+          // Preserve active local inventory units across all local tiers:
+          // 1. Current in-memory React state (prev)
+          // 2. Primary local IndexedDB storage (idbCachedUnits, idbBranchCachedUnits)
+          // 3. Compact/full localStorage cache (readInventoryFromLocalStorage())
+          const allLocalSources = [
+            ...(Array.isArray(prev) ? prev : []),
+            ...(Array.isArray(idbCachedUnits) ? idbCachedUnits : []),
+            ...(Array.isArray(idbBranchCachedUnits) ? idbBranchCachedUnits : []),
+            ...readInventoryFromLocalStorage()
+          ];
+
+          allLocalSources.forEach(u => {
             const s = String(u.serial_number || '').trim().toUpperCase();
             if (s && !deletedSerialsSet.has(s) && !u.is_deleted && u.status !== 'deleted') {
               if (!map.has(s)) {
-                // Unit exists in local state but not yet returned by cloud query: preserve optimistic addition
+                // Unit exists in local state but not yet returned by cloud query: preserve optimistic addition / imported dataset
                 map.set(s, u);
               } else if (u.isSessionDraft) {
                 const cloudUnit = map.get(s);
@@ -2691,8 +2831,11 @@ export function useCloudSync({
             .sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
           const normalized = normalizeInventoryUnits(mergedRaw, allAvailableParts);
           const merged = reconcileUnitsWithPackedDrafts(normalized, effectiveShipments, effectiveDraft, activePackingStationsRef.current || activePackingStations);
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(merged)); } catch (e) {}
-          dbStorage.setItem('mdc_inventory', merged);
+          saveInventoryToLocalStorage(merged);
+          // Zero-Loss Guard: Never overwrite local IndexedDB with a smaller array unless explicitly cleared
+          if (!Array.isArray(idbCachedUnits) || merged.length >= idbCachedUnits.length) {
+            dbStorage.setItem('mdc_inventory', merged);
+          }
 
           return merged;
         });
@@ -2974,7 +3117,7 @@ export function useCloudSync({
           }
           return u;
         });
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -2993,7 +3136,7 @@ export function useCloudSync({
           }
           return u;
         });
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -3022,7 +3165,7 @@ export function useCloudSync({
             current_site_id: 'site-dc'
           });
         }
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -3042,7 +3185,7 @@ export function useCloudSync({
           }
           return u;
         });
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -3050,7 +3193,7 @@ export function useCloudSync({
       const cleanS = String(payload.serialNumber).trim().toUpperCase();
       setInventoryUnits(prev => {
         const updated = (prev || []).filter(u => String(u.serial_number || '').trim().toUpperCase() !== cleanS);
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -3091,7 +3234,7 @@ export function useCloudSync({
           } else {
             updated = prev || [];
           }
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3128,7 +3271,7 @@ export function useCloudSync({
             }
             return existing;
           });
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3150,7 +3293,7 @@ export function useCloudSync({
             }
             return existing;
           });
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3174,7 +3317,7 @@ export function useCloudSync({
             }
             return existing;
           });
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3195,7 +3338,7 @@ export function useCloudSync({
             }
             return u;
           });
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3205,11 +3348,11 @@ export function useCloudSync({
         const incomingSerials = new Set(payload.units.map(u => String(u.serial_number || '').trim().toUpperCase()).filter(Boolean));
         const filteredPrev = (prev || []).filter(u => !incomingSerials.has(String(u.serial_number || '').trim().toUpperCase()));
         const updated = [...payload.units, ...filteredPrev];
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
-      autoRefreshData({ tables: ['inventory_units', 'saved_records'], force: true, silent: true }).catch(() => {});
+      autoRefreshData({ tables: ['inventory_units', 'saved_records'], force: false, silent: true }).catch(() => {});
     } else if ((type === 'STOCK_UPDATED' || type === 'UNIT_ADDED') && payload.unit) {
       const u = payload.unit;
       const cleanS = String(u.serial_number || payload.serial || '').trim().toUpperCase();
@@ -3219,7 +3362,7 @@ export function useCloudSync({
             return prev;
           }
           const updated = [u, ...(prev || [])];
-          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          saveInventoryToLocalStorage(updated);
           dbStorage.setItem('mdc_inventory', updated);
           return updated;
         });
@@ -3271,7 +3414,7 @@ export function useCloudSync({
               return u;
             });
             if (changed) {
-              try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+              try { saveInventoryToLocalStorage(updated); } catch (e) {}
               dbStorage.setItem('mdc_inventory', updated);
               return updated;
             }
@@ -3329,7 +3472,7 @@ export function useCloudSync({
           if (p.siteCode && (sCode === p.siteCode || sId === p.siteCode)) return false;
           return true;
         });
-        try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+        saveInventoryToLocalStorage(updated);
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
@@ -3348,7 +3491,7 @@ export function useCloudSync({
     }
 
     if (currentUser?.id) {
-      autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
+      autoRefreshData({ silent: true, force: false, reason: 'Initial app mount' });
     }
     try {
       if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -3378,7 +3521,7 @@ export function useCloudSync({
                   };
                 });
               }
-            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'INVENTORY_CACHE_INVALIDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
               if (ev.data.type === 'GLOBAL_FORCE_CACHE_REFRESH') {
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}
@@ -3387,6 +3530,47 @@ export function useCloudSync({
                 setTimeout(() => {
                   window.location.reload();
                 }, 800);
+              } else if (ev.data.type === 'INVENTORY_CACHE_INVALIDATED') {
+                if (Array.isArray(ev.data.payload?.units) && ev.data.payload.units.length > 0) {
+                  const nowIso = new Date().toISOString();
+                  setInventoryUnits(ev.data.payload.units);
+                  saveInventoryToLocalStorage(ev.data.payload.units);
+                  try {
+                    localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                    localStorage.setItem('mdc_live_inventory_count', String(ev.data.payload.units.length));
+                  } catch (e) {}
+                  dbStorage.setItem('mdc_inventory', ev.data.payload.units);
+                  dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                  dbStorage.setItem('mdc_live_inventory_count', ev.data.payload.units.length);
+                  autoRefreshData({
+                    force: true,
+                    silent: true,
+                    isManual: false,
+                    reason: 'Local Broadcast [INVENTORY_CACHE_INVALIDATED - Metas]',
+                    tables: ['saved_records', 'parts']
+                  }).catch(err => console.warn('Cross-tab refresh note:', err));
+                } else {
+                  console.info('[Cross-Tab Sync] INVENTORY_CACHE_INVALIDATED received. Wiping inventory cache & forcing live refresh...');
+                  try {
+                    localStorage.removeItem('mdc_inventory');
+                    localStorage.removeItem('mdc_live_inventory_updated_at');
+                    localStorage.removeItem('mdc_live_inventory_count');
+                    localStorage.removeItem('mdc_zero_stock_tracker');
+                    localStorage.removeItem('mdc_masterlist_updated_at');
+                  } catch (e) {}
+                  dbStorage.removeItem('mdc_inventory');
+                  dbStorage.removeItem('mdc_live_inventory_updated_at');
+                  dbStorage.removeItem('mdc_live_inventory_count');
+                  lastRefreshTimeRef.current = 0;
+
+                  autoRefreshData({
+                    force: true,
+                    silent: true,
+                    isManual: false,
+                    reason: 'Local Broadcast [INVENTORY_CACHE_INVALIDATED]',
+                    tables: ['inventory_units', 'saved_records', 'parts']
+                  }).catch(err => console.warn('Cross-tab refresh note:', err));
+                }
               } else if (ev.data.type === 'MASTER_DATA_CLEARED') {
                 clearOperationalLocalStorage({
                   keepSession: true,
@@ -3540,6 +3724,47 @@ export function useCloudSync({
                   });
                 }
               }
+            } else if (bType === 'INVENTORY_CACHE_INVALIDATED') {
+              if (Array.isArray(bPayload?.units) && bPayload.units.length > 0) {
+                const nowIso = new Date().toISOString();
+                setInventoryUnits(bPayload.units);
+                saveInventoryToLocalStorage(bPayload.units);
+                try {
+                  localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                  localStorage.setItem('mdc_live_inventory_count', String(bPayload.units.length));
+                } catch (e) {}
+                dbStorage.setItem('mdc_inventory', bPayload.units);
+                dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                dbStorage.setItem('mdc_live_inventory_count', bPayload.units.length);
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: `WebSocket Broadcast [${bType} - Metas]`,
+                  tables: ['saved_records', 'parts']
+                }).catch(err => console.warn('Realtime refresh note:', err));
+              } else {
+                console.info(`[Realtime WebSocket ${primaryRoomName}] INVENTORY_CACHE_INVALIDATED received. Wiping inventory cache & forcing live refresh...`);
+                try {
+                  localStorage.removeItem('mdc_inventory');
+                  localStorage.removeItem('mdc_live_inventory_updated_at');
+                  localStorage.removeItem('mdc_live_inventory_count');
+                  localStorage.removeItem('mdc_zero_stock_tracker');
+                  localStorage.removeItem('mdc_masterlist_updated_at');
+                } catch (e) {}
+                dbStorage.removeItem('mdc_inventory');
+                dbStorage.removeItem('mdc_live_inventory_updated_at');
+                dbStorage.removeItem('mdc_live_inventory_count');
+                lastRefreshTimeRef.current = 0;
+
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: `WebSocket Broadcast [${bType}]`,
+                  tables: ['inventory_units', 'saved_records', 'parts']
+                }).catch(err => console.warn('Realtime refresh note:', err));
+              }
             } else if (['SHIPMENT_RECEIVED', 'BRANCH_STOCK_UPDATED'].includes(bType)) {
               autoRefreshData({ force: true, silent: true, isManual: false, reason: `WebSocket Broadcast [${bType}]`, tables: ['shipments', 'saved_records', 'inventory_units'] });
             } else if (['SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(bType)) {
@@ -3609,6 +3834,47 @@ export function useCloudSync({
               ].includes(bType)
             )) {
               handleRealtimeInventoryEvent(bType, bPayload);
+            } else if (bType === 'INVENTORY_CACHE_INVALIDATED') {
+              if (Array.isArray(bPayload?.units) && bPayload.units.length > 0) {
+                const nowIso = new Date().toISOString();
+                setInventoryUnits(bPayload.units);
+                saveInventoryToLocalStorage(bPayload.units);
+                try {
+                  localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                  localStorage.setItem('mdc_live_inventory_count', String(bPayload.units.length));
+                } catch (e) {}
+                dbStorage.setItem('mdc_inventory', bPayload.units);
+                dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+                dbStorage.setItem('mdc_live_inventory_count', bPayload.units.length);
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: 'Realtime Global Alert [INVENTORY_CACHE_INVALIDATED - Metas]',
+                  tables: ['saved_records', 'parts']
+                }).catch(err => console.warn('Global alert refresh note:', err));
+              } else {
+                console.info('[Realtime Global Alerts] INVENTORY_CACHE_INVALIDATED received. Wiping inventory cache & forcing live refresh...');
+                try {
+                  localStorage.removeItem('mdc_inventory');
+                  localStorage.removeItem('mdc_live_inventory_updated_at');
+                  localStorage.removeItem('mdc_live_inventory_count');
+                  localStorage.removeItem('mdc_zero_stock_tracker');
+                  localStorage.removeItem('mdc_masterlist_updated_at');
+                } catch (e) {}
+                dbStorage.removeItem('mdc_inventory');
+                dbStorage.removeItem('mdc_live_inventory_updated_at');
+                dbStorage.removeItem('mdc_live_inventory_count');
+                lastRefreshTimeRef.current = 0;
+
+                autoRefreshData({
+                  force: true,
+                  silent: true,
+                  isManual: false,
+                  reason: 'Realtime Global Alert [INVENTORY_CACHE_INVALIDATED]',
+                  tables: ['inventory_units', 'saved_records', 'parts']
+                }).catch(err => console.warn('Global alert refresh note:', err));
+              }
             } else if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
               const targetUserId = String(bPayload?.userId || '').trim().toLowerCase();
               const targetEmail = String(bPayload?.email || '').trim().toLowerCase();
@@ -4131,7 +4397,7 @@ export function useCloudSync({
       localStorage.setItem('mdc_active_period', JSON.stringify(septPeriod));
       localStorage.setItem('mdc_forecast', JSON.stringify(seedData.forecastItems));
       localStorage.setItem('mdc_allocations', JSON.stringify(seedData.allocations));
-      localStorage.setItem('mdc_inventory', JSON.stringify(seedData.inventoryUnits || []));
+      saveInventoryToLocalStorage(seedData.inventoryUnits || []);
       localStorage.setItem('mdc_parts', JSON.stringify(seedData.parts));
       localStorage.setItem('mdc_sites', JSON.stringify(seedData.sites));
       localStorage.setItem('mdc_categories', JSON.stringify(seedData.categories));
