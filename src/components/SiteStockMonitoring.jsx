@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveSite } from '../utils/appContextHelpers';
+import { resolveSite, getCleanDisplaySerial } from '../utils/appContextHelpers';
 import { getCategoryForPart } from '../utils/categoryFilter';
 import { exportSiteStockMonitoringToExcel } from '../utils/stockExportUtils';
 import {
@@ -41,6 +41,9 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     sites = [],
     parts = [],
     inventoryUnits = [],
+    isInventoryLoaded = true,
+    isAutoRefreshing = false,
+    cloudSyncStatus,
     getSiteMonitoringData,
     markUnitAsUsed,
     unmarkUnitAsUsed,
@@ -55,6 +58,8 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
 
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
+  const isAdmin = isSuperadmin || currentUser?.role === 'admin' || currentUser?.isSuperAdmin;
+  const canRestore = isAdmin;
 
   // Resolve user site object
   const userSiteObj = useMemo(() => {
@@ -122,9 +127,9 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     }
   };
 
-  const handleCopySerial = (serial) => {
-    if (!serial) return;
-    const clean = String(serial).trim().toUpperCase();
+  const handleCopySerial = (serial, unit) => {
+    if (!serial && !unit) return;
+    const clean = getCleanDisplaySerial(serial, unit).trim().toUpperCase();
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(clean);
     } else {
@@ -168,8 +173,31 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
   // Import state
   const [importParsedBatch, setImportParsedBatch] = useState(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({
+    active: false,
+    stage: '',
+    detail: '',
+    percent: 0,
+    current: 0,
+    total: 0
+  });
+  const isSubmittingImportRef = useRef(false);
   const [importSelectedSheet, setImportSelectedSheet] = useState('');
   const fileInputRef = useRef(null);
+
+  // Helper to resolve human-readable site location code for any unit
+  const getUnitSiteCode = useCallback((unit) => {
+    if (!unit) return '';
+    if (unit.site_code && unit.site_code !== 'ALL') return unit.site_code;
+    const sId = unit.current_site_id || unit.site_id || unit.siteId;
+    if (sId && sId !== 'ALL') {
+      const s = sites.find(site => site.id === sId || site.code === sId);
+      if (s?.code) return s.code;
+    }
+    if (unit.site_name && unit.site_name !== 'All Retail Branches' && unit.site_name !== 'ALL') return unit.site_name;
+    if (activeSiteObj && activeSiteObj.code && activeSiteObj.code !== 'ALL') return activeSiteObj.code;
+    return 'BRANCH';
+  }, [sites, activeSiteObj]);
 
   // Total branch units across all 26 retail sites (excluding Central DC)
   const allBranchUnitsCount = useMemo(() => {
@@ -184,6 +212,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     return (inventoryUnits || []).filter(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && deletedSerialsSet.has(s)) return false;
+      if (u.status === 'packed' || u.status === 'draft') return false;
       const sId = String(u.current_site_id || u.site_id || u.siteId || '').toLowerCase();
       const sCode = String(u.site_code || u.siteCode || '').toUpperCase();
       return sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && !u.is_dc;
@@ -206,6 +235,9 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
     const units = (inventoryUnits || []).filter(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && deletedSerialsSet.has(s)) return false;
+      if (u.status === 'packed' || u.status === 'draft') return false;
+      const isDc = u.current_site_id === 'site-dc' || u.site_code === 'DC-MDC' || u.site_code === 'DC' || (!u.current_site_id && !u.site_code && u.is_dc);
+      if (activeSiteObj.id === 'ALL' && isDc) return false;
       if (activeSiteObj.id !== 'ALL') {
         const uSite = String(u.current_site_id || u.siteId || '').toLowerCase();
         const uCode = String(u.site_code || u.siteCode || '').toUpperCase();
@@ -269,6 +301,16 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
       }
     };
   }, [getSiteMonitoringData, activeSiteObj, inventoryUnits]);
+
+  const isSyncing = Boolean(
+    isAutoRefreshing ||
+    !isInventoryLoaded ||
+    (cloudSyncStatus?.isSaving && siteData.kpi.totalCount < 100)
+  );
+
+  const isPartialDataDuringSync = Boolean(
+    isSyncing && siteData.kpi.totalCount < 100
+  );
 
   // Robust part description resolver
   const getPartDescription = useCallback((pn, fallbackDesc) => {
@@ -425,16 +467,33 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
       showToast?.('Please select or specify a part serial number.', 'error');
       return;
     }
+    const serial = selectedUnitSerial;
+    const orderNo = markUsedOrderNumber;
+    const notesVal = markUsedNotes;
+    const usedDateVal = markUsedDate;
+
+    // Locate matching unit in site stock to forward part number
+    const inStockUnit = siteData?.inStock?.find(u => String(u.serial_number || '').trim().toUpperCase() === String(serial).trim().toUpperCase());
+    const partNo = inStockUnit?.part_number;
+
+    // Instant close and reset
+    setIsMarkUsedOpen(false);
+    setSelectedUnitSerial('');
+    setMarkUsedOrderNumber('');
+    setMarkUsedNotes('');
+    setMarkUsedDate(new Date().toISOString().substring(0, 10));
+
     const res = await markUnitAsUsed({
-      serialNumber: selectedUnitSerial,
-      workOrderNumber: markUsedOrderNumber,
-      notes: markUsedNotes
+      serialNumber: serial,
+      partNumber: partNo,
+      siteId: activeSiteObj.id,
+      workOrderNumber: orderNo,
+      notes: notesVal,
+      usedDate: usedDateVal
     });
-    if (res?.success) {
-      setIsMarkUsedOpen(false);
-      setSelectedUnitSerial('');
-      setMarkUsedOrderNumber('');
-      setMarkUsedNotes('');
+
+    if (res?.success === false) {
+      showToast?.(res.error || 'Failed to record part as used.', 'error');
     }
   };
 
@@ -548,6 +607,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
 
   // Confirm Import
   const handleConfirmImport = async () => {
+    if (isSubmittingImportRef.current || isImporting) return;
     if (!importParsedBatch || !importParsedBatch.items) return;
     const validItems = importParsedBatch.items.filter(
       it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY'
@@ -557,43 +617,122 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
       return;
     }
 
+    isSubmittingImportRef.current = true;
+    setIsImporting(true);
+    setImportProgress({
+      active: true,
+      stage: 'Preparing Import Data',
+      detail: `Validating ${validItems.length.toLocaleString()} records for insertion...`,
+      percent: 5,
+      current: 0,
+      total: validItems.length
+    });
+
+    // Yield control to let React paint the loading screen
+    await new Promise(resolve => setTimeout(resolve, 50));
+
     const isMulti = importParsedBatch.activeSheet === 'ALL_SHEETS' || activeSiteObj.id === 'ALL';
 
-    if (clearBeforeImport && typeof clearSiteParts === 'function') {
-      if (isMulti) {
-        await clearSiteParts({
-          clearAllSites: true,
-          reason: 'Pre-import clean slate for all retail branch sites prior to consolidated Site Stock Monitoring import'
-        });
-      } else {
-        await clearSiteParts({
-          siteId: activeSiteObj.id,
-          siteCode: activeSiteObj.code,
-          clearAllSites: false,
-          reason: `Pre-import clean slate for ${activeSiteObj.name} prior to Site Stock Monitoring import`
-        });
-      }
-    }
+    try {
+      if (clearBeforeImport && typeof clearSiteParts === 'function') {
+        setImportProgress(prev => ({
+          ...prev,
+          stage: 'Clearing Outdated Site Inventory',
+          detail: isMulti
+            ? `Purging old inventory across all ${branchSitesCount} retail branch sites...`
+            : `Purging old inventory for ${activeSiteObj.name}...`,
+          percent: 18
+        }));
+        await new Promise(resolve => setTimeout(resolve, 30));
 
-    const res = batchAddScanInUnits(
-      validItems,
-      null,
-      isMulti ? 'Branch Stock' : `${activeSiteObj.code} Stock`,
-      isMulti ? 'ALL' : activeSiteObj.id,
-      isMulti ? 'ALL' : activeSiteObj.code,
-      isMulti ? 'All Retail Branches' : activeSiteObj.name
-    );
-    if (res.success) {
-      const targetMsg = isMulti ? `all ${branchSitesCount} branch sites` : activeSiteObj.name;
-      showToast?.(
-        `Successfully imported ${res.count} parts (${importParsedBatch.summary.inStock || 0} In-Stock, ${importParsedBatch.summary.used || 0} Used, ${importParsedBatch.summary.transferred || 0} Transferred, ${importParsedBatch.summary.outtake || 0} Outtake) across ${targetMsg}!`,
-        'success'
+        if (isMulti) {
+          await clearSiteParts({
+            clearAllSites: true,
+            reason: 'Pre-import clean slate for all retail branch sites prior to consolidated Site Stock Monitoring import'
+          });
+        } else {
+          await clearSiteParts({
+            siteId: activeSiteObj.id,
+            siteCode: activeSiteObj.code,
+            clearAllSites: false,
+            reason: `Pre-import clean slate for ${activeSiteObj.name} prior to Site Stock Monitoring import`
+          });
+        }
+
+        setImportProgress(prev => ({
+          ...prev,
+          stage: 'Inventory Cleared',
+          detail: 'Clean slate applied successfully. Structuring part records...',
+          percent: 30
+        }));
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+
+      setImportProgress(prev => ({
+        ...prev,
+        stage: 'Processing Part Records',
+        detail: `Structuring and indexing ${validItems.length.toLocaleString()} parts...`,
+        percent: 35
+      }));
+
+      const res = await batchAddScanInUnits(
+        validItems,
+        null,
+        isMulti ? 'Branch Stock' : `${activeSiteObj.code} Stock`,
+        isMulti ? 'ALL' : activeSiteObj.id,
+        isMulti ? 'ALL' : activeSiteObj.code,
+        isMulti ? 'All Retail Branches' : activeSiteObj.name,
+        {
+          onProgress: ({ stage, detail, percent, current, total }) => {
+            const mappedPercent = Math.min(96, Math.max(35, Math.round(35 + ((percent || 0) * 0.62))));
+            setImportProgress(prev => ({
+              ...prev,
+              stage: stage || 'Processing Part Batches',
+              detail: detail || prev.detail,
+              percent: mappedPercent,
+              current: current ?? prev.current,
+              total: total || prev.total
+            }));
+          }
+        }
       );
-      setImportParsedBatch(null);
-      setIsImportOpen(false);
-      setClearBeforeImport(false);
-    } else {
-      showToast?.(res.error || 'Import failed', 'error');
+
+      if (res?.success) {
+        setImportProgress({
+          active: true,
+          stage: 'Finalizing Import',
+          detail: 'Database update complete! Refreshing view...',
+          percent: 100,
+          current: validItems.length,
+          total: validItems.length
+        });
+        await new Promise(resolve => setTimeout(resolve, 400));
+
+        const targetMsg = isMulti ? `all ${branchSitesCount} branch sites` : activeSiteObj.name;
+        showToast?.(
+          `Successfully imported ${res.count} parts (${importParsedBatch.summary.inStock || 0} In-Stock, ${importParsedBatch.summary.used || 0} Used, ${importParsedBatch.summary.transferred || 0} Transferred, ${importParsedBatch.summary.outtake || 0} Outtake) across ${targetMsg}!`,
+          'success'
+        );
+        setImportParsedBatch(null);
+        setIsImportOpen(false);
+        setClearBeforeImport(false);
+      } else {
+        showToast?.(res?.error || 'Import failed', 'error');
+      }
+    } catch (err) {
+      console.error('Import execution error:', err);
+      showToast?.('Import encountered an error: ' + (err?.message || 'Unknown error'), 'error');
+    } finally {
+      isSubmittingImportRef.current = false;
+      setIsImporting(false);
+      setImportProgress({
+        active: false,
+        stage: '',
+        detail: '',
+        percent: 0,
+        current: 0,
+        total: 0
+      });
     }
   };
 
@@ -639,8 +778,27 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <div style={{ padding: '6px 8px', background: '#ecfdf5', borderRadius: '8px', color: '#059669', display: 'flex', alignItems: 'center' }}>
                 <FileSpreadsheet size={20} />
               </div>
-              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
-                Site Stock Monitoring — {activeSiteObj.name} ({activeSiteObj.code})
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span>Site Stock Monitoring — {activeSiteObj.name} ({activeSiteObj.code})</span>
+                {isSyncing && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      background: '#e0f2fe',
+                      color: '#0284c7',
+                      border: '1px solid #bae6fd'
+                    }}
+                  >
+                    <RefreshCw size={11} className="spin" />
+                    Syncing live data...
+                  </span>
+                )}
               </h2>
             </div>
             <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#64748b' }}>
@@ -771,6 +929,32 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
           </div>
         </div>
 
+        {/* Realtime Cloud Hydration Banner during initial refresh */}
+        {isPartialDataDuringSync && (
+          <div style={{
+            marginTop: '14px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontSize: '12.5px',
+            color: '#1e40af'
+          }}>
+            <RefreshCw size={15} className="spin" color="#2563eb" />
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+              <span>
+                <strong>Synchronizing live site stock &amp; parts status...</strong> Initializing complete inventory records from cloud database.
+              </span>
+              <span style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 700 }}>
+                Live Cloud Sync Active
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* 2. KPI Summary Banner */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginTop: '16px' }}>
           
@@ -779,8 +963,14 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#1e40af' }}>Stock on Hand</span>
               <Package size={15} color="#2563eb" />
             </div>
-            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#1e3a8a' }}>
-              {siteData.kpi.inStockCount}
+            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#1e3a8a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPartialDataDuringSync ? (
+                <span style={{ fontSize: '13px', color: '#3b82f6', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                  <RefreshCw size={11} className="spin" /> Syncing...
+                </span>
+              ) : (
+                siteData.kpi.inStockCount
+              )}
             </div>
             <span style={{ fontSize: '10.5px', color: '#3b82f6' }}>Available for repairs</span>
           </div>
@@ -790,8 +980,14 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#92400e' }}>Used Parts</span>
               <Wrench size={15} color="#d97706" />
             </div>
-            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#78350f' }}>
-              {siteData.kpi.usedCount}
+            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#78350f', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPartialDataDuringSync ? (
+                <span style={{ fontSize: '13px', color: '#d97706', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                  <RefreshCw size={11} className="spin" /> Syncing...
+                </span>
+              ) : (
+                siteData.kpi.usedCount
+              )}
             </div>
             <span style={{ fontSize: '10.5px', color: '#b45309' }}>Consumed in OC orders</span>
           </div>
@@ -801,8 +997,14 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#6b21a8' }}>For Outtake</span>
               <LogOut size={15} color="#9333ea" />
             </div>
-            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#581c87' }}>
-              {siteData.kpi.outtakeCount}
+            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#581c87', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPartialDataDuringSync ? (
+                <span style={{ fontSize: '13px', color: '#9333ea', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                  <RefreshCw size={11} className="spin" /> Syncing...
+                </span>
+              ) : (
+                siteData.kpi.outtakeCount
+              )}
             </div>
             <span style={{ fontSize: '10.5px', color: '#7e22ce' }}>Pending DC/Apple return</span>
           </div>
@@ -812,8 +1014,14 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#155e75' }}>Transferred</span>
               <ArrowRightLeft size={15} color="#0891b2" />
             </div>
-            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#164e63' }}>
-              {siteData.kpi.transferredCount}
+            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#164e63', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPartialDataDuringSync ? (
+                <span style={{ fontSize: '13px', color: '#0891b2', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                  <RefreshCw size={11} className="spin" /> Syncing...
+                </span>
+              ) : (
+                siteData.kpi.transferredCount
+              )}
             </div>
             <span style={{ fontSize: '10.5px', color: '#0e7490' }}>Inter-branch transfers</span>
           </div>
@@ -823,10 +1031,18 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#166534' }}>Total Tracked SKUs</span>
               <Boxes size={15} color="#16a34a" />
             </div>
-            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#14532d' }}>
-              {siteData.kpi.skuCount}
+            <div style={{ marginTop: '4px', fontSize: '20px', fontWeight: 800, color: '#14532d', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isPartialDataDuringSync ? (
+                <span style={{ fontSize: '13px', color: '#16a34a', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                  <RefreshCw size={11} className="spin" /> Syncing...
+                </span>
+              ) : (
+                siteData.kpi.skuCount
+              )}
             </div>
-            <span style={{ fontSize: '10.5px', color: '#15803d' }}>{siteData.kpi.totalCount} total units</span>
+            <span style={{ fontSize: '10.5px', color: '#15803d' }}>
+              {isPartialDataDuringSync ? 'Synchronizing units...' : `${siteData.kpi.totalCount} total units`}
+            </span>
           </div>
 
         </div>
@@ -877,7 +1093,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <Package size={13} color={viewSection === 'stock' ? '#2563eb' : '#94a3b8'} />
-                <span>Stock on hand ({siteData.kpi.inStockCount})</span>
+                <span>Stock on hand ({isPartialDataDuringSync ? '...' : siteData.kpi.inStockCount})</span>
               </button>
 
               <button
@@ -899,7 +1115,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <Wrench size={13} color={viewSection === 'used' ? '#d97706' : '#94a3b8'} />
-                <span>Used Parts ({siteData.kpi.usedCount})</span>
+                <span>Used Parts ({isPartialDataDuringSync ? '...' : siteData.kpi.usedCount})</span>
               </button>
 
               <button
@@ -921,7 +1137,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <LogOut size={13} color={viewSection === 'outtake' ? '#9333ea' : '#94a3b8'} />
-                <span>For Outtake ({siteData.kpi.outtakeCount})</span>
+                <span>For Outtake ({isPartialDataDuringSync ? '...' : siteData.kpi.outtakeCount})</span>
               </button>
 
               <button
@@ -943,7 +1159,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <ArrowRightLeft size={13} color={viewSection === 'transferred' ? '#0891b2' : '#94a3b8'} />
-                <span>Transferred ({siteData.kpi.transferredCount})</span>
+                <span>Transferred ({isPartialDataDuringSync ? '...' : siteData.kpi.transferredCount})</span>
               </button>
 
               <button
@@ -1217,7 +1433,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <Package size={12} />
-                <span>1. Stock on Hand ({filteredInStock.length})</span>
+                <span>1. Stock on Hand ({isPartialDataDuringSync ? '...' : filteredInStock.length})</span>
               </button>
               <button
                 type="button"
@@ -1238,7 +1454,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <Wrench size={12} />
-                <span>2. Used Parts ({filteredUsed.length})</span>
+                <span>2. Used Parts ({isPartialDataDuringSync ? '...' : filteredUsed.length})</span>
               </button>
               <button
                 type="button"
@@ -1259,7 +1475,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <LogOut size={12} />
-                <span>3. For Outtake ({filteredOuttake.length})</span>
+                <span>3. For Outtake ({isPartialDataDuringSync ? '...' : filteredOuttake.length})</span>
               </button>
               <button
                 type="button"
@@ -1280,7 +1496,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 }}
               >
                 <ArrowRightLeft size={12} />
-                <span>4. Transferred Parts ({filteredTransferred.length})</span>
+                <span>4. Transferred Parts ({isPartialDataDuringSync ? '...' : filteredTransferred.length})</span>
               </button>
               <button
                 type="button"
@@ -1400,7 +1616,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               className="data-table"
               style={{
                 width: '100%',
-                minWidth: '4360px',
+                minWidth: '4630px',
                 fontSize: '12px',
                 borderCollapse: 'separate',
                 borderSpacing: 0,
@@ -1416,20 +1632,23 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 <col style={{ width: '110px' }} />
                 <col style={{ width: '260px' }} />
 
-                {/* Section 2: Used Parts (5 cols) */}
+                {/* Section 2: Used Parts (6 cols) */}
+                <col style={{ width: '90px' }} />
                 <col style={{ width: '110px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '260px' }} />
                 <col style={{ width: '190px' }} />
                 <col style={{ width: '240px' }} />
 
-                {/* Section 3: For Outtake (4 cols) */}
+                {/* Section 3: For Outtake (5 cols) */}
+                <col style={{ width: '90px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '260px' }} />
                 <col style={{ width: '190px' }} />
                 <col style={{ width: '220px' }} />
 
-                {/* Section 4: Transferred Parts (5 cols) */}
+                {/* Section 4: Transferred Parts (6 cols) */}
+                <col style={{ width: '90px' }} />
                 <col style={{ width: '110px' }} />
                 <col style={{ width: '140px' }} />
                 <col style={{ width: '260px' }} />
@@ -1465,7 +1684,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   </th>
                   <th
                     ref={sectionUsedRef}
-                    colSpan={5}
+                    colSpan={6}
                     style={{
                       position: 'sticky',
                       top: 0,
@@ -1483,7 +1702,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   </th>
                   <th
                     ref={sectionOuttakeRef}
-                    colSpan={4}
+                    colSpan={5}
                     style={{
                       position: 'sticky',
                       top: 0,
@@ -1501,7 +1720,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   </th>
                   <th
                     ref={sectionTransferredRef}
-                    colSpan={5}
+                    colSpan={6}
                     style={{
                       position: 'sticky',
                       top: 0,
@@ -1547,6 +1766,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#f0f9ff', color: '#0369a1', borderBottom: '2px solid #bae6fd', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks</th>
 
                   {/* Section 2: Used Parts */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', minWidth: '90px', maxWidth: '90px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Site</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', minWidth: '110px', maxWidth: '110px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Date Used</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
@@ -1554,12 +1774,14 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '240px', minWidth: '240px', maxWidth: '240px', boxSizing: 'border-box', background: '#fffbeb', color: '#b45309', borderBottom: '2px solid #fde68a', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks (OC#)</th>
 
                   {/* Section 3: For Outtake */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', minWidth: '90px', maxWidth: '90px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Site</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '190px', minWidth: '190px', maxWidth: '190px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Serial</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '220px', minWidth: '220px', maxWidth: '220px', boxSizing: 'border-box', background: '#faf5ff', color: '#6d28d9', borderBottom: '2px solid #ddd6fe', borderRight: '3px solid #94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Remarks</th>
 
                   {/* Section 4: Transferred Parts */}
+                  <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '90px', minWidth: '90px', maxWidth: '90px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Origin Site</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '110px', minWidth: '110px', maxWidth: '110px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Date Trans</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '140px', minWidth: '140px', maxWidth: '140px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>P/N</th>
                   <th style={{ position: 'sticky', top: '39px', zIndex: 29, width: '260px', minWidth: '260px', maxWidth: '260px', boxSizing: 'border-box', background: '#ecfeff', color: '#0e7490', borderBottom: '2px solid #a5f3fc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Part Description</th>
@@ -1602,8 +1824,8 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#ffffff' : '#f8fafc'; }}
                     >
                       {/* Section 1: Stock on Hand */}
-                      <td style={{ color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh ? activeSiteObj.code : ''}>
-                        {oh ? activeSiteObj.code : ''}
+                      <td style={{ color: '#0369a1', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh ? getUnitSiteCode(oh) : ''}>
+                        {oh ? getUnitSiteCode(oh) : ''}
                       </td>
                       <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.part_number || ''}>
                         {oh ? <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{oh.part_number}</strong> : ''}
@@ -1611,30 +1833,30 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.description || ''}>
                         {oh?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh?.serial_number || ''}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={oh ? getCleanDisplaySerial(oh.serial_number, oh) : ''}>
                         {oh ? (
                           oh.is_summary_only ? (
                             <span style={{ color: '#64748b', fontStyle: 'italic', fontSize: '11px' }}>Summary (no serial)</span>
                           ) : (
                             <span
-                              onClick={() => handleCopySerial(oh.serial_number)}
+                              onClick={() => handleCopySerial(oh.serial_number, oh)}
                               style={{
                                 fontFamily: 'var(--font-mono)',
                                 fontWeight: 600,
                                 cursor: 'pointer',
-                                color: copiedSerial === oh.serial_number ? '#15803d' : '#0f172a',
+                                color: (copiedSerial === oh.serial_number || copiedSerial === getCleanDisplaySerial(oh.serial_number, oh)) ? '#15803d' : '#0f172a',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '4px',
                                 padding: '2px 5px',
                                 borderRadius: '4px',
-                                background: copiedSerial === oh.serial_number ? '#dcfce7' : 'transparent',
+                                background: (copiedSerial === oh.serial_number || copiedSerial === getCleanDisplaySerial(oh.serial_number, oh)) ? '#dcfce7' : 'transparent',
                                 transition: 'all 0.15s ease'
                               }}
                               title="Click to copy serial"
                             >
-                              <span>{oh.serial_number}</span>
-                              {copiedSerial === oh.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                              <span>{getCleanDisplaySerial(oh.serial_number, oh)}</span>
+                              {(copiedSerial === oh.serial_number || copiedSerial === getCleanDisplaySerial(oh.serial_number, oh)) ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
                             </span>
                           )
                         ) : ''}
@@ -1659,6 +1881,9 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       </td>
 
                       {/* Section 2: Used Parts */}
+                      <td style={{ color: '#b45309', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={u ? getUnitSiteCode(u) : ''}>
+                        {u ? getUnitSiteCode(u) : ''}
+                      </td>
                       <td style={{ color: '#b45309', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px', boxSizing: 'border-box', padding: '10px 12px' }} title={u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}>
                         {u ? (u.used_at ? String(u.used_at).substring(0, 10) : (u.dateUsed || '—')) : ''}
                       </td>
@@ -1668,27 +1893,27 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={u?.description || ''}>
                         {u?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={u?.serial_number || ''}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={u ? getCleanDisplaySerial(u.serial_number, u) : ''}>
                         {u ? (
                           <span
-                            onClick={() => handleCopySerial(u.serial_number)}
+                            onClick={() => handleCopySerial(u.serial_number, u)}
                             style={{
                               fontFamily: 'var(--font-mono)',
                               fontWeight: 600,
                               cursor: 'pointer',
-                              color: copiedSerial === u.serial_number ? '#15803d' : '#0f172a',
+                              color: (copiedSerial === u.serial_number || copiedSerial === getCleanDisplaySerial(u.serial_number, u)) ? '#15803d' : '#0f172a',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
                               padding: '2px 5px',
                               borderRadius: '4px',
-                              background: copiedSerial === u.serial_number ? '#dcfce7' : 'transparent',
+                              background: (copiedSerial === u.serial_number || copiedSerial === getCleanDisplaySerial(u.serial_number, u)) ? '#dcfce7' : 'transparent',
                               transition: 'all 0.15s ease'
                             }}
                             title="Click to copy serial"
                           >
-                            <span>{u.serial_number}</span>
-                            {copiedSerial === u.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                            <span>{getCleanDisplaySerial(u.serial_number, u)}</span>
+                            {(copiedSerial === u.serial_number || copiedSerial === getCleanDisplaySerial(u.serial_number, u)) ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
                           </span>
                         ) : ''}
                       </td>
@@ -1709,33 +1934,36 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       </td>
 
                       {/* Section 3: For Outtake */}
+                      <td style={{ color: '#6d28d9', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot ? getUnitSiteCode(ot) : ''}>
+                        {ot ? getUnitSiteCode(ot) : ''}
+                      </td>
                       <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.part_number || ''}>
                         {ot ? <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>{ot.part_number}</strong> : ''}
                       </td>
                       <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.description || ''}>
                         {ot?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot?.serial_number || ''}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={ot ? getCleanDisplaySerial(ot.serial_number, ot) : ''}>
                         {ot ? (
                           <span
-                            onClick={() => handleCopySerial(ot.serial_number)}
+                            onClick={() => handleCopySerial(ot.serial_number, ot)}
                             style={{
                               fontFamily: 'var(--font-mono)',
                               fontWeight: 600,
                               cursor: 'pointer',
-                              color: copiedSerial === ot.serial_number ? '#15803d' : '#0f172a',
+                              color: (copiedSerial === ot.serial_number || copiedSerial === getCleanDisplaySerial(ot.serial_number, ot)) ? '#15803d' : '#0f172a',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
                               padding: '2px 5px',
                               borderRadius: '4px',
-                              background: copiedSerial === ot.serial_number ? '#dcfce7' : 'transparent',
+                              background: (copiedSerial === ot.serial_number || copiedSerial === getCleanDisplaySerial(ot.serial_number, ot)) ? '#dcfce7' : 'transparent',
                               transition: 'all 0.15s ease'
                             }}
                             title="Click to copy serial"
                           >
-                            <span>{ot.serial_number}</span>
-                            {copiedSerial === ot.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                            <span>{getCleanDisplaySerial(ot.serial_number, ot)}</span>
+                            {(copiedSerial === ot.serial_number || copiedSerial === getCleanDisplaySerial(ot.serial_number, ot)) ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
                           </span>
                         ) : ''}
                       </td>
@@ -1756,6 +1984,9 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       </td>
 
                       {/* Section 4: Transferred Parts */}
+                      <td style={{ color: '#0e7490', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '90px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr ? getUnitSiteCode(tr) : ''}>
+                        {tr ? getUnitSiteCode(tr) : ''}
+                      </td>
                       <td style={{ color: '#0e7490', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}>
                         {tr ? (tr.transferred_at ? String(tr.transferred_at).substring(0, 10) : (tr.dateTransferred || '—')) : ''}
                       </td>
@@ -1765,27 +1996,27 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       <td style={{ maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', boxSizing: 'border-box', padding: '10px 12px' }} title={tr?.description || ''}>
                         {tr?.description || ''}
                       </td>
-                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr?.serial_number || ''}>
+                      <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '190px', boxSizing: 'border-box', padding: '10px 12px' }} title={tr ? getCleanDisplaySerial(tr.serial_number, tr) : ''}>
                         {tr ? (
                           <span
-                            onClick={() => handleCopySerial(tr.serial_number)}
+                            onClick={() => handleCopySerial(tr.serial_number, tr)}
                             style={{
                               fontFamily: 'var(--font-mono)',
                               fontWeight: 600,
                               cursor: 'pointer',
-                              color: copiedSerial === tr.serial_number ? '#15803d' : '#0f172a',
+                              color: (copiedSerial === tr.serial_number || copiedSerial === getCleanDisplaySerial(tr.serial_number, tr)) ? '#15803d' : '#0f172a',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
                               padding: '2px 5px',
                               borderRadius: '4px',
-                              background: copiedSerial === tr.serial_number ? '#dcfce7' : 'transparent',
+                              background: (copiedSerial === tr.serial_number || copiedSerial === getCleanDisplaySerial(tr.serial_number, tr)) ? '#dcfce7' : 'transparent',
                               transition: 'all 0.15s ease'
                             }}
                             title="Click to copy serial"
                           >
-                            <span>{tr.serial_number}</span>
-                            {copiedSerial === tr.serial_number ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
+                            <span>{getCleanDisplaySerial(tr.serial_number, tr)}</span>
+                            {(copiedSerial === tr.serial_number || copiedSerial === getCleanDisplaySerial(tr.serial_number, tr)) ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#94a3b8" />}
                           </span>
                         ) : ''}
                       </td>
@@ -1865,7 +2096,11 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                 <tbody>
                   {filteredInStock.map(unit => (
                     <tr key={unit.serial_number}>
-                      <td style={{ color: '#64748b', fontWeight: 600 }}>{unit.site_code || activeSiteObj.code}</td>
+                      <td>
+                        <span className="badge" style={{ background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd', fontWeight: 700, fontSize: '11px' }}>
+                          {getUnitSiteCode(unit)}
+                        </span>
+                      </td>
                       <td>
                         <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{unit.part_number}</strong>
                       </td>
@@ -1875,7 +2110,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                           <span style={{ color: '#64748b', fontStyle: 'italic' }}>Summary quantity (no serial)</span>
                         ) : (
                           <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a' }}>
-                            {unit.serial_number}
+                            {getCleanDisplaySerial(unit.serial_number, unit)}
                           </span>
                         )}
                       </td>
@@ -1963,18 +2198,24 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: '#fef3c7' }}>
+                    <th style={{ width: '110px' }}>Site Location</th>
                     <th style={{ width: '120px' }}>Date Used</th>
                     <th style={{ width: '130px' }}>Part Number</th>
                     <th>Part Description</th>
                     <th style={{ width: '170px' }}>Serial Number</th>
                     <th style={{ width: '160px' }}>Work Order (OC#)</th>
                     <th>Usage Remarks</th>
-                    <th style={{ width: '120px', textAlign: 'center' }}>Action</th>
+                    {canRestore && <th style={{ width: '120px', textAlign: 'center' }}>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredUsed.map(unit => (
                     <tr key={unit.serial_number}>
+                      <td>
+                        <span className="badge" style={{ background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', fontWeight: 700, fontSize: '11px' }}>
+                          {getUnitSiteCode(unit)}
+                        </span>
+                      </td>
                       <td style={{ color: '#92400e', fontWeight: 600 }}>
                         {unit.used_at ? String(unit.used_at).substring(0, 10) : (unit.dateUsed || '—')}
                       </td>
@@ -1983,7 +2224,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       </td>
                       <td>{unit.description || 'Replacement Part'}</td>
                       <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{unit.serial_number}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{getCleanDisplaySerial(unit.serial_number, unit)}</span>
                       </td>
                       <td>
                         {unit.work_order_number ? (
@@ -1993,18 +2234,20 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                         ) : '—'}
                       </td>
                       <td style={{ color: '#64748b' }}>{unit.usage_notes || unit.remarks || unit.notes || 'Used in Repair'}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn btn-xs btn-secondary"
-                          style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                          onClick={() => unmarkUnitAsUsed(unit.serial_number)}
-                          title="Restore back to branch in-stock"
-                        >
-                          <RotateCcw size={11} color="#059669" />
-                          <span>Restore</span>
-                        </button>
-                      </td>
+                      {canRestore && (
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-secondary"
+                            style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                            onClick={() => unmarkUnitAsUsed(unit.serial_number)}
+                            title="Restore back to branch in-stock"
+                          >
+                            <RotateCcw size={11} color="#059669" />
+                            <span>Restore</span>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -2036,40 +2279,48 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: '#f3e8ff' }}>
+                    <th style={{ width: '110px' }}>Site Location</th>
                     <th style={{ width: '130px' }}>Part Number</th>
                     <th>Part Description</th>
                     <th style={{ width: '180px' }}>Serial Number</th>
                     <th style={{ width: '130px' }}>Date Marked</th>
                     <th>Outtake Reason / Remarks</th>
-                    <th style={{ width: '120px', textAlign: 'center' }}>Action</th>
+                    {canRestore && <th style={{ width: '120px', textAlign: 'center' }}>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredOuttake.map(unit => (
                     <tr key={unit.serial_number}>
                       <td>
+                        <span className="badge" style={{ background: '#faf5ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontWeight: 700, fontSize: '11px' }}>
+                          {getUnitSiteCode(unit)}
+                        </span>
+                      </td>
+                      <td>
                         <strong style={{ color: '#7c3aed', fontFamily: 'var(--font-mono)' }}>{unit.part_number}</strong>
                       </td>
                       <td>{unit.description || 'Replacement Part'}</td>
                       <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{unit.serial_number}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{getCleanDisplaySerial(unit.serial_number, unit)}</span>
                       </td>
                       <td style={{ color: '#64748b' }}>
                         {unit.outtake_at ? String(unit.outtake_at).substring(0, 10) : '—'}
                       </td>
                       <td style={{ color: '#581c87' }}>{unit.outtake_reason || unit.remarks || unit.notes || 'For Outtake'}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn btn-xs btn-secondary"
-                          style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                          onClick={() => unmarkUnitForOuttake(unit.serial_number)}
-                          title="Restore back to in-stock"
-                        >
-                          <RotateCcw size={11} color="#059669" />
-                          <span>Restore</span>
-                        </button>
-                      </td>
+                      {canRestore && (
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-secondary"
+                            style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                            onClick={() => unmarkUnitForOuttake(unit.serial_number)}
+                            title="Restore back to in-stock"
+                          >
+                            <RotateCcw size={11} color="#059669" />
+                            <span>Restore</span>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -2101,6 +2352,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
               <table className="data-table" style={{ width: '100%', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: '#cffafe' }}>
+                    <th style={{ width: '110px' }}>Origin Site</th>
                     <th style={{ width: '120px' }}>Date Transferred</th>
                     <th style={{ width: '130px' }}>Part Number</th>
                     <th>Part Description</th>
@@ -2108,12 +2360,17 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                     <th style={{ width: '140px' }}>Destination Site</th>
                     <th style={{ width: '130px' }}>Transfer Slip (TS#)</th>
                     <th>Transfer Remarks</th>
-                    <th style={{ width: '120px', textAlign: 'center' }}>Action</th>
+                    {canRestore && <th style={{ width: '120px', textAlign: 'center' }}>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredTransferred.map(unit => (
                     <tr key={unit.serial_number}>
+                      <td>
+                        <span className="badge" style={{ background: '#ecfeff', color: '#0e7490', border: '1px solid #a5f3fc', fontWeight: 700, fontSize: '11px' }}>
+                          {getUnitSiteCode(unit)}
+                        </span>
+                      </td>
                       <td style={{ color: '#0e7490', fontWeight: 600 }}>
                         {unit.transferred_at ? String(unit.transferred_at).substring(0, 10) : (unit.dateTransferred || '—')}
                       </td>
@@ -2122,7 +2379,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                       </td>
                       <td>{unit.description || 'Replacement Part'}</td>
                       <td>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{unit.serial_number}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{getCleanDisplaySerial(unit.serial_number, unit)}</span>
                       </td>
                       <td>
                         <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontWeight: 700 }}>
@@ -2135,18 +2392,20 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                         </span>
                       </td>
                       <td style={{ color: '#64748b' }}>{unit.remarks || unit.notes || 'Transferred'}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button
-                          type="button"
-                          className="btn btn-xs btn-secondary"
-                          style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
-                          onClick={() => unmarkUnitTransfer(unit.serial_number)}
-                          title="Restore back to in-stock"
-                        >
-                          <RotateCcw size={11} color="#059669" />
-                          <span>Restore</span>
-                        </button>
-                      </td>
+                      {canRestore && (
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-secondary"
+                            style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                            onClick={() => unmarkUnitTransfer(unit.serial_number)}
+                            title="Restore back to in-stock"
+                          >
+                            <RotateCcw size={11} color="#059669" />
+                            <span>Restore</span>
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -2244,7 +2503,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   <option value="">-- Select In-Stock Serialized Part --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
-                      {u.part_number} — {u.serial_number} ({u.description})
+                      {u.part_number} — {getCleanDisplaySerial(u.serial_number, u)} ({u.description})
                     </option>
                   ))}
                 </select>
@@ -2346,7 +2605,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   <option value="">-- Select Serialized Part to Transfer --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
-                      {u.part_number} — {u.serial_number} ({u.description})
+                      {u.part_number} — {getCleanDisplaySerial(u.serial_number, u)} ({u.description})
                     </option>
                   ))}
                 </select>
@@ -2460,7 +2719,7 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
                   <option value="">-- Select Serialized Part for Outtake --</option>
                   {siteData.inStock.filter(u => !u.is_summary_only).map(u => (
                     <option key={u.serial_number} value={u.serial_number}>
-                      {u.part_number} — {u.serial_number} ({u.description})
+                      {u.part_number} — {getCleanDisplaySerial(u.serial_number, u)} ({u.description})
                     </option>
                   ))}
                 </select>
@@ -2515,157 +2774,348 @@ export default function SiteStockMonitoring({ initialSiteId = null }) {
       {/* MODAL 4: IMPORT SITE STOCK MONITORING SPREADSHEET */}
       {/* ═══════════════════════════════════════════════════════════════════════════ */}
       {isImportOpen && (
-        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setIsImportOpen(false); }}>
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (isImporting || importProgress.active) return;
+            if (e.target === e.currentTarget) setIsImportOpen(false);
+          }}
+        >
           <div className="modal-card" style={{ maxWidth: '640px' }}>
             <div className="modal-header" style={{ background: '#0284c7', color: '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <UploadCloud size={18} />
                 <h3 style={{ margin: 0, fontSize: '15px', color: '#fff' }}>
-                  Import Site Stock Monitoring (XLSX / CSV)
+                  {importProgress.active
+                    ? 'Importing Site Stock Monitoring...'
+                    : 'Import Site Stock Monitoring (XLSX / CSV)'}
                 </h3>
               </div>
-              <button type="button" onClick={() => setIsImportOpen(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isImporting || importProgress.active) return;
+                  setIsImportOpen(false);
+                }}
+                disabled={isImporting || importProgress.active}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: (isImporting || importProgress.active) ? 'rgba(255,255,255,0.4)' : '#fff',
+                  cursor: (isImporting || importProgress.active) ? 'not-allowed' : 'pointer'
+                }}
+              >
                 <X size={16} />
               </button>
             </div>
 
-            <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <p style={{ margin: 0, fontSize: '12px', color: '#475569' }}>
-                Upload <strong>Site Stock Monitoring.xlsx</strong> or an individual branch sheet. The system replicates the 4 lifecycle tables (Stock on Hand, Used Parts, Outtake, Transferred) and directly updates the branch database without manual data entry.
-              </p>
-
-              {/* Upload Dropzone */}
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                style={{
-                  border: '2px dashed #0284c7',
-                  borderRadius: '10px',
-                  padding: '24px',
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                  background: '#f0f9ff'
-                }}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx, .xls, .csv"
-                  style={{ display: 'none' }}
-                  onChange={(e) => handleFileSelect(e.target.files?.[0])}
-                />
-                <FileSpreadsheet size={32} color="#0284c7" style={{ marginBottom: '8px' }} />
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
-                  {isImporting ? 'Processing and validating spreadsheet...' : 'Click to select or drop Site Stock Monitoring file'}
+            {importProgress.active ? (
+              <div style={{ padding: '32px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '16px' }}>
+                <div style={{
+                  width: '68px',
+                  height: '68px',
+                  borderRadius: '50%',
+                  background: '#e0f2fe',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 14px rgba(2, 132, 199, 0.2)'
+                }}>
+                  <RefreshCw size={34} color="#0284c7" className="animate-spin" />
                 </div>
-                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
-                  Supports Microsoft Excel (.xlsx, .xls) and .csv
+
+                <div style={{ maxWidth: '500px' }}>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
+                    {importProgress.stage || 'Importing Inventory Records...'}
+                  </h4>
+                  <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                    {importProgress.detail || 'Please wait while records are validated, structured, and saved.'}
+                  </p>
                 </div>
-              </div>
 
-              {/* Template Download Link */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
-                <span style={{ color: '#64748b' }}>Need the official spreadsheet structure?</span>
-                <button
-                  type="button"
-                  className="btn btn-xs btn-secondary"
-                  onClick={() => downloadSiteStockMonitoringTemplate(activeSiteObj.code)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Download size={11} color="#059669" />
-                  <span>Download Excel Template</span>
-                </button>
-              </div>
-
-              {/* Sheet Selector (for multi-sheet workbooks) */}
-              {importParsedBatch && importParsedBatch.availableSheets?.length > 1 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', minWidth: '85px', margin: 0 }}>
-                    Active Sheet:
-                  </label>
-                  <select
-                    className="form-select form-select-sm"
-                    value={importSelectedSheet}
-                    onChange={(e) => handleSheetChange(e.target.value)}
-                    style={{ fontSize: '12px', fontWeight: 600, flex: 1, padding: '4px 8px' }}
-                  >
-                    <option value="ALL_SHEETS">
-                      ★ All 27 Retail Branch Sheets (Update All 26 Sites — Consolidated)
-                    </option>
-                    {importParsedBatch.availableSheets.filter(s => s !== 'ALL_SHEETS').map(sName => (
-                      <option key={sName} value={sName}>
-                        Branch Sheet: {sName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Parsed Preview Statistics */}
-              {importParsedBatch && (
-                <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: '8px', padding: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <CheckCircle2 size={16} color="#16a34a" />
-                      <strong style={{ fontSize: '13px', color: '#0f172a' }}>
-                        {importParsedBatch.activeSheet === 'ALL_SHEETS' ? 'All 27 Branch Sheets' : `Sheet "${importParsedBatch.activeSheet}"`} Ready to Import
-                      </strong>
-                    </div>
-                    <span className="badge" style={{ background: '#16a34a', color: '#fff', fontWeight: 800 }}>
-                      {importParsedBatch.summary.valid} Valid Records
-                    </span>
+                {/* Progress Bar Container */}
+                <div style={{ width: '100%', maxWidth: '520px', marginTop: '6px' }}>
+                  <div style={{
+                    width: '100%',
+                    height: '14px',
+                    background: '#e2e8f0',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)'
+                  }}>
+                    <div style={{
+                      width: `${Math.min(100, Math.max(5, importProgress.percent))}%`,
+                      height: '100%',
+                      background: 'linear-gradient(90deg, #0284c7 0%, #38bdf8 100%)',
+                      borderRadius: '8px',
+                      transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      boxShadow: '0 0 10px rgba(56, 189, 248, 0.6)'
+                    }} />
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', textAlign: 'center', fontSize: '11px' }}>
-                    <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                      <div style={{ color: '#1e40af', fontWeight: 700 }}>In-Stock</div>
-                      <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.inStock || 0}</div>
-                    </div>
-                    <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                      <div style={{ color: '#92400e', fontWeight: 700 }}>Used</div>
-                      <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.used || 0}</div>
-                    </div>
-                    <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                      <div style={{ color: '#6b21a8', fontWeight: 700 }}>Outtake</div>
-                      <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.outtake || 0}</div>
-                    </div>
-                    <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                      <div style={{ color: '#155e75', fontWeight: 700 }}>Transferred</div>
-                      <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.transferred || 0}</div>
-                    </div>
-                  </div>
-
-                  {/* Optional Pre-Import Clean Slate Checkbox */}
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '12px', padding: '10px 12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={clearBeforeImport}
-                      onChange={(e) => setClearBeforeImport(e.target.checked)}
-                      style={{ width: '16px', height: '16px', accentColor: '#d97706' }}
-                    />
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '8px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: '#64748b'
+                  }}>
                     <span>
-                      {importParsedBatch.activeSheet === 'ALL_SHEETS' || activeSiteObj.id === 'ALL'
-                        ? `Clear all old parts across all ${branchSitesCount} retail branch sites before importing (recommended)`
-                        : `Clear existing old parts for ${activeSiteObj.name} before importing (recommended)`}
+                      {importProgress.current > 0
+                        ? `Processed ${importProgress.current.toLocaleString()} / ${importProgress.total.toLocaleString()} units`
+                        : `${importProgress.total ? importProgress.total.toLocaleString() : (importParsedBatch?.summary?.valid || 0)} total units`}
                     </span>
-                  </label>
+                    <span style={{ color: '#0284c7', fontWeight: 800, fontSize: '13px' }}>
+                      {importProgress.percent}%
+                    </span>
+                  </div>
                 </div>
-              )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsImportOpen(false)}>
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  style={{ background: '#0284c7', borderColor: '#0284c7' }}
-                  disabled={!importParsedBatch || importParsedBatch.summary.valid === 0}
-                  onClick={handleConfirmImport}
-                >
-                  Confirm &amp; Insert {importParsedBatch?.summary?.valid || 0} Records
-                </button>
+                {/* Step indicator pills */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '8px',
+                  width: '100%',
+                  maxWidth: '520px',
+                  marginTop: '8px'
+                }}>
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    background: importProgress.percent >= 25 ? '#f0fdf4' : '#f8fafc',
+                    border: `1px solid ${importProgress.percent >= 25 ? '#bbf7d0' : '#e2e8f0'}`,
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: importProgress.percent >= 25 ? '#15803d' : '#64748b',
+                    fontWeight: 600
+                  }}>
+                    <CheckCircle2 size={13} color={importProgress.percent >= 25 ? '#16a34a' : '#94a3b8'} />
+                    <span>1. Clean Slate</span>
+                  </div>
+
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    background: importProgress.percent >= 35 ? (importProgress.percent >= 75 ? '#f0fdf4' : '#eff6ff') : '#f8fafc',
+                    border: `1px solid ${importProgress.percent >= 35 ? (importProgress.percent >= 75 ? '#bbf7d0' : '#bfdbfe') : '#e2e8f0'}`,
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: importProgress.percent >= 35 ? (importProgress.percent >= 75 ? '#15803d' : '#0284c7') : '#64748b',
+                    fontWeight: 600
+                  }}>
+                    {importProgress.percent >= 75 ? (
+                      <CheckCircle2 size={13} color="#16a34a" />
+                    ) : (
+                      <RefreshCw size={13} className={importProgress.percent >= 35 ? 'animate-spin' : ''} color={importProgress.percent >= 35 ? '#0284c7' : '#94a3b8'} />
+                    )}
+                    <span>2. Structure Parts</span>
+                  </div>
+
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    background: importProgress.percent >= 75 ? (importProgress.percent >= 100 ? '#f0fdf4' : '#eff6ff') : '#f8fafc',
+                    border: `1px solid ${importProgress.percent >= 75 ? (importProgress.percent >= 100 ? '#bbf7d0' : '#bfdbfe') : '#e2e8f0'}`,
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    color: importProgress.percent >= 75 ? (importProgress.percent >= 100 ? '#15803d' : '#0284c7') : '#64748b',
+                    fontWeight: 600
+                  }}>
+                    {importProgress.percent >= 100 ? (
+                      <CheckCircle2 size={13} color="#16a34a" />
+                    ) : (
+                      <UploadCloud size={13} color={importProgress.percent >= 75 ? '#0284c7' : '#94a3b8'} />
+                    )}
+                    <span>3. Cloud Sync</span>
+                  </div>
+                </div>
+
+                <div style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  padding: '8px 14px',
+                  fontSize: '11.5px',
+                  color: '#64748b',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  marginTop: '4px'
+                }}>
+                  <Info size={13} color="#0284c7" />
+                  <span>Please keep this window open until import completes. All retail sheets are synchronized automatically.</span>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <p style={{ margin: 0, fontSize: '12px', color: '#475569' }}>
+                  Upload <strong>Site Stock Monitoring.xlsx</strong> or an individual branch sheet. The system replicates the 4 lifecycle tables (Stock on Hand, Used Parts, Outtake, Transferred) and directly updates the branch database without manual data entry.
+                </p>
+
+                {/* Upload Dropzone */}
+                <div
+                  onClick={() => !isImporting && fileInputRef.current?.click()}
+                  style={{
+                    border: '2px dashed #0284c7',
+                    borderRadius: '10px',
+                    padding: '24px',
+                    textAlign: 'center',
+                    cursor: isImporting ? 'not-allowed' : 'pointer',
+                    background: '#f0f9ff'
+                  }}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx, .xls, .csv"
+                    style={{ display: 'none' }}
+                    onChange={(e) => handleFileSelect(e.target.files?.[0])}
+                  />
+                  <FileSpreadsheet size={32} color="#0284c7" style={{ marginBottom: '8px' }} />
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+                    {isImporting ? 'Processing and validating spreadsheet...' : 'Click to select or drop Site Stock Monitoring file'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                    Supports Microsoft Excel (.xlsx, .xls) and .csv
+                  </div>
+                </div>
+
+                {/* Template Download Link */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px' }}>
+                  <span style={{ color: '#64748b' }}>Need the official spreadsheet structure?</span>
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-secondary"
+                    onClick={() => downloadSiteStockMonitoringTemplate(activeSiteObj.code)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Download size={11} color="#059669" />
+                    <span>Download Excel Template</span>
+                  </button>
+                </div>
+
+                {/* Sheet Selector (for multi-sheet workbooks) */}
+                {importParsedBatch && importParsedBatch.availableSheets?.length > 1 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', minWidth: '85px', margin: 0 }}>
+                      Active Sheet:
+                    </label>
+                    <select
+                      className="form-select form-select-sm"
+                      value={importSelectedSheet}
+                      onChange={(e) => handleSheetChange(e.target.value)}
+                      style={{ fontSize: '12px', fontWeight: 600, flex: 1, padding: '4px 8px' }}
+                    >
+                      <option value="ALL_SHEETS">
+                        ★ All 27 Retail Branch Sheets (Update All 26 Sites — Consolidated)
+                      </option>
+                      {importParsedBatch.availableSheets.filter(s => s !== 'ALL_SHEETS').map(sName => (
+                        <option key={sName} value={sName}>
+                          Branch Sheet: {sName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Parsed Preview Statistics */}
+                {importParsedBatch && (
+                  <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <CheckCircle2 size={16} color="#16a34a" />
+                        <strong style={{ fontSize: '13px', color: '#0f172a' }}>
+                          {importParsedBatch.activeSheet === 'ALL_SHEETS' ? 'All 27 Branch Sheets' : `Sheet "${importParsedBatch.activeSheet}"`} Ready to Import
+                        </strong>
+                      </div>
+                      <span className="badge" style={{ background: '#16a34a', color: '#fff', fontWeight: 800 }}>
+                        {importParsedBatch.summary.valid} Valid Records
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', textAlign: 'center', fontSize: '11px' }}>
+                      <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                        <div style={{ color: '#1e40af', fontWeight: 700 }}>In-Stock</div>
+                        <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.inStock || 0}</div>
+                      </div>
+                      <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                        <div style={{ color: '#92400e', fontWeight: 700 }}>Used</div>
+                        <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.used || 0}</div>
+                      </div>
+                      <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                        <div style={{ color: '#6b21a8', fontWeight: 700 }}>Outtake</div>
+                        <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.outtake || 0}</div>
+                      </div>
+                      <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                        <div style={{ color: '#155e75', fontWeight: 700 }}>Transferred</div>
+                        <div style={{ fontSize: '14px', fontWeight: 800 }}>{importParsedBatch.summary.transferred || 0}</div>
+                      </div>
+                    </div>
+
+                    {/* Optional Pre-Import Clean Slate Checkbox */}
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '12px', padding: '10px 12px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={clearBeforeImport}
+                        onChange={(e) => setClearBeforeImport(e.target.checked)}
+                        style={{ width: '16px', height: '16px', accentColor: '#d97706' }}
+                      />
+                      <span>
+                        {importParsedBatch.activeSheet === 'ALL_SHEETS' || activeSiteObj.id === 'ALL'
+                          ? `Clear all old parts across all ${branchSitesCount} retail branch sites before importing (recommended)`
+                          : `Clear existing old parts for ${activeSiteObj.name} before importing (recommended)`}
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={isImporting || importProgress.active}
+                    onClick={() => setIsImportOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    style={{
+                      background: '#0284c7',
+                      borderColor: '#0284c7',
+                      minWidth: '180px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      cursor: (!importParsedBatch || importParsedBatch.summary.valid === 0 || isImporting || importProgress.active) ? 'not-allowed' : 'pointer'
+                    }}
+                    disabled={!importParsedBatch || importParsedBatch.summary.valid === 0 || isImporting || importProgress.active}
+                    onClick={handleConfirmImport}
+                  >
+                    {isImporting || importProgress.active ? (
+                      <>
+                        <RefreshCw size={14} className="animate-spin" />
+                        <span>Importing Records...</span>
+                      </>
+                    ) : (
+                      <span>Confirm &amp; Insert {importParsedBatch?.summary?.valid || 0} Records</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

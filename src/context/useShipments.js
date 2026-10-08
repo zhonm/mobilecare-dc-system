@@ -745,9 +745,12 @@ export function useShipments({
     let updatedInv = [];
     if (newShipment.items && newShipment.items.length > 0 && setInventoryUnits) {
       const serialsInShipment = new Set(newShipment.items.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean));
-      const targetUnitStatus = (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') 
+      const isDraft = newShipment.status === 'draft';
+      const isConfirmed = newShipment.status === 'received_confirmed' || newShipment.status === 'delivered';
+      const isShipped = newShipment.status === 'shipped' || newShipment.status === 'in_transit';
+      const targetUnitStatus = isConfirmed 
         ? 'in_stock' 
-        : ((newShipment.status === 'shipped' || newShipment.status === 'in_transit') ? 'shipped' : 'packed');
+        : (isShipped ? 'shipped' : 'packed');
       
       setInventoryUnits(prev => {
         const existingMatched = new Set();
@@ -759,12 +762,14 @@ export function useShipments({
               ...u,
               status: targetUnitStatus,
               box_number: u.box_number || 1,
-              current_site_id: newShipment.site_id || u.current_site_id,
-              site_code: newShipment.site_code || u.site_code,
-              shipped_at: newShipment.shipment_date || u.shipped_at || new Date().toISOString(),
+              // Only assign to destination branch once the PL is finalized (not in draft mode)
+              current_site_id: isDraft ? (u.current_site_id || 'site-dc') : (newShipment.site_id || u.current_site_id),
+              site_code: isDraft ? (u.site_code || 'DC-MDC') : (newShipment.site_code || u.site_code),
+              destination_site_id: newShipment.site_id || u.destination_site_id,
+              shipped_at: isDraft ? null : (newShipment.shipment_date || u.shipped_at || new Date().toISOString()),
               shipped_by: resolvedPreparedBy,
-              received_at: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
-              received_by: (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') ? (newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff') : u.received_by
+              received_at: isConfirmed ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
+              received_by: isConfirmed ? (newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff') : u.received_by
             };
           }
           return u;
@@ -1029,7 +1034,10 @@ export function useShipments({
             const branchUnits = updatedInv.filter(u => {
               const sId = String(u.current_site_id || u.site_id || '').toLowerCase();
               const sCode = String(u.site_code || '').toUpperCase();
-              return sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && !u.is_dc;
+              const isDc = sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || u.is_dc;
+              if (isDc) return false;
+              if (u.status === 'draft' || (u.status === 'packed' && newShipment.status === 'draft')) return false;
+              return true;
             });
             await queuedSavedRecordsUpsert(supabase, {
               id: 'master_branch_inventory_registry',
@@ -1051,24 +1059,27 @@ export function useShipments({
         }
 
         if (newShipment.items && newShipment.items.length > 0) {
-          const targetUnitStatus = (newShipment.status === 'received_confirmed' || newShipment.status === 'delivered') 
+          const isDraft = newShipment.status === 'draft';
+          const isConfirmed = newShipment.status === 'received_confirmed' || newShipment.status === 'delivered';
+          const isShipped = newShipment.status === 'shipped' || newShipment.status === 'in_transit';
+          const targetUnitStatus = isConfirmed 
             ? 'in_stock' 
-            : ((newShipment.status === 'shipped' || newShipment.status === 'in_transit') ? 'shipped' : 'packed');
+            : (isShipped ? 'shipped' : 'packed');
           
           const rowsToUpsert = newShipment.items.map(it => {
             const cleanSerial = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
             const existingU = inventoryUnits.find(u => String(u.serial_number || '').toUpperCase() === cleanSerial);
             const partId = isUUID(existingU?.part_id) ? existingU.part_id : null;
             const siteId = isUUID(newShipment.site_id) ? newShipment.site_id : null;
-            const isConfirmed = newShipment.status === 'received_confirmed' || newShipment.status === 'delivered';
 
             return {
               ...(partId ? { part_id: partId } : {}),
               serial_number: cleanSerial,
               status: targetUnitStatus,
               box_number: it.box_number || 1,
-              ...(siteId ? { current_site_id: siteId } : {}),
-              shipped_at: newShipment.shipment_date || new Date().toISOString(),
+              // Only assign to destination branch site in database once finalized (not draft)
+              ...(siteId && !isDraft ? { current_site_id: siteId } : {}),
+              shipped_at: isDraft ? null : (newShipment.shipment_date || new Date().toISOString()),
               received_at: existingU?.received_at || it.received_at || new Date().toISOString(),
               ...(isConfirmed ? { received_confirmed_at: newShipment.received_at || new Date().toISOString() } : {})
             };

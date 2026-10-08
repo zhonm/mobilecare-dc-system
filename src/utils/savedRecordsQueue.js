@@ -217,3 +217,12 @@ export function getSavedRecordsQueueStats() {
 }
 
 export const getSavedRecordsQueueStatus = getSavedRecordsQueueStats;
+
+// Auto-flush pending writes if the browser window or tab is reloaded or closed
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('beforeunload', () => {
+    try {
+      flushSavedRecordsQueue();
+    } catch (e) {}
+  });
+}

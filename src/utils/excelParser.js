@@ -2912,6 +2912,11 @@ export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
   const clean = raw.toUpperCase().replace(/\s+/g, ' ');
   const norm = clean.replace(/[^A-Z0-9]/g, '');
 
+  // Prefer an exact configured site code. APP ILO and ASP ILO are separate
+  // branches; applying the legacy APPILO alias first merges their inventory.
+  let match = sites.find(s => s.code?.toUpperCase() === clean);
+  if (match) return match;
+
   // Alias maps for known sheet names in Site Stock Monitoring.xlsx
   if (norm === 'ASPLIMA' || norm === 'LIMA') {
     const lim = sites.find(s => s.code === 'ASP LIM');
@@ -2921,9 +2926,13 @@ export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
     const ilo = sites.find(s => s.code === 'ASP ILO');
     if (ilo) return ilo;
   }
+  if (norm === 'ASPGL5' || norm === 'ASPGLS' || norm === 'GL5' || norm === 'GLS') {
+    const gl5 = sites.find(s => s.code === 'ASP GL5' || s.code === 'ASP GLS');
+    if (gl5) return gl5;
+  }
 
   // Exact match on site code
-  let match = sites.find(s => s.code?.toUpperCase() === clean);
+  match = sites.find(s => s.code?.toUpperCase() === clean);
   if (match) return match;
 
   // Normalized alphanumeric code match
@@ -3142,26 +3151,28 @@ function reconcileSheetStockItems(sheetItems, existingParts = []) {
   });
 
   const currentCounts = new Map();
-  const seenSerials = new Set();
   const reconciledItems = sheetItems.filter(item => {
     if (item.lifecycle_status !== 'in_stock') return true;
-      const serial = String(item.serialNumber || '').trim().toUpperCase();
-      const canonicalPart = resolvePartInfo(item.partNumber, existingParts)?.part_number || item.partNumber;
-      const expectedCount = expectedCounts.get(canonicalPart) || 0;
-      if (!serial || seenSerials.has(serial) || !expectedCount) return false;
-      seenSerials.add(serial);
-      const retainedCount = currentCounts.get(canonicalPart) || 0;
-      if (retainedCount >= expectedCount) return false;
-      currentCounts.set(canonicalPart, retainedCount + 1);
-      return true;
-    });
+    // Do not deduplicate by serial here: the workbook may contain the same
+    // serial in multiple lifecycle sections, and those rows must remain
+    // available to the import summary.
+    const canonicalPart = resolvePartInfo(item.partNumber, existingParts)?.part_number || item.partNumber;
+    const expectedCount = expectedCounts.get(canonicalPart) || 0;
+    const retainedCount = currentCounts.get(canonicalPart) || 0;
+    if (!expectedCount || retainedCount >= expectedCount) return false;
+    currentCounts.set(canonicalPart, retainedCount + 1);
+    return true;
+  });
 
   const summaryOnlyItems = [];
   summaryRows.forEach(summary => {
     const canonicalPart = resolvePartInfo(summary.partNumber, existingParts)?.part_number || summary.partNumber;
     const deficit = Math.max(0, summary.quantity - (currentCounts.get(canonicalPart) || 0));
     for (let index = 0; index < deficit; index += 1) {
-      const summarySerial = `SUMMARY${canonicalPart.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyItems.length + 1}`.toUpperCase();
+      const summarySite = String(summary.siteCode || summary.siteName || 'SITE')
+        .replace(/[^A-Z0-9]/gi, '')
+        .toUpperCase();
+      const summarySerial = `SUMMARY${summarySite}${canonicalPart.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyItems.length + 1}`.toUpperCase();
       summaryOnlyItems.push({
         partNumber: canonicalPart,
         description: summary.description || `Legacy summary stock (${canonicalPart})`,
@@ -3259,7 +3270,7 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
   });
 
   const existingSerialsSet = new Set(targetSiteUnits.map(u => String(u.serial_number || '').trim().toUpperCase()));
-  const seenSerialsInBatch = new Set();
+  const seenSerialsInBatch = new Map();
   const parsedItems = [];
 
   rawExtractedItems.forEach((raw, idx) => {
@@ -3273,16 +3284,32 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
         : validateAppleSerialNumber(raw.serialNumber, cleanPN, existingParts);
     const cleanSerial = serialValidation.cleanSerial || raw.serialNumber;
 
+    // Disambiguate storage serials if repeated in the workbook so that:
+    // 1. Used, outtake, and transferred parts sharing a serial with in-stock parts are preserved as real records.
+    // 2. Duplicate rows within the same branch sheet are preserved without crashing database unique constraints.
+    const seenCount = seenSerialsInBatch.get(cleanSerial) || 0;
+    seenSerialsInBatch.set(cleanSerial, seenCount + 1);
+
+    let storageSerial = cleanSerial;
+    if (seenCount > 0) {
+      if (raw.lifecycle_status === 'used') {
+        storageSerial = `${cleanSerial}-USED${seenCount > 1 ? `-${seenCount}` : ''}`;
+      } else if (raw.lifecycle_status === 'outtake') {
+        storageSerial = `${cleanSerial}-OUTTAKE${seenCount > 1 ? `-${seenCount}` : ''}`;
+      } else if (raw.lifecycle_status === 'transferred') {
+        storageSerial = `${cleanSerial}-TRANSFERRED${seenCount > 1 ? `-${seenCount}` : ''}`;
+      } else {
+        storageSerial = `${cleanSerial}-DUP${seenCount + 1}`;
+      }
+    }
+
     let status = 'VALID';
     let statusMessage = 'Ready to import';
 
     if (!serialValidation.isValid) {
       status = 'ERROR';
       statusMessage = serialValidation.reason || 'Invalid serial format';
-    } else if (seenSerialsInBatch.has(cleanSerial)) {
-      status = 'DUPLICATE';
-      statusMessage = 'Duplicate serial found in uploaded file';
-    } else if (existingSerialsSet.has(cleanSerial)) {
+    } else if (existingSerialsSet.has(cleanSerial) || existingSerialsSet.has(storageSerial)) {
       status = 'EXISTING_INVENTORY';
       statusMessage = `Already exists in ${raw.site_code || activeSheetName || 'site'} inventory`;
     } else if (!existingPart) {
@@ -3290,15 +3317,16 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
       statusMessage = 'New part catalog SKU (auto-register on receive)';
     }
 
-    seenSerialsInBatch.add(cleanSerial);
-
     parsedItems.push({
       id: `batch-mon-${idx}-${Math.random().toString(36).substr(2, 5)}`,
       rowNumber: raw.rowNumber,
       sheetName: raw.sheetName,
       partNumber: cleanPN,
       description: partDesc,
-      serialNumber: cleanSerial,
+      serialNumber: storageSerial,
+      raw_serial: cleanSerial,
+      raw_serial_number: cleanSerial,
+      display_serial: cleanSerial,
       lifecycle_status: raw.lifecycle_status,
       dateReceived: raw.dateReceived || null,
       dateUsed: raw.dateUsed || null,
@@ -3332,12 +3360,18 @@ export function parseSiteStockMonitoringWorkbook(workbook, {
       if (summaryOnlyIndex >= summaryOnlyTarget) break;
       const canonicalPart = resolvePartInfo(summary.partNumber, existingParts);
       const cleanPartNumber = canonicalPart?.part_number || summary.partNumber;
-      const summarySerial = `SUMMARY${cleanPartNumber.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyIndex + 1}`.toUpperCase();
+      const summarySite = String(summary.siteCode || summary.siteName || targetSiteCode || 'SITE')
+        .replace(/[^A-Z0-9]/gi, '')
+        .toUpperCase();
+      const summarySerial = `SUMMARY${summarySite}${cleanPartNumber.replace(/[^A-Z0-9]/gi, '')}${summaryOnlyIndex + 1}`.toUpperCase();
       parsedItems.push({
         id: `summary-stock-${summarySerial}`,
         partNumber: cleanPartNumber,
         description: summary.description || canonicalPart?.description || `Legacy summary stock (${cleanPartNumber})`,
         serialNumber: summarySerial,
+        raw_serial: summarySerial,
+        raw_serial_number: summarySerial,
+        display_serial: summarySerial,
         lifecycle_status: 'in_stock',
         status: 'NEW_PART',
         statusMessage: 'Imported from Site Stock summary; serial number not provided',
@@ -6434,5 +6468,3 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
 
   return { workbook, buffer };
 }
-
-

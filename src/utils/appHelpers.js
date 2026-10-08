@@ -103,8 +103,10 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
   if (Array.isArray(effectiveShipments)) {
     effectiveShipments.forEach(sh => {
       if (sh && Array.isArray(sh.items) && sh.status !== 'cancelled') {
-        const sId = String(sh.site_id || '').toLowerCase();
-        const sCode = String(sh.site_code || '').toUpperCase();
+        const rawSiteId = sh.site_id || sh.siteId || sh.destination_site_id || sh.target_site_id || sh.destinationSiteId || '';
+        const rawSiteCode = sh.site_code || sh.siteCode || sh.destination_site_code || sh.targetSiteCode || sh.destination || '';
+        const sId = String(rawSiteId).toLowerCase();
+        const sCode = String(rawSiteCode).toUpperCase();
         const isBranchSite = sId !== 'site-dc' && sCode !== 'DC-MDC' && sCode !== 'DC' && (Boolean(sId) || Boolean(sCode));
 
         const clearTime = clearedSitesMap['ENTIRE_SYSTEM'] ||
@@ -113,11 +115,13 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
           clearedSitesMap[sh.site_code] ||
           clearedSitesMap[sId] ||
           clearedSitesMap[sCode] ||
+          clearedSitesMap[rawSiteId] ||
+          clearedSitesMap[rawSiteCode] ||
           null;
 
         if (clearTime) {
-          const shDateStr = sh.received_at || sh.received_date || sh.shipment_date || sh.created_at || sh.updated_at || 0;
-          const isPriorToClear = new Date(shDateStr).getTime() <= new Date(clearTime).getTime();
+          const shDateStr = sh.received_at || sh.received_date || sh.shipment_date || sh.created_at || 0;
+          const isPriorToClear = !shDateStr || new Date(shDateStr).getTime() <= new Date(clearTime).getTime();
           if (isPriorToClear) {
             // Completed historical shipment prior to clear time: do NOT synthesize into site inventory!
             return;
@@ -132,13 +136,13 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         const receiverName = sh.received_by_name || sh.receiving_signature || 'Branch Staff';
 
         sh.items.forEach(it => {
-          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          const s = String(it.serial_number || it.serialNumber || (typeof it === 'string' ? it : '')).trim().toUpperCase();
           if (s && !deletedSerialsSet.has(s) && !packedSerialsMap.has(s)) {
             packedSerialsMap.set(s, {
               status: targetStatus,
               box_number: it.box_number || 1,
-              current_site_id: sh.site_id || 'site-dc',
-              site_code: sh.site_code || null,
+              current_site_id: rawSiteId || 'site-dc',
+              site_code: rawSiteCode || null,
               shipped_at: shipDateStr,
               received_at: isReceived ? recvDateStr : null,
               received_by: isReceived ? receiverName : null,
@@ -155,14 +159,46 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
   }
 
   const seenSerials = new Set();
-  const updatedUnits = inputUnits.map(u => {
+  const validBaseUnits = (inputUnits || []).filter(u => {
+    if (!u || u.is_deleted || u.status === 'deleted') return false;
+    const s = String(u.serial_number || '').trim().toUpperCase();
+    if (s && deletedSerialsSet.has(s)) return false;
+
+    const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
+    const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+    const isBranch = uSiteId !== 'site-dc' && uSiteCode !== 'DC-MDC' && uSiteCode !== 'DC' && (Boolean(uSiteId) || Boolean(uSiteCode));
+    const uClearTime = clearedSitesMap['ENTIRE_SYSTEM'] ||
+      (isBranch && clearedSitesMap['ALL_BRANCHES']) ||
+      clearedSitesMap[u.current_site_id] ||
+      clearedSitesMap[u.site_code] ||
+      clearedSitesMap[uSiteId] ||
+      clearedSitesMap[uSiteCode] ||
+      null;
+
+    if (uClearTime) {
+      const uDateStr = u.received_at || u.created_at;
+      if (!uDateStr || new Date(uDateStr).getTime() <= new Date(uClearTime).getTime()) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const updatedUnits = validBaseUnits.map(u => {
     const s = String(u.serial_number || '').trim().toUpperCase();
     seenSerials.add(s);
     const packInfo = packedSerialsMap.get(s);
     if (packInfo) {
+      // Terminal lifecycle protection: If a unit is already used, outtake, or transferred,
+      // a historical received shipment must NOT downgrade its status back to in_stock!
+      const isTerminalLifecycle = u.status === 'used' || u.status === 'outtake' || u.status === 'transferred' || Boolean(u.used_at) || Boolean(u.outtake_at) || Boolean(u.transferred_at);
+      const effectiveStatus = (isTerminalLifecycle && packInfo.status === 'in_stock')
+        ? u.status
+        : packInfo.status;
+
       return {
         ...u,
-        status: packInfo.status,
+        status: effectiveStatus,
         box_number: packInfo.box_number || u.box_number || 1,
         current_site_id: packInfo.current_site_id || u.current_site_id,
         site_code: packInfo.site_code || u.site_code,
@@ -179,6 +215,24 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
   // Ensure any serialized unit in a finalized shipment (e.g. received or shipped) exists in inventory
   packedSerialsMap.forEach((packInfo, s) => {
     if (!seenSerials.has(s) && !packInfo.isDraft && !deletedSerialsSet.has(s)) {
+      const pSiteId = String(packInfo.current_site_id || '').toLowerCase();
+      const pSiteCode = String(packInfo.site_code || '').toUpperCase();
+      const isBranch = pSiteId !== 'site-dc' && pSiteCode !== 'DC-MDC' && pSiteCode !== 'DC';
+      const pClearTime = clearedSitesMap['ENTIRE_SYSTEM'] ||
+        (isBranch && clearedSitesMap['ALL_BRANCHES']) ||
+        clearedSitesMap[packInfo.current_site_id] ||
+        clearedSitesMap[packInfo.site_code] ||
+        clearedSitesMap[pSiteId] ||
+        clearedSitesMap[pSiteCode] ||
+        null;
+
+      if (pClearTime) {
+        const pDateStr = packInfo.received_at || packInfo.shipped_at;
+        if (!pDateStr || new Date(pDateStr).getTime() <= new Date(pClearTime).getTime()) {
+          return;
+        }
+      }
+
       updatedUnits.push({
         id: `unit-${s}`,
         part_id: packInfo.part_id || null,
@@ -200,4 +254,15 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
   });
 
   return updatedUnits;
+}
+
+// Helper to get clean serial for UI presentation, stripping internal deduplication/lifecycle suffixes
+export function getCleanDisplaySerial(serial, unit) {
+  if (unit) {
+    const raw = unit.display_serial || unit.raw_serial || unit.raw_serial_number;
+    if (raw && typeof raw === 'string') return raw.trim();
+  }
+  if (!serial || typeof serial !== 'string') return serial || '';
+  const trimmed = serial.trim();
+  return trimmed.replace(/-(?:DUP\d+|USED(?:-\d+)?|OUTTAKE(?:-\d+)?|TRANSFERRED(?:-\d+)?)$/i, '');
 }

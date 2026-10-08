@@ -73,6 +73,7 @@ export function useCloudSync({
   setAllocations,
   inventoryUnits,
   setInventoryUnits,
+  setIsInventoryLoaded,
   _purchaseOrders,
   setPurchaseOrders,
   _shipments,
@@ -180,7 +181,13 @@ export function useCloudSync({
       'MASTER_DATA_CLEARED',
       'FIFO_AUDIT_UPDATED',
       'FIFO_AUDIT_CLEARED',
-      'SITE_PARTS_CLEARED'
+      'SITE_PARTS_CLEARED',
+      'PART_MARKED_AS_USED',
+      'PART_RESTORED_TO_STOCK',
+      'PART_MARKED_OUTTAKE',
+      'PART_OUTTAKE_RECORDED',
+      'PART_TRANSFERRED',
+      'PART_TRANSFER_RECORDED'
     ].includes(eventType);
 
     if (supabase) {
@@ -425,6 +432,25 @@ export function useCloudSync({
       // Archiving Rolling Window: Active queries only fetch records within the 60-day operational window
       const archiveCutoffIsoDate = getArchiveCutoffIso(ARCHIVE_CUTOFF_DAYS);
       const archiveCutoffIsoTimestamp = getArchiveCutoffDate(ARCHIVE_CUTOFF_DAYS).toISOString();
+      const fetchAllInventoryUnits = async () => {
+        const pageSize = 1000;
+        const rows = [];
+
+        for (let offset = 0; ; offset += pageSize) {
+          const response = await supabase
+            .from('inventory_units')
+            .select('*')
+            .order('created_at', { ascending: true })
+            .range(offset, offset + pageSize - 1);
+
+          if (response.error) return response;
+          const page = response.data || [];
+          rows.push(...page);
+          if (page.length < pageSize) break;
+        }
+
+        return { data: rows, error: null };
+      };
 
       const [
         resProfiles,
@@ -448,6 +474,7 @@ export function useCloudSync({
               'master_auto_logout_settings_registry',
               'master_users_registry',
               'master_branch_inventory_registry',
+              'master_used_parts_registry',
               'cleared_sites_registry',
               'deleted_unit_serials_registry'
             ];
@@ -480,6 +507,7 @@ export function useCloudSync({
             'master_auto_logout_settings_registry',
             'master_session_audit_logs_registry',
             'master_branch_inventory_registry',
+            'master_used_parts_registry',
             'cleared_sites_registry'
           ];
           const HEAVY_DOC_IDS = [
@@ -612,7 +640,12 @@ export function useCloudSync({
             if (!localInvUpdatedAt) {
               try { localInvUpdatedAt = await dbStorage.getItem('mdc_live_inventory_updated_at'); } catch (e) {}
             }
-            const hasLocalUnits = Array.isArray(inventoryUnits) && inventoryUnits.length > 0;
+            let idbUnits = null;
+            try { idbUnits = await dbStorage.getItem('mdc_inventory'); } catch (e) {}
+            const effectiveCachedUnits = (Array.isArray(idbUnits) && idbUnits.length > (inventoryUnits?.length || 0))
+              ? idbUnits
+              : (inventoryUnits || []);
+            const hasLocalUnits = Array.isArray(effectiveCachedUnits) && effectiveCachedUnits.length >= 100;
             const isTimestampMismatch = Boolean(remoteLiveInvHeader.updated_at && remoteLiveInvHeader.updated_at !== localInvUpdatedAt);
             const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('inventory_units')));
             const needsInvDownload = (isForce || !hasLocalUnits || isTimestampMismatch || isTargetedSync) && remoteLiveInvHeader.notes !== '__CLEARED__';
@@ -630,6 +663,9 @@ export function useCloudSync({
                     try { localStorage.setItem('mdc_live_inventory_updated_at', fullInvDoc.updated_at); } catch (e) {}
                     try { await dbStorage.setItem('mdc_live_inventory_updated_at', fullInvDoc.updated_at); } catch (e) {}
                   }
+                  if (Array.isArray(fullInvDoc?.snapshot_data?.units)) {
+                    dbStorage.setItem('mdc_inventory', fullInvDoc.snapshot_data.units);
+                  }
                 }
               } catch (err) {
                 console.warn('Full live inventory fetch note:', err);
@@ -638,7 +674,7 @@ export function useCloudSync({
             } else {
               systemRows.push({
                 ...remoteLiveInvHeader,
-                snapshot_data: { units: inventoryUnits || [] }
+                snapshot_data: { units: effectiveCachedUnits }
               });
             }
           }
@@ -705,7 +741,7 @@ export function useCloudSync({
         ) : Promise.resolve({ data: null }),
         // In-Stock Inventory Units: PMG branch users have network-wide ASP branch visibility (Central DC excluded by RLS & UI)
         shouldFetch('inventory_units') ? (
-          supabase.from('inventory_units').select('*').limit(2000)
+          fetchAllInventoryUnits()
         ) : Promise.resolve({ data: null }),
         shouldFetch('parts') ? supabase.from('parts').select('*').order('part_number', { ascending: true }) : Promise.resolve({ data: null }),
         shouldFetch('sites') ? supabase.from('sites').select('*').order('code', { ascending: true }) : Promise.resolve({ data: null }),
@@ -759,6 +795,7 @@ export function useCloudSync({
       const dbCats = resCats.data;
       const dbShipments = resShipments.data;
       const dbPartsRequests = resPartsRequests.data;
+      const inventoryQueryFailed = Boolean(resUnits?.error);
 
       // 1. Process Profiles & User Page Permissions & Master Users Registry
       if (shouldFetch('profiles') || shouldFetch('saved_records') || shouldFetch('user_page_permissions')) {
@@ -2136,16 +2173,36 @@ export function useCloudSync({
           ? cloudDeletedSerialsDoc.snapshot_data.deletedSerials
           : [];
 
+        let activeLocalSerials = new Set();
+        try {
+          const localInv = JSON.parse(localStorage.getItem('mdc_inventory') || '[]');
+          (localInv || []).forEach(u => {
+            const s = String(u.serial_number || '').trim().toUpperCase();
+            if (s && !u.is_deleted && u.status !== 'deleted') activeLocalSerials.add(s);
+          });
+        } catch (e) {}
+
         let deletedSerialsSet = new Set();
         try {
           const localDeletedSerials = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-          deletedSerialsSet = new Set([
+          const combined = new Set([
             ...localDeletedSerials,
             ...cloudDeletedSerials
           ].map(s => String(s).trim().toUpperCase()));
+          // Guard against stale cloud deleted serials resurrecting deletions for active inventory
+          // but strictly preserve serials explicitly registered in localDeletedSerials
+          const localExplicitSet = new Set((localDeletedSerials || []).map(s => String(s).trim().toUpperCase()));
+          activeLocalSerials.forEach(s => {
+            if (!localExplicitSet.has(s)) {
+              combined.delete(s);
+            }
+          });
+          deletedSerialsSet = combined;
           localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(Array.from(deletedSerialsSet)));
         } catch (e) {
-        deletedSerialsSet = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
+          const combined = new Set(cloudDeletedSerials.map(s => String(s).trim().toUpperCase()));
+          activeLocalSerials.forEach(s => combined.delete(s));
+          deletedSerialsSet = combined;
         }
 
         // Synchronize cleared sites registry across network
@@ -2246,7 +2303,20 @@ export function useCloudSync({
           } catch (e) {}
         }
 
+        let idbUsedReg = null;
+        try { idbUsedReg = await dbStorage.getItem('mdc_master_used_parts_registry'); } catch (e) {}
+
         setInventoryUnits(prev => {
+          const hasCloudInventoryRows = Array.isArray(dbUnits) && dbUnits.length > 0;
+          const hasInventorySnapshot = (dbSavedRecords || []).some(
+            doc => (doc?.id === 'live_master_dc_inventory' || doc?.id === 'master_branch_inventory_registry') &&
+              Array.isArray(doc?.snapshot_data?.units) && doc.snapshot_data.units.length > 0
+          );
+          if (inventoryQueryFailed || (!hasCloudInventoryRows && !hasInventorySnapshot && (prev || []).length > 0)) {
+            console.warn('[CloudSync] Preserving local inventory because the cloud inventory response was empty or failed.');
+            return prev;
+          }
+
           const map = new Map();
 
           const allAvailableParts = [
@@ -2285,11 +2355,14 @@ export function useCloudSync({
               if (cleanSerial) {
                 const recvInfo = receivedShipmentsMap.get(cleanSerial);
                 const isPackedOrShipped = !recvInfo && shippedOrPackedSerials.has(cleanSerial);
-                const targetStatus = recvInfo
-                  ? 'in_stock'
-                  : (isPackedOrShipped
-                      ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
-                      : (dbU.status || 'in_stock'));
+                const isDbLifecycle = dbU.status === 'used' || dbU.status === 'outtake' || dbU.status === 'transferred' || Boolean(dbU.used_at);
+                const targetStatus = isDbLifecycle
+                  ? dbU.status
+                  : (recvInfo
+                      ? 'in_stock'
+                      : (isPackedOrShipped
+                          ? (dbU.status === 'shipped' ? 'shipped' : 'packed')
+                          : (dbU.status || 'in_stock')));
 
                 let meta = null;
                 if (dbU.notes && typeof dbU.notes === 'string' && dbU.notes.includes('__META__:')) {
@@ -2381,21 +2454,34 @@ export function useCloudSync({
                     ? (existing.notes || u.notes || resolvedAssignment)
                     : (u.notes || existing.notes || resolvedAssignment);
 
+                  // Stale snapshot doc must NOT downgrade a part marked used, outtake, or transferred back to in_stock
+                  const resolvedStatus = isExistingPackedOrShipped
+                    ? existing.status
+                    : existing?.status === 'used' || existing?.status === 'outtake' || existing?.status === 'transferred'
+                      ? existing.status
+                      : u.status === 'used' || u.status === 'outtake' || u.status === 'transferred'
+                        ? u.status
+                        : preferExisting
+                          ? existing?.status || u.status || 'in_stock'
+                          : u.status || existing?.status || 'in_stock';
+
                   map.set(s, {
                     ...u,
                     ...existing,
-                    status: isExistingPackedOrShipped ? existing.status : (u.status || existing.status || 'in_stock'),
+                    status: resolvedStatus,
                     current_site_id: isExistingPackedOrShipped ? existing.current_site_id : (u.current_site_id || existing.current_site_id),
                     site_code: u.site_code || existing.site_code,
                     site_name: u.site_name || existing.site_name,
-                    work_order_number: u.work_order_number || existing.work_order_number || null,
-                    usage_notes: u.usage_notes || existing.usage_notes || null,
-                    used_at: u.used_at || existing.used_at || null,
-                    outtake_at: u.outtake_at || existing.outtake_at || null,
-                    outtake_reason: u.outtake_reason || existing.outtake_reason || null,
-                    transferred_at: u.transferred_at || existing.transferred_at || null,
-                    transfer_slip_number: u.transfer_slip_number || existing.transfer_slip_number || null,
-                    transferred_to_site_code: u.transferred_to_site_code || existing.transferred_to_site_code || null,
+                    work_order_number: resolvedStatus === 'used' ? (existing?.work_order_number || u.work_order_number || null) : (u.work_order_number || existing?.work_order_number || null),
+                    usage_notes: resolvedStatus === 'used' ? (existing?.usage_notes || u.usage_notes || null) : (u.usage_notes || existing?.usage_notes || null),
+                    used_at: resolvedStatus === 'used' ? (existing?.used_at || u.used_at || null) : (u.used_at || existing?.used_at || null),
+                    used_by_id: resolvedStatus === 'used' ? (existing?.used_by_id || u.used_by_id || null) : (u.used_by_id || existing?.used_by_id || null),
+                    used_by_name: resolvedStatus === 'used' ? (existing?.used_by_name || u.used_by_name || null) : (u.used_by_name || existing?.used_by_name || null),
+                    outtake_at: resolvedStatus === 'outtake' ? (existing?.outtake_at || u.outtake_at || null) : (u.outtake_at || existing?.outtake_at || null),
+                    outtake_reason: resolvedStatus === 'outtake' ? (existing?.outtake_reason || u.outtake_reason || null) : (u.outtake_reason || existing?.outtake_reason || null),
+                    transferred_at: resolvedStatus === 'transferred' ? (existing?.transferred_at || u.transferred_at || null) : (u.transferred_at || existing?.transferred_at || null),
+                    transfer_slip_number: resolvedStatus === 'transferred' ? (existing?.transfer_slip_number || u.transfer_slip_number || null) : (u.transfer_slip_number || existing?.transfer_slip_number || null),
+                    transferred_to_site_code: resolvedStatus === 'transferred' ? (existing?.transferred_to_site_code || u.transferred_to_site_code || null) : (u.transferred_to_site_code || existing?.transferred_to_site_code || null),
                     box_number: isExistingPackedOrShipped ? (existing.box_number || 1) : (u.box_number || existing.box_number || 1),
                     po_number: existing.po_number || u.po_number || null,
                     po_id: existing.po_id || u.po_id || null,
@@ -2411,6 +2497,63 @@ export function useCloudSync({
 
           overlaySnapshotDoc(liveMasterInvDoc);
           overlaySnapshotDoc(branchMasterInvDoc);
+
+          // Overlay Master Used Parts Registry to guarantee used units persistence
+          const usedPartsRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_used_parts_registry');
+          let usedRegistryRecords = Array.isArray(usedPartsRegistryDoc?.snapshot_data?.records)
+            ? usedPartsRegistryDoc.snapshot_data.records
+            : [];
+
+          try {
+            const localUsedReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+            const combinedMap = new Map();
+            usedRegistryRecords.forEach(r => { if (r?.serial_number) combinedMap.set(String(r.serial_number).toUpperCase(), r); });
+            if (Array.isArray(localUsedReg)) localUsedReg.forEach(r => { if (r?.serial_number) combinedMap.set(String(r.serial_number).toUpperCase(), r); });
+            if (Array.isArray(idbUsedReg)) idbUsedReg.forEach(r => { if (r?.serial_number) combinedMap.set(String(r.serial_number).toUpperCase(), r); });
+            usedRegistryRecords = Array.from(combinedMap.values());
+            if (usedRegistryRecords.length > 0) {
+              dbStorage.setItem('mdc_master_used_parts_registry', usedRegistryRecords);
+            }
+          } catch (e) {}
+
+          if (usedRegistryRecords.length > 0) {
+            usedRegistryRecords.forEach(rec => {
+              const s = String(rec.serial_number || '').trim().toUpperCase();
+              if (s && !deletedSerialsSet.has(s)) {
+                if (map.has(s)) {
+                  const target = map.get(s);
+                  const isPackedOrShipped = target.status === 'packed' || target.status === 'shipped';
+                  if (!isPackedOrShipped) {
+                    map.set(s, {
+                      ...target,
+                      status: 'used',
+                      work_order_number: rec.work_order_number || target.work_order_number || null,
+                      usage_notes: rec.usage_notes || target.usage_notes || null,
+                      used_at: rec.used_at || target.used_at || null,
+                      used_by_name: rec.used_by || rec.used_by_name || target.used_by_name || null,
+                      used_by_id: rec.used_by_id || target.used_by_id || null
+                    });
+                  }
+                } else {
+                  map.set(s, {
+                    serial_number: s,
+                    part_number: rec.part_number,
+                    description: rec.description,
+                    current_site_id: rec.site_id,
+                    site_code: rec.site_code,
+                    site_name: rec.site_name,
+                    status: 'used',
+                    work_order_number: rec.work_order_number || null,
+                    usage_notes: rec.usage_notes || null,
+                    used_at: rec.used_at || null,
+                    used_by_name: rec.used_by || rec.used_by_name || null,
+                    used_by_id: rec.used_by_id || null,
+                    updated_at: rec.used_at || new Date().toISOString()
+                  });
+                }
+              }
+            });
+          }
 
           // Cross-Check & Harvest in-stock units recorded across intake batches (guarantees cross-user parity)
           // Strictly harvest ONLY from physical intake batches (e.g. 'DIRECT RECEIVING' or 'INTAKE-'), NEVER from Purchase Order records!
@@ -2505,12 +2648,32 @@ export function useCloudSync({
                 const cloudUnit = map.get(s);
                 const localTime = u.updated_at ? new Date(u.updated_at).getTime() : 0;
                 const cloudTime = cloudUnit?.updated_at ? new Date(cloudUnit.updated_at).getTime() : 0;
-                if (localTime > cloudTime && (u.intake_assignment || u.notes)) {
+
+                const isLocalLifecycle = u.status === 'used' || u.status === 'outtake' || u.status === 'transferred' || Boolean(u.used_at);
+                const isCloudStaleInStock = cloudUnit.status === 'in_stock' && !cloudUnit.used_at && !cloudUnit.outtake_at && !cloudUnit.transferred_at;
+
+                if (localTime >= cloudTime || (isLocalLifecycle && isCloudStaleInStock)) {
+                  const isCloudPackedOrShipped = cloudUnit.status === 'packed' || cloudUnit.status === 'shipped';
                   map.set(s, {
                     ...cloudUnit,
+                    ...u,
+                    current_site_id: isCloudPackedOrShipped ? cloudUnit.current_site_id : (u.current_site_id || cloudUnit.current_site_id),
+                    site_code: isCloudPackedOrShipped ? cloudUnit.site_code : (u.site_code || cloudUnit.site_code),
+                    site_name: isCloudPackedOrShipped ? cloudUnit.site_name : (u.site_name || cloudUnit.site_name),
                     intake_assignment: u.intake_assignment || cloudUnit.intake_assignment,
                     notes: u.notes || cloudUnit.notes,
-                    updated_at: u.updated_at
+                    status: isCloudPackedOrShipped ? cloudUnit.status : (u.status || cloudUnit.status),
+                    work_order_number: u.work_order_number || cloudUnit.work_order_number || null,
+                    usage_notes: u.usage_notes || cloudUnit.usage_notes || null,
+                    used_at: u.used_at || cloudUnit.used_at || null,
+                    used_by_name: u.used_by_name || cloudUnit.used_by_name || null,
+                    used_by_id: u.used_by_id || cloudUnit.used_by_id || null,
+                    outtake_at: u.outtake_at || cloudUnit.outtake_at || null,
+                    outtake_reason: u.outtake_reason || cloudUnit.outtake_reason || null,
+                    transferred_at: u.transferred_at || cloudUnit.transferred_at || null,
+                    transfer_slip_number: u.transfer_slip_number || cloudUnit.transfer_slip_number || null,
+                    transferred_to_site_code: u.transferred_to_site_code || cloudUnit.transferred_to_site_code || null,
+                    updated_at: u.updated_at || cloudUnit.updated_at
                   });
                 }
               }
@@ -2533,6 +2696,7 @@ export function useCloudSync({
 
           return merged;
         });
+        if (setIsInventoryLoaded) setIsInventoryLoaded(true);
       }
 
       // 8. Process Parts Requests
@@ -2682,7 +2846,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, _dcIntakeRecords, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
+  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setIsInventoryLoaded, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, _dcIntakeRecords, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {
@@ -2802,7 +2966,8 @@ export function useCloudSync({
             return {
               ...u,
               status: 'packed',
-              current_site_id: payload.siteId || u.current_site_id,
+              current_site_id: payload.isFinalized ? (payload.siteId || u.current_site_id) : (u.current_site_id || 'site-dc'),
+              destination_site_id: payload.siteId || null,
               box_number: payload.boxNumber || u.box_number || 1,
               shipped_at: new Date().toISOString()
             };
@@ -2821,7 +2986,8 @@ export function useCloudSync({
             return {
               ...u,
               status: 'packed',
-              current_site_id: payload.siteId || u.current_site_id,
+              current_site_id: payload.isFinalized ? (payload.siteId || u.current_site_id) : (u.current_site_id || 'site-dc'),
+              destination_site_id: payload.siteId || null,
               shipped_at: new Date().toISOString()
             };
           }
@@ -2888,6 +3054,131 @@ export function useCloudSync({
         dbStorage.setItem('mdc_inventory', updated);
         return updated;
       });
+    } else if (type === 'PART_MARKED_AS_USED' && (payload.unit || payload.serialNumber || payload.usage)) {
+      const u = payload.unit;
+      const cleanS = String(u?.serial_number || payload.serialNumber || payload.usage?.serial_number || '').trim().toUpperCase();
+      if (cleanS) {
+        if (payload.usage) {
+          try {
+            const localReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+            const nextReg = [payload.usage, ...localReg.filter(r => String(r.serial_number || '').toUpperCase() !== cleanS)].slice(0, 500);
+            localStorage.setItem('mdc_master_used_parts_registry', JSON.stringify(nextReg));
+            dbStorage.setItem('mdc_master_used_parts_registry', nextReg);
+          } catch (e) {}
+        }
+        setInventoryUnits(prev => {
+          const exists = (prev || []).some(existing => String(existing.serial_number || '').trim().toUpperCase() === cleanS);
+          let updated;
+          if (exists) {
+            updated = (prev || []).map(existing => {
+              if (String(existing.serial_number || '').trim().toUpperCase() === cleanS) {
+                return {
+                  ...existing,
+                  ...(u || {}),
+                  status: 'used',
+                  used_at: u?.used_at || payload.usage?.used_at || new Date().toISOString(),
+                  used_by_id: u?.used_by_id || payload.usage?.used_by_id || null,
+                  used_by_name: u?.used_by_name || payload.usage?.used_by || 'Branch Specialist',
+                  work_order_number: u?.work_order_number || payload.usage?.work_order_number || existing.work_order_number || null,
+                  usage_notes: u?.usage_notes || payload.usage?.usage_notes || existing.usage_notes || null,
+                  notes: u?.notes || (payload.usage?.usage_notes ? `Used in ${payload.usage?.work_order_number || 'Repair'} | ${payload.usage?.usage_notes}` : (existing.notes || 'Used in Repair'))
+                };
+              }
+              return existing;
+            });
+          } else if (u) {
+            updated = [u, ...(prev || [])];
+          } else {
+            updated = prev || [];
+          }
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
+    } else if (type === 'PART_RESTORED_TO_STOCK' && (payload.serialNumber || payload.unit)) {
+      const cleanS = String(payload.serialNumber || payload.unit?.serial_number || '').trim().toUpperCase();
+      if (cleanS) {
+        try {
+          const localReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+          const nextReg = localReg.filter(r => String(r.serial_number || '').toUpperCase() !== cleanS);
+          localStorage.setItem('mdc_master_used_parts_registry', JSON.stringify(nextReg));
+          dbStorage.setItem('mdc_master_used_parts_registry', nextReg);
+        } catch (e) {}
+        setInventoryUnits(prev => {
+          const updated = (prev || []).map(existing => {
+            if (String(existing.serial_number || '').trim().toUpperCase() === cleanS) {
+              const cleanNotes = existing.notes ? existing.notes.split(' | __META__:')[0] : 'In-Stock';
+              return {
+                ...existing,
+                status: 'in_stock',
+                used_at: null,
+                used_by_id: null,
+                used_by_name: null,
+                work_order_number: null,
+                usage_notes: null,
+                outtake_at: null,
+                outtake_reason: null,
+                transferred_at: null,
+                transferred_to_site_id: null,
+                transferred_to_site_code: null,
+                transfer_slip_number: null,
+                notes: cleanNotes
+              };
+            }
+            return existing;
+          });
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
+    } else if ((type === 'PART_MARKED_OUTTAKE' || type === 'PART_OUTTAKE_RECORDED') && (payload.unit || payload.serialNumber)) {
+      const u = payload.unit;
+      const cleanS = String(u?.serial_number || payload.serialNumber || '').trim().toUpperCase();
+      if (cleanS) {
+        setInventoryUnits(prev => {
+          const updated = (prev || []).map(existing => {
+            if (String(existing.serial_number || '').trim().toUpperCase() === cleanS) {
+              return {
+                ...existing,
+                ...(u || {}),
+                status: 'outtake',
+                outtake_at: u?.outtake_at || new Date().toISOString(),
+                outtake_reason: u?.outtake_reason || 'For Outtake'
+              };
+            }
+            return existing;
+          });
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
+    } else if ((type === 'PART_TRANSFERRED' || type === 'PART_TRANSFER_RECORDED') && (payload.unit || payload.serialNumber)) {
+      const u = payload.unit;
+      const cleanS = String(u?.serial_number || payload.serialNumber || '').trim().toUpperCase();
+      if (cleanS) {
+        setInventoryUnits(prev => {
+          const updated = (prev || []).map(existing => {
+            if (String(existing.serial_number || '').trim().toUpperCase() === cleanS) {
+              return {
+                ...existing,
+                ...(u || {}),
+                status: 'transferred',
+                transferred_at: u?.transferred_at || new Date().toISOString(),
+                transferred_to_site_id: u?.transferred_to_site_id || existing.transferred_to_site_id || null,
+                transferred_to_site_code: u?.transferred_to_site_code || existing.transferred_to_site_code || null,
+                transfer_slip_number: u?.transfer_slip_number || existing.transfer_slip_number || null
+              };
+            }
+            return existing;
+          });
+          try { localStorage.setItem('mdc_inventory', JSON.stringify(updated)); } catch (e) {}
+          dbStorage.setItem('mdc_inventory', updated);
+          return updated;
+        });
+      }
     } else if (type === 'STOCK_UPDATED' && (payload.serialNumber || payload.serial)) {
       const cleanS = String(payload.serialNumber || payload.serial).trim().toUpperCase();
       const newAssign = payload.assignment || (payload.unit ? (payload.unit.intake_assignment || payload.unit.notes) : null);
@@ -3165,7 +3456,9 @@ export function useCloudSync({
               'MASTER_DATA_UPDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED',
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
-              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED'
+              'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
+              'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'PART_RESTORED_TO_STOCK', 'PART_MARKED_OUTTAKE',
+              'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED'
             ].includes(ev.data.type);
 
             if (!isLocalEventAlreadyHandled && ev.data.table) {
@@ -3282,7 +3575,8 @@ export function useCloudSync({
               'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED',
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
               'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
-              'SUPERVISOR_SETTINGS_UPDATED', 'SITE_PARTS_CLEARED'
+              'SUPERVISOR_SETTINGS_UPDATED', 'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'PART_RESTORED_TO_STOCK',
+              'PART_MARKED_OUTTAKE', 'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {
@@ -3299,8 +3593,22 @@ export function useCloudSync({
             const bType = payload?.payload?.type;
             const bPayload = payload?.payload?.payload;
 
-            if (bType === 'SITE_PARTS_CLEARED') {
-              handleRealtimeInventoryEvent('SITE_PARTS_CLEARED', bPayload);
+            if (bType && bPayload && (
+              bType === 'SITE_PARTS_CLEARED' || [
+                'PART_MARKED_AS_USED',
+                'PART_RESTORED_TO_STOCK',
+                'PART_MARKED_OUTTAKE',
+                'PART_OUTTAKE_RECORDED',
+                'PART_TRANSFERRED',
+                'PART_TRANSFER_RECORDED',
+                'STOCK_UPDATED',
+                'UNIT_ADDED',
+                'UNIT_DELETED',
+                'UNIT_PACKED',
+                'UNIT_UNPACKED'
+              ].includes(bType)
+            )) {
+              handleRealtimeInventoryEvent(bType, bPayload);
             } else if (bType === 'FORCE_LOGOUT_USER' || (bType === 'USER_REGISTRY_UPDATED' && (bPayload?.action === 'DELETE' || bPayload?.isActive === false))) {
               const targetUserId = String(bPayload?.userId || '').trim().toLowerCase();
               const targetEmail = String(bPayload?.email || '').trim().toLowerCase();

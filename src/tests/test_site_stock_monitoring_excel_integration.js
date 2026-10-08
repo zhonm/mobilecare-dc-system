@@ -123,11 +123,11 @@ async function runTests() {
   assert.strictEqual(multiSheetResult.activeSheet, 'ALL_SHEETS', 'Active sheet must be ALL_SHEETS');
   assert.strictEqual(multiSheetResult.isMultiSite, true, 'isMultiSite flag must be true');
   assert.strictEqual(multiSheetResult.availableSheets.length, 28, 'Should have ALL_SHEETS + 27 branch sheets');
-  assert.strictEqual(multiSheetResult.items.length, 5104, 'Must parse the reconciled total units across all 27 branch sheets');
-  assert.strictEqual(multiSheetResult.summary.inStock, 3457, 'Must reconcile the Site Stock summary in-stock units');
-  assert.strictEqual(multiSheetResult.summary.used, 1454, 'Must have exactly 1,454 used units');
+  assert.strictEqual(multiSheetResult.items.length, 5077, 'Must parse the reconciled total units across all 27 branch sheets');
+  assert.strictEqual(multiSheetResult.summary.inStock, 3467, 'Must reconcile the Site Stock summary in-stock units');
+  assert.strictEqual(multiSheetResult.summary.used, 1407, 'Must have exactly 1,407 used units');
   assert.strictEqual(multiSheetResult.summary.outtake, 46, 'Must have exactly 46 outtake units');
-  assert.strictEqual(multiSheetResult.summary.transferred, 147, 'Must have exactly 147 transferred units');
+  assert.strictEqual(multiSheetResult.summary.transferred, 157, 'Must have exactly 157 transferred units');
 
   console.log(`  ✓ PASS: All 27 branch sheets parsed simultaneously!`);
   console.log(`    Total Records: ${multiSheetResult.items.length}`);
@@ -164,7 +164,7 @@ async function runTests() {
   );
   assert.strictEqual(scanInAllRes.success, true, 'parseScanInPartsFile multi-sheet must succeed');
   assert.strictEqual(scanInAllRes.activeSheet, 'ALL_SHEETS', 'Active sheet must be ALL_SHEETS');
-  assert.strictEqual(scanInAllRes.items.length, 5104, 'Must parse the reconciled record count');
+  assert.strictEqual(scanInAllRes.items.length, 5077, 'Must parse the reconciled record count');
   console.log(`  ✓ PASS: parseScanInPartsFile multi-sheet routed cleanly (${scanInAllRes.items.length} units extracted)`);
 
   console.log('\n====================================================================');

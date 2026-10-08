@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveSite, isUUID } from '../utils/appContextHelpers';
+import { resolveSite, isUUID, getCleanDisplaySerial } from '../utils/appContextHelpers';
 import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus, resolveCanonicalIPhoneModel } from '../utils/partResolver';
 import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilter';
 import { defaultPartsCatalog } from '../data/defaultCatalog';
@@ -101,6 +101,8 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
 
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
+  const isAdmin = isSuperadmin || currentUser?.role === 'admin' || currentUser?.isSuperAdmin;
+  const canRestore = isAdmin;
   const currentUserSiteRef = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
 
   // User site resolution (Superadmin is explicitly Central DC, not retail branches)
@@ -1067,6 +1069,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     }
     const rows = liveUsedUnitsLog.map((u, idx) => ({
       '#': idx + 1,
+      'Site Location': u.site_code || u.site_name || resolveSite(u.current_site_id || u.site_id || u.siteId, sites)?.code || activeSiteObj?.code || 'BRANCH',
       'Part Number': u.part_number,
       'Description': u.description || 'Apple Replacement Part',
       'Serial Number': u.serial_number,
@@ -1074,7 +1077,6 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
       'Used By (Technician)': u.used_by_name || u.used_by || 'Branch Specialist',
       'Used Date': u.used_at ? new Date(u.used_at).toLocaleDateString() : 'N/A',
       'Used Time': u.used_at ? formatTo12HourTime(u.used_at) : 'N/A',
-      'Branch Site': u.site_code || activeSiteObj.code,
       'Usage Notes': u.usage_notes || u.notes || ''
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -4907,6 +4909,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                     <thead>
                       <tr style={{ background: '#f8fafc' }}>
                         <th style={{ width: '40px', textAlign: 'center' }}>#</th>
+                        <th style={{ minWidth: '100px' }}>Site Location</th>
                         <th style={{ minWidth: '150px' }}>Part Number</th>
                         <th style={{ minWidth: '220px' }}>Part Description</th>
                         <th style={{ minWidth: '180px' }}>Serial Number</th>
@@ -4914,7 +4917,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                         <th style={{ minWidth: '150px' }}>Date & Time Used</th>
                         <th style={{ minWidth: '140px' }}>Used By</th>
                         <th style={{ minWidth: '180px' }}>Usage Notes</th>
-                        <th style={{ width: '110px', textAlign: 'center' }}>Action</th>
+                        {canRestore && <th style={{ width: '110px', textAlign: 'center' }}>Action</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -4922,6 +4925,20 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                         <tr key={u.id || u.serial_number || idx}>
                           <td style={{ textAlign: 'center', fontSize: '11.5px', color: '#94a3b8' }}>
                             {idx + 1}
+                          </td>
+                          <td>
+                            <span
+                              className="badge"
+                              style={{
+                                background: '#fffbeb',
+                                color: '#b45309',
+                                border: '1px solid #fde68a',
+                                fontSize: '11px',
+                                fontWeight: 700
+                              }}
+                            >
+                              {u.site_code || u.site_name || resolveSite(u.current_site_id || u.site_id || u.siteId, sites)?.code || activeSiteObj?.code || 'BRANCH'}
+                            </span>
                           </td>
                           <td>
                             <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
@@ -4944,7 +4961,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                                 border: '1px solid #cbd5e1'
                               }}
                             >
-                              {u.serial_number}
+                                {getCleanDisplaySerial(u.serial_number, u)}
                             </span>
                           </td>
                           <td>
@@ -4976,29 +4993,31 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                           <td style={{ fontSize: '12px', color: '#64748b' }}>
                             {u.usage_notes || u.notes || '—'}
                           </td>
-                          <td style={{ textAlign: 'center' }}>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              style={{
-                                fontSize: '11px',
-                                padding: '3px 8px',
-                                color: '#475569',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '3px'
-                              }}
-                              onClick={() => {
-                                if (window.confirm(`Restore serial ${u.serial_number} back to In-Stock status?`)) {
-                                  unmarkUnitAsUsed(u.serial_number);
-                                }
-                              }}
-                              title="Undo: Revert this part back to In-Stock inventory"
-                            >
-                              <RotateCcw size={11} />
-                              <span>Revert</span>
-                            </button>
-                          </td>
+                          {canRestore && (
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{
+                                  fontSize: '11px',
+                                  padding: '3px 8px',
+                                  color: '#475569',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px'
+                                }}
+                                onClick={() => {
+                                  if (window.confirm(`Restore serial ${getCleanDisplaySerial(u.serial_number, u)} back to In-Stock status?`)) {
+                                    unmarkUnitAsUsed(u.serial_number);
+                                  }
+                                }}
+                                title="Undo: Revert this part back to In-Stock inventory"
+                              >
+                                <RotateCcw size={11} />
+                                <span>Revert</span>
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -5440,7 +5459,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
                               overflow: 'hidden',
                               textOverflow: 'ellipsis'
                             }}>
-                              {item.serial_number}
+                              {getCleanDisplaySerial(item.serial_number, item)}
                             </div>
                             <div style={{ fontSize: '10.5px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' }}>
                               <span>Box {item.box_number || 1}</span>
@@ -5641,7 +5660,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '10px 12px', fontSize: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#64748b' }}>Serial Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{unitToDelete.serial_number || unitToDelete.serialNumber}</strong>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToDelete.serial_number || unitToDelete.serialNumber, unitToDelete)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#64748b' }}>Part Number:</span>
@@ -5730,7 +5749,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
               <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '6px', padding: '10px 12px', fontSize: '12px', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                   <span style={{ color: '#0369a1' }}>Serial Number:</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{unitToEdit.serial_number || unitToEdit.serialNumber}</strong>
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#0f172a' }}>{getCleanDisplaySerial(unitToEdit.serial_number || unitToEdit.serialNumber, unitToEdit)}</strong>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: '#0369a1' }}>Part Number:</span>

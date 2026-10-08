@@ -474,6 +474,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const isSiteMatch = isDcMode ? unitIsDc : (u.current_site_id === activeReceivingSite.id || u.site_code === activeReceivingSite.code);
       if (!isSiteMatch) return; // Completely ignore other sites to avoid false cross-site conflicts
 
+      // Only check active units that are currently in stock, allocated, or packed
+      if (u.status !== 'in_stock' && u.status !== 'allocated' && u.status !== 'packed' && u.status) return;
+
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && !map.has(s)) {
         map.set(s, {
@@ -487,48 +490,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
     });
 
-    // 3. Historical Batch Records (Only relevant in DC mode)
-    if (isDcMode) {
-      (dcIntakeRecords || []).forEach(rec => {
-        if (Array.isArray(rec.items)) {
-          rec.items.forEach(u => {
-            const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
-            if (s && !map.has(s)) {
-              map.set(s, {
-                serial_number: s,
-                part_number: u.part_number || u.partNumber,
-                description: u.description || 'Genuine Apple Part',
-                assignment: u.intake_assignment || rec.record_name || 'Historical Intake Batch',
-                received_at: u.received_at || rec.intake_date,
-                location: `Intake Batch "${rec.record_name || rec.id}"`
-              });
-            }
-          });
-        }
-      });
-
-      // 4. DC Shipments / Outbound Packing Lists
-      (shipments || []).forEach(sh => {
-        if (Array.isArray(sh.items)) {
-          sh.items.forEach(u => {
-            const s = String(u.serial_number || u.serialNumber || '').trim().toUpperCase();
-            if (s && !map.has(s)) {
-              map.set(s, {
-                serial_number: s,
-                part_number: u.part_number || u.partNumber,
-                description: u.description || 'Genuine Apple Part',
-                assignment: sh.invoice_ref || 'Outbound Packing List',
-                received_at: sh.shipment_date || sh.created_at,
-                location: `Packing List "${sh.invoice_ref || sh.shipment_number}"`
-              });
-            }
-          });
-        }
-      });
-    }
-
     return map;
-  }, [sessionScans, inventoryUnits, dcIntakeRecords, shipments, activeReceivingSite, dcSiteObj?.id, dcSiteObj?.code]);
+  }, [sessionScans, inventoryUnits, activeReceivingSite, dcSiteObj?.id, dcSiteObj?.code]);
 
   // Check if current serial input is already scanned / present in the system
   const duplicateSerialMatch = useMemo(() => {
@@ -1094,7 +1057,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return;
     }
 
-    const res = batchAddScanInUnits(
+    const res = await batchAddScanInUnits(
       validItems,
       isPmgUser ? null : (modalPoId || selectedPoId || null),
       effectiveDest,
