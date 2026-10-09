@@ -1,9 +1,9 @@
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
 import { unmarkDeletedSerials } from './deletionRegistryService';
-import { getPartCategory } from '../utils/categoryFilter';
+import { getPartCategory, resolvePartCategoryUUID } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
-import { saveInventoryToLocalStorage } from '../utils/appContextHelpers';
+import { saveInventoryToLocalStorage, isUUID } from '../utils/appContextHelpers';
 
 export const executeSaveUnitsToSupabase = async ({
   units,
@@ -26,11 +26,14 @@ export const executeSaveUnitsToSupabase = async ({
       const pn = (u.part_number || 'UNKNOWN').toUpperCase();
       if (!existingPartsMap.has(pn) && !missingParts.some(mp => mp.part_number === pn)) {
         const catCode = getPartCategory({ part_number: pn, description: u.description });
-        const partCatId = catMap.get(catCode) || defaultCatId;
+        const rawCatId = catMap.get(catCode) || defaultCatId;
+        const partCatUuid = (rawCatId && isUUID(rawCatId))
+          ? rawCatId
+          : resolvePartCategoryUUID({ part_number: pn, description: u.description });
         missingParts.push({
           part_number: pn,
           description: u.description || 'Service Replacement Part',
-          ...(partCatId ? { category_id: partCatId } : {})
+          ...(partCatUuid && isUUID(partCatUuid) ? { category_id: partCatUuid } : {})
         });
       }
     });

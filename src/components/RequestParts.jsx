@@ -11,6 +11,7 @@ import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import ConfirmReceiveModal from './ConfirmReceiveModal';
 import AllStocksImportModal from './AllStocksImportModal';
 import SerialDossierModal from './SerialDossierModal';
+import FixablyInventoryDashboard from './FixablyInventoryDashboard';
 import { searchSerialsWithFullDetails } from '../utils/serialTracker';
 import {
   Inbox,
@@ -67,7 +68,7 @@ const REASON_PRESETS = [
   'Quarterly Buffer Replenishment'
 ];
 
-export default function RequestParts({ defaultTab = 'requests_table', _embeddedMode = false, onNavigateToStation = null }) {
+export default function RequestParts({ defaultTab = 'requests_table', initialView = 'all_stocks', _embeddedMode = false, onNavigateToStation = null }) {
   const {
     activeTab: globalActiveTab,
     setActiveTab: setGlobalActiveTab,
@@ -147,6 +148,7 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
     if (defaultTab === 'all_stocks') return 'all_stocks';
     return pmgSubTab || defaultTab || 'requests_table';
   });
+  const [showFixablyDashboard, _setShowFixablyDashboard] = useState(true);
 
   const prevDefaultTabRef = useRef(defaultTab);
   useEffect(() => {
@@ -3799,8 +3801,21 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
         </div>
       )}
 
-      {/* 7. TAB 3: All Stocks & Multi-Site Inventory with Regional Tabs and Part Number Availability Search */}
-      {activeTab === 'all_stocks' && (
+      {/* 7. TAB 3: All Stocks & Multi-Site Inventory Visibility */}
+      {activeTab === 'all_stocks' && showFixablyDashboard ? (
+        <FixablyInventoryDashboard
+          currentUser={currentUser}
+          sites={sites}
+          parts={parts}
+          setParts={setParts}
+          inventoryUnits={inventoryUnits}
+          batchAddScanInUnits={batchAddScanInUnits}
+          clearSiteParts={clearSiteParts}
+          showToast={showToast}
+          initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
+          initialSelectedSiteId={allStocksSelectedSiteId}
+        />
+      ) : activeTab === 'all_stocks' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
           {/* Top Search Bar & Telemetry Status Card */}

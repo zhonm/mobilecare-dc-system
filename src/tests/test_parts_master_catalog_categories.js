@@ -14,10 +14,13 @@ import fs from 'fs';
 import {
   HARDWARE_CATEGORIES,
   DEFAULT_PART_CATEGORIES,
+  CANONICAL_CATEGORY_UUIDS,
   getPartCategory,
   getCategoryForPart,
-  resolvePartCategoryId
+  resolvePartCategoryId,
+  resolvePartCategoryUUID
 } from '../utils/categoryFilter.js';
+import { isUUID } from '../utils/appContextHelpers.js';
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 
 const seedData = JSON.parse(fs.readFileSync(new URL('../data/seedData.json', import.meta.url), 'utf8'));
@@ -135,6 +138,35 @@ seedData.parts.forEach(p => {
   assert.strictEqual(p.category_id, expectedId, `seedData part ${p.part_number} category_id mismatch`);
 });
 console.log(`  ✓ PASS: All ${seedData.parts.length} seedData parts accurately categorized`);
+
+// ----------------------------------------------------
+// 6. Supabase PostgreSQL Category UUID Resolution (Fix 22P02)
+// ----------------------------------------------------
+console.log('\n--- 6. Supabase PostgreSQL Category UUID Resolution (Fix 22P02) ---');
+Object.entries(CANONICAL_CATEGORY_UUIDS).forEach(([code, uuid]) => {
+  assert.ok(isUUID(uuid), `CANONICAL_CATEGORY_UUIDS.${code} must be a valid UUID, got: ${uuid}`);
+});
+console.log('  ✓ PASS: All CANONICAL_CATEGORY_UUIDS are strictly valid PostgreSQL UUIDs');
+
+// Test that a battery part with slug 'cat-battery' resolves to valid UUID
+const batteryWithSlug = { part_number: '661-22374', description: 'Battery, iPhone 13', category_id: 'cat-battery' };
+const resolvedBatteryUuid = resolvePartCategoryUUID(batteryWithSlug);
+assert.ok(isUUID(resolvedBatteryUuid), 'Resolved battery UUID must be a valid UUID');
+assert.strictEqual(resolvedBatteryUuid, CANONICAL_CATEGORY_UUIDS.BATTERY, 'Resolved battery UUID must match CANONICAL_CATEGORY_UUIDS.BATTERY');
+assert.notStrictEqual(resolvedBatteryUuid, 'cat-battery', 'Must never return "cat-battery" string for DB UUID');
+
+// Test that a display part resolves to DISPLAY UUID
+const displayWithSlug = { part_number: '661-21988', description: 'Display, iPhone 13', category_id: 'cat-display' };
+const resolvedDisplayUuid = resolvePartCategoryUUID(displayWithSlug);
+assert.ok(isUUID(resolvedDisplayUuid), 'Resolved display UUID must be a valid UUID');
+assert.strictEqual(resolvedDisplayUuid, CANONICAL_CATEGORY_UUIDS.DISPLAY, 'Resolved display UUID must match CANONICAL_CATEGORY_UUIDS.DISPLAY');
+
+// Test that an existing valid UUID is preserved
+const existingCustomUuid = '11111111-2222-4333-8444-555555555555';
+const partWithCustomUuid = { part_number: '661-99999', description: 'Custom Part', category_id: existingCustomUuid };
+assert.strictEqual(resolvePartCategoryUUID(partWithCustomUuid), existingCustomUuid, 'Existing valid UUID must be preserved');
+
+console.log('  ✓ PASS: resolvePartCategoryUUID guarantees valid PostgreSQL UUIDs and eliminates error 22P02');
 
 console.log('\n====================================================');
 console.log('ALL PARTS MASTER CATALOG CATEGORY TESTS PASSED (100%)');

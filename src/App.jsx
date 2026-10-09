@@ -92,7 +92,9 @@ function MainApp() {
         }
         return <RequestParts defaultTab={pmgSubTab || 'requests_table'} key="request-parts" />;
       case 'all-stocks':
-        return <RequestParts defaultTab="all_stocks" key="all-stocks" />;
+        return <RequestParts defaultTab="all_stocks" initialView="all_stocks" key="all-stocks" />;
+      case 'multi-site':
+        return <RequestParts defaultTab="all_stocks" initialView="multi_site" key="multi-site" />;
       case 'reports':
       case 'site-transfers-fifo':
         return <SiteTransfersFifoReport />;

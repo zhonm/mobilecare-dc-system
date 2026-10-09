@@ -911,7 +911,6 @@ export function usePartsRequests({
       siteList = siteList.filter(s => !s.is_dc && s.code !== 'DC-MDC' && s.code !== 'DC' && s.id !== 'site-dc');
     }
 
-    const networkSerials = new Set();
     const isAvailableStatus = (status) => {
       const normalized = String(status || 'in_stock').toLowerCase();
       return normalized === 'in_stock' || normalized === 'delivered' || normalized === 'received';

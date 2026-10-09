@@ -284,3 +284,36 @@ export function resolvePartCategoryId(part, categories = []) {
   return cat?.id || `cat-${getPartCategory(part).toLowerCase().replace('_', '')}`;
 }
 
+export const CANONICAL_CATEGORY_UUIDS = {
+  BATTERY: 'b069269c-a7e2-46fd-9d95-f0d479f1d6c3',
+  DISPLAY: '89179943-a0e2-4e80-b213-34e3bcb6869f',
+  CAMERA: 'c79bff7c-7a67-44b4-9761-2f47a8ddda04',
+  BACK_GLASS: '34068b1c-78ca-43bd-99d5-6afa8c45cdab',
+  MID_REAR: 'e94505e8-04f5-4058-bea0-b5bcee19fa34',
+  OTHER: 'de1c3a4e-ee19-4213-afa5-9b66688288b3'
+};
+
+const isValidUUID = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+/**
+ * Resolves the genuine PostgreSQL UUID for a part's category.
+ * Guaranteed to return a valid UUID to prevent PostgreSQL error 22P02.
+ *
+ * @param {Object} part - Part object or descriptor
+ * @param {Array<Object>} categories - Active category definitions
+ * @returns {string} Valid category UUID
+ */
+export function resolvePartCategoryUUID(part, categories = []) {
+  if (!part) return CANONICAL_CATEGORY_UUIDS.OTHER;
+  if (part.category_id && isValidUUID(part.category_id)) return part.category_id;
+
+  const detectedCode = getPartCategory(part);
+  if (Array.isArray(categories) && categories.length > 0) {
+    const matched = categories.find(c => String(c.code || '').trim().toUpperCase() === detectedCode);
+    if (matched && isValidUUID(matched.id)) return matched.id;
+  }
+
+  return CANONICAL_CATEGORY_UUIDS[detectedCode] || CANONICAL_CATEGORY_UUIDS.OTHER;
+}
+
+

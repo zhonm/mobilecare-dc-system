@@ -5,6 +5,7 @@ import { isUUID } from '../utils/appContextHelpers.js';
 import {
   DEFAULT_PART_CATEGORIES,
   resolvePartCategoryId,
+  resolvePartCategoryUUID,
   getPartCategory
 } from '../utils/categoryFilter.js';
 import { resolveSafeRegion } from '../constants/config.js';
@@ -247,19 +248,23 @@ export function useCatalogAndSites({
       dbStorage.setItem('mdc_parts', healed);
 
       if (supabase) {
-        const catMap = new Map((categories || []).map(c => [c.code, c.id]));
-        const updates = healed
-          .filter(p => p.part_number)
-          .map(p => {
-            const catCode = getPartCategory(p);
-            const catId = catMap.get(catCode) || p.category_id;
-            return {
-              part_number: p.part_number,
-              category_id: catId
-            };
-          });
-
         (async () => {
+          let liveDbCats = [];
+          try {
+            const { data } = await supabase.from('part_categories').select('id, code');
+            if (data && data.length > 0) liveDbCats = data;
+          } catch (e) {}
+
+          const updates = healed
+            .filter(p => p.part_number)
+            .map(p => {
+              const catUuid = resolvePartCategoryUUID(p, liveDbCats.length > 0 ? liveDbCats : categories);
+              return {
+                part_number: p.part_number,
+                ...(catUuid && isUUID(catUuid) ? { category_id: catUuid } : {})
+              };
+            });
+
           for (let i = 0; i < updates.length; i += 50) {
             const chunk = updates.slice(i, i + 50);
             await supabase.from('parts').upsert(chunk, { onConflict: 'part_number' }).catch(() => {});
@@ -386,7 +391,10 @@ export function useCatalogAndSites({
         let dbCatId = (targetCat && isUUID(targetCat.id)) ? targetCat.id : null;
         if (!dbCatId) {
           const { data: matchedDbCat } = await supabase.from('part_categories').select('id').eq('code', catCode).maybeSingle();
-          dbCatId = matchedDbCat?.id || null;
+          dbCatId = (matchedDbCat?.id && isUUID(matchedDbCat.id)) ? matchedDbCat.id : null;
+        }
+        if (!dbCatId || !isUUID(dbCatId)) {
+          dbCatId = resolvePartCategoryUUID({ part_number: cleanPN, description: cleanDesc }, categories);
         }
 
         const { error } = await supabase.from('parts').upsert({
@@ -396,7 +404,7 @@ export function useCatalogAndSites({
           iphone_model: partData.iphone_model || 'iPhone',
           stocking_price: parseFloat(partData.stocking_price) || 0,
           is_active: partData.is_active ?? true,
-          ...(dbCatId ? { category_id: dbCatId } : {}),
+          ...(dbCatId && isUUID(dbCatId) ? { category_id: dbCatId } : {}),
           updated_at: new Date().toISOString()
         }, { onConflict: 'part_number' });
 

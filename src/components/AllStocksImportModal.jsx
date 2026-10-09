@@ -12,7 +12,8 @@ import {
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
 import { parseScanInPartsFile, parseFixablyInventoryValueCsv } from '../utils/excelParser.js';
-import { saveInventoryToLocalStorage } from '../utils/appContextHelpers.js';
+import { saveInventoryToLocalStorage, isUUID } from '../utils/appContextHelpers.js';
+import { resolvePartCategoryUUID } from '../utils/categoryFilter.js';
 
 export default function AllStocksImportModal({
   isOpen,
@@ -213,14 +214,25 @@ export default function AllStocksImportModal({
 
         try {
           if (supabase) {
-            await supabase.from('parts').upsert(
-              partsToUpsert.map(p => ({
+            let liveDbCats = [];
+            try {
+              const { data } = await supabase.from('part_categories').select('id, code');
+              if (data && data.length > 0) liveDbCats = data;
+            } catch (e) {}
+
+            const rowsToUpsert = partsToUpsert.map(p => {
+              const catUuid = resolvePartCategoryUUID(p, liveDbCats);
+              return {
                 part_number: p.part_number,
                 description: p.description,
-                category_id: p.category_id || 'cat-display',
+                ...(catUuid && isUUID(catUuid) ? { category_id: catUuid } : {}),
                 stocking_price: p.stocking_price || 99,
                 is_active: true
-              })),
+              };
+            });
+
+            await supabase.from('parts').upsert(
+              rowsToUpsert,
               { onConflict: 'part_number' }
             );
           }

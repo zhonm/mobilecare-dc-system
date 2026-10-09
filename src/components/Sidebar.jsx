@@ -23,7 +23,8 @@ import {
   Globe,
   ChevronDown,
   ChevronRight,
-  Package
+  Package,
+  Building2
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -60,7 +61,7 @@ export default function Sidebar() {
     return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
   }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode]);
 
-  const isPartsActive = activeTab === 'request-parts' || activeTab === 'all-stocks';
+  const isPartsActive = activeTab === 'request-parts' || activeTab === 'all-stocks' || activeTab === 'multi-site';
 
   const [isPartsDropdownOpen, setIsPartsDropdownOpen] = useState(() => isPartsActive);
 
@@ -94,6 +95,10 @@ export default function Sidebar() {
       setActiveTab('all-stocks');
       if (setPmgSubTab) setPmgSubTab('all_stocks');
       try { localStorage.setItem('mdc_parts_subtab', 'all_stocks'); } catch (e) {}
+    } else if (child.id === 'multi-site') {
+      setActiveTab('multi-site');
+      if (setPmgSubTab) setPmgSubTab('all_stocks');
+      try { localStorage.setItem('mdc_parts_subtab', 'multi_site'); } catch (e) {}
     } else {
       setActiveTab(child.id);
       if (setPmgSubTab && child.subTab) {
@@ -106,7 +111,10 @@ export default function Sidebar() {
 
   const isChildActive = (child) => {
     if (child.id === 'all-stocks') {
-      return activeTab === 'all-stocks' || (activeTab === 'request-parts' && pmgSubTab === 'all_stocks');
+      return activeTab === 'all-stocks';
+    }
+    if (child.id === 'multi-site') {
+      return activeTab === 'multi-site';
     }
     if (child.id === 'request-parts') {
       if (activeTab !== 'request-parts') return false;
@@ -127,6 +135,9 @@ export default function Sidebar() {
     { id: 'orders', label: 'Purchase Orders', icon: ShoppingCart, badge: openPOsCount, section: 'Planning & Allocation' },
 
     // 2. Operations & Logistics (Combined Arrival, Intake, Scan-Out, Shipments, & Parts Inventory)
+    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, section: 'Operations & Logistics' },
+    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, badge: pendingShipmentsCount, section: 'Operations & Logistics' },
+    { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
     {
       id: 'parts-group',
       label: 'Parts Requests & Stock',
@@ -151,8 +162,14 @@ export default function Sidebar() {
         {
           id: 'all-stocks',
           subTab: 'all_stocks',
-          label: 'All Stocks & Multi-Site',
+          label: 'All Stocks',
           icon: Globe
+        },
+        {
+          id: 'multi-site',
+          subTab: 'multi_site',
+          label: 'Multi-Site Dashboard',
+          icon: Building2
         },
         {
           id: 'request-parts',
@@ -162,9 +179,6 @@ export default function Sidebar() {
         }
       ]
     },
-    { id: 'scan-in', label: 'Receive Scan-In', icon: Barcode, section: 'Operations & Logistics' },
-    { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, badge: pendingShipmentsCount, section: 'Operations & Logistics' },
-    { id: 'shipments', label: 'Outbound Shipments', icon: Truck, section: 'Operations & Logistics' },
 
     // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },

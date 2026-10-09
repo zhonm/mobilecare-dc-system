@@ -17,7 +17,7 @@ import {
   saveInventoryToLocalStorage,
   readInventoryFromLocalStorage
 } from '../utils/appContextHelpers';
-import { getPartCategory } from '../utils/categoryFilter';
+import { getPartCategory, resolvePartCategoryUUID } from '../utils/categoryFilter';
 import { queuedSavedRecordsUpsert, flushSavedRecordsQueue } from '../utils/savedRecordsQueue';
 import { cleanSerialNumberInput } from '../utils/serialTracker';
 import { resolveSiteFromSheetOrCode } from '../utils/excelParser';
@@ -257,6 +257,9 @@ export function useInventory({
       try {
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
         if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
+          const updatedCloud = reg.snapshot_data.deletedSerials.filter(serial =>
+            !serialSetToKeep.has(String(serial).trim().toUpperCase())
+          );
           if (options.immediate) {
             await supabase.from('saved_records').upsert({
               id: 'deleted_unit_serials_registry',
@@ -535,11 +538,14 @@ export function useInventory({
         const cleanPN = String(u.part_number || '').trim().toUpperCase();
         if (cleanPN && !pMap.has(cleanPN) && !missingPartsMap.has(cleanPN)) {
           const catCode = getPartCategory({ part_number: cleanPN, description: u.description });
-          const partCatId = catMap.get(catCode) || defaultCatId || 'cat-display';
+          const rawCatId = catMap.get(catCode) || defaultCatId;
+          const partCatUuid = (rawCatId && isUUID(rawCatId))
+            ? rawCatId
+            : resolvePartCategoryUUID({ part_number: cleanPN, description: u.description });
           missingPartsMap.set(cleanPN, {
             part_number: cleanPN,
             description: u.description || `Part ${cleanPN}`,
-            category_id: partCatId
+            ...(partCatUuid && isUUID(partCatUuid) ? { category_id: partCatUuid } : {})
           });
         }
       }

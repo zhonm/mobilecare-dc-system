@@ -35,7 +35,7 @@ import {
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
-import { resolvePartCategoryId, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
+import { resolvePartCategoryId, resolvePartCategoryUUID, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
 import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName } from '../utils/shipmentHelpers';
 import {
   ARCHIVE_CUTOFF_DAYS,
@@ -325,7 +325,16 @@ export function useCloudSync({
               await supabase.from('profiles').delete().ilike('email', item.payload.email);
             }
           } else if (item.actionType === 'PART_UPSERT') {
-            await supabase.from('parts').upsert(item.payload, { onConflict: 'part_number' });
+            const payload = { ...item.payload };
+            if (payload.category_id && !isUUID(payload.category_id)) {
+              const catUuid = resolvePartCategoryUUID(payload);
+              if (catUuid && isUUID(catUuid)) {
+                payload.category_id = catUuid;
+              } else {
+                delete payload.category_id;
+              }
+            }
+            await supabase.from('parts').upsert(payload, { onConflict: 'part_number' });
           } else if (item.actionType === 'PART_DELETE') {
             await supabase.from('parts').delete().eq('part_number', item.payload.part_number);
           } else if (item.actionType === 'SITE_UPSERT') {
@@ -4363,7 +4372,11 @@ export function useCloudSync({
             const trueCode = getPartCategory(p);
             const catObj = categories.find(c => c.id === p.category_id);
             const catCode = (catObj && catObj.code === trueCode) ? catObj.code : trueCode;
-            const catId = catMap.get(catCode) || null;
+            const candidateCatId = catMap.get(catCode);
+            const resolvedUuid = (candidateCatId && isUUID(candidateCatId))
+              ? candidateCatId
+              : resolvePartCategoryUUID(p, categories);
+
             return {
               part_number: p.part_number,
               description: p.description,
@@ -4371,7 +4384,7 @@ export function useCloudSync({
               stocking_price: p.stocking_price || 0,
               safety_stock_pct: p.safety_stock_pct || 0.05,
               is_active: p.is_active ?? true,
-              ...(catId ? { category_id: catId } : {})
+              ...(resolvedUuid && isUUID(resolvedUuid) ? { category_id: resolvedUuid } : {})
             };
           }).filter(p => p.part_number);
           const uniquePartRows = Array.from(new Map(partRows.map(r => [r.part_number.trim().toUpperCase(), r])).values());

@@ -105,15 +105,27 @@ export default function PmgSidebar() {
     },
     {
       id: 'all-stocks',
-      label: 'All Stocks & Multi-Site',
-      description: 'Network-wide parts visibility',
+      label: 'All Stocks',
+      description: 'Master inventory directory & uploader',
       section: 'Network Visibility',
       icon: Globe,
       onClick: () => {
         setActiveTab('all-stocks');
         if (setPmgSubTab) setPmgSubTab('all_stocks');
       },
-      isActive: activeTab === 'all-stocks' || (activeTab === 'request-parts' && pmgSubTab === 'all_stocks')
+      isActive: activeTab === 'all-stocks'
+    },
+    {
+      id: 'multi-site',
+      label: 'Multi-Site Dashboard',
+      description: 'Branch aging & health analytics',
+      section: 'Network Visibility',
+      icon: Building2,
+      onClick: () => {
+        setActiveTab('multi-site');
+        if (setPmgSubTab) setPmgSubTab('all_stocks');
+      },
+      isActive: activeTab === 'multi-site'
     },
     {
       id: 'feedback',

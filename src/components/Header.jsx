@@ -69,7 +69,12 @@ export default function Header() {
           ? { title: 'All Stocks & Multi-Site', section: 'Operations & Logistics', showCategories: false }
           : { title: currentUser?.role === 'parts_management' ? 'Parts Requests' : 'Parts Requests & Replenishment', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false },
     'all-stocks': { 
-      title: 'All Stocks & Multi-Site', 
+      title: 'All Stocks & Inventory', 
+      section: 'Operations & Logistics', 
+      showCategories: false 
+    },
+    'multi-site': { 
+      title: 'Multi-Site Inventory Dashboard', 
       section: 'Operations & Logistics', 
       showCategories: false 
     },

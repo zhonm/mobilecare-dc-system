@@ -13,6 +13,7 @@ export const ALL_PAGES = [
   { id: 'audit', label: 'Serialized Audit Log', section: 'Traceability' },
   { id: 'request-parts', label: 'Parts Requests', section: 'Warehouse Operations' },
   { id: 'all-stocks', label: 'All Stocks & Inventory', section: 'Warehouse Operations' },
+  { id: 'multi-site', label: 'Multi-Site Inventory Dashboard', section: 'Warehouse Operations' },
   { id: 'settings', label: 'Settings', section: 'Admin' },
   { id: 'user-access', label: 'User Access Management', section: 'Admin' }
 ];
@@ -28,7 +29,8 @@ export const PAGE_TITLES = {
   'scan-out': 'Pack Scan-Out & Packing List Generator',
   shipments: 'Outbound Shipments & Proof of Delivery',
   'request-parts': 'New Request of Parts & Demand Replenishment',
-  'all-stocks': 'All Stocks & Multi-Site Inventory Visibility',
+  'all-stocks': 'All Stocks & Master Inventory Visibility',
+  'multi-site': 'Multi-Site Inventory Health & Aging Dashboard',
   'site-transfers-fifo': 'Multi-Site Stock Transfers & FIFO Compliance Audit',
   'forecast-reports': 'Fixably Forecasting Reports & Analytics',
   audit: 'Serialized Lifecycle & Traceability Audit',
