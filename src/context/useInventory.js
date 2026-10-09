@@ -257,16 +257,27 @@ export function useInventory({
       try {
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
         if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
-          const updatedCloud = reg.snapshot_data.deletedSerials.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
-          await queuedSavedRecordsUpsert({
-            id: 'deleted_unit_serials_registry',
-            record_type: 'deletion_registry',
-            period_label: 'Deleted Unit Serials Registry',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            snapshot_data: { deletedSerials: updatedCloud },
-            updated_at: new Date().toISOString()
-          }, { debounceMs: options.immediate ? 0 : 1000, immediate: Boolean(options.immediate) });
+          if (options.immediate) {
+            await supabase.from('saved_records').upsert({
+              id: 'deleted_unit_serials_registry',
+              record_type: 'deletion_registry',
+              period_label: 'Deleted Unit Serials Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { deletedSerials: updatedCloud },
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+          } else {
+            await queuedSavedRecordsUpsert({
+              id: 'deleted_unit_serials_registry',
+              record_type: 'deletion_registry',
+              period_label: 'Deleted Unit Serials Registry',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              snapshot_data: { deletedSerials: updatedCloud },
+              updated_at: new Date().toISOString()
+            }, { debounceMs: 1000, immediate: false });
+          }
         }
       } catch (e) {}
     }
@@ -647,6 +658,15 @@ export function useInventory({
             if (Array.isArray(idbInv) && idbInv.length > 0) currentInv = idbInv;
           } catch (e) {}
         }
+        if (options.replaceExistingBranchStock) {
+          // If replacing branch stock (clean slate import), preserve DC units while replacing branch units
+          const isDc = (item) => {
+            const sId = String(item.current_site_id || '').toLowerCase();
+            const sCode = String(item.site_code || '').toUpperCase();
+            return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
+          };
+          currentInv = (currentInv || []).filter(isDc);
+        }
         const mergedMap = new Map();
         currentInv.forEach(u => {
           const s = String(u.serial_number || '').toUpperCase();
@@ -696,20 +716,35 @@ export function useInventory({
         saveInventoryToLocalStorage(allPoolUnits);
         dbStorage.setItem('mdc_inventory', allPoolUnits);
 
-        await queuedSavedRecordsUpsert({
-          id: 'live_master_dc_inventory',
-          record_type: 'inventory_master',
-          period_label: 'Live Master DC Inventory',
-          period_year: new Date().getFullYear(),
-          period_month: new Date().getMonth() + 1,
-          period_week: 1,
-          notes: 'Master In-Stock inventory pool across all accounts',
-          saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-          snapshot_data: {
-            units: allPoolUnits
-          },
-          updated_at: nowIso
-        }, { debounceMs: options.immediate ? 0 : 1200, immediate: Boolean(options.immediate) });
+        if (options.immediate) {
+          await supabase.from('saved_records').upsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: { units: allPoolUnits },
+            updated_at: nowIso
+          }, { onConflict: 'id' });
+        } else {
+          await queuedSavedRecordsUpsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              units: allPoolUnits
+            },
+            updated_at: nowIso
+          }, { debounceMs: 1200, immediate: false });
+        }
 
         // Synchronize dedicated retail branch inventory registry for PMG Users & multi-site tracking
         const isDcUnit = (item) => {
@@ -723,20 +758,35 @@ export function useInventory({
           try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
           dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
 
-          await queuedSavedRecordsUpsert({
-            id: 'master_branch_inventory_registry',
-            record_type: 'branch_inventory',
-            period_label: 'Master Retail Branch Inventory',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            period_week: 1,
-            notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
-            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-            snapshot_data: {
-              units: branchUnitsList
-            },
-            updated_at: nowIso
-          }, { debounceMs: options.immediate ? 0 : 1200, immediate: Boolean(options.immediate) });
+          if (options.immediate) {
+            await supabase.from('saved_records').upsert({
+              id: 'master_branch_inventory_registry',
+              record_type: 'branch_inventory',
+              period_label: 'Master Retail Branch Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: { units: branchUnitsList },
+              updated_at: nowIso
+            }, { onConflict: 'id' });
+          } else {
+            await queuedSavedRecordsUpsert({
+              id: 'master_branch_inventory_registry',
+              record_type: 'branch_inventory',
+              period_label: 'Master Retail Branch Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: {
+                units: branchUnitsList
+              },
+              updated_at: nowIso
+            }, { debounceMs: 1200, immediate: false });
+          }
         }
       } catch (poolErr) {
         console.warn('live_master_dc_inventory sync note:', poolErr.message);
@@ -1527,8 +1577,20 @@ export function useInventory({
     }
 
     setInventoryUnits(prev => {
+      const isDc = (item) => {
+        const sId = String(item.current_site_id || '').toLowerCase();
+        const sCode = String(item.site_code || '').toUpperCase();
+        return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
+      };
+
+      let baseUnits = prev || [];
+      if (options?.replaceExistingBranchStock || isMultiSite) {
+        // Clean slate multi-site import: purge existing branch units while preserving DC stock
+        baseUnits = baseUnits.filter(isDc);
+      }
+
       const serialsToImport = new Set(newUnits.map(u => String(u.serial_number || '').toUpperCase()));
-      const untouchedUnits = (prev || []).filter(u => !serialsToImport.has(String(u.serial_number || '').toUpperCase()));
+      const untouchedUnits = baseUnits.filter(u => !serialsToImport.has(String(u.serial_number || '').toUpperCase()));
       const updated = [...untouchedUnits, ...newUnits];
       try {
         localStorage.removeItem('mdc_is_cleared');
@@ -1540,11 +1602,6 @@ export function useInventory({
       }
       dbStorage.setItem('mdc_inventory', updated);
       const nowIso = new Date().toISOString();
-      const isDc = (item) => {
-        const sId = String(item.current_site_id || '').toLowerCase();
-        const sCode = String(item.site_code || '').toUpperCase();
-        return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
-      };
       const branchOnly = updated.filter(item => !isDc(item));
       if (branchOnly.length > 0) {
         dbStorage.setItem('mdc_branch_inventory_units', branchOnly);
@@ -1574,6 +1631,15 @@ export function useInventory({
       dbStorage.setItem('mdc_cleared_site_timestamps', updatedClearedSites);
 
       if (supabase) {
+        await supabase.from('saved_records').upsert({
+          id: 'cleared_sites_registry',
+          record_type: 'cleared_sites',
+          period_label: 'Cleared Sites Registry',
+          period_year: new Date().getFullYear(),
+          period_month: new Date().getMonth() + 1,
+          snapshot_data: { clearedSites: updatedClearedSites },
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
         queuedSavedRecordsUpsert({
           id: 'cleared_sites_registry',
           record_type: 'cleared_sites',
@@ -1605,6 +1671,7 @@ export function useInventory({
     await saveUnitsToSupabase(newUnits, {
       immediate: true,
       skipBroadcast: false,
+      replaceExistingBranchStock: Boolean(options?.replaceExistingBranchStock || isMultiSite),
       onProgress: options?.onProgress
     });
     await flushSavedRecordsQueue();
@@ -1616,10 +1683,11 @@ export function useInventory({
         siteId: resolvedSiteId,
         siteCode: resolvedSiteCode,
         count: newUnits.length,
+        units: newUnits,
         timestamp: Date.now()
       });
-      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, timestamp: Date.now() });
-      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, timestamp: Date.now() });
+      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
+      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
     }
 
     if (poMap.size > 0) {
@@ -2109,11 +2177,14 @@ export function useInventory({
     // 5. Update inventoryUnits state
     const nextUnits = currentUnits.filter(u => !isMatch(u));
     setInventoryUnits(nextUnits);
+    const remainingBranchUnits = nextUnits.filter(u => !isDc(u));
     try {
       saveInventoryToLocalStorage(nextUnits);
       localStorage.removeItem('mdc_recent_scans');
+      localStorage.setItem('mdc_branch_inventory_units', JSON.stringify(remainingBranchUnits));
     } catch (e) {}
     dbStorage.setItem('mdc_inventory', nextUnits);
+    dbStorage.setItem('mdc_branch_inventory_units', remainingBranchUnits);
 
     // 6. Cloud deletion and registry sync
     if (supabase) {
@@ -2194,6 +2265,11 @@ export function useInventory({
               if (onlyInStock) q = q.eq('status', 'in_stock');
               const { error } = await q;
               if (error) throw error;
+              try {
+                let q2 = supabase.from('inventory_units').delete().eq('allocated_site_id', branchSiteId);
+                if (onlyInStock) q2 = q2.eq('status', 'in_stock');
+                await q2;
+              } catch (e) {}
             }
           } else if (resolvedId && isUUID(resolvedId)) {
             try {
@@ -2201,6 +2277,11 @@ export function useInventory({
               if (onlyInStock) q = q.eq('status', 'in_stock');
               const { error } = await q;
               if (error) throw error;
+              try {
+                let q2 = supabase.from('inventory_units').delete().eq('allocated_site_id', resolvedId);
+                if (onlyInStock) q2 = q2.eq('status', 'in_stock');
+                await q2;
+              } catch (e) {}
             } catch (e) {}
           }
 

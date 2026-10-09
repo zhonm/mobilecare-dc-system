@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS public.inventory_units (
     received_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     allocated_at TIMESTAMPTZ,
     allocated_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    allocated_site_id UUID REFERENCES public.sites(id) ON DELETE SET NULL,
     shipped_at TIMESTAMPTZ,
     shipped_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     received_confirmed_at TIMESTAMPTZ,
@@ -249,6 +250,7 @@ CREATE TABLE IF NOT EXISTS public.inventory_units (
 CREATE INDEX IF NOT EXISTS idx_inventory_serial ON public.inventory_units(serial_number);
 CREATE INDEX IF NOT EXISTS idx_inventory_part_status ON public.inventory_units(part_id, status);
 CREATE INDEX IF NOT EXISTS idx_inventory_site ON public.inventory_units(current_site_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_units_allocated_site ON public.inventory_units(allocated_site_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_units_updated_at ON public.inventory_units(updated_at DESC);
 
 -- 4.5 Allocation Cycles & Per-Site Allocation Items

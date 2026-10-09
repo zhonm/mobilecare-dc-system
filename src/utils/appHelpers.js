@@ -176,8 +176,11 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
       null;
 
     if (uClearTime) {
-      const uDateStr = u.updated_at || u.received_at || u.created_at;
-      if (!uDateStr || new Date(uDateStr).getTime() <= new Date(uClearTime).getTime()) {
+      const uClearTimeMs = new Date(uClearTime).getTime();
+      const uUpdatedMs = u.updated_at ? new Date(u.updated_at).getTime() : 0;
+      const uReceivedMs = (u.received_at || u.created_at) ? new Date(u.received_at || u.created_at).getTime() : 0;
+      const effectiveDateMs = uUpdatedMs || uReceivedMs;
+      if (!effectiveDateMs || effectiveDateMs <= uClearTimeMs) {
         return false;
       }
     }

@@ -490,14 +490,22 @@ export function useCloudSync({
 
         const pageSize = 1000;
         const rows = [];
-        const INVENTORY_COLUMNS = 'id, part_id, serial_number, current_site_id, po_id, status, box_number, received_at, received_by, allocated_at, allocated_by, allocated_site_id, is_deleted, updated_at, notes, work_order_number, usage_notes, used_at, outtake_at, outtake_reason, transferred_at, transfer_slip_number, transferred_to_site_code, site_code, site_name, part_number, description';
+        const INVENTORY_COLUMNS = 'id, part_id, serial_number, current_site_id, po_id, status, box_number, received_at, received_by, allocated_at, allocated_by, shipped_at, shipped_by, received_confirmed_at, received_confirmed_by, notes, created_at, updated_at, is_deleted';
 
         for (let offset = 0; ; offset += pageSize) {
-          const response = await supabase
+          let response = await supabase
             .from('inventory_units')
             .select(INVENTORY_COLUMNS)
             .order('created_at', { ascending: true })
             .range(offset, offset + pageSize - 1);
+
+          if (response.error && (response.error.code === '42703' || response.error.message?.includes('does not exist'))) {
+            response = await supabase
+              .from('inventory_units')
+              .select('*')
+              .order('created_at', { ascending: true })
+              .range(offset, offset + pageSize - 1);
+          }
 
           if (response.error) return response;
           const page = response.data || [];
@@ -2331,15 +2339,18 @@ export function useCloudSync({
 
         // Synchronize cleared sites registry across network
         const cloudClearedSitesDoc = dbSavedRecords?.find(r => r.id === 'cleared_sites_registry');
-        const cloudClearedSites = cloudClearedSitesDoc?.snapshot_data?.clearedSites || {};
+        const cloudClearedSites = cloudClearedSitesDoc?.snapshot_data?.clearedSites;
         let clearedSitesMap = {};
         try {
           const localClearedSites = JSON.parse(localStorage.getItem('mdc_cleared_site_timestamps') || '{}');
-          clearedSitesMap = { ...localClearedSites, ...cloudClearedSites };
+          // If authoritative cloud record exists, it takes precedence (reflects latest clear/unclear)
+          clearedSitesMap = cloudClearedSites && typeof cloudClearedSites === 'object'
+            ? { ...cloudClearedSites }
+            : { ...localClearedSites };
           localStorage.setItem('mdc_cleared_site_timestamps', JSON.stringify(clearedSitesMap));
           dbStorage.setItem('mdc_cleared_site_timestamps', clearedSitesMap);
         } catch (e) {
-          clearedSitesMap = { ...cloudClearedSites };
+          clearedSitesMap = cloudClearedSites || {};
         }
 
         // Serials that are already shipped, dispatched, or packed in active drafts:

@@ -751,8 +751,12 @@ export function usePartsRequests({
       if (s && deletedSerialsSet.has(s)) return false;
 
       if (clearTime) {
-        const uDateStr = u.updated_at || u.received_at || u.created_at;
-        if (!uDateStr || new Date(uDateStr).getTime() <= new Date(clearTime).getTime()) {
+        // Priority: If unit was explicitly updated/created AFTER the clearance time, it is freshly imported or active stock.
+        const clearTimeMs = new Date(clearTime).getTime();
+        const uUpdatedMs = u.updated_at ? new Date(u.updated_at).getTime() : 0;
+        const uReceivedMs = (u.received_at || u.created_at) ? new Date(u.received_at || u.created_at).getTime() : 0;
+        const effectiveDateMs = uUpdatedMs || uReceivedMs;
+        if (!effectiveDateMs || effectiveDateMs <= clearTimeMs) {
           return false;
         }
       }
@@ -916,11 +920,12 @@ export function usePartsRequests({
     return siteList.map(site => {
       const isOwnSite = !isSuper && Boolean(userSiteId && (site.id === userSiteId || site.code === userSiteId));
       const stock = getStockOnHandForSite(site.id);
+      const siteSeenSerials = new Set();
       const uniqueUnits = (stock.units || []).filter(unit => {
         const serial = String(unit.serial_number || unit.serialNumber || '').trim().toUpperCase();
         if (!serial) return true;
-        if (networkSerials.has(serial)) return false;
-        networkSerials.add(serial);
+        if (siteSeenSerials.has(serial)) return false;
+        siteSeenSerials.add(serial);
         return true;
       });
 

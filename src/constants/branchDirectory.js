@@ -362,6 +362,7 @@ export function normalizeSiteCode(rawCode) {
   if (!rawCode) return '';
   const clean = String(rawCode).trim().toUpperCase();
   if (clean === 'APPILO') return 'APP ILO';
+  if (clean === 'CBO' || clean === 'COT') return 'ASP COT';
   if (clean === 'DC') return 'DC-MDC';
   return clean;
 }

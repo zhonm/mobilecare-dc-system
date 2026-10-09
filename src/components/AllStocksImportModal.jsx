@@ -263,6 +263,7 @@ export default function AllStocksImportModal({
         'ALL',
         'All Retail Branches',
         {
+          replaceExistingBranchStock: Boolean(clearBeforeImport),
           onProgress: ({ stage, detail, percent, current, total }) => {
             const mappedPercent = Math.min(96, Math.max(45, Math.round(45 + ((percent || 0) * 0.52))));
             setImportProgress(prev => ({

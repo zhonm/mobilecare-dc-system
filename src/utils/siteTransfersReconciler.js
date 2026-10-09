@@ -41,9 +41,12 @@ export function normalizeSite(input = '') {
     return { code: 'UNKNOWN', name: 'Unknown / Unassigned', shortName: 'Unknown' };
   }
 
-  // Extract site code from strings like "GL5_MSPI-Owned" or "GL5_Repair"
+  // Extract site code from strings like "GL5_MSPI-Owned" or "GL5_Repair" or "CBO_MSPI-Owned"
   const prefixMatch = str.match(/^([A-Za-z0-9]+)[-_]/);
-  const candidatePrefix = prefixMatch ? prefixMatch[1].toUpperCase() : '';
+  let candidatePrefix = prefixMatch ? prefixMatch[1].toUpperCase() : '';
+  if (candidatePrefix === 'CBO') {
+    candidatePrefix = 'COT';
+  }
 
   for (const mapping of SITE_CODE_MAPPINGS) {
     if (candidatePrefix && mapping.code === candidatePrefix) {

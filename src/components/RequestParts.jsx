@@ -1862,7 +1862,13 @@ export default function RequestParts({ defaultTab = 'requests_table', _embeddedM
               }}
               onClick={() => {
                 if (autoRefreshData) {
-                  autoRefreshData({ force: true, silent: false, reason: 'Parts requests refresh', tables: ['parts_requests', 'parts', 'inventory_units'] });
+                  autoRefreshData({
+                    force: true,
+                    silent: false,
+                    isManual: true,
+                    reason: 'All stocks multi-site live refresh',
+                    tables: ['parts_requests', 'parts', 'inventory_units', 'saved_records']
+                  });
                 } else if (typeof fetchPartsRequests === 'function') {
                   fetchPartsRequests({ force: true });
                 }

@@ -2926,6 +2926,10 @@ export function resolveSiteFromSheetOrCode(sheetNameOrCode, sites = []) {
     const gl5 = sites.find(s => s.code === 'ASP GL5' || s.code === 'ASP GLS');
     if (gl5) return gl5;
   }
+  if (norm === 'ASPCOT' || norm === 'COT' || norm === 'CBO' || norm === 'COTABATO') {
+    const cot = sites.find(s => s.code === 'ASP COT');
+    if (cot) return cot;
+  }
 
   // Exact match on site code
   match = sites.find(s => s.code?.toUpperCase() === clean);
@@ -3503,7 +3507,8 @@ export async function parseFixablyInventoryValueCsv(
         return sCode === norm.code || sClean === norm.code ||
                (norm.code === 'VER' && (sClean === 'VN' || sCode === 'ASP VN')) ||
                (norm.code === 'MAG' && (sClean === 'RM' || sCode === 'APP RM')) ||
-               (norm.code === 'ILO' && (sClean === 'ILO' || sCode === 'ASP ILO'));
+               (norm.code === 'ILO' && (sClean === 'ILO' || sCode === 'ASP ILO')) ||
+               ((norm.code === 'COT' || norm.code === 'CBO') && (sClean === 'COT' || sCode === 'ASP COT'));
       });
 
       if (siteMatch) {
@@ -3519,7 +3524,8 @@ export async function parseFixablyInventoryValueCsv(
         return bk === norm.code || cleanBk === norm.code ||
                (norm.code === 'VER' && cleanBk === 'VN') ||
                (norm.code === 'MAG' && cleanBk === 'RM') ||
-               (norm.code === 'ILO' && cleanBk === 'ILO');
+               (norm.code === 'ILO' && cleanBk === 'ILO') ||
+               ((norm.code === 'COT' || norm.code === 'CBO') && (cleanBk === 'COT' || bk === 'ASP COT'));
       });
       const dirObj = matchedKey ? OFFICIAL_BRANCH_DIRECTORY[matchedKey] : null;
       const finalCode = matchedKey || norm.code;
