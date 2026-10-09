@@ -25,7 +25,8 @@ import {
   TrendingDown,
   ShieldAlert,
   ArrowRightLeft,
-  Zap
+  Zap,
+  Filter
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
 import {
@@ -61,7 +62,7 @@ export default function FixablyInventoryDashboard({
   const [isDropzoneOpen, setIsDropzoneOpen] = useState(false);
   const [syncWithAppInventory, setSyncWithAppInventory] = useState(true);
 
-  // 2. 3-Slot File Ingestion State
+  // 2. 3-Slot File Ingestion State (User Uploads Only)
   const [slots, setSlots] = useState({
     site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
     kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
@@ -104,16 +105,15 @@ export default function FixablyInventoryDashboard({
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  // Load initial data from Storage or auto-fetch default files on mount
+  // Load initial data strictly from Storage (user uploads). NO default demo files.
   useEffect(() => {
     let isMounted = true;
 
     async function loadInitialData() {
       setIsLoading(true);
       try {
-        // 1. Check IndexedDB/LocalStorage for saved snapshot that already has multi-file investigation reconciliation
         const cached = await dbStorage.getItem('mdc_fixably_snapshot');
-        if (cached && cached.items && cached.items.length > 0 && Array.isArray(cached.investigationItems)) {
+        if (cached && cached.items && cached.items.length > 0) {
           if (isMounted) {
             setSnapshot(cached);
             setIsLoading(false);
@@ -121,51 +121,13 @@ export default function FixablyInventoryDashboard({
           }
         }
 
-        // 2. Fetch all 3 default files in parallel and reconcile
-        try {
-          const [resOut, resKgb, resTransfer] = await Promise.all([
-            fetch('/output.csv').catch(() => null),
-            fetch('/kgb_used.csv').catch(() => null),
-            fetch('/stock_transfer.csv').catch(() => null)
-          ]);
-
-          if (resOut && resOut.ok) {
-            const outText = await resOut.text();
-            const kgbText = resKgb && resKgb.ok ? await resKgb.text() : null;
-            const transferText = resTransfer && resTransfer.ok ? await resTransfer.text() : null;
-
-            const reconciled = await reconcileFixablyMultiFile({
-              siteStockContent: outText,
-              kgbUsedContent: kgbText,
-              stockTransferContent: transferText,
-              options: {
-                sites,
-                currentDate: new Date('2026-10-09T00:00:00Z')
-              }
-            });
-
-            if (reconciled.success && isMounted) {
-              setSnapshot(reconciled);
-              await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
-              try {
-                localStorage.setItem('mdc_fixably_snapshot_timestamp', reconciled.timestamp);
-                const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
-                const updatedBatches = [
-                  reconciled.batchSummary,
-                  ...(Array.isArray(existingBatches) ? existingBatches.slice(0, 19) : [])
-                ];
-                await dbStorage.setItem('inventory_sync_batches', updatedBatches);
-              } catch (e) {}
-              setIsLoading(false);
-              return;
-            }
-          }
-        } catch (fetchErr) {
-          console.warn('Could not auto-fetch and reconcile default files:', fetchErr);
+        // If no snapshot exists yet, open upload center automatically
+        if (isMounted) {
+          setIsDropzoneOpen(true);
+          setIsLoading(false);
         }
       } catch (err) {
         console.error('Error loading initial Fixably data:', err);
-      } finally {
         if (isMounted) setIsLoading(false);
       }
     }
@@ -254,70 +216,6 @@ export default function FixablyInventoryDashboard({
     });
   };
 
-  // Auto-Load Workspace Default CSVs into 3 slots
-  const handleLoadDefaultFiles = async () => {
-    setIsParsing(true);
-    setParseProgress({ stage: 'Fetching workspace default CSV files...', percent: 20 });
-    try {
-      const [resOut, resKgb, resTransfer] = await Promise.all([
-        fetch('/output.csv'),
-        fetch('/kgb_used.csv'),
-        fetch('/stock_transfer.csv')
-      ]);
-
-      const [textOut, textKgb, textTransfer] = await Promise.all([
-        resOut.ok ? resOut.text() : '',
-        resKgb.ok ? resKgb.text() : '',
-        resTransfer.ok ? resTransfer.text() : ''
-      ]);
-
-      setParseProgress({ stage: 'Validating report schemas & headers...', percent: 50 });
-
-      const [valOut, valKgb, valTransfer] = await Promise.all([
-        validateFixablyFile(textOut, 'site_stock'),
-        validateFixablyFile(textKgb, 'kgb_used'),
-        validateFixablyFile(textTransfer, 'stock_transfer')
-      ]);
-
-      setSlots({
-        site_stock: {
-          file: null,
-          name: 'output.csv',
-          size: new Blob([textOut]).size,
-          rowCount: valOut.rowCount || 3385,
-          valid: valOut.valid,
-          error: valOut.error || null,
-          content: textOut
-        },
-        kgb_used: {
-          file: null,
-          name: 'kgb_used.csv',
-          size: new Blob([textKgb]).size,
-          rowCount: valKgb.rowCount || 20000,
-          valid: valKgb.valid,
-          error: valKgb.error || null,
-          content: textKgb
-        },
-        stock_transfer: {
-          file: null,
-          name: 'stock_transfer.csv',
-          size: new Blob([textTransfer]).size,
-          rowCount: valTransfer.rowCount || 3350,
-          valid: valTransfer.valid,
-          error: valTransfer.error || null,
-          content: textTransfer
-        }
-      });
-
-      showToast?.('Loaded default workspace files into all 3 slots!', 'success');
-    } catch (err) {
-      showToast?.(`Failed to load default files: ${err.message}`, 'error');
-    } finally {
-      setIsParsing(false);
-      setParseProgress(null);
-    }
-  };
-
   // Process & Reconcile Multi-File Sync
   const handleProcessMultiFile = async () => {
     if (!slots.site_stock.content && !slots.site_stock.file) {
@@ -394,7 +292,7 @@ export default function FixablyInventoryDashboard({
       }
 
       showToast?.(
-        `Successfully reconciled ${reconciled.items.length.toLocaleString()} units across ${reconciled.sites.length} sites (${reconciled.investigationItems?.length || 0} flagged in closed repairs)!`,
+        `Successfully synced ${reconciled.items.length.toLocaleString()} units across ${reconciled.sites.length} sites (${reconciled.investigationItems?.length || 0} flagged in closed repairs)!`,
         'success'
       );
     } catch (err) {
@@ -535,47 +433,56 @@ export default function FixablyInventoryDashboard({
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '360px', gap: '14px' }}>
         <RefreshCw size={36} color="#0284c7" className="animate-spin" />
-        <div style={{ fontSize: '15px', fontWeight: 600, color: '#334155' }}>Loading Fixably Inventory Intelligence...</div>
-        <div style={{ fontSize: '12px', color: '#64748b' }}>Reconciling multi-site stocks, KGB repairs, and DC transfers</div>
+        <div style={{ fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>Loading Inventory Snapshot...</div>
+        <div style={{ fontSize: '12px', color: '#64748b' }}>Checking local cache and inventory sync state</div>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', width: '100%' }}>
 
-      {/* 1. Header Banner & View Switcher */}
-      <div className="card" style={{ padding: '20px 24px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+      {/* 1. Refined Main Header Banner */}
+      <div
+        className="card"
+        style={{
+          padding: '18px 22px',
+          background: '#ffffff',
+          border: '1.5px solid #cbd5e1',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           
           <div style={{ flex: 1, minWidth: '300px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-              <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Globe size={20} color="#0284c7" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Globe size={22} color="#0284c7" />
               </div>
               <div>
-                <h2 style={{ margin: 0, fontSize: '19px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
-                  All Stocks &amp; Multi-Site Inventory Visibility
+                <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
+                  All Stocks &amp; Multi-Site Inventory
                 </h2>
                 <div style={{ fontSize: '12.5px', color: '#64748b', marginTop: '2px' }}>
-                  Automated Multi-File Ingestion, KGB Repair Matching &amp; Multi-Branch Health Analytics
+                  Network-wide on-hand inventory visibility, Fixably aging health &amp; GSX repair reconciliation
                 </div>
               </div>
             </div>
 
             {snapshot && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '10px' }}>
-                <span className="badge" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                <span className="badge" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                   <CheckCircle2 size={12} color="#059669" />
                   <span>File: {snapshot.fileName || 'output.csv'}</span>
                 </span>
-                <span className="badge" style={{ background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', fontSize: '11px' }}>
+                <span className="badge" style={{ background: '#f8fafc', color: '#334155', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 600 }}>
                   Synced: {new Date(snapshot.timestamp).toLocaleDateString()} {new Date(snapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
-                <span className="badge badge-primary" style={{ fontSize: '11px', fontWeight: 700 }}>
-                  {snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0} Total Units On-Hand
+                <span className="badge" style={{ background: '#0284c7', color: '#ffffff', fontSize: '11px', fontWeight: 800 }}>
+                  {snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0} Units On-Hand
                 </span>
-                <span className="badge" style={{ background: '#f1f5f9', color: '#334155', fontSize: '11px', fontWeight: 600 }}>
+                <span className="badge" style={{ background: '#f1f5f9', color: '#0f172a', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 700 }}>
                   {snapshot.sites?.length || 0} Authorized Service Points
                 </span>
                 {(snapshot.investigationItems?.length > 0 || snapshot.globalMetrics?.investigationCount > 0) && (
@@ -583,12 +490,12 @@ export default function FixablyInventoryDashboard({
                     className="badge"
                     onClick={() => {
                       setViewMode('all_stocks');
-                      setInvestigationFilter('INVESTIGATION_ONLY');
+                      setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
                     }}
                     style={{
                       background: '#fff1f2',
                       color: '#be123c',
-                      border: '1px solid #fecdd3',
+                      border: '1.5px solid #fecdd3',
                       fontSize: '11px',
                       fontWeight: 800,
                       cursor: 'pointer',
@@ -596,10 +503,10 @@ export default function FixablyInventoryDashboard({
                       alignItems: 'center',
                       gap: '4px'
                     }}
-                    title="Click to view all items showing on-hand that were already consumed in GSX repairs"
+                    title="Click to filter table to items appearing in closed GSX repairs"
                   >
                     <ShieldAlert size={12} color="#be123c" />
-                    <span>{snapshot.investigationItems?.length || snapshot.globalMetrics?.investigationCount} Flagged in Closed Repairs</span>
+                    <span>{snapshot.investigationItems?.length || snapshot.globalMetrics?.investigationCount} Flagged in KGB</span>
                   </span>
                 )}
               </div>
@@ -608,7 +515,7 @@ export default function FixablyInventoryDashboard({
 
           {/* View Switcher Pills & Action Buttons */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
-            <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '3px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '3px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
               <button
                 type="button"
                 onClick={() => setViewMode('all_stocks')}
@@ -619,13 +526,13 @@ export default function FixablyInventoryDashboard({
                   fontSize: '12.5px',
                   fontWeight: viewMode === 'all_stocks' ? 800 : 600,
                   background: viewMode === 'all_stocks' ? '#0284c7' : 'transparent',
-                  color: viewMode === 'all_stocks' ? '#ffffff' : '#475569',
+                  color: viewMode === 'all_stocks' ? '#ffffff' : '#334155',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   transition: 'all 0.15s ease',
-                  boxShadow: viewMode === 'all_stocks' ? '0 1px 3px rgba(2, 132, 199, 0.3)' : 'none'
+                  boxShadow: viewMode === 'all_stocks' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
                 }}
               >
                 <Layers size={14} />
@@ -642,13 +549,13 @@ export default function FixablyInventoryDashboard({
                   fontSize: '12.5px',
                   fontWeight: viewMode === 'multi_site' ? 800 : 600,
                   background: viewMode === 'multi_site' ? '#0284c7' : 'transparent',
-                  color: viewMode === 'multi_site' ? '#ffffff' : '#475569',
+                  color: viewMode === 'multi_site' ? '#ffffff' : '#334155',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
                   transition: 'all 0.15s ease',
-                  boxShadow: viewMode === 'multi_site' ? '0 1px 3px rgba(2, 132, 199, 0.3)' : 'none'
+                  boxShadow: viewMode === 'multi_site' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
                 }}
               >
                 <Building2 size={14} />
@@ -662,21 +569,21 @@ export default function FixablyInventoryDashboard({
                 className="btn btn-sm"
                 onClick={() => setIsDropzoneOpen(prev => !prev)}
                 style={{
-                  fontSize: '11.5px',
-                  padding: '6px 12px',
+                  fontSize: '12px',
+                  padding: '6px 14px',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',
                   fontWeight: 700,
                   color: '#0284c7',
-                  border: '1px solid #bae6fd',
-                  background: isDropzoneOpen ? '#e0f2fe' : '#f0f9ff',
+                  border: '1.5px solid #0284c7',
+                  background: isDropzoneOpen ? '#e0f2fe' : '#ffffff',
                   borderRadius: '6px',
                   cursor: 'pointer'
                 }}
               >
-                <UploadCloud size={13} color="#0284c7" />
-                <span>{isDropzoneOpen ? 'Hide Upload Center' : 'Upload & Sync (3-Slot)'}</span>
+                <UploadCloud size={14} color="#0284c7" />
+                <span>{isDropzoneOpen ? 'Close Upload Center' : 'Upload Reports (3-Slot)'}</span>
               </button>
 
               {snapshot && (
@@ -686,14 +593,14 @@ export default function FixablyInventoryDashboard({
                     className="btn btn-sm"
                     onClick={() => exportDeadStockToExcel(snapshot.items, 'NETWORK')}
                     style={{
-                      fontSize: '11.5px',
-                      padding: '6px 12px',
+                      fontSize: '12px',
+                      padding: '6px 14px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '6px',
                       fontWeight: 700,
                       color: '#dc2626',
-                      border: '1px solid #fca5a5',
+                      border: '1.5px solid #f87171',
                       background: '#fff1f2',
                       borderRadius: '6px',
                       cursor: 'pointer'
@@ -710,14 +617,14 @@ export default function FixablyInventoryDashboard({
                       className="btn btn-sm"
                       onClick={() => exportInvestigationToExcel(snapshot.investigationItems, 'NETWORK')}
                       style={{
-                        fontSize: '11.5px',
-                        padding: '6px 12px',
+                        fontSize: '12px',
+                        padding: '6px 14px',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '6px',
                         fontWeight: 700,
                         color: '#be123c',
-                        border: '1px solid #fecdd3',
+                        border: '1.5px solid #fecdd3',
                         background: '#ffe4e6',
                         borderRadius: '6px',
                         cursor: 'pointer'
@@ -736,7 +643,7 @@ export default function FixablyInventoryDashboard({
         </div>
       </div>
 
-      {/* 2. Unified 3-Slot Upload Center (Modal / Collapsible Panel) */}
+      {/* 2. Unified 3-Slot Upload Center (No demo workspace defaults) */}
       {isDropzoneOpen && (
         <div
           className="card"
@@ -744,7 +651,7 @@ export default function FixablyInventoryDashboard({
             padding: '24px',
             background: '#ffffff',
             border: '2px solid #0284c7',
-            borderRadius: 'var(--radius-lg)',
+            borderRadius: '12px',
             boxShadow: '0 8px 24px rgba(2, 132, 199, 0.12)'
           }}
         >
@@ -772,17 +679,17 @@ export default function FixablyInventoryDashboard({
           />
 
           {/* Header of Upload Center */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <UploadCloud size={20} color="#0284c7" />
+              <div style={{ width: '38px', height: '38px', borderRadius: '8px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <UploadCloud size={22} color="#0284c7" />
               </div>
               <div>
                 <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
                   Unified Fixably Multi-File Ingestion Center
                 </h3>
                 <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                  Ingest Site Stocks, GSX Parts Used (KGB), and Stock Transfers to reconcile DC provenance and consumption
+                  Select or drop your export files to reconcile branch on-hand inventory, GSX repair consumption, and DC transfers.
                 </div>
               </div>
             </div>
@@ -790,9 +697,9 @@ export default function FixablyInventoryDashboard({
             <button
               type="button"
               onClick={() => setIsDropzoneOpen(false)}
-              style={{ border: 'none', background: '#f1f5f9', borderRadius: '50%', width: '28px', height: '28px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}
+              style={{ border: 'none', background: '#f1f5f9', borderRadius: '50%', width: '30px', height: '30px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}
             >
-              <X size={15} />
+              <X size={16} />
             </button>
           </div>
 
@@ -811,29 +718,28 @@ export default function FixablyInventoryDashboard({
                 border: activeSlotDrag === 'site_stock' ? '2px dashed #0284c7' : slots.site_stock.valid ? '2px solid #10b981' : slots.site_stock.error ? '2px solid #ef4444' : '2px dashed #cbd5e1',
                 background: activeSlotDrag === 'site_stock' ? '#f0f9ff' : slots.site_stock.valid ? '#f0fdf4' : slots.site_stock.error ? '#fef2f2' : '#f8fafc',
                 cursor: slots.site_stock.valid ? 'default' : 'pointer',
-                transition: 'all 0.15s ease',
-                position: 'relative'
+                transition: 'all 0.15s ease'
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Package size={16} color={slots.site_stock.valid ? '#16a34a' : '#0284c7'} />
-                  <strong style={{ fontSize: '13px', color: '#0f172a' }}>Slot 1: Site Stocks</strong>
+                  <Package size={17} color={slots.site_stock.valid ? '#16a34a' : '#0284c7'} />
+                  <strong style={{ fontSize: '13.5px', color: '#0f172a' }}>Slot 1: Site Stocks</strong>
                 </div>
-                <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: slots.site_stock.valid ? '#dcfce7' : '#fee2e2', color: slots.site_stock.valid ? '#15803d' : '#b91c1c' }}>
+                <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '2px 7px', borderRadius: '4px', background: slots.site_stock.valid ? '#dcfce7' : '#fee2e2', color: slots.site_stock.valid ? '#15803d' : '#b91c1c' }}>
                   REQUIRED
                 </span>
               </div>
 
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 600 }}>output.csv</code> (Semicolon/Comma delimited with Stock Name, Part #, Serial, Last Received Date)
+              <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>output.csv</code> (Stock Name, Part Number, Serial, Last Received Date)
               </div>
 
               {slots.site_stock.valid ? (
-                <div style={{ background: '#ffffff', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={14} color="#16a34a" />
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <CheckCircle2 size={15} color="#16a34a" />
                       <span>{slots.site_stock.name}</span>
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
@@ -846,40 +752,40 @@ export default function FixablyInventoryDashboard({
                       e.stopPropagation();
                       handleClearSlot('site_stock');
                     }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '4px', cursor: 'pointer', color: '#dc2626' }}
+                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
                     title="Remove file"
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 </div>
               ) : slots.site_stock.error ? (
-                <div style={{ background: '#ffffff', border: '1px solid #fecdd3', borderRadius: '6px', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
-                    <AlertTriangle size={13} color="#dc2626" />
+                <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
+                    <AlertTriangle size={14} color="#dc2626" />
                     <span>Validation Error</span>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#991b1b' }}>{slots.site_stock.error}</div>
+                  <div style={{ fontSize: '11.5px', color: '#991b1b' }}>{slots.site_stock.error}</div>
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       siteStockInputRef.current?.click();
                     }}
-                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '10.5px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
                   >
-                    Choose Replacement File
+                    Select Replacement File
                   </button>
                 </div>
               ) : (
-                <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '16px 10px', textAlign: 'center', background: '#ffffff' }}>
-                  <UploadCloud size={20} color="#94a3b8" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#0284c7' }}>Drag &amp; drop output.csv or click to browse</div>
-                  <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '2px' }}>Fixably branch on-hand stock export</div>
+                <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
+                  <UploadCloud size={24} color="#0284c7" style={{ margin: '0 auto 6px' }} />
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0284c7' }}>Select or drop output.csv</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>Fixably branch on-hand stock export</div>
                 </div>
               )}
             </div>
 
-            {/* SLOT 2: KGB Used Report (kgb_used.csv) [Required / Recommended] */}
+            {/* SLOT 2: KGB Used Report (kgb_used.csv) [Recommended] */}
             <div
               onDragOver={(e) => handleSlotDragOver(e, 'kgb_used')}
               onDragLeave={handleSlotDragLeave}
@@ -891,29 +797,28 @@ export default function FixablyInventoryDashboard({
                 border: activeSlotDrag === 'kgb_used' ? '2px dashed #0284c7' : slots.kgb_used.valid ? '2px solid #10b981' : slots.kgb_used.error ? '2px solid #ef4444' : '2px dashed #cbd5e1',
                 background: activeSlotDrag === 'kgb_used' ? '#f0f9ff' : slots.kgb_used.valid ? '#f0fdf4' : slots.kgb_used.error ? '#fef2f2' : '#f8fafc',
                 cursor: slots.kgb_used.valid ? 'default' : 'pointer',
-                transition: 'all 0.15s ease',
-                position: 'relative'
+                transition: 'all 0.15s ease'
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <ShieldAlert size={16} color={slots.kgb_used.valid ? '#16a34a' : '#ea580c'} />
-                  <strong style={{ fontSize: '13px', color: '#0f172a' }}>Slot 2: GSX KGB Used Report</strong>
+                  <ShieldAlert size={17} color={slots.kgb_used.valid ? '#16a34a' : '#ea580c'} />
+                  <strong style={{ fontSize: '13.5px', color: '#0f172a' }}>Slot 2: GSX KGB Used Report</strong>
                 </div>
-                <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: slots.kgb_used.valid ? '#dcfce7' : '#fee2e2', color: slots.kgb_used.valid ? '#15803d' : '#b91c1c' }}>
-                  REQUIRED
+                <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '2px 7px', borderRadius: '4px', background: slots.kgb_used.valid ? '#dcfce7' : '#e0e7ff', color: slots.kgb_used.valid ? '#15803d' : '#3730a3' }}>
+                  RECOMMENDED
                 </span>
               </div>
 
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 600 }}>kgb_used.csv</code> (Apple GSX repair log: Order ID, Product KGB, Repair Closed Date)
+              <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>kgb_used.csv</code> (Order ID, Product KGB, Repair Closed Date)
               </div>
 
               {slots.kgb_used.valid ? (
-                <div style={{ background: '#ffffff', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={14} color="#16a34a" />
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <CheckCircle2 size={15} color="#16a34a" />
                       <span>{slots.kgb_used.name}</span>
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
@@ -926,40 +831,40 @@ export default function FixablyInventoryDashboard({
                       e.stopPropagation();
                       handleClearSlot('kgb_used');
                     }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '4px', cursor: 'pointer', color: '#dc2626' }}
+                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
                     title="Remove file"
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 </div>
               ) : slots.kgb_used.error ? (
-                <div style={{ background: '#ffffff', border: '1px solid #fecdd3', borderRadius: '6px', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
-                    <AlertTriangle size={13} color="#dc2626" />
+                <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
+                    <AlertTriangle size={14} color="#dc2626" />
                     <span>Validation Error</span>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#991b1b' }}>{slots.kgb_used.error}</div>
+                  <div style={{ fontSize: '11.5px', color: '#991b1b' }}>{slots.kgb_used.error}</div>
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       kgbInputRef.current?.click();
                     }}
-                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '10.5px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
                   >
-                    Choose Replacement File
+                    Select Replacement File
                   </button>
                 </div>
               ) : (
-                <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '16px 10px', textAlign: 'center', background: '#ffffff' }}>
-                  <UploadCloud size={20} color="#94a3b8" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#0284c7' }}>Drag &amp; drop kgb_used.csv or click to browse</div>
-                  <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '2px' }}>GSX closed repair consumed parts</div>
+                <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
+                  <UploadCloud size={24} color="#ea580c" style={{ margin: '0 auto 6px' }} />
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#ea580c' }}>Select or drop kgb_used.csv</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>GSX closed repair consumed parts</div>
                 </div>
               )}
             </div>
 
-            {/* SLOT 3: Stock Transfers (stock_transfer.csv) [Required / Recommended] */}
+            {/* SLOT 3: Stock Transfers (stock_transfer.csv) [Recommended] */}
             <div
               onDragOver={(e) => handleSlotDragOver(e, 'stock_transfer')}
               onDragLeave={handleSlotDragLeave}
@@ -971,29 +876,28 @@ export default function FixablyInventoryDashboard({
                 border: activeSlotDrag === 'stock_transfer' ? '2px dashed #0284c7' : slots.stock_transfer.valid ? '2px solid #10b981' : slots.stock_transfer.error ? '2px solid #ef4444' : '2px dashed #cbd5e1',
                 background: activeSlotDrag === 'stock_transfer' ? '#f0f9ff' : slots.stock_transfer.valid ? '#f0fdf4' : slots.stock_transfer.error ? '#fef2f2' : '#f8fafc',
                 cursor: slots.stock_transfer.valid ? 'default' : 'pointer',
-                transition: 'all 0.15s ease',
-                position: 'relative'
+                transition: 'all 0.15s ease'
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <ArrowRightLeft size={16} color={slots.stock_transfer.valid ? '#16a34a' : '#6d28d9'} />
-                  <strong style={{ fontSize: '13px', color: '#0f172a' }}>Slot 3: Stock Transfers</strong>
+                  <ArrowRightLeft size={17} color={slots.stock_transfer.valid ? '#16a34a' : '#6d28d9'} />
+                  <strong style={{ fontSize: '13.5px', color: '#0f172a' }}>Slot 3: Stock Transfers</strong>
                 </div>
-                <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: slots.stock_transfer.valid ? '#dcfce7' : '#fee2e2', color: slots.stock_transfer.valid ? '#15803d' : '#b91c1c' }}>
-                  REQUIRED
+                <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '2px 7px', borderRadius: '4px', background: slots.stock_transfer.valid ? '#dcfce7' : '#e0e7ff', color: slots.stock_transfer.valid ? '#15803d' : '#3730a3' }}>
+                  RECOMMENDED
                 </span>
               </div>
 
-              <div style={{ fontSize: '11.5px', color: '#64748b', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 600 }}>stock_transfer.csv</code> (Transfer records: From Stock, To Stock, Serial Number)
+              <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>stock_transfer.csv</code> (From Stock, To Stock, Serial Number)
               </div>
 
               {slots.stock_transfer.valid ? (
-                <div style={{ background: '#ffffff', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={14} color="#16a34a" />
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <CheckCircle2 size={15} color="#16a34a" />
                       <span>{slots.stock_transfer.name}</span>
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
@@ -1006,35 +910,35 @@ export default function FixablyInventoryDashboard({
                       e.stopPropagation();
                       handleClearSlot('stock_transfer');
                     }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '4px', cursor: 'pointer', color: '#dc2626' }}
+                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
                     title="Remove file"
                   >
-                    <X size={12} />
+                    <X size={13} />
                   </button>
                 </div>
               ) : slots.stock_transfer.error ? (
-                <div style={{ background: '#ffffff', border: '1px solid #fecdd3', borderRadius: '6px', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
-                    <AlertTriangle size={13} color="#dc2626" />
+                <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px' }}>
+                    <AlertTriangle size={14} color="#dc2626" />
                     <span>Validation Error</span>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#991b1b' }}>{slots.stock_transfer.error}</div>
+                  <div style={{ fontSize: '11.5px', color: '#991b1b' }}>{slots.stock_transfer.error}</div>
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       stockTransferInputRef.current?.click();
                     }}
-                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '10.5px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                    style={{ marginTop: '8px', border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', cursor: 'pointer' }}
                   >
-                    Choose Replacement File
+                    Select Replacement File
                   </button>
                 </div>
               ) : (
-                <div style={{ border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '16px 10px', textAlign: 'center', background: '#ffffff' }}>
-                  <UploadCloud size={20} color="#94a3b8" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#0284c7' }}>Drag &amp; drop stock_transfer.csv or click to browse</div>
-                  <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '2px' }}>DC transfers identifying DC Stock provenance</div>
+                <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
+                  <UploadCloud size={24} color="#6d28d9" style={{ margin: '0 auto 6px' }} />
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#6d28d9' }}>Select or drop stock_transfer.csv</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>DC transfers for DC Stock classification</div>
                 </div>
               )}
             </div>
@@ -1042,32 +946,20 @@ export default function FixablyInventoryDashboard({
           </div>
 
           {/* Action Toolbar & Progress */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={handleLoadDefaultFiles}
-                disabled={isParsing}
-                style={{ fontSize: '12px', padding: '7px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
-                title="Automatically load sample files stored in workspace into all 3 slots"
-              >
-                <Zap size={13} color="#eab308" />
-                <span>⚡ Load Workspace Default CSVs</span>
-              </button>
-
               <button
                 type="button"
                 className="btn btn-sm"
                 onClick={handleClearAllSlots}
                 disabled={isParsing}
-                style={{ fontSize: '12px', padding: '7px 12px', background: '#f8fafc', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }}
+                style={{ fontSize: '12px', padding: '7px 14px', background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
               >
                 Clear All Slots
               </button>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#475569', cursor: 'pointer', marginLeft: '6px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: '#334155', cursor: 'pointer', fontWeight: 600, marginLeft: '6px' }}>
                 <input
                   type="checkbox"
                   checked={syncWithAppInventory}
@@ -1085,22 +977,22 @@ export default function FixablyInventoryDashboard({
                 disabled={isParsing || !slots.site_stock.valid || Boolean(slots.site_stock.error)}
                 style={{
                   padding: '9px 24px',
-                  fontSize: '13px',
+                  fontSize: '13.5px',
                   fontWeight: 800,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '8px',
-                  boxShadow: '0 2px 6px rgba(2, 132, 199, 0.3)'
+                  boxShadow: '0 2px 8px rgba(2, 132, 199, 0.3)'
                 }}
               >
                 {isParsing ? (
                   <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    <span>Reconciling Reports...</span>
+                    <RefreshCw size={15} className="animate-spin" />
+                    <span>Processing &amp; Reconciling...</span>
                   </>
                 ) : (
                   <>
-                    <Zap size={14} />
+                    <Zap size={15} />
                     <span>Process &amp; Sync Inventory</span>
                   </>
                 )}
@@ -1125,139 +1017,211 @@ export default function FixablyInventoryDashboard({
         </div>
       )}
 
-      {/* 3. Global Summary Cards (7 KPI Cards including Flagged in Closed Repairs) */}
+      {/* 3. Global Summary KPI Cards (Interactive Filters) */}
       {snapshot?.globalMetrics && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
           
           {/* Card 1: Total Active Value */}
-          <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total Active Value
+          <div
+            className="card"
+            style={{
+              padding: '16px',
+              background: '#ffffff',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: '12px',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Active Value
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Boxes size={15} color="#0284c7" />
               </div>
             </div>
-            <div style={{ fontSize: '22px', fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+            <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
               ${Number(snapshot.globalMetrics.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
               Across {snapshot.globalMetrics.sitesCount} service sites
             </div>
           </div>
 
           {/* Card 2: Total Units On-Hand */}
-          <div className="card" style={{ padding: '16px 18px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total Units On-Hand
+          <div
+            className="card"
+            onClick={() => {
+              setAgingFilter('ALL');
+              setInvestigationFilter('ALL');
+            }}
+            style={{
+              padding: '16px',
+              background: '#ffffff',
+              border: (agingFilter === 'ALL' && investigationFilter === 'ALL') ? '2px solid #0284c7' : '1.5px solid #cbd5e1',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+            }}
+            title="Click to reset filters and view all on-hand units"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                Total On-Hand
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Package size={15} color="#16a34a" />
               </div>
             </div>
-            <div style={{ fontSize: '22px', fontWeight: 900, color: '#0f172a' }}>
+            <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a' }}>
               {snapshot.globalMetrics.totalUnits.toLocaleString()}
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
-              {snapshot.globalMetrics.uniqueParts} unique catalog parts
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
+              {snapshot.globalMetrics.uniqueParts} catalog parts
             </div>
           </div>
 
           {/* Card 3: Dead Stock (>= 180 days) - Action Required */}
-          <div className="card" style={{ padding: '16px 18px', background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div
+            className="card"
+            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.DEAD_STOCK ? 'ALL' : AGING_BRACKETS.DEAD_STOCK)}
+            style={{
+              padding: '16px',
+              background: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '#ffe4e6' : '#fff1f2',
+              border: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '2px solid #e11d48' : '1.5px solid #fecdd3',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            title="Click to filter Master Table to Dead Stock (>= 180 days)"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Dead Stock (≥ 180d)
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffe4e6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <AlertTriangle size={15} color="#e11d48" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: '22px', fontWeight: 900, color: '#be123c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
                 {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.DEAD_STOCK]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 800, color: '#e11d48' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#e11d48' }}>
                 ({snapshot.globalMetrics.deadStockPercent}%)
               </span>
             </div>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#e11d48', marginTop: '4px' }}>
-              Action Required (Pull-Out / RMA)
+            <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
+              {agingFilter === AGING_BRACKETS.DEAD_STOCK ? 'Filtering Active (Click to reset)' : 'Action Required (RMA Pull-Out)'}
             </div>
           </div>
 
           {/* Card 4: Non-Moving (90 - 179 days) */}
-          <div className="card" style={{ padding: '16px 18px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div
+            className="card"
+            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.NON_MOVING ? 'ALL' : AGING_BRACKETS.NON_MOVING)}
+            style={{
+              padding: '16px',
+              background: agingFilter === AGING_BRACKETS.NON_MOVING ? '#ffedd5' : '#fff7ed',
+              border: agingFilter === AGING_BRACKETS.NON_MOVING ? '2px solid #ea580c' : '1.5px solid #fed7aa',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            title="Click to filter Master Table to Non-Moving Stock (90–179 days)"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Non-Moving (90–179d)
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffedd5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Clock size={15} color="#ea580c" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: '22px', fontWeight: 900, color: '#c2410c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <div style={{ fontSize: '21px', fontWeight: 900, color: '#c2410c' }}>
                 {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.NON_MOVING]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 800, color: '#ea580c' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#ea580c' }}>
                 ({snapshot.globalMetrics.nonMovingPercent}%)
               </span>
             </div>
-            <div style={{ fontSize: '11px', color: '#9a3412', marginTop: '4px' }}>
-              Pre-aging stock tier
+            <div style={{ fontSize: '10.5px', color: '#9a3412', marginTop: '3px', fontWeight: 700 }}>
+              {agingFilter === AGING_BRACKETS.NON_MOVING ? 'Filtering Active' : 'Pre-aging inventory tier'}
             </div>
           </div>
 
           {/* Card 5: Slow-Moving (60 - 89 days) */}
-          <div className="card" style={{ padding: '16px 18px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div
+            className="card"
+            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.SLOW_MOVING ? 'ALL' : AGING_BRACKETS.SLOW_MOVING)}
+            style={{
+              padding: '16px',
+              background: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '#fef3c7' : '#fffbeb',
+              border: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '2px solid #d97706' : '1.5px solid #fde68a',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            title="Click to filter Master Table to Slow-Moving Stock (60–89 days)"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Slow-Moving (60–89d)
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <TrendingDown size={15} color="#d97706" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: '22px', fontWeight: 900, color: '#b45309' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <div style={{ fontSize: '21px', fontWeight: 900, color: '#b45309' }}>
                 {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.SLOW_MOVING]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 800, color: '#d97706' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#d97706' }}>
                 ({snapshot.globalMetrics.slowMovingPercent}%)
               </span>
             </div>
-            <div style={{ fontSize: '11px', color: '#92400e', marginTop: '4px' }}>
-              Velocity slowing down
+            <div style={{ fontSize: '10.5px', color: '#92400e', marginTop: '3px', fontWeight: 700 }}>
+              {agingFilter === AGING_BRACKETS.SLOW_MOVING ? 'Filtering Active' : 'Velocity slowing down'}
             </div>
           </div>
 
           {/* Card 6: In Stock / Active (< 60 days) */}
-          <div className="card" style={{ padding: '16px 18px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div
+            className="card"
+            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.IN_STOCK ? 'ALL' : AGING_BRACKETS.IN_STOCK)}
+            style={{
+              padding: '16px',
+              background: agingFilter === AGING_BRACKETS.IN_STOCK ? '#dcfce7' : '#f0fdf4',
+              border: agingFilter === AGING_BRACKETS.IN_STOCK ? '2px solid #16a34a' : '1.5px solid #bbf7d0',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            title="Click to filter Master Table to Active In-Stock (< 60 days)"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Active Stock (&lt; 60d)
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <CheckCircle2 size={15} color="#16a34a" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: '22px', fontWeight: 900, color: '#15803d' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <div style={{ fontSize: '21px', fontWeight: 900, color: '#15803d' }}>
                 {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.IN_STOCK]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '13px', fontWeight: 800, color: '#16a34a' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#16a34a' }}>
                 ({snapshot.globalMetrics.inStockPercent}%)
               </span>
             </div>
-            <div style={{ fontSize: '11px', color: '#166534', marginTop: '4px' }}>
-              Fresh active rotation
+            <div style={{ fontSize: '10.5px', color: '#166534', marginTop: '3px', fontWeight: 700 }}>
+              {agingFilter === AGING_BRACKETS.IN_STOCK ? 'Filtering Active' : 'Fresh active rotation'}
             </div>
           </div>
 
-          {/* Card 7: KGB Used / Dispatch Investigation */}
+          {/* Card 7: KGB Closed Repairs */}
           <div
             className="card"
             onClick={() => {
@@ -1265,33 +1229,33 @@ export default function FixablyInventoryDashboard({
               setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
             }}
             style={{
-              padding: '16px 18px',
-              background: '#fff1f2',
-              border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1px solid #fecdd3',
-              borderRadius: 'var(--radius-lg)',
+              padding: '16px',
+              background: investigationFilter === 'INVESTIGATION_ONLY' ? '#ffe4e6' : '#fff1f2',
+              border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1.5px solid #fecdd3',
+              borderRadius: '12px',
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to parts showing on-hand that were already consumed in closed GSX repairs"
+            title="Click to filter Master Table to on-hand parts consumed in GSX repairs"
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 KGB Closed Repairs
               </span>
               <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffe4e6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <ShieldAlert size={15} color="#e11d48" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: '22px', fontWeight: 900, color: '#be123c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+              <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
                 {snapshot.globalMetrics?.investigationCount || snapshot.investigationItems?.length || 0}
               </div>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#e11d48' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, color: '#e11d48' }}>
                 UNITS
               </span>
             </div>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#be123c', marginTop: '4px' }}>
-              {investigationFilter === 'INVESTIGATION_ONLY' ? 'Filtering Active (Click to reset)' : 'On-hand parts used in GSX (Click to filter)'}
+            <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
+              {investigationFilter === 'INVESTIGATION_ONLY' ? 'Filtering Active (Click to reset)' : 'On-hand parts used in GSX'}
             </div>
           </div>
 
@@ -1299,23 +1263,42 @@ export default function FixablyInventoryDashboard({
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW 1: "ALL STOCKS" MASTER DIRECTORY TABLE */}
+      {/* VIEW 1: "ALL STOCKS" MASTER DIRECTORY TABLE (High-Visibility Redesign) */}
       {/* ========================================================================= */}
       {viewMode === 'all_stocks' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)', background: '#ffffff' }}>
-          
-          {/* Filter Bar */}
-          <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+        <div
+          className="card"
+          style={{
+            padding: 0,
+            overflow: 'hidden',
+            border: '1.5px solid #cbd5e1',
+            borderRadius: '12px',
+            background: '#ffffff',
+            boxShadow: '0 4px 16px rgba(15, 23, 42, 0.06)'
+          }}
+        >
+          {/* Filter Bar with Strong Visual Hierarchy */}
+          <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
               
               {/* Search Bar */}
-              <div style={{ position: 'relative', flex: 1, minWidth: '260px', maxWidth: '380px' }}>
-                <Search size={14} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#0284c7' }} />
+              <div style={{ position: 'relative', flex: 1, minWidth: '280px', maxWidth: '420px' }}>
+                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#0284c7' }} />
                 <input
                   type="text"
                   className="form-input"
-                  style={{ paddingLeft: '34px', paddingRight: masterSearch ? '28px' : '10px', fontSize: '12.5px', height: '36px', borderRadius: '8px' }}
-                  placeholder="Search serial #, part #, model, branch, order #..."
+                  style={{
+                    paddingLeft: '36px',
+                    paddingRight: masterSearch ? '30px' : '10px',
+                    fontSize: '13px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    border: '1.5px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#0f172a',
+                    fontWeight: 600
+                  }}
+                  placeholder="Search part #, description, serial #, branch, order #..."
                   value={masterSearch}
                   onChange={(e) => setMasterSearch(e.target.value)}
                 />
@@ -1323,9 +1306,9 @@ export default function FixablyInventoryDashboard({
                   <button
                     type="button"
                     onClick={() => setMasterSearch('')}
-                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}
+                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b' }}
                   >
-                    <X size={13} />
+                    <X size={14} />
                   </button>
                 )}
               </div>
@@ -1335,10 +1318,10 @@ export default function FixablyInventoryDashboard({
                 
                 {/* Site Filter */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '11.5px', fontWeight: 600, color: '#64748b' }}>Site:</label>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Branch:</label>
                   <select
                     className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '36px', borderRadius: '8px', minWidth: '120px' }}
+                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
                     value={siteFilter}
                     onChange={(e) => setSiteFilter(e.target.value)}
                   >
@@ -1353,10 +1336,10 @@ export default function FixablyInventoryDashboard({
 
                 {/* Aging Status Filter */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '11.5px', fontWeight: 600, color: '#64748b' }}>Aging:</label>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Aging:</label>
                   <select
                     className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '36px', borderRadius: '8px' }}
+                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
                     value={agingFilter}
                     onChange={(e) => setAgingFilter(e.target.value)}
                   >
@@ -1370,10 +1353,10 @@ export default function FixablyInventoryDashboard({
 
                 {/* Stock Classification Filter */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '11.5px', fontWeight: 600, color: '#64748b' }}>Type:</label>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Type:</label>
                   <select
                     className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '36px', borderRadius: '8px' }}
+                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
                     value={classificationFilter}
                     onChange={(e) => setClassificationFilter(e.target.value)}
                   >
@@ -1385,18 +1368,18 @@ export default function FixablyInventoryDashboard({
 
                 {/* Investigation Filter */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '11.5px', fontWeight: 600, color: '#64748b' }}>GSX Status:</label>
+                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>GSX Status:</label>
                   <select
                     className="form-select"
                     style={{
                       fontSize: '12px',
                       padding: '6px 10px',
-                      height: '36px',
+                      height: '38px',
                       borderRadius: '8px',
-                      border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1px solid #cbd5e1',
+                      border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1.5px solid #cbd5e1',
                       background: investigationFilter === 'INVESTIGATION_ONLY' ? '#fff1f2' : '#ffffff',
                       color: investigationFilter === 'INVESTIGATION_ONLY' ? '#be123c' : '#0f172a',
-                      fontWeight: investigationFilter === 'INVESTIGATION_ONLY' ? 700 : 500
+                      fontWeight: 700
                     }}
                     value={investigationFilter}
                     onChange={(e) => setInvestigationFilter(e.target.value)}
@@ -1410,7 +1393,7 @@ export default function FixablyInventoryDashboard({
                 {/* Rows per page */}
                 <select
                   className="form-select"
-                  style={{ fontSize: '12px', padding: '6px 10px', height: '36px', borderRadius: '8px', width: '90px' }}
+                  style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', width: '90px', fontWeight: 600 }}
                   value={rowsPerPage}
                   onChange={(e) => setRowsPerPage(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
                 >
@@ -1432,7 +1415,7 @@ export default function FixablyInventoryDashboard({
                       setClassificationFilter('ALL');
                       setInvestigationFilter('ALL');
                     }}
-                    style={{ fontSize: '11.5px', padding: '6px 10px', height: '36px' }}
+                    style={{ fontSize: '12px', padding: '6px 12px', height: '38px', fontWeight: 700 }}
                     title="Reset all filters"
                   >
                     Reset
@@ -1444,149 +1427,129 @@ export default function FixablyInventoryDashboard({
             </div>
 
             {/* Results count & active filters display */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', color: '#64748b', marginTop: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#475569', marginTop: '12px', paddingTop: '8px', borderTop: '1px solid #e2e8f0' }}>
               <div>
-                Showing <strong>{filteredMasterItems.length.toLocaleString()}</strong> of {snapshot?.items?.length.toLocaleString() || 0} total serialized units
+                Showing <strong style={{ color: '#0f172a' }}>{filteredMasterItems.length.toLocaleString()}</strong> of {snapshot?.items?.length.toLocaleString() || 0} total serialized units
                 {investigationFilter === 'INVESTIGATION_ONLY' && (
-                  <span style={{ marginLeft: '8px', color: '#be123c', fontWeight: 700 }}>
-                    (Filtered to parts appearing in closed GSX repairs)
+                  <span style={{ marginLeft: '8px', color: '#be123c', fontWeight: 800 }}>
+                    (Filtered to units matching closed GSX repair consumption)
                   </span>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9', fontSize: '10.5px', fontWeight: 700 }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9', border: '1px solid #c4b5fd', fontSize: '11px', fontWeight: 800 }}>
                   DC Stock: {filteredMasterItems.filter(i => i.stockType === 'DC Stock').length.toLocaleString()}
                 </span>
-                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '10.5px', fontWeight: 700 }}>
+                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #7dd3fc', fontSize: '11px', fontWeight: 800 }}>
                   MSPI-Owned: {filteredMasterItems.filter(i => i.stockType !== 'DC Stock').length.toLocaleString()}
                 </span>
                 {filteredMasterItems.filter(i => i.isInvestigation).length > 0 && (
-                  <span className="badge" style={{ background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3', fontSize: '10.5px', fontWeight: 800 }}>
-                    ⚠️ Flagged in KGB: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
+                  <span className="badge" style={{ background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontSize: '11px', fontWeight: 800 }}>
+                    ⚠️ Flagged: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Master Table */}
-          <div className="table-container" style={{ overflowX: 'auto' }}>
+          {/* Master Table: High-Visibility Dark Sticky Header & High-Contrast Typography */}
+          <div className="table-container" style={{ overflowX: 'auto', maxHeight: '720px' }}>
             {paginatedMasterItems.length === 0 ? (
               <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b' }}>
-                <Boxes size={36} color="#cbd5e1" style={{ marginBottom: '8px' }} />
-                <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '15px' }}>No Inventory Records Match Your Filter</h4>
-                <p style={{ margin: 0, fontSize: '12.5px' }}>Try broadening your search query or adjusting the filters.</p>
+                <Boxes size={40} color="#94a3b8" style={{ marginBottom: '10px' }} />
+                <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '16px', fontWeight: 800 }}>No Inventory Records Match Your Filter</h4>
+                <p style={{ margin: 0, fontSize: '13px' }}>Try broadening your search query or resetting the dropdown filters.</p>
               </div>
             ) : (
-              <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+              <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                    <th style={{ width: '50px', textAlign: 'center' }}>#</th>
-                    <th style={{ minWidth: '140px' }}>Part Number</th>
-                    <th style={{ minWidth: '220px' }}>Description</th>
-                    <th style={{ width: '100px' }}>Branch</th>
-                    <th style={{ width: '130px' }}>Stock Classification</th>
-                    <th style={{ minWidth: '170px' }}>Serial Number</th>
-                    <th style={{ width: '110px' }}>Last Received</th>
-                    <th style={{ minWidth: '200px' }}>Aging &amp; Status</th>
-                    <th style={{ minWidth: '190px' }}>GSX / Dispatch Status</th>
-                    <th style={{ width: '100px', textAlign: 'right' }}>Total Value</th>
+                  <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                    <th style={{ width: '50px', textAlign: 'center', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>#</th>
+                    <th style={{ minWidth: '150px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
+                    <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Description</th>
+                    <th style={{ width: '110px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Branch</th>
+                    <th style={{ width: '140px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Classification</th>
+                    <th style={{ minWidth: '175px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Serial Number</th>
+                    <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Last Received</th>
+                    <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging &amp; Status</th>
+                    <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>GSX / Dispatch Status</th>
+                    <th style={{ width: '110px', textAlign: 'right', padding: '12px 16px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Value</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedMasterItems.map((item, idx) => {
                     const rowNumber = rowsPerPage === 'ALL' ? idx + 1 : (currentPage - 1) * rowsPerPage + idx + 1;
                     const isCopied = copiedSerial === item.serialNumber;
+                    const isEven = idx % 2 === 1;
 
                     return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9', background: item.isInvestigation ? '#fffbfb' : '#ffffff' }}>
-                        <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', verticalAlign: 'middle' }}>
+                      <tr
+                        key={item.id}
+                        style={{
+                          borderBottom: '1px solid #e2e8f0',
+                          background: item.isInvestigation ? '#fff5f5' : isEven ? '#f8fafc' : '#ffffff',
+                          transition: 'background-color 0.1s ease'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#e0f2fe';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = item.isInvestigation ? '#fff5f5' : isEven ? '#f8fafc' : '#ffffff';
+                        }}
+                      >
+                        <td style={{ textAlign: 'center', color: '#64748b', fontSize: '12px', fontWeight: 700, verticalAlign: 'middle', padding: '12px 10px', whiteSpace: 'nowrap' }}>
                           {rowNumber}
                         </td>
                         
-                        <td style={{ verticalAlign: 'middle' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{item.partNumber}</strong>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ color: '#0284c7', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', fontWeight: 700 }}>
+                              {item.partNumber}
+                            </span>
                             <button
                               type="button"
                               onClick={() => handleCopy(item.partNumber, 'Part Number')}
-                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'inline-flex', alignItems: 'center' }}
                               title="Copy Part Number"
                             >
-                              <Copy size={11} />
+                              <Copy size={12} />
                             </button>
                           </div>
                         </td>
 
-                        <td style={{ verticalAlign: 'middle' }}>
-                          <div style={{ color: '#1e293b', fontWeight: 500 }}>{item.description}</div>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px' }}>
+                          <div style={{ color: '#0f172a', fontWeight: 500, fontSize: '13px', lineHeight: 1.4, minWidth: '220px' }}>
+                            {item.description}
+                          </div>
                         </td>
 
-                        <td style={{ verticalAlign: 'middle' }}>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                           <span
                             onClick={() => {
-                              setSelectedSiteCode(item.siteCode.replace(/^(ASP|APP)\s+/, ''));
+                              setSelectedSiteCode(item.cleanSiteCode || item.siteCode.replace(/^(ASP|APP)\s+/, ''));
                               setViewMode('multi_site');
                             }}
                             style={{
-                              display: 'inline-block',
-                              padding: '2px 8px',
-                              borderRadius: '4px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '4px 9px',
+                              borderRadius: '6px',
                               background: '#f1f5f9',
-                              color: '#0f172a',
+                              color: '#1e293b',
                               fontWeight: 700,
-                              fontSize: '11px',
+                              fontSize: '11.5px',
                               cursor: 'pointer',
-                              border: '1px solid #e2e8f0'
+                              whiteSpace: 'nowrap',
+                              border: '1px solid #e2e8f0',
+                              transition: 'background-color 0.15s ease'
                             }}
-                            title="Click to view this site in Multi-Site dashboard"
+                            title="Click to view branch in Multi-Site dashboard"
                           >
                             {item.siteCode}
                           </span>
                         </td>
 
-                        <td style={{ verticalAlign: 'middle' }}>
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '2px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              background: item.stockType === 'DC Stock' ? '#f5f3ff' : '#e0f2fe',
-                              color: item.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1',
-                              border: item.stockType === 'DC Stock' ? '1px solid #ddd6fe' : '1px solid #bae6fd'
-                            }}
-                          >
-                            {item.stockType}
-                          </span>
-                        </td>
-
-                        <td style={{ verticalAlign: 'middle' }}>
-                          {item.serialNumber ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <code style={{ fontSize: '11.5px', color: '#334155', background: '#f8fafc', padding: '2px 6px', borderRadius: '4px' }}>
-                                {item.serialNumber}
-                              </code>
-                              <button
-                                type="button"
-                                onClick={() => handleCopy(item.serialNumber, 'Serial')}
-                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: isCopied ? '#16a34a' : '#94a3b8', padding: '2px' }}
-                                title="Copy Serial Number"
-                              >
-                                {isCopied ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
-                              </button>
-                            </div>
-                          ) : (
-                            <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>Non-serialized (Qty: {item.quantity})</span>
-                          )}
-                        </td>
-
-                        <td style={{ verticalAlign: 'middle', fontSize: '12px', color: '#475569' }}>
-                          {item.lastReceivedDate || '—'}
-                        </td>
-
-                        <td style={{ verticalAlign: 'middle' }}>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                           <span
                             style={{
                               display: 'inline-flex',
@@ -1596,19 +1559,112 @@ export default function FixablyInventoryDashboard({
                               borderRadius: '6px',
                               fontSize: '11px',
                               fontWeight: 700,
-                              background: item.badgeBg,
-                              color: item.badgeColor
+                              whiteSpace: 'nowrap',
+                              background: item.stockType === 'DC Stock' ? '#f5f3ff' : '#f0f9ff',
+                              color: item.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1',
+                              border: item.stockType === 'DC Stock' ? '1px solid #ddd6fe' : '1px solid #bae6fd'
                             }}
                           >
-                            {item.agingBracket === AGING_BRACKETS.DEAD_STOCK && <AlertTriangle size={12} color="#dc2626" />}
-                            {item.agingBracket === AGING_BRACKETS.NON_MOVING && <Clock size={12} color="#ea580c" />}
-                            {item.agingBracket === AGING_BRACKETS.SLOW_MOVING && <TrendingDown size={12} color="#d97706" />}
-                            {item.agingBracket === AGING_BRACKETS.IN_STOCK && <CheckCircle2 size={12} color="#16a34a" />}
-                            <span>{item.statusLabel}</span>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.stockType === 'DC Stock' ? '#8b5cf6' : '#0284c7' }} />
+                            {item.stockType}
                           </span>
                         </td>
 
-                        <td style={{ verticalAlign: 'middle' }}>
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                          {item.serialNumber ? (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{
+                                fontSize: '12px',
+                                color: '#0f172a',
+                                background: '#f8fafc',
+                                border: '1px solid #e2e8f0',
+                                padding: '3px 8px',
+                                borderRadius: '5px',
+                                fontWeight: 600,
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                letterSpacing: '0.02em'
+                              }}>
+                                {item.serialNumber}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(item.serialNumber, 'Serial')}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: isCopied ? '#16a34a' : '#94a3b8', padding: '2px', display: 'inline-flex', alignItems: 'center' }}
+                                title="Copy Serial Number"
+                              >
+                                {isCopied ? <Check size={12} color="#16a34a" /> : <Copy size={12} />}
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ color: '#94a3b8', fontSize: '11.5px', fontStyle: 'italic' }}>Non-serialized (Qty: {item.quantity})</span>
+                          )}
+                        </td>
+
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', fontSize: '12px', color: '#475569', fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', whiteSpace: 'nowrap' }}>
+                          {item.lastReceivedDate || '—'}
+                        </td>
+
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '3px 9px',
+                                borderRadius: '6px',
+                                fontSize: '11.5px',
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                background: item.badgeBg,
+                                color: item.badgeColor,
+                                border: item.agingBracket === AGING_BRACKETS.DEAD_STOCK ? '1px solid #fca5a5'
+                                  : item.agingBracket === AGING_BRACKETS.NON_MOVING ? '1px solid #fdba74'
+                                  : item.agingBracket === AGING_BRACKETS.SLOW_MOVING ? '1px solid #fde047'
+                                  : '1px solid #86efac'
+                              }}
+                              title={item.statusLabel}
+                            >
+                              {item.agingBracket === AGING_BRACKETS.DEAD_STOCK && <AlertTriangle size={12} color="#dc2626" />}
+                              {item.agingBracket === AGING_BRACKETS.NON_MOVING && <Clock size={12} color="#ea580c" />}
+                              {item.agingBracket === AGING_BRACKETS.SLOW_MOVING && <TrendingDown size={12} color="#d97706" />}
+                              {item.agingBracket === AGING_BRACKETS.IN_STOCK && <CheckCircle2 size={12} color="#16a34a" />}
+                              <span>
+                                {item.agingBracket === AGING_BRACKETS.DEAD_STOCK
+                                  ? `Dead Stock (${item.agingDays}d)`
+                                  : item.agingBracket === AGING_BRACKETS.NON_MOVING
+                                  ? `Non-Moving (${item.agingDays}d)`
+                                  : item.agingBracket === AGING_BRACKETS.SLOW_MOVING
+                                  ? `Slow-Moving (${item.agingDays}d)`
+                                  : `In Stock (${item.agingDays}d)`}
+                              </span>
+                            </span>
+
+                            {item.agingBracket === AGING_BRACKETS.DEAD_STOCK && (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.04em',
+                                  background: '#fee2e2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fca5a5',
+                                  whiteSpace: 'nowrap'
+                                }}
+                                title="Action Required: RMA pull-out or site reallocation"
+                              >
+                                Action Req.
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                           {item.isInvestigation ? (
                             <div
                               style={{
@@ -1617,26 +1673,26 @@ export default function FixablyInventoryDashboard({
                                 gap: '5px',
                                 padding: '3px 8px',
                                 borderRadius: '6px',
-                                fontSize: '10.5px',
-                                fontWeight: 800,
+                                fontSize: '11px',
+                                fontWeight: 700,
                                 background: '#fff1f2',
                                 color: '#be123c',
                                 border: '1px solid #fecdd3'
                               }}
                               title={`Closed GSX Repair Order #${item.investigationDetails?.orderId || ''} (${item.investigationDetails?.gsxStatus || 'SCOM'}) closed on ${item.investigationDetails?.repairClosedDate || ''} at ${item.investigationDetails?.locationName || ''}`}
                             >
-                              <ShieldAlert size={12} color="#be123c" />
+                              <ShieldAlert size={12} color="#e11d48" />
                               <span>Order #{item.investigationDetails?.orderId} ({item.investigationDetails?.gsxStatus || 'SCOM'})</span>
                             </div>
                           ) : (
-                            <span style={{ color: '#16a34a', fontSize: '11px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                              <Check size={12} color="#16a34a" />
-                              <span>Clean / Verified</span>
+                            <span style={{ color: '#059669', fontSize: '11.5px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <Check size={13} color="#059669" />
+                              <span>Verified Clean</span>
                             </span>
                           )}
                         </td>
 
-                        <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                        <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
                           ${(item.totalValue || item.partValue || 0).toFixed(2)}
                         </td>
                       </tr>
@@ -1647,11 +1703,11 @@ export default function FixablyInventoryDashboard({
             )}
           </div>
 
-          {/* Pagination Controls */}
+          {/* Pagination Controls with High Contrast */}
           {rowsPerPage !== 'ALL' && totalPages > 1 && (
-            <div style={{ padding: '12px 20px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div style={{ fontSize: '12px', color: '#64748b' }}>
-                Page <strong>{currentPage}</strong> of <strong>{totalPages}</strong>
+            <div style={{ padding: '12px 20px', background: '#f8fafc', borderTop: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ fontSize: '12.5px', color: '#334155', fontWeight: 600 }}>
+                Page <strong style={{ color: '#0f172a' }}>{currentPage}</strong> of <strong style={{ color: '#0f172a' }}>{totalPages}</strong>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1660,7 +1716,7 @@ export default function FixablyInventoryDashboard({
                   className="btn btn-sm btn-secondary"
                   disabled={currentPage <= 1}
                   onClick={() => setCurrentPage(1)}
-                  style={{ fontSize: '11px', padding: '4px 8px' }}
+                  style={{ fontSize: '12px', padding: '5px 10px', fontWeight: 700 }}
                 >
                   First
                 </button>
@@ -1669,12 +1725,12 @@ export default function FixablyInventoryDashboard({
                   className="btn btn-sm btn-secondary"
                   disabled={currentPage <= 1}
                   onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  style={{ fontSize: '11px', padding: '4px 8px' }}
+                  style={{ fontSize: '12px', padding: '5px 8px' }}
                 >
-                  <ChevronLeft size={13} />
+                  <ChevronLeft size={14} />
                 </button>
 
-                <span style={{ fontSize: '12px', padding: '0 8px', fontWeight: 700, color: '#0f172a' }}>
+                <span style={{ fontSize: '12.5px', padding: '0 10px', fontWeight: 800, color: '#0f172a' }}>
                   {currentPage} / {totalPages}
                 </span>
 
@@ -1683,16 +1739,16 @@ export default function FixablyInventoryDashboard({
                   className="btn btn-sm btn-secondary"
                   disabled={currentPage >= totalPages}
                   onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  style={{ fontSize: '11px', padding: '4px 8px' }}
+                  style={{ fontSize: '12px', padding: '5px 8px' }}
                 >
-                  <ChevronRight size={13} />
+                  <ChevronRight size={14} />
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm btn-secondary"
                   disabled={currentPage >= totalPages}
                   onClick={() => setCurrentPage(totalPages)}
-                  style={{ fontSize: '11px', padding: '4px 8px' }}
+                  style={{ fontSize: '12px', padding: '5px 10px', fontWeight: 700 }}
                 >
                   Last
                 </button>
@@ -1710,7 +1766,7 @@ export default function FixablyInventoryDashboard({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
           {/* Site Navigation Card: Region tabs & Branch Selector Chips */}
-          <div className="card" style={{ padding: '16px 20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
+          <div className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1.5px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)' }}>
             
             {/* Region Tabs (Metro Manila vs Provincial) */}
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
@@ -1725,12 +1781,12 @@ export default function FixablyInventoryDashboard({
                 style={{
                   flex: 1,
                   minWidth: '220px',
-                  padding: '10px 16px',
+                  padding: '11px 18px',
                   borderRadius: '8px',
                   border: 'none',
                   cursor: 'pointer',
                   background: selectedRegion === 'metro_manila' ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#f8fafc',
-                  color: selectedRegion === 'metro_manila' ? '#ffffff' : '#334155',
+                  color: selectedRegion === 'metro_manila' ? '#ffffff' : '#1e293b',
                   boxShadow: selectedRegion === 'metro_manila' ? '0 4px 10px rgba(2, 132, 199, 0.25)' : 'none',
                   display: 'flex',
                   alignItems: 'center',
@@ -1739,13 +1795,13 @@ export default function FixablyInventoryDashboard({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Building2 size={16} color={selectedRegion === 'metro_manila' ? '#ffffff' : '#0284c7'} />
+                  <Building2 size={18} color={selectedRegion === 'metro_manila' ? '#ffffff' : '#0284c7'} />
                   <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 800, fontSize: '13px' }}>Metro Manila Sites</div>
-                    <div style={{ fontSize: '11px', opacity: 0.85 }}>{metroManilaSitesList.length} Authorized Service Points</div>
+                    <div style={{ fontWeight: 800, fontSize: '13.5px' }}>Metro Manila Sites</div>
+                    <div style={{ fontSize: '11.5px', opacity: 0.9 }}>{metroManilaSitesList.length} Authorized Service Points</div>
                   </div>
                 </div>
-                <span style={{ background: selectedRegion === 'metro_manila' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0', color: selectedRegion === 'metro_manila' ? '#ffffff' : '#0f172a', padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 800 }}>
+                <span style={{ background: selectedRegion === 'metro_manila' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0', color: selectedRegion === 'metro_manila' ? '#ffffff' : '#0f172a', padding: '3px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800 }}>
                   {metroManilaSitesList.reduce((acc, s) => acc + s.totalUnits, 0).toLocaleString()} units
                 </span>
               </button>
@@ -1761,12 +1817,12 @@ export default function FixablyInventoryDashboard({
                 style={{
                   flex: 1,
                   minWidth: '220px',
-                  padding: '10px 16px',
+                  padding: '11px 18px',
                   borderRadius: '8px',
                   border: 'none',
                   cursor: 'pointer',
                   background: selectedRegion === 'provincial' ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)' : '#f8fafc',
-                  color: selectedRegion === 'provincial' ? '#ffffff' : '#334155',
+                  color: selectedRegion === 'provincial' ? '#ffffff' : '#1e293b',
                   boxShadow: selectedRegion === 'provincial' ? '0 4px 10px rgba(217, 119, 6, 0.25)' : 'none',
                   display: 'flex',
                   alignItems: 'center',
@@ -1775,21 +1831,21 @@ export default function FixablyInventoryDashboard({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <MapPin size={16} color={selectedRegion === 'provincial' ? '#ffffff' : '#d97706'} />
+                  <MapPin size={18} color={selectedRegion === 'provincial' ? '#ffffff' : '#d97706'} />
                   <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 800, fontSize: '13px' }}>Provincial Sites</div>
-                    <div style={{ fontSize: '11px', opacity: 0.85 }}>{provincialSitesList.length} Regional Service Points</div>
+                    <div style={{ fontWeight: 800, fontSize: '13.5px' }}>Provincial Sites</div>
+                    <div style={{ fontSize: '11.5px', opacity: 0.9 }}>{provincialSitesList.length} Regional Service Points</div>
                   </div>
                 </div>
-                <span style={{ background: selectedRegion === 'provincial' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0', color: selectedRegion === 'provincial' ? '#ffffff' : '#0f172a', padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 800 }}>
+                <span style={{ background: selectedRegion === 'provincial' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0', color: selectedRegion === 'provincial' ? '#ffffff' : '#0f172a', padding: '3px 10px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800 }}>
                   {provincialSitesList.reduce((acc, s) => acc + s.totalUnits, 0).toLocaleString()} units
                 </span>
               </button>
             </div>
 
-            {/* Individual Branch Selector Chips */}
-            <div style={{ paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '8px' }}>
+            {/* Individual Branch Selector Chips with Crisp Contrast */}
+            <div style={{ paddingTop: '10px', borderTop: '1px solid #e2e8f0' }}>
+              <div style={{ fontSize: '11.5px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '8px' }}>
                 Select Site to View Health &amp; Inventory Aging:
               </div>
               
@@ -1809,20 +1865,20 @@ export default function FixablyInventoryDashboard({
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '6px',
-                        padding: '6px 12px',
+                        padding: '7px 12px',
                         borderRadius: '6px',
                         border: isSelected
                           ? (selectedRegion === 'provincial' ? '2px solid #d97706' : '2px solid #0284c7')
-                          : '1px solid #cbd5e1',
+                          : '1.5px solid #cbd5e1',
                         background: isSelected
                           ? (selectedRegion === 'provincial' ? '#fffbeb' : '#f0f9ff')
                           : '#ffffff',
                         color: isSelected
                           ? (selectedRegion === 'provincial' ? '#92400e' : '#0369a1')
-                          : '#1e293b',
+                          : '#0f172a',
                         cursor: 'pointer',
-                        fontWeight: isSelected ? 800 : 500,
-                        fontSize: '12px',
+                        fontWeight: isSelected ? 800 : 600,
+                        fontSize: '12.5px',
                         transition: 'all 0.1s ease'
                       }}
                     >
@@ -1833,7 +1889,7 @@ export default function FixablyInventoryDashboard({
                           color: site.totalUnits > 0 ? (isSelected ? '#ffffff' : '#0f172a') : '#dc2626',
                           borderRadius: '999px',
                           padding: '1px 6px',
-                          fontSize: '10.5px',
+                          fontSize: '11px',
                           fontWeight: 700
                         }}
                       >
@@ -1844,10 +1900,11 @@ export default function FixablyInventoryDashboard({
                           style={{
                             background: '#fee2e2',
                             color: '#dc2626',
+                            border: '1px solid #fecdd3',
                             borderRadius: '999px',
                             padding: '1px 5px',
-                            fontSize: '9.5px',
-                            fontWeight: 700
+                            fontSize: '10px',
+                            fontWeight: 800
                           }}
                           title={`${deadCount} dead stock units requiring pull-out`}
                         >
@@ -1862,7 +1919,7 @@ export default function FixablyInventoryDashboard({
                             border: '1px solid #fecdd3',
                             borderRadius: '999px',
                             padding: '1px 5px',
-                            fontSize: '9.5px',
+                            fontSize: '10px',
                             fontWeight: 800
                           }}
                           title={`${invCount} serials flagged in closed repairs`}
@@ -1880,45 +1937,45 @@ export default function FixablyInventoryDashboard({
 
           {/* Selected Site Detail Banner */}
           {currentSiteData && (
-            <div className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)' }}>
+            <div className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1.5px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
                 
                 <div style={{ flex: 1, minWidth: '280px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                    <Building2 size={20} color="#0284c7" />
-                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
+                    <Building2 size={22} color="#0284c7" />
+                    <h3 style={{ margin: 0, fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>
                       {currentSiteData.siteName}
                     </h3>
-                    <span className="badge badge-primary" style={{ fontSize: '11px', fontWeight: 700 }}>
+                    <span className="badge badge-primary" style={{ fontSize: '11.5px', fontWeight: 800 }}>
                       {currentSiteData.siteCode}
                     </span>
                     {currentSiteData.shipTo && (
-                      <span className="badge" style={{ fontSize: '11px', background: '#e0e7ff', color: '#3730a3', fontWeight: 700 }}>
+                      <span className="badge" style={{ fontSize: '11.5px', background: '#e0e7ff', color: '#3730a3', fontWeight: 700, border: '1px solid #c7d2fe' }}>
                         Ship-To: {currentSiteData.shipTo}
                       </span>
                     )}
                     {currentSiteData.investigationCount > 0 && (
-                      <span className="badge" style={{ fontSize: '11px', background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3', fontWeight: 800 }}>
+                      <span className="badge" style={{ fontSize: '11.5px', background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontWeight: 800 }}>
                         ⚠️ {currentSiteData.investigationCount} Closed Repair Matches
                       </span>
                     )}
                   </div>
 
-                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <MapPin size={13} color="#94a3b8" />
+                  <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <MapPin size={14} color="#64748b" />
                     <span>{currentSiteData.address || 'Standard Authorized Service Facility'}</span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #f1f5f9', fontSize: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#1e293b' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0', fontSize: '12.5px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#0f172a' }}>
                       <span style={{ color: '#64748b', fontWeight: 600 }}>Branch Supervisor:</span>
                       <strong>{currentSiteData.supervisor}</strong>
                     </div>
 
                     {currentSiteData.phone && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <Phone size={12} color="#0284c7" />
-                        <a href={`tel:${currentSiteData.phone}`} style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 600 }}>
+                        <Phone size={13} color="#0284c7" />
+                        <a href={`tel:${currentSiteData.phone}`} style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 700 }}>
                           {currentSiteData.phone}
                         </a>
                       </div>
@@ -1926,8 +1983,8 @@ export default function FixablyInventoryDashboard({
 
                     {currentSiteData.email && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <Mail size={12} color="#0284c7" />
-                        <a href={`mailto:${currentSiteData.email}`} style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 600 }}>
+                        <Mail size={13} color="#0284c7" />
+                        <a href={`mailto:${currentSiteData.email}`} style={{ color: '#0284c7', textDecoration: 'none', fontWeight: 700 }}>
                           {currentSiteData.email}
                         </a>
                       </div>
@@ -1950,14 +2007,14 @@ export default function FixablyInventoryDashboard({
                       showToast?.(`Exported ${deadItems.length} dead stock items for ${currentSiteData.siteCode}`, 'success');
                     }}
                     style={{
-                      fontSize: '11.5px',
+                      fontSize: '12px',
                       padding: '8px 12px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
                       fontWeight: 700,
                       color: '#dc2626',
-                      border: '1px solid #fca5a5',
+                      border: '1.5px solid #f87171',
                       background: '#fff1f2',
                       borderRadius: '6px',
                       cursor: 'pointer'
@@ -1976,14 +2033,14 @@ export default function FixablyInventoryDashboard({
                       showToast?.(`Exported Dead Stock Excel workbook for ${currentSiteData.siteCode}`, 'success');
                     }}
                     style={{
-                      fontSize: '11.5px',
+                      fontSize: '12px',
                       padding: '8px 12px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
                       fontWeight: 700,
                       color: '#ea580c',
-                      border: '1px solid #fed7aa',
+                      border: '1.5px solid #fb923c',
                       background: '#fff7ed',
                       borderRadius: '6px',
                       cursor: 'pointer'
@@ -2003,14 +2060,14 @@ export default function FixablyInventoryDashboard({
                         showToast?.(`Exported ${currentSiteData.investigationCount} flagged items to Excel for ${currentSiteData.siteCode}`, 'success');
                       }}
                       style={{
-                        fontSize: '11.5px',
+                        fontSize: '12px',
                         padding: '8px 12px',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '5px',
                         fontWeight: 700,
                         color: '#be123c',
-                        border: '1px solid #fecdd3',
+                        border: '1.5px solid #fecdd3',
                         background: '#ffe4e6',
                         borderRadius: '6px',
                         cursor: 'pointer'
@@ -2030,14 +2087,14 @@ export default function FixablyInventoryDashboard({
                       showToast?.(`Exported complete multi-tab inventory workbook for ${currentSiteData.siteCode}`, 'success');
                     }}
                     style={{
-                      fontSize: '11.5px',
+                      fontSize: '12px',
                       padding: '8px 12px',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '5px',
                       fontWeight: 700,
                       color: '#0284c7',
-                      border: '1px solid #bae6fd',
+                      border: '1.5px solid #0284c7',
                       background: '#f0f9ff',
                       borderRadius: '6px',
                       cursor: 'pointer'
@@ -2059,21 +2116,21 @@ export default function FixablyInventoryDashboard({
                         }
                       }}
                       style={{
-                        fontSize: '11px',
+                        fontSize: '11.5px',
                         padding: '8px 10px',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '4px',
                         fontWeight: 700,
                         color: '#64748b',
-                        border: '1px solid #e2e8f0',
+                        border: '1px solid #cbd5e1',
                         background: '#f8fafc',
                         borderRadius: '6px',
                         cursor: 'pointer'
                       }}
                       title="Clear old parts prior to fresh intake"
                     >
-                      <Trash2 size={12} color="#94a3b8" />
+                      <Trash2 size={13} color="#94a3b8" />
                       <span>Clear Site</span>
                     </button>
                   )}
@@ -2083,136 +2140,136 @@ export default function FixablyInventoryDashboard({
             </div>
           )}
 
-          {/* SITE KPI HEALTH SUMMARY TABLE (Matching SIte Stocks (Fixably).xlsx) */}
+          {/* SITE KPI HEALTH SUMMARY TABLE (High-Contrast Header & Borders) */}
           {currentSiteData?.metrics && (
-            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)', background: '#ffffff' }}>
-              <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #cbd5e1', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.05)' }}>
+              <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Boxes size={16} color="#0284c7" />
-                  <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                  <Boxes size={18} color="#0284c7" />
+                  <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
                     Inventory Aging &amp; Health Summary ({currentSiteData.siteCode})
                   </h4>
                 </div>
-                <div style={{ fontSize: '11.5px', color: '#64748b' }}>
-                  Parity Model matching <code style={{ fontWeight: 600 }}>SIte Stocks (Fixably).xlsx</code>
+                <div style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
+                  Parity Model matching <code style={{ fontWeight: 700, color: '#0284c7' }}>SIte Stocks (Fixably).xlsx</code>
                 </div>
               </div>
 
               <div className="table-container" style={{ overflowX: 'auto' }}>
-                <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr style={{ background: '#f1f5f9' }}>
-                      <th style={{ minWidth: '180px' }}>Stock Classification</th>
-                      <th style={{ textAlign: 'center', color: '#dc2626' }}>Dead Stock (≥ 180d)</th>
-                      <th style={{ textAlign: 'center', color: '#ea580c' }}>Non-Moving (90–179d)</th>
-                      <th style={{ textAlign: 'center', color: '#d97706' }}>Slow-Moving (60–89d)</th>
-                      <th style={{ textAlign: 'center', color: '#16a34a' }}>In Stock (&lt; 60d)</th>
-                      <th style={{ textAlign: 'center', fontWeight: 800 }}>Total Units</th>
-                      <th style={{ textAlign: 'center', color: '#dc2626' }}>Dead Stock %</th>
-                      <th style={{ textAlign: 'center', color: '#ea580c' }}>Non-Moving %</th>
-                      <th style={{ textAlign: 'center', color: '#d97706' }}>Slow-Moving %</th>
-                      <th style={{ textAlign: 'center', color: '#16a34a' }}>In Stock %</th>
+                    <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                      <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Stock Classification</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Dead Stock (≥ 180d)</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Non-Moving (90–179d)</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Slow-Moving (60–89d)</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>In Stock (&lt; 60d)</th>
+                      <th style={{ textAlign: 'center', fontWeight: 900, background: '#0f172a', color: '#ffffff', padding: '12px 10px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Total Units</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Dead %</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Non-Moving %</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Slow %</th>
+                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>In Stock %</th>
                     </tr>
                   </thead>
                   <tbody>
                     {/* DC Stock Row */}
-                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ fontWeight: 700, color: '#6d28d9' }}>
+                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={{ fontWeight: 800, color: '#6d28d9', padding: '12px 14px' }}>
                         <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6', marginRight: '6px' }} />
                         DC Stock
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#dc2626', background: '#fff1f2' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.dead}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.nonMoving}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.slow}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.inStock}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, background: '#f8fafc' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 900, background: '#f8fafc', color: '#0f172a', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.units}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#dc2626', background: '#fff1f2' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.deadPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.nonMovingPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.slowPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
                         {currentSiteData.metrics.dcStock.inStockPercent}
                       </td>
                     </tr>
 
                     {/* MSPI-Owned / C/I REP Row */}
-                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
-                      <td style={{ fontWeight: 700, color: '#0369a1' }}>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
+                      <td style={{ fontWeight: 800, color: '#0369a1', padding: '12px 14px' }}>
                         <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#0284c7', marginRight: '6px' }} />
                         MSPI-Owned / C/I REP
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#dc2626', background: '#fff1f2' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.dead}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.nonMoving}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.slow}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 600, color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.inStock}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, background: '#f8fafc' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 900, background: '#f1f5f9', color: '#0f172a', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.units}
                       </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#dc2626', background: '#fff1f2' }}>
+                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.deadPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.nonMovingPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.slowPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
                         {currentSiteData.metrics.mspiOwned.inStockPercent}
                       </td>
                     </tr>
 
                     {/* COMBINED TOTAL Row */}
-                    <tr style={{ background: '#f8fafc', fontWeight: 800, borderTop: '2px solid #cbd5e1' }}>
-                      <td style={{ color: '#0f172a' }}>COMBINED TOTAL</td>
-                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6' }}>
+                    <tr style={{ background: '#f1f5f9', fontWeight: 900, borderTop: '2px solid #94a3b8' }}>
+                      <td style={{ color: '#0f172a', padding: '12px 14px' }}>COMBINED TOTAL</td>
+                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
                         {currentSiteData.metrics.total.dead}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 800 }}>
                         {currentSiteData.metrics.total.nonMoving}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 800 }}>
                         {currentSiteData.metrics.total.slow}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
                         {currentSiteData.metrics.total.inStock}
                       </td>
-                      <td style={{ textAlign: 'center', fontSize: '13.5px', color: '#0f172a', background: '#e2e8f0' }}>
+                      <td style={{ textAlign: 'center', fontSize: '14px', color: '#0f172a', background: '#e2e8f0', padding: '12px 10px', fontWeight: 900 }}>
                         {currentSiteData.metrics.total.units}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6' }}>
+                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
                         {currentSiteData.metrics.total.deadPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c' }}>
+                      <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 700 }}>
                         {currentSiteData.metrics.total.nonMovingPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#d97706' }}>
+                      <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 700 }}>
                         {currentSiteData.metrics.total.slowPercent}
                       </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a' }}>
+                      <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
                         {currentSiteData.metrics.total.inStockPercent}
                       </td>
                     </tr>
@@ -2224,10 +2281,10 @@ export default function FixablyInventoryDashboard({
 
           {/* SEGMENTED LISTS & SUB-TABS */}
           {currentSiteData?.metrics && (
-            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-lg)', background: '#ffffff' }}>
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #cbd5e1', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.05)' }}>
               
               {/* Segmented Sub-Tab Header */}
-              <div style={{ padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ padding: '8px 16px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 
                 {/* Tab 1: Dead Stock */}
                 <button
@@ -2423,97 +2480,105 @@ export default function FixablyInventoryDashboard({
               </div>
 
               {/* Tab Content Display */}
-              <div className="table-container" style={{ overflowX: 'auto' }}>
+              <div className="table-container" style={{ overflowX: 'auto', maxHeight: '680px' }}>
                 
                 {/* 5.1 Part Aggregations View */}
                 {segmentedTab === 'part_aggregations' ? (
-                  <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                  <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr style={{ background: '#f8fafc' }}>
-                        <th style={{ minWidth: '160px' }}>Part Number</th>
-                        <th style={{ minWidth: '240px' }}>Part Description</th>
-                        <th style={{ textAlign: 'center', width: '150px' }}>Total Serials On-Hand</th>
-                        <th style={{ textAlign: 'center', width: '110px' }}>DC Stock</th>
-                        <th style={{ textAlign: 'center', width: '110px' }}>MSPI-Owned</th>
-                        <th style={{ minWidth: '220px' }}>Aging Breakdown</th>
-                        <th style={{ textAlign: 'center', width: '120px' }}>Action</th>
+                      <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                        <th style={{ minWidth: '160px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
+                        <th style={{ minWidth: '240px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Description</th>
+                        <th style={{ textAlign: 'center', width: '150px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Total Serials</th>
+                        <th style={{ textAlign: 'center', width: '110px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>DC Stock</th>
+                        <th style={{ textAlign: 'center', width: '110px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>MSPI-Owned</th>
+                        <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging Breakdown</th>
+                        <th style={{ textAlign: 'center', width: '120px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {currentSiteData.metrics.partAggregations.map(partRow => {
+                      {currentSiteData.metrics.partAggregations.map((partRow, pIdx) => {
                         const isExpanded = expandedPartPn === partRow.partNumber;
+                        const isEven = pIdx % 2 === 1;
 
                         return (
                           <React.Fragment key={partRow.partNumber}>
-                            <tr style={{ borderBottom: isExpanded ? 'none' : '1px solid #f1f5f9', background: isExpanded ? '#f8fafc' : '#ffffff' }}>
-                              <td style={{ verticalAlign: 'middle' }}>
+                            <tr
+                              style={{
+                                borderBottom: isExpanded ? 'none' : '1px solid #e2e8f0',
+                                background: isExpanded ? '#f0f9ff' : isEven ? '#f8fafc' : '#ffffff'
+                              }}
+                            >
+                              <td style={{ verticalAlign: 'middle', padding: '11px 14px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{partRow.partNumber}</strong>
+                                  <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>
+                                    {partRow.partNumber}
+                                  </strong>
                                   <button
                                     type="button"
                                     onClick={() => handleCopy(partRow.partNumber, 'Part Number')}
                                     style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
                                   >
-                                    <Copy size={11} />
+                                    <Copy size={12} />
                                   </button>
                                 </div>
                               </td>
 
-                              <td style={{ verticalAlign: 'middle', fontWeight: 500, color: '#1e293b' }}>
+                              <td style={{ verticalAlign: 'middle', fontWeight: 600, color: '#0f172a', padding: '11px 14px' }}>
                                 {partRow.partDescription}
                               </td>
 
-                              <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                                <span style={{ background: '#e0f2fe', color: '#0369a1', padding: '3px 10px', borderRadius: '999px', fontWeight: 800, fontSize: '12px' }}>
+                              <td style={{ textAlign: 'center', verticalAlign: 'middle', padding: '11px 10px' }}>
+                                <span style={{ background: '#e0f2fe', color: '#0369a1', padding: '4px 10px', borderRadius: '999px', fontWeight: 800, fontSize: '12px', border: '1px solid #7dd3fc' }}>
                                   {partRow.totalSerialsOnHand} UNITS
                                 </span>
                               </td>
 
-                              <td style={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#6d28d9' }}>
+                              <td style={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 800, color: '#6d28d9', padding: '11px 10px' }}>
                                 {partRow.dcStockCount}
                               </td>
 
-                              <td style={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#0369a1' }}>
+                              <td style={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 800, color: '#0369a1', padding: '11px 10px' }}>
                                 {partRow.mspiCount}
                               </td>
 
-                              <td style={{ verticalAlign: 'middle' }}>
+                              <td style={{ verticalAlign: 'middle', padding: '11px 14px' }}>
                                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                                   {partRow.deadCount > 0 && (
-                                    <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', fontSize: '10px', fontWeight: 700 }}>
+                                    <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', border: '1px solid #fecdd3', fontSize: '10.5px', fontWeight: 800 }}>
                                       {partRow.deadCount} Dead
                                     </span>
                                   )}
                                   {partRow.nonMovingCount > 0 && (
-                                    <span className="badge" style={{ background: '#ffedd5', color: '#ea580c', fontSize: '10px', fontWeight: 700 }}>
+                                    <span className="badge" style={{ background: '#ffedd5', color: '#ea580c', border: '1px solid #fed7aa', fontSize: '10.5px', fontWeight: 800 }}>
                                       {partRow.nonMovingCount} Non-Moving
                                     </span>
                                   )}
                                   {partRow.slowCount > 0 && (
-                                    <span className="badge" style={{ background: '#fef3c7', color: '#d97706', fontSize: '10px', fontWeight: 700 }}>
+                                    <span className="badge" style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '10.5px', fontWeight: 800 }}>
                                       {partRow.slowCount} Slow
                                     </span>
                                   )}
                                   {partRow.inStockCount > 0 && (
-                                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontSize: '10px', fontWeight: 700 }}>
+                                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0', fontSize: '10.5px', fontWeight: 800 }}>
                                       {partRow.inStockCount} Active
                                     </span>
                                   )}
                                 </div>
                               </td>
 
-                              <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                              <td style={{ textAlign: 'center', verticalAlign: 'middle', padding: '11px 10px' }}>
                                 <button
                                   type="button"
                                   className="btn btn-sm"
                                   onClick={() => setExpandedPartPn(isExpanded ? null : partRow.partNumber)}
                                   style={{
-                                    fontSize: '11px',
-                                    padding: '4px 10px',
-                                    fontWeight: 700,
+                                    fontSize: '11.5px',
+                                    padding: '5px 12px',
+                                    fontWeight: 800,
                                     color: isExpanded ? '#dc2626' : '#0284c7',
-                                    background: isExpanded ? '#fff1f2' : '#f0f9ff',
-                                    border: isExpanded ? '1px solid #fecdd3' : '1px solid #bae6fd',
+                                    background: isExpanded ? '#fff1f2' : '#ffffff',
+                                    border: isExpanded ? '1.5px solid #fecdd3' : '1.5px solid #0284c7',
                                     borderRadius: '6px',
                                     cursor: 'pointer'
                                   }}
@@ -2525,9 +2590,9 @@ export default function FixablyInventoryDashboard({
 
                             {/* Expanded serial listing row */}
                             {isExpanded && (
-                              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                <td colSpan={7} style={{ padding: '12px 20px' }}>
-                                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>
+                              <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
+                                <td colSpan={7} style={{ padding: '14px 20px' }}>
+                                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#334155', marginBottom: '8px' }}>
                                     Serials in Stock for {partRow.partNumber} ({partRow.serials.length} units):
                                   </div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -2538,24 +2603,24 @@ export default function FixablyInventoryDashboard({
                                           key={`${unit.serialNumber}-${sIdx}`}
                                           style={{
                                             background: '#ffffff',
-                                            border: unit.isInvestigation ? '1px solid #fca5a5' : '1px solid #cbd5e1',
+                                            border: unit.isInvestigation ? '1.5px solid #f87171' : '1.5px solid #cbd5e1',
                                             borderRadius: '6px',
                                             padding: '4px 8px',
                                             display: 'inline-flex',
                                             alignItems: 'center',
                                             gap: '6px',
-                                            fontSize: '11.5px'
+                                            fontSize: '12px'
                                           }}
                                         >
-                                          <code style={{ color: unit.isInvestigation ? '#be123c' : '#0f172a', fontWeight: 700 }}>
+                                          <code style={{ color: unit.isInvestigation ? '#be123c' : '#0f172a', fontWeight: 800 }}>
                                             {unit.serialNumber || 'NON-SERIALIZED'}
                                           </code>
-                                          <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 700 }}>
+                                          <span style={{ fontSize: '10.5px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 800 }}>
                                             {unit.agingDays}d
                                           </span>
                                           {unit.isInvestigation && (
-                                            <span style={{ fontSize: '9.5px', padding: '1px 4px', borderRadius: '4px', background: '#fff1f2', color: '#be123c', fontWeight: 800 }}>
-                                              KGB
+                                            <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: '#ffe4e6', color: '#9f1239', fontWeight: 800 }}>
+                                              KGB Used
                                             </span>
                                           )}
                                           <button
@@ -2564,7 +2629,7 @@ export default function FixablyInventoryDashboard({
                                             style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
                                             title="Copy serial"
                                           >
-                                            <Copy size={10} />
+                                            <Copy size={11} />
                                           </button>
                                         </div>
                                       ))}
@@ -2586,11 +2651,11 @@ export default function FixablyInventoryDashboard({
                       return (
                         <div style={{ padding: '48px 20px', textAlign: 'center', color: '#64748b' }}>
                           <CheckCircle2 size={36} color="#10b981" style={{ margin: '0 auto 8px' }} />
-                          <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '15px' }}>
+                          <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '16px', fontWeight: 800 }}>
                             No Dispatched / Closed GSX Contradictions for {currentSiteData.siteCode}
                           </h4>
-                          <p style={{ margin: 0, fontSize: '12.5px' }}>
-                            None of the on-hand units at this site match repairs in the KGB Used Report. All serials are clean.
+                          <p style={{ margin: 0, fontSize: '13px' }}>
+                            None of the on-hand units at this site match repairs in the KGB Used Report. All serials are verified clean.
                           </p>
                         </div>
                       );
@@ -2599,10 +2664,10 @@ export default function FixablyInventoryDashboard({
                     return (
                       <div>
                         {/* Sub-header with export actions */}
-                        <div style={{ padding: '12px 18px', background: '#fff1f2', borderBottom: '1px solid #fecdd3', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                        <div style={{ padding: '12px 18px', background: '#fff1f2', borderBottom: '1.5px solid #fecdd3', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <ShieldAlert size={16} color="#be123c" />
-                            <span style={{ fontSize: '12.5px', fontWeight: 800, color: '#be123c' }}>
+                            <ShieldAlert size={18} color="#be123c" />
+                            <span style={{ fontSize: '13px', fontWeight: 800, color: '#be123c' }}>
                               {invList.length} Units Flagged in Closed GSX Repairs (Investigation Required)
                             </span>
                           </div>
@@ -2613,20 +2678,20 @@ export default function FixablyInventoryDashboard({
                               className="btn btn-sm"
                               onClick={() => exportInvestigationToCsv(currentSiteData.items, currentSiteData.siteCode)}
                               style={{
-                                fontSize: '11px',
-                                padding: '4px 10px',
+                                fontSize: '11.5px',
+                                padding: '5px 12px',
                                 display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: '4px',
+                                gap: '5px',
                                 fontWeight: 700,
                                 color: '#be123c',
                                 background: '#ffffff',
-                                border: '1px solid #fecdd3',
-                                borderRadius: '4px',
+                                border: '1.5px solid #fecdd3',
+                                borderRadius: '5px',
                                 cursor: 'pointer'
                               }}
                             >
-                              <Download size={11} color="#be123c" />
+                              <Download size={12} color="#be123c" />
                               <span>Export Investigation CSV</span>
                             </button>
 
@@ -2635,67 +2700,67 @@ export default function FixablyInventoryDashboard({
                               className="btn btn-sm"
                               onClick={() => exportInvestigationToExcel(currentSiteData.items, currentSiteData.siteCode)}
                               style={{
-                                fontSize: '11px',
-                                padding: '4px 10px',
+                                fontSize: '11.5px',
+                                padding: '5px 12px',
                                 display: 'inline-flex',
                                 alignItems: 'center',
-                                gap: '4px',
+                                gap: '5px',
                                 fontWeight: 700,
                                 color: '#be123c',
                                 background: '#ffffff',
-                                border: '1px solid #fecdd3',
-                                borderRadius: '4px',
+                                border: '1.5px solid #fecdd3',
+                                borderRadius: '5px',
                                 cursor: 'pointer'
                               }}
                             >
-                              <FileSpreadsheet size={11} color="#be123c" />
+                              <FileSpreadsheet size={12} color="#be123c" />
                               <span>Export Investigation Excel</span>
                             </button>
                           </div>
                         </div>
 
-                        <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                        <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                           <thead>
-                            <tr style={{ background: '#f8fafc' }}>
-                              <th style={{ width: '45px', textAlign: 'center' }}>#</th>
-                              <th style={{ minWidth: '150px' }}>Part Number</th>
-                              <th style={{ minWidth: '220px' }}>Description</th>
-                              <th style={{ minWidth: '170px' }}>Transferred Serial</th>
-                              <th style={{ width: '120px' }}>Stock Type</th>
-                              <th style={{ minWidth: '130px' }}>Order Number</th>
-                              <th style={{ width: '120px' }}>Closed Date</th>
-                              <th style={{ minWidth: '180px' }}>Used By (Location)</th>
-                              <th style={{ width: '100px' }}>GSX Status</th>
-                              <th style={{ width: '110px' }}>Last Received</th>
+                            <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                              <th style={{ width: '45px', textAlign: 'center', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>#</th>
+                              <th style={{ minWidth: '150px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
+                              <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Description</th>
+                              <th style={{ minWidth: '170px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Transferred Serial</th>
+                              <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Stock Type</th>
+                              <th style={{ minWidth: '130px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Order Number</th>
+                              <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Closed Date</th>
+                              <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Used By (Location)</th>
+                              <th style={{ width: '100px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>GSX Status</th>
+                              <th style={{ width: '110px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Last Received</th>
                             </tr>
                           </thead>
                           <tbody>
                             {invList.map((unit, uIdx) => (
-                              <tr key={unit.id} style={{ borderBottom: '1px solid #f1f5f9', background: '#fffbfb' }}>
-                                <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', verticalAlign: 'middle' }}>
+                              <tr key={unit.id} style={{ borderBottom: '1px solid #e2e8f0', background: '#fff5f5' }}>
+                                <td style={{ textAlign: 'center', color: '#64748b', fontSize: '12px', fontWeight: 700, verticalAlign: 'middle', padding: '11px 10px' }}>
                                   {uIdx + 1}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle' }}>
+                                <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{unit.partNumber}</strong>
+                                    <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 800 }}>{unit.partNumber}</strong>
                                     <button
                                       type="button"
                                       onClick={() => handleCopy(unit.partNumber, 'Part Number')}
                                       style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
                                     >
-                                      <Copy size={11} />
+                                      <Copy size={12} />
                                     </button>
                                   </div>
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontWeight: 500, color: '#1e293b' }}>
+                                <td style={{ verticalAlign: 'middle', fontWeight: 600, color: '#0f172a', padding: '11px 12px' }}>
                                   {unit.description}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle' }}>
+                                <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <code style={{ fontSize: '11.5px', color: '#be123c', background: '#fff1f2', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                    <code style={{ fontSize: '12px', color: '#9f1239', background: '#ffe4e6', border: '1.5px solid #fecdd3', padding: '3px 8px', borderRadius: '5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
                                       {unit.serialNumber}
                                     </code>
                                     <button
@@ -2704,46 +2769,47 @@ export default function FixablyInventoryDashboard({
                                       style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
                                       title="Copy Serial Number"
                                     >
-                                      <Copy size={11} />
+                                      <Copy size={12} />
                                     </button>
                                   </div>
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle' }}>
+                                <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
                                   <span
                                     style={{
                                       display: 'inline-block',
-                                      padding: '2px 8px',
-                                      borderRadius: '4px',
+                                      padding: '3px 8px',
+                                      borderRadius: '6px',
                                       fontSize: '11px',
-                                      fontWeight: 700,
-                                      background: unit.stockType === 'DC Stock' ? '#f5f3ff' : '#e0f2fe',
-                                      color: unit.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1'
+                                      fontWeight: 800,
+                                      background: unit.stockType === 'DC Stock' ? '#ede9fe' : '#e0f2fe',
+                                      color: unit.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1',
+                                      border: unit.stockType === 'DC Stock' ? '1.5px solid #c4b5fd' : '1.5px solid #7dd3fc'
                                     }}
                                   >
                                     {unit.stockType}
                                   </span>
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontWeight: 700, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                                <td style={{ verticalAlign: 'middle', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)', padding: '11px 12px' }}>
                                   {unit.investigationDetails?.orderId || '—'}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontSize: '12px', color: '#475569' }}>
+                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#1e293b', fontWeight: 600, padding: '11px 12px' }}>
                                   {unit.investigationDetails?.repairClosedDate || '—'}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontSize: '12px', color: '#1e293b', fontWeight: 600 }}>
+                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#0f172a', fontWeight: 700, padding: '11px 12px' }}>
                                   {unit.investigationDetails?.locationName || currentSiteData.siteName}
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle' }}>
-                                  <span className="badge" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontSize: '10.5px', fontWeight: 800 }}>
+                                <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
+                                  <span className="badge" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontSize: '11px', fontWeight: 800 }}>
                                     {unit.investigationDetails?.gsxStatus || 'SCOM'}
                                   </span>
                                 </td>
 
-                                <td style={{ verticalAlign: 'middle', fontSize: '12px', color: '#475569' }}>
+                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#475569', fontWeight: 600, padding: '11px 12px' }}>
                                   {unit.lastReceivedDate || '—'}
                                 </td>
                               </tr>
@@ -2770,11 +2836,11 @@ export default function FixablyInventoryDashboard({
                     if (activeList.length === 0) {
                       return (
                         <div style={{ padding: '48px 20px', textAlign: 'center', color: '#64748b' }}>
-                          <CheckCircle2 size={32} color="#10b981" style={{ marginBottom: '8px' }} />
-                          <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '14px' }}>
+                          <CheckCircle2 size={36} color="#10b981" style={{ margin: '0 auto 8px' }} />
+                          <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '16px', fontWeight: 800 }}>
                             No Items in this Aging Bracket
                           </h4>
-                          <p style={{ margin: 0, fontSize: '12px' }}>
+                          <p style={{ margin: 0, fontSize: '13px' }}>
                             {currentSiteData.siteCode} has 0 parts classified in this bracket.
                           </p>
                         </div>
@@ -2782,105 +2848,181 @@ export default function FixablyInventoryDashboard({
                     }
 
                     return (
-                      <table className="data-table" style={{ width: '100%', fontSize: '12.5px' }}>
+                      <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
                         <thead>
-                          <tr style={{ background: '#f8fafc' }}>
-                            <th style={{ width: '50px', textAlign: 'center' }}>#</th>
-                            <th style={{ minWidth: '150px' }}>Part Number</th>
-                            <th style={{ minWidth: '220px' }}>Description</th>
-                            <th style={{ width: '130px' }}>Classification</th>
-                            <th style={{ minWidth: '180px' }}>Serial Number</th>
-                            <th style={{ width: '110px' }}>Last Received</th>
-                            <th style={{ minWidth: '200px' }}>Aging &amp; Status</th>
-                            <th style={{ width: '110px', textAlign: 'right' }}>Part Value</th>
+                          <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                            <th style={{ width: '50px', textAlign: 'center', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>#</th>
+                            <th style={{ minWidth: '150px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
+                            <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Description</th>
+                            <th style={{ width: '130px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Classification</th>
+                            <th style={{ minWidth: '175px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Serial Number</th>
+                            <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Last Received</th>
+                            <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging &amp; Status</th>
+                            <th style={{ width: '110px', textAlign: 'right', padding: '12px 16px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Value</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {activeList.map((unit, uIdx) => (
-                            <tr key={unit.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                              <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', verticalAlign: 'middle' }}>
-                                {uIdx + 1}
-                              </td>
+                          {activeList.map((unit, uIdx) => {
+                            const isEven = uIdx % 2 === 1;
 
-                              <td style={{ verticalAlign: 'middle' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <strong style={{ color: '#0284c7', fontFamily: 'var(--font-mono)' }}>{unit.partNumber}</strong>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopy(unit.partNumber, 'Part Number')}
-                                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
-                                  >
-                                    <Copy size={11} />
-                                  </button>
-                                </div>
-                              </td>
+                            return (
+                              <tr
+                                key={unit.id}
+                                style={{
+                                  borderBottom: '1px solid #e2e8f0',
+                                  background: isEven ? '#f8fafc' : '#ffffff',
+                                  transition: 'background-color 0.1s ease'
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = '#e0f2fe';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = isEven ? '#f8fafc' : '#ffffff';
+                                }}
+                              >
+                                <td style={{ textAlign: 'center', color: '#64748b', fontSize: '12px', fontWeight: 700, verticalAlign: 'middle', padding: '12px 10px', whiteSpace: 'nowrap' }}>
+                                  {uIdx + 1}
+                                </td>
 
-                              <td style={{ verticalAlign: 'middle', fontWeight: 500, color: '#1e293b' }}>
-                                {unit.description}
-                              </td>
-
-                              <td style={{ verticalAlign: 'middle' }}>
-                                <span
-                                  style={{
-                                    display: 'inline-block',
-                                    padding: '2px 8px',
-                                    borderRadius: '4px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    background: unit.stockType === 'DC Stock' ? '#f5f3ff' : '#e0f2fe',
-                                    color: unit.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1'
-                                  }}
-                                >
-                                  {unit.stockType}
-                                </span>
-                              </td>
-
-                              <td style={{ verticalAlign: 'middle' }}>
-                                {unit.serialNumber ? (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <code style={{ fontSize: '11.5px', color: '#334155', background: '#f8fafc', padding: '2px 6px', borderRadius: '4px' }}>
-                                      {unit.serialNumber}
-                                    </code>
+                                <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{ color: '#0284c7', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', fontWeight: 700 }}>{unit.partNumber}</span>
                                     <button
                                       type="button"
-                                      onClick={() => handleCopy(unit.serialNumber, 'Serial')}
-                                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                                      onClick={() => handleCopy(unit.partNumber, 'Part Number')}
+                                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'inline-flex', alignItems: 'center' }}
                                     >
-                                      <Copy size={11} />
+                                      <Copy size={12} />
                                     </button>
                                   </div>
-                                ) : (
-                                  <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>Non-serialized</span>
-                                )}
-                              </td>
+                                </td>
 
-                              <td style={{ verticalAlign: 'middle', fontSize: '12px', color: '#475569' }}>
-                                {unit.lastReceivedDate || '—'}
-                              </td>
+                                <td style={{ verticalAlign: 'middle', padding: '12px 14px' }}>
+                                  <div style={{ color: '#0f172a', fontWeight: 500, fontSize: '13px', lineHeight: 1.4, minWidth: '220px' }}>
+                                    {unit.description}
+                                  </div>
+                                </td>
 
-                              <td style={{ verticalAlign: 'middle' }}>
-                                <span
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '5px',
-                                    padding: '3px 8px',
-                                    borderRadius: '6px',
-                                    fontSize: '11px',
-                                    fontWeight: 700,
-                                    background: unit.badgeBg,
-                                    color: unit.badgeColor
-                                  }}
-                                >
-                                  {unit.statusLabel}
-                                </span>
-                              </td>
+                                <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '5px',
+                                      padding: '3px 9px',
+                                      borderRadius: '6px',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                      whiteSpace: 'nowrap',
+                                      background: unit.stockType === 'DC Stock' ? '#f5f3ff' : '#f0f9ff',
+                                      color: unit.stockType === 'DC Stock' ? '#6d28d9' : '#0369a1',
+                                      border: unit.stockType === 'DC Stock' ? '1px solid #ddd6fe' : '1px solid #bae6fd'
+                                    }}
+                                  >
+                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: unit.stockType === 'DC Stock' ? '#8b5cf6' : '#0284c7' }} />
+                                    {unit.stockType}
+                                  </span>
+                                </td>
 
-                              <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
-                                ${(unit.totalValue || unit.partValue || 0).toFixed(2)}
-                              </td>
-                            </tr>
-                          ))}
+                                <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                  {unit.serialNumber ? (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                      <span style={{
+                                        fontSize: '12px',
+                                        color: '#0f172a',
+                                        background: '#f8fafc',
+                                        border: '1px solid #e2e8f0',
+                                        padding: '3px 8px',
+                                        borderRadius: '5px',
+                                        fontWeight: 600,
+                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                        letterSpacing: '0.02em'
+                                      }}>
+                                        {unit.serialNumber}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopy(unit.serialNumber, 'Serial')}
+                                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'inline-flex', alignItems: 'center' }}
+                                      >
+                                        <Copy size={12} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: '#94a3b8', fontSize: '11.5px', fontStyle: 'italic' }}>Non-serialized</span>
+                                  )}
+                                </td>
+
+                                <td style={{ verticalAlign: 'middle', fontSize: '12.5px', color: '#475569', fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                  {unit.lastReceivedDate || '—'}
+                                </td>
+
+                                <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '3px 9px',
+                                        borderRadius: '6px',
+                                        fontSize: '11.5px',
+                                        fontWeight: 700,
+                                        whiteSpace: 'nowrap',
+                                        background: unit.badgeBg,
+                                        color: unit.badgeColor,
+                                        border: unit.agingBracket === AGING_BRACKETS.DEAD_STOCK ? '1px solid #fca5a5'
+                                          : unit.agingBracket === AGING_BRACKETS.NON_MOVING ? '1px solid #fdba74'
+                                          : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING ? '1px solid #fde047'
+                                          : '1px solid #86efac'
+                                      }}
+                                      title={unit.statusLabel}
+                                    >
+                                      {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && <AlertTriangle size={12} color="#dc2626" />}
+                                      {unit.agingBracket === AGING_BRACKETS.NON_MOVING && <Clock size={12} color="#ea580c" />}
+                                      {unit.agingBracket === AGING_BRACKETS.SLOW_MOVING && <TrendingDown size={12} color="#d97706" />}
+                                      {unit.agingBracket === AGING_BRACKETS.IN_STOCK && <CheckCircle2 size={12} color="#16a34a" />}
+                                      <span>
+                                        {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK
+                                          ? `Dead Stock (${unit.agingDays}d)`
+                                          : unit.agingBracket === AGING_BRACKETS.NON_MOVING
+                                          ? `Non-Moving (${unit.agingDays}d)`
+                                          : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING
+                                          ? `Slow-Moving (${unit.agingDays}d)`
+                                          : `In Stock (${unit.agingDays}d)`}
+                                      </span>
+                                    </span>
+
+                                    {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          padding: '2px 6px',
+                                          borderRadius: '4px',
+                                          fontSize: '10px',
+                                          fontWeight: 800,
+                                          textTransform: 'uppercase',
+                                          letterSpacing: '0.04em',
+                                          background: '#fee2e2',
+                                          color: '#b91c1c',
+                                          border: '1px solid #fca5a5',
+                                          whiteSpace: 'nowrap'
+                                        }}
+                                        title="Action Required: RMA pull-out or site reallocation"
+                                      >
+                                        Action Req.
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                                  ${(unit.totalValue || unit.partValue || 0).toFixed(2)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     );

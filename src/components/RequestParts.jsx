@@ -1769,6 +1769,26 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const HeaderIcon = viewHeaderMeta.icon;
   const BadgeIcon = viewHeaderMeta.badgeIcon;
 
+  // When All Stocks / Multi-Site is active, render FixablyInventoryDashboard directly to prevent redundant duplicate headers and KPI cards
+  if (activeTab === 'all_stocks' && showFixablyDashboard) {
+    return (
+      <div className="request-parts-container" style={{ maxWidth: '1440px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
+        <FixablyInventoryDashboard
+          currentUser={currentUser}
+          sites={sites}
+          parts={parts}
+          setParts={setParts}
+          inventoryUnits={inventoryUnits}
+          batchAddScanInUnits={batchAddScanInUnits}
+          clearSiteParts={clearSiteParts}
+          showToast={showToast}
+          initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
+          initialSelectedSiteId={allStocksSelectedSiteId}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="request-parts-container" style={{ maxWidth: '1360px', margin: '0 auto', animation: 'fadeIn 0.2s ease-out' }}>
       
