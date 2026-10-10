@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import {
   AUTO_LOGOUT_REGISTRY_DOC_ID,
   getStoredAutoLogoutConfig,
@@ -120,14 +119,8 @@ export function useAutoLogout({
     clearSessionAuthTimestamp();
     setIsWarningOpen(false);
 
-    // Clear operational storage to prevent stale cached data on device
-    if (currentConfig.clear_cache_on_logout) {
-      try {
-        await clearOperationalLocalStorage({ keepSession: false });
-      } catch (err) {
-        console.warn('Operational storage purge error on auto-logout:', err);
-      }
-    }
+    // Note: Do NOT purge calculated operational storage on auto-logout.
+    // Business data (forecasting, allocations, Fixably multi-site snapshots) persists across sessions.
 
     // Invoke sign out
     try {

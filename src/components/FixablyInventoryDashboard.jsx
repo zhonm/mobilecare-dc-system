@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Globe,
   Building2,
@@ -26,12 +26,14 @@ import {
   ShieldAlert,
   ArrowRightLeft,
   Zap,
-  Filter
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
+import { supabase } from '../supabase/client.js';
 import {
   validateFixablyFile,
   reconcileFixablyMultiFile,
+  compactFixablySnapshot,
+  hydrateFixablySnapshot,
   exportDeadStockToCsv,
   exportDeadStockToExcel,
   exportInvestigationToCsv,
@@ -48,6 +50,7 @@ export default function FixablyInventoryDashboard({
   batchAddScanInUnits = null,
   clearSiteParts = null,
   showToast = null,
+  broadcastCloudEvent = null,
   initialViewMode = 'all_stocks',
   initialSelectedSiteId = null
 }) {
@@ -97,13 +100,65 @@ export default function FixablyInventoryDashboard({
   const [segmentedTab, setSegmentedTab] = useState('dead_stock'); // 'dead_stock' | 'non_moving' | 'slow_moving' | 'active_stock' | 'investigation' | 'part_aggregations' | 'all_stock'
   const [expandedPartPn, setExpandedPartPn] = useState(null);
 
-  // Format file size helper
+  // format file size helper
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
+
+  // Push compact snapshot to Supabase Cloud (<2MB) and broadcast to peers
+  const syncSnapshotToCloud = useCallback(async (snapToSync) => {
+    if (!supabase || !snapToSync?.items?.length) return false;
+    try {
+      const compact = compactFixablySnapshot(snapToSync);
+      const nowIso = new Date().toISOString();
+      const cloudPayload = {
+        id: 'master_fixably_inventory_snapshot',
+        record_type: 'fixably_snapshot',
+        period_label: 'Master Fixably Inventory Snapshot',
+        period_year: new Date().getFullYear(),
+        period_month: new Date().getMonth() + 1,
+        snapshot_data: compact,
+        saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
+        updated_at: nowIso
+      };
+      const { error: cloudErr } = await supabase
+        .from('saved_records')
+        .upsert(cloudPayload, { onConflict: 'id' });
+
+      if (cloudErr) {
+        console.warn('Cloud sync error for master_fixably_inventory_snapshot:', cloudErr);
+        return false;
+      }
+
+      try {
+        localStorage.setItem('mdc_fixably_snapshot_timestamp', nowIso);
+        localStorage.setItem('mdc_fixably_updated_at', nowIso);
+        await dbStorage.setItem('mdc_fixably_updated_at', nowIso);
+      } catch (e) {}
+
+      if (typeof broadcastCloudEvent === 'function') {
+        broadcastCloudEvent('FIXABLY_SNAPSHOT_UPDATED', {
+          timestamp: nowIso,
+          totalUnits: snapToSync.items.length
+        });
+      }
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bus = new BroadcastChannel('mdc_sync_bus');
+        bus.postMessage({
+          type: 'FIXABLY_SNAPSHOT_UPDATED',
+          payload: { snapshot: snapToSync, timestamp: nowIso }
+        });
+        bus.close();
+      }
+      return true;
+    } catch (e) {
+      console.warn('syncSnapshotToCloud exception:', e);
+      return false;
+    }
+  }, [broadcastCloudEvent, currentUser?.email, currentUser?.fullName]);
 
   // Load initial data strictly from Storage (user uploads). NO default demo files.
   useEffect(() => {
@@ -112,13 +167,104 @@ export default function FixablyInventoryDashboard({
     async function loadInitialData() {
       setIsLoading(true);
       try {
-        const cached = await dbStorage.getItem('mdc_fixably_snapshot');
+        let cached = await dbStorage.getItem('mdc_fixably_snapshot');
+
+        // Secondary fallback to localStorage
+        if (!cached || !cached.items || cached.items.length === 0) {
+          try {
+            const rawLocal = localStorage.getItem('mdc_fixably_snapshot');
+            if (rawLocal) cached = JSON.parse(rawLocal);
+          } catch (e) {}
+        }
+
+        // Tertiary fallback to permanent saved records archive
+        if (!cached || !cached.items || cached.items.length === 0) {
+          try {
+            const savedRecs = await dbStorage.getAllSavedRecords();
+            const snapRec = savedRecs.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
+            if (snapRec && snapRec.snapshot && snapRec.snapshot.items?.length > 0) {
+              cached = snapRec.snapshot;
+              await dbStorage.setItem('mdc_fixably_snapshot', cached);
+            }
+          } catch (e) {}
+        }
+
+        // Quaternary fallback to Supabase cloud master_fixably_inventory_snapshot
+        if ((!cached || !cached.items || cached.items.length === 0) && supabase) {
+          try {
+            const { data: cloudRec, error: cloudErr } = await supabase
+              .from('saved_records')
+              .select('*')
+              .eq('id', 'master_fixably_inventory_snapshot')
+              .maybeSingle();
+            if (!cloudErr && cloudRec?.snapshot_data && Array.isArray(cloudRec.snapshot_data.items) && cloudRec.snapshot_data.items.length > 0) {
+              cached = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+              await dbStorage.setItem('mdc_fixably_snapshot', cached);
+              try {
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
+                localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudRec.updated_at || cached.timestamp || '');
+              } catch (e) {}
+              await dbStorage.putSavedRecord({
+                id: 'master_fixably_inventory_snapshot',
+                record_type: 'fixably_snapshot',
+                snapshot: cached,
+                created_at: cloudRec.updated_at || cached.timestamp || new Date().toISOString()
+              });
+            }
+          } catch (cloudFetchErr) {
+            console.warn('Fixably initial cloud fallback note:', cloudFetchErr);
+          }
+        }
+
+        // Quinary auto-seed fallback: If neither local nor cloud has Fixably snapshot, auto-sync from server export file
+        if ((!cached || !cached.items || cached.items.length === 0) && typeof fetch !== 'undefined') {
+          try {
+            const resp = await fetch('/output.csv');
+            if (resp.ok) {
+              const csvText = await resp.text();
+              if (csvText && csvText.includes('Stock Name')) {
+                let kgbText = null;
+                let transferText = null;
+                try {
+                  const kResp = await fetch('/kgb_used.csv');
+                  if (kResp.ok) kgbText = await kResp.text();
+                } catch (e) {}
+                try {
+                  const tResp = await fetch('/stock_transfer.csv');
+                  if (tResp.ok) transferText = await tResp.text();
+                } catch (e) {}
+
+                const autoReconciled = await reconcileFixablyMultiFile({
+                  siteStockContent: csvText,
+                  kgbUsedContent: kgbText,
+                  stockTransferContent: transferText,
+                  options: { sites, currentDate: new Date('2026-10-09T00:00:00Z') }
+                });
+
+                if (autoReconciled.success && autoReconciled.items?.length > 0) {
+                  cached = autoReconciled;
+                  await dbStorage.setItem('mdc_fixably_snapshot', cached);
+                  try {
+                    localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
+                    localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
+                  } catch (e) {}
+                  await syncSnapshotToCloud(cached);
+                }
+              }
+            }
+          } catch (autoSeedErr) {
+            console.warn('Auto-seed note:', autoSeedErr);
+          }
+        }
+
         if (cached && cached.items && cached.items.length > 0) {
+          cached = hydrateFixablySnapshot(cached, sites);
           if (isMounted) {
             setSnapshot(cached);
             setIsLoading(false);
-            return;
+            setIsDropzoneOpen(false);
           }
+          return;
         }
 
         // If no snapshot exists yet, open upload center automatically
@@ -136,6 +282,104 @@ export default function FixablyInventoryDashboard({
 
     return () => {
       isMounted = false;
+    };
+  }, [sites, syncSnapshotToCloud]);
+
+  // Real-time multi-user & cross-device snapshot synchronization listener
+  useEffect(() => {
+    let bus = null;
+    let realtimeChannel = null;
+
+    const handleApplySyncedSnapshot = (incomingSnapshot) => {
+      if (incomingSnapshot && Array.isArray(incomingSnapshot.items) && incomingSnapshot.items.length > 0) {
+        setSnapshot(incomingSnapshot);
+        setIsDropzoneOpen(false);
+        setIsLoading(false);
+      }
+    };
+
+    // 1. Cross-tab BroadcastChannel listener
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        bus = new BroadcastChannel('mdc_sync_bus');
+        bus.onmessage = async (ev) => {
+          if (ev.data?.type === 'FIXABLY_SNAPSHOT_UPDATED') {
+            if (ev.data?.payload?.snapshot) {
+              handleApplySyncedSnapshot(ev.data.payload.snapshot);
+            } else {
+              const latest = await dbStorage.getItem('mdc_fixably_snapshot');
+              if (latest?.items?.length > 0) {
+                handleApplySyncedSnapshot(latest);
+              }
+            }
+          } else if (ev.data?.type === 'FIXABLY_SNAPSHOT_CLEARED') {
+            setSnapshot(null);
+            setIsDropzoneOpen(true);
+          }
+        };
+      }
+    } catch (e) {}
+
+    // 2. Storage event listener (fallback for other tabs in same browser)
+    const handleStorageEvent = (e) => {
+      if (e.key === 'mdc_fixably_snapshot' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          handleApplySyncedSnapshot(parsed);
+        } catch (err) {}
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageEvent);
+    }
+
+    // 3. Supabase Realtime Channel: Instantly receives snapshot when another user uploads
+    if (supabase) {
+      const channelId = `fixably_sync_${Math.random().toString(36).substring(7)}`;
+      realtimeChannel = supabase
+        .channel(channelId)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'saved_records',
+            filter: 'id=eq.master_fixably_inventory_snapshot'
+          },
+          async (payload) => {
+            if (payload.eventType === 'DELETE') {
+              setSnapshot(null);
+              setIsDropzoneOpen(true);
+              return;
+            }
+            if (payload.new && payload.new.snapshot_data && Array.isArray(payload.new.snapshot_data.items)) {
+              const newSnapshot = hydrateFixablySnapshot(payload.new.snapshot_data, sites);
+              await dbStorage.setItem('mdc_fixably_snapshot', newSnapshot);
+              try {
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(newSnapshot));
+                localStorage.setItem('mdc_fixably_snapshot_timestamp', payload.new.updated_at || newSnapshot.timestamp || '');
+              } catch (e) {}
+              await dbStorage.putSavedRecord({
+                id: 'master_fixably_inventory_snapshot',
+                record_type: 'fixably_snapshot',
+                snapshot: newSnapshot,
+                created_at: payload.new.updated_at || newSnapshot.timestamp || new Date().toISOString()
+              });
+              handleApplySyncedSnapshot(newSnapshot);
+            }
+          }
+        )
+        .subscribe();
+    }
+
+    return () => {
+      if (bus) bus.close();
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('storage', handleStorageEvent);
+      }
+      if (realtimeChannel && supabase) {
+        supabase.removeChannel(realtimeChannel).catch(() => {});
+      }
     };
   }, [sites]);
 
@@ -255,9 +499,10 @@ export default function FixablyInventoryDashboard({
       setParseProgress({ stage: 'Calculating aging metrics and branch health...', percent: 75 });
       await new Promise(r => setTimeout(r, 60));
 
-      // Persist snapshot in IndexedDB and LocalStorage
+      // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
       await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
       try {
+        localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(reconciled));
         localStorage.setItem('mdc_fixably_snapshot_timestamp', reconciled.timestamp);
         const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
         const updatedBatches = [
@@ -265,7 +510,20 @@ export default function FixablyInventoryDashboard({
           ...(Array.isArray(existingBatches) ? existingBatches.slice(0, 19) : [])
         ];
         await dbStorage.setItem('inventory_sync_batches', updatedBatches);
-      } catch (e) {}
+
+        // Permanent archival backup in STORE_SAVED_RECORDS (immune to cache clearance)
+        await dbStorage.putSavedRecord({
+          id: 'master_fixably_inventory_snapshot',
+          record_type: 'fixably_snapshot',
+          snapshot: reconciled,
+          created_at: reconciled.timestamp || new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Fixably snapshot backup note:', e);
+      }
+
+      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
+      await syncSnapshotToCloud(reconciled);
 
       setSnapshot(reconciled);
       setIsDropzoneOpen(false);

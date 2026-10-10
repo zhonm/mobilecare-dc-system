@@ -1782,6 +1782,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           batchAddScanInUnits={batchAddScanInUnits}
           clearSiteParts={clearSiteParts}
           showToast={showToast}
+          broadcastCloudEvent={broadcastCloudEvent}
           initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
           initialSelectedSiteId={allStocksSelectedSiteId}
         />
@@ -3832,6 +3833,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           batchAddScanInUnits={batchAddScanInUnits}
           clearSiteParts={clearSiteParts}
           showToast={showToast}
+          broadcastCloudEvent={broadcastCloudEvent}
           initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
           initialSelectedSiteId={allStocksSelectedSiteId}
         />

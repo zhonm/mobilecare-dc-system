@@ -22,7 +22,12 @@ const PRESERVED_SESSION_KEYS = [
   'mdc_allocation_mode',
   'mdc_filter_scope',
   'mdc_is_cleared',
-  'mdc_supervisor_settings'
+  'mdc_supervisor_settings',
+  'mdc_fixably_snapshot',
+  'mdc_fixably_snapshot_timestamp',
+  'inventory_sync_batches',
+  'mdc_saved_records',
+  'mdc_auto_logout_settings'
 ];
 
 /**

@@ -132,7 +132,7 @@ class DbStorage {
     }
   }
 
-  async clearOperationalCache(preserveKeys = ['mdc_current_user', 'mdc_session_sig', 'mdc_users']) {
+  async clearOperationalCache(preserveKeys = ['mdc_current_user', 'mdc_session_sig', 'mdc_users', 'mdc_fixably_snapshot', 'inventory_sync_batches', 'mdc_saved_records', 'mdc_supervisor_settings', 'mdc_auto_logout_settings']) {
     try {
       const db = await this.getDb();
       if (db) {

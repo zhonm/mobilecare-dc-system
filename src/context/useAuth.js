@@ -12,7 +12,6 @@ import {
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
 import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
-import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { isUUID } from '../utils/appContextHelpers';
 import {
   getSessionAuthTimestamp,
@@ -949,13 +948,16 @@ export function useAuth({
       (user.email && localDataOwner.toLowerCase() === user.email.toLowerCase())
     );
 
+    try {
+      localStorage.setItem('mdc_local_data_owner', user.id);
+    } catch (e) {}
+
+    // Ensure calculated business data (forecasting, allocations, inventory snapshots) persists across sessions
     if (!isOwnerMatch) {
-      await clearOperationalLocalStorage({ keepSession: true });
       setIsInitialSyncing(true);
-    } else {
-      if (typeof hydrateFromSupabase === 'function') {
-        hydrateFromSupabase();
-      }
+    }
+    if (typeof hydrateFromSupabase === 'function') {
+      hydrateFromSupabase();
     }
 
     setCurrentUser(user);
@@ -1194,13 +1196,16 @@ export function useAuth({
       (updatedUser.email && localDataOwner.toLowerCase() === updatedUser.email.toLowerCase())
     );
 
+    try {
+      localStorage.setItem('mdc_local_data_owner', updatedUser.id);
+    } catch (e) {}
+
+    // Ensure calculated business data persists across sessions
     if (!isOwnerMatch) {
-      await clearOperationalLocalStorage({ keepSession: true });
       setIsInitialSyncing(true);
-    } else {
-      if (typeof hydrateFromSupabase === 'function') {
-        hydrateFromSupabase();
-      }
+    }
+    if (typeof hydrateFromSupabase === 'function') {
+      hydrateFromSupabase();
     }
 
     setCurrentUser(updatedUser);
@@ -1281,11 +1286,8 @@ export function useAuth({
       clearSessionAuthTimestamp();
       await dbStorage.removeItem('mdc_current_user');
     } catch (e) {}
-    try {
-      await clearOperationalLocalStorage({ keepSession: false });
-    } catch (e) {
-      console.warn('Error clearing operational storage on signOut:', e);
-    }
+    // Do NOT wipe operational business data (forecasting, allocations, inventory snapshots) on sign out.
+    // Business data must persist securely in dbStorage and LocalStorage across sessions.
     setCurrentUser(null);
     setPendingFirstTimeUser(null);
     setIsInitialSyncing(false);
