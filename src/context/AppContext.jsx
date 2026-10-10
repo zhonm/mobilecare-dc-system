@@ -13,6 +13,8 @@ import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import { matchUserByEmail } from '../utils/userMatcher';
 import { isUUID, safeUUID, reconcileUnitsWithPackedDrafts, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { isSupabaseConfigured } from '../supabase/client';
+import dbStorage from '../utils/dbStorage';
+import { hydrateFixablySnapshot } from '../utils/fixablyInventoryEngine';
 
 // Domain Hooks
 import { useAuth } from './useAuth';
@@ -259,6 +261,56 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Centralized Fixably Snapshot State (Synchronized across All Stocks, Multi-Site, and Branch Stock on Hand)
+  const [fixablySnapshot, setFixablySnapshot] = useState(() => {
+    try {
+      const raw = localStorage.getItem('mdc_fixably_snapshot');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.items?.length) return parsed;
+      }
+    } catch (e) {}
+    return null;
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const idb = await dbStorage.getItem('mdc_fixably_snapshot');
+        if (isMounted && idb?.items?.length) {
+          setFixablySnapshot(prev => prev?.timestamp === idb.timestamp ? prev : idb);
+        }
+      } catch (e) {}
+    })();
+    return () => { isMounted = false; };
+  }, []);
+
+  useEffect(() => {
+    const handleSnapshotStorage = (e) => {
+      if (e.key === 'mdc_fixably_snapshot' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setFixablySnapshot(parsed);
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('storage', handleSnapshotStorage);
+    let bc = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      bc = new BroadcastChannel('mdc_sync_bus');
+      bc.onmessage = (msg) => {
+        if (msg.data?.type === 'FIXABLY_SNAPSHOT_UPDATED' && msg.data?.payload?.snapshot) {
+          setFixablySnapshot(msg.data.payload.snapshot);
+        }
+      };
+    }
+    return () => {
+      window.removeEventListener('storage', handleSnapshotStorage);
+      if (bc) bc.close();
+    };
+  }, []);
+
   // 1. Catalog & Sites Domain
   const catalogAndSites = useCatalogAndSites({
     getCurrentUser: () => auth.currentUser,
@@ -370,6 +422,7 @@ export function AppProvider({ children }) {
     repairUsageRecords: inventory.repairUsageRecords,
     setRepairUsageRecords: inventory.setRepairUsageRecords,
     showToast,
+    fixablySnapshot,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
@@ -455,6 +508,8 @@ export function AppProvider({ children }) {
     deletionAuditLogs: auditLogs.deletionAuditLogs,
     setDeletionAuditLogs: auditLogs.setDeletionAuditLogs,
     logDeletionAudit: auditLogs.logDeletionAudit,
+    fixablySnapshot,
+    setFixablySnapshot,
     setAutoLogoutConfig: (...args) => autoLogoutRef.current?.setAutoLogoutConfig?.(...args),
     setSessionAuditLogs: auditLogs.setSessionAuditLogs,
     isDataSyncPaused: inactivityGuard.isDataSyncPaused,
@@ -686,6 +741,8 @@ export function AppProvider({ children }) {
         setPmgSubTab,
         shipmentsFilterStatus,
         setShipmentsFilterStatus,
+        fixablySnapshot,
+        setFixablySnapshot,
 
         // Automated Daily Session & Auto-Logout Management
         autoLogoutConfig: autoLogout.autoLogoutConfig,

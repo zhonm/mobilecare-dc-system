@@ -4,7 +4,6 @@ import { resolveSite } from '../utils/appContextHelpers';
 import mobileCareLogo from '../assets/mobilecareNoBGLogo.png';
 import {
   Inbox,
-  Globe,
   Wrench,
   LogOut,
   ShieldCheck,
@@ -27,6 +26,7 @@ export default function PmgSidebar() {
     partsRequests = [],
     getStockOnHandForSite,
     inventoryUnits = [],
+    fixablySnapshot,
     isAutoRefreshing,
     isMobileNavOpen,
     setIsMobileNavOpen
@@ -48,7 +48,7 @@ export default function PmgSidebar() {
       return (uSiteId === userSite.id || uSiteCode === userSite.code) && String(u.status || '').toLowerCase() === 'in_stock';
     });
     return { totalInStock: units.length };
-  }, [getStockOnHandForSite, userSite, inventoryUnits]);
+  }, [getStockOnHandForSite, userSite, inventoryUnits, fixablySnapshot]);
 
   // Requests metrics for this branch
   const branchRequests = useMemo(() => {
@@ -104,18 +104,6 @@ export default function PmgSidebar() {
       isActive: activeTab === 'request-parts' && pmgSubTab === 'usage_history'
     },
     {
-      id: 'all-stocks',
-      label: 'All Stocks',
-      description: 'Master inventory directory & uploader',
-      section: 'Network Visibility',
-      icon: Globe,
-      onClick: () => {
-        setActiveTab('all-stocks');
-        if (setPmgSubTab) setPmgSubTab('all_stocks');
-      },
-      isActive: activeTab === 'all-stocks'
-    },
-    {
       id: 'multi-site',
       label: 'Multi-Site Dashboard',
       description: 'Branch aging & health analytics',
@@ -123,7 +111,7 @@ export default function PmgSidebar() {
       icon: Building2,
       onClick: () => {
         setActiveTab('multi-site');
-        if (setPmgSubTab) setPmgSubTab('all_stocks');
+        if (setPmgSubTab) setPmgSubTab('multi_site');
       },
       isActive: activeTab === 'multi-site'
     },

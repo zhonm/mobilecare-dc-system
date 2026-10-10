@@ -22,6 +22,7 @@ export function usePartsRequests({
   repairUsageRecords = [],
   setRepairUsageRecords,
   showToast,
+  fixablySnapshot = null,
   broadcastCloudEvent,
   enqueueOfflineAction,
   setCloudSyncStatus
@@ -743,7 +744,162 @@ export function usePartsRequests({
       clearedSitesMap[targetCodeUpper] ||
       null;
 
-    // Filter matching units
+    // Check for synchronized Fixably multi-file inventory snapshot for this retail branch
+    let activeSnapshot = fixablySnapshot;
+    if (!activeSnapshot) {
+      try {
+        const rawLocal = localStorage.getItem('mdc_fixably_snapshot');
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (parsed?.items?.length) activeSnapshot = parsed;
+        }
+      } catch (e) {}
+    }
+
+    const branchFixablyItems = (activeSnapshot?.items || []).filter(it => {
+      const itCodeClean = String(it.siteCode || it.site_code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
+      const itCodeRaw = String(it.siteCode || it.site_code || '').toUpperCase().trim();
+      const itSiteId = String(it.siteId || it.current_site_id || '').toLowerCase().trim();
+      return (
+        (targetClean && itCodeClean === targetClean) ||
+        (targetCodeUpper && itCodeRaw === targetCodeUpper) ||
+        (targetIdLower && itSiteId === targetIdLower)
+      );
+    });
+
+    if (isBranchTarget && branchFixablyItems.length > 0) {
+      const partsSummary = {};
+      let totalInStock = 0;
+      let totalAllocated = 0;
+      let totalPacked = 0;
+      const unitsList = [];
+
+      // Check if any serials were consumed in repair AFTER the latest snapshot was ingested
+      const newlyUsedSerials = new Map();
+      try {
+        const snapshotTimeMs = activeSnapshot?.timestamp ? new Date(activeSnapshot.timestamp).getTime() : 0;
+        const localUsedReg = JSON.parse(localStorage.getItem('mdc_master_used_parts_registry') || '[]');
+        if (Array.isArray(localUsedReg)) {
+          localUsedReg.forEach(r => {
+            if (r?.serial_number && r?.used_at) {
+              const usedTimeMs = new Date(r.used_at).getTime();
+              if (snapshotTimeMs && usedTimeMs > snapshotTimeMs) {
+                newlyUsedSerials.set(String(r.serial_number).trim().toUpperCase(), r);
+              }
+            }
+          });
+        }
+      } catch (e) {}
+
+      branchFixablyItems.forEach(it => {
+        const rawPN = it.partNumber || it.part_number || '';
+        const cleanPN = String(rawPN).trim().toUpperCase();
+        if (!cleanPN) return;
+
+        const cleanSerial = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
+        if (cleanSerial && deletedSerialsSet.has(cleanSerial)) return;
+
+        const matchedPart = (parts || []).find(p => p.part_number?.trim().toUpperCase() === cleanPN) ||
+                            defaultPartsCatalog.find(p => p.part_number?.trim().toUpperCase() === cleanPN);
+        const catObj = getCategoryForPart(matchedPart || { description: it.description }, categories);
+        const resolvedCategoryName = catObj?.name || 'General';
+        const resolvedCategoryId = catObj?.id || matchedPart?.category_id || 'cat-general';
+        const resolvedCategoryCode = catObj?.code || 'GENERAL';
+        const resolvedModel = resolveCanonicalIPhoneModel(
+          matchedPart?.iphone_model,
+          matchedPart?.description || it.description
+        );
+
+        if (!partsSummary[cleanPN]) {
+          partsSummary[cleanPN] = {
+            partNumber: cleanPN,
+            partId: matchedPart?.id || `part-${cleanPN}`,
+            description: matchedPart?.description || it.description || `Part ${cleanPN}`,
+            category: resolvedCategoryName,
+            category_name: resolvedCategoryName,
+            category_id: resolvedCategoryId,
+            categoryId: resolvedCategoryId,
+            categoryCode: resolvedCategoryCode,
+            model: resolvedModel,
+            stockingPrice: matchedPart?.stocking_price || it.partValue || 99,
+            is_active: matchedPart ? (matchedPart.is_active !== false && matchedPart.status !== 'inactive') : true,
+            inStock: 0,
+            allocated: 0,
+            packed: 0,
+            total: 0
+          };
+        }
+
+        const isNewlyUsed = Boolean(cleanSerial && newlyUsedSerials.has(cleanSerial));
+        const unitStatus = isNewlyUsed ? 'used' : 'in_stock';
+
+        if (unitStatus === 'in_stock') {
+          partsSummary[cleanPN].inStock += 1;
+          totalInStock += 1;
+        }
+        partsSummary[cleanPN].total += 1;
+
+        unitsList.push({
+          id: it.id || `fixably-${cleanSerial || Math.random()}`,
+          part_id: matchedPart?.id || `part-${cleanPN}`,
+          part_number: cleanPN,
+          partNumber: cleanPN,
+          description: matchedPart?.description || it.description || `Part ${cleanPN}`,
+          serial_number: cleanSerial,
+          serialNumber: cleanSerial,
+          current_site_id: siteId,
+          site_code: siteCode,
+          site_name: targetSite?.name || it.siteName || siteCode,
+          stockType: it.stockType || 'DC Stock',
+          classification: it.stockType || 'DC Stock',
+          received_at: it.lastReceivedDate || it.dateReceived || new Date().toISOString(),
+          lastReceivedDate: it.lastReceivedDate || it.dateReceived,
+          aging_days: typeof it.agingDays === 'number' ? it.agingDays : 0,
+          aging_bracket: it.agingBracket || 'In Stock',
+          status_label: it.statusLabel || 'In Stock',
+          status: unitStatus,
+          is_deleted: false,
+          is_fixably_synced: true
+        });
+      });
+
+      // Overlay in-transit shipments or packed units from DC
+      (inventoryUnits || []).filter(u => {
+        if (!u || u.is_deleted || u.status === 'deleted') return false;
+        const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
+        const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+        const uClean = uSiteCode.replace(/^(ASP|APP)\s+/, '');
+        const matches = (targetIdLower && uSiteId === targetIdLower) ||
+                        (targetCodeUpper && uSiteCode === targetCodeUpper) ||
+                        (targetClean && uClean && targetClean === uClean);
+        return matches && (u.status === 'packed' || u.status === 'shipped' || u.status === 'in_transit' || u.status === 'allocated');
+      }).forEach(u => {
+        const cleanPN = String(u.part_number || u.partNumber || '').trim().toUpperCase();
+        if (partsSummary[cleanPN]) {
+          if (u.status === 'allocated') {
+            partsSummary[cleanPN].allocated += 1;
+            totalAllocated += 1;
+          } else {
+            partsSummary[cleanPN].packed += 1;
+            totalPacked += 1;
+          }
+          partsSummary[cleanPN].total += 1;
+        }
+      });
+
+      return {
+        siteId,
+        siteCode,
+        partsSummary,
+        totalInStock,
+        totalAllocated,
+        totalPacked,
+        totalUnits: totalInStock + totalAllocated + totalPacked,
+        units: unitsList
+      };
+    }
+
+    // Filter matching units (fallback when Fixably snapshot is not loaded)
     const matchingUnits = (inventoryUnits || []).filter(u => {
       if (!u || u.is_deleted || u.status === 'deleted') return false;
 
@@ -894,7 +1050,7 @@ export function usePartsRequests({
       totalUnits: matchingUnits.length,
       units: matchingUnits
     };
-  }, [inventoryUnits, parts, sites, categories, currentUser?.role]);
+  }, [inventoryUnits, parts, sites, categories, currentUser?.role, fixablySnapshot]);
 
   // 6. Multi-Site Stock Summary with Granular Serial Privacy & Masking
   const getAllSitesStockSummary = useCallback((targetSiteFilter = 'ALL') => {

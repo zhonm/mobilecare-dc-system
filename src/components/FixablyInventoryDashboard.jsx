@@ -24,11 +24,13 @@ import {
   Check,
   TrendingDown,
   ShieldAlert,
-  ArrowRightLeft,
   Zap,
+  Lock
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
 import { supabase } from '../supabase/client.js';
+import { resolveSite } from '../utils/appContextHelpers.js';
+import { isProvincialSite } from '../utils/partResolver.js';
 import {
   validateFixablyFile,
   reconcileFixablyMultiFile,
@@ -51,14 +53,52 @@ export default function FixablyInventoryDashboard({
   clearSiteParts = null,
   showToast = null,
   broadcastCloudEvent = null,
+  snapshot: propSnapshot = null,
+  setSnapshot: propSetSnapshot = null,
   initialViewMode = 'all_stocks',
   initialSelectedSiteId = null
 }) {
-  const isSuperadmin = currentUser?.role === 'superadmin';
+  const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN' || currentUser?.isSuperAdmin);
+  const isPmgUser = currentUser?.role === 'parts_management';
 
-  // 1. Core State
-  const [viewMode, setViewMode] = useState(initialViewMode || 'all_stocks'); // 'all_stocks' | 'multi_site'
-  const [snapshot, setSnapshot] = useState(null);
+  // Resolve user assigned branch
+  const userAssignedSite = useMemo(() => {
+    return resolveSite(currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode, sites);
+  }, [currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode, sites]);
+
+  const userSiteCodeClean = useMemo(() => {
+    const raw = userAssignedSite?.code || currentUser?.siteCode || '';
+    return raw.toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
+  }, [userAssignedSite?.code, currentUser?.siteCode]);
+
+  // 1. Core State: strictly lock viewMode to 'multi_site' for non-superadmins
+  const [viewMode, setViewMode] = useState(() => {
+    if (!isSuperadmin) return 'multi_site';
+    return initialViewMode || 'all_stocks';
+  });
+
+  // Guard against illegal viewMode states for non-superadmins
+  useEffect(() => {
+    if (!isSuperadmin && viewMode !== 'multi_site') {
+      setViewMode('multi_site');
+    }
+  }, [isSuperadmin, viewMode]);
+
+  const [localSnapshot, setLocalSnapshot] = useState(propSnapshot || null);
+  const snapshot = propSnapshot || localSnapshot;
+  const setSnapshot = useCallback((val) => {
+    setLocalSnapshot(val);
+    if (typeof propSetSnapshot === 'function') {
+      propSetSnapshot(val);
+    }
+  }, [propSetSnapshot]);
+
+  useEffect(() => {
+    if (propSnapshot) {
+      setLocalSnapshot(propSnapshot);
+    }
+  }, [propSnapshot]);
+
   const [isLoading, setIsLoading] = useState(true);
   const [isParsing, setIsParsing] = useState(false);
   const [parseProgress, setParseProgress] = useState(null);
@@ -89,8 +129,16 @@ export default function FixablyInventoryDashboard({
   const [copiedSerial, setCopiedSerial] = useState(null);
 
   // 4. Multi-Site View State
-  const [selectedRegion, setSelectedRegion] = useState('metro_manila'); // 'metro_manila' | 'provincial'
+  const [selectedRegion, setSelectedRegion] = useState(() => {
+    if (isPmgUser && userAssignedSite && isProvincialSite(userAssignedSite)) {
+      return 'provincial';
+    }
+    return 'metro_manila';
+  });
   const [selectedSiteCode, setSelectedSiteCode] = useState(() => {
+    if (isPmgUser && userSiteCodeClean) {
+      return userSiteCodeClean;
+    }
     if (initialSelectedSiteId) {
       const match = sites.find(s => s.id === initialSelectedSiteId || s.code === initialSelectedSiteId);
       if (match) return match.code.replace(/^(ASP|APP)\s+/, '');
@@ -645,12 +693,131 @@ export default function FixablyInventoryDashboard({
     return Math.ceil(filteredMasterItems.length / rowsPerPage) || 1;
   }, [filteredMasterItems, rowsPerPage]);
 
+  // Helper to match site against current user's assigned site (supports codes like 'ANX', 'APP ANX', 'APP THE ANNEX', 'THE ANNEX')
+  const isSiteMatchingUser = useCallback((siteCodeOrObj) => {
+    if (!userSiteCodeClean) return false;
+    const rawCode = typeof siteCodeOrObj === 'string'
+      ? siteCodeOrObj
+      : (siteCodeOrObj?.siteCode || siteCodeOrObj?.code || siteCodeOrObj?.siteName || siteCodeOrObj?.name || '');
+    const clean = rawCode.toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
+    if (clean && clean === userSiteCodeClean) return true;
+    if ((clean === 'ANX' || clean === 'THE ANNEX') && (userSiteCodeClean === 'ANX' || userSiteCodeClean === 'THE ANNEX')) return true;
+    if (userAssignedSite?.id && siteCodeOrObj?.id && userAssignedSite.id === siteCodeOrObj.id) return true;
+    if (userAssignedSite?.id && siteCodeOrObj?.siteId && userAssignedSite.id === siteCodeOrObj.siteId) return true;
+    return false;
+  }, [userSiteCodeClean, userAssignedSite?.id]);
+
   // Current Site Data for Multi-Site Page
   const currentSiteData = useMemo(() => {
     if (!snapshot?.sites) return null;
     const target = selectedSiteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '');
-    return snapshot.sites.find(s => s.siteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '') === target) || snapshot.sites[0] || null;
+    return snapshot.sites.find(s => {
+      const clean = s.siteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '');
+      return clean === target || (clean === 'ANX' && target === 'THE ANNEX') || (clean === 'THE ANNEX' && target === 'ANX');
+    }) || snapshot.sites[0] || null;
   }, [snapshot, selectedSiteCode]);
+
+  // Check if current viewed site is assigned to the active user
+  const isCurrentSiteAssignedToUser = useMemo(() => {
+    if (!currentSiteData) return false;
+    return isSiteMatchingUser(currentSiteData);
+  }, [currentSiteData, isSiteMatchingUser]);
+
+  // User's assigned branch data from snapshot (used for PMG metrics scoping)
+  const userSiteData = useMemo(() => {
+    if (!snapshot?.sites || !userSiteCodeClean) return null;
+    return snapshot.sites.find(s => isSiteMatchingUser(s)) || null;
+  }, [snapshot?.sites, userSiteCodeClean, isSiteMatchingUser]);
+
+  // Metrics to display on the top summary cards:
+  // Superadmin sees system-wide network metrics across all service sites.
+  // PMG users strictly see ONLY metrics for their designated assigned site!
+  const displayMetrics = useMemo(() => {
+    if (!isSuperadmin && isPmgUser) {
+      if (userSiteData) {
+        const m = userSiteData.metrics?.total || {};
+        const siteVal = userSiteData.totalValue || userSiteData.items?.reduce((sum, it) => sum + (Number(it.partValue) || 99), 0) || 0;
+        return {
+          isScopedToBranch: true,
+          branchName: userSiteData.siteName || (userSiteCodeClean ? `ASP ${userSiteCodeClean}` : 'Assigned Branch'),
+          branchCode: userSiteData.siteCode || userSiteCodeClean || 'BRANCH',
+          totalUnits: userSiteData.totalUnits || 0,
+          totalValue: siteVal,
+          uniqueParts: userSiteData.uniquePartsCount || userSiteData.metrics?.partAggregations?.length || 0,
+          sitesCount: 1,
+          investigationCount: userSiteData.investigationCount || 0,
+          agingCounts: {
+            [AGING_BRACKETS.DEAD_STOCK]: m.dead || 0,
+            [AGING_BRACKETS.NON_MOVING]: m.nonMoving || 0,
+            [AGING_BRACKETS.SLOW_MOVING]: m.slow || 0,
+            [AGING_BRACKETS.IN_STOCK]: m.inStock || 0
+          },
+          deadStockPercent: m.deadPercent || '0.0',
+          nonMovingPercent: m.nonMovingPercent || '0.0',
+          slowMovingPercent: m.slowMovingPercent || '0.0',
+          inStockPercent: m.inStockPercent || '0.0'
+        };
+      }
+      return {
+        isScopedToBranch: true,
+        branchName: userSiteCodeClean ? `ASP ${userSiteCodeClean}` : 'Assigned Branch',
+        branchCode: userSiteCodeClean || 'BRANCH',
+        totalUnits: 0,
+        totalValue: 0,
+        uniqueParts: 0,
+        sitesCount: 1,
+        investigationCount: 0,
+        agingCounts: {
+          [AGING_BRACKETS.DEAD_STOCK]: 0,
+          [AGING_BRACKETS.NON_MOVING]: 0,
+          [AGING_BRACKETS.SLOW_MOVING]: 0,
+          [AGING_BRACKETS.IN_STOCK]: 0
+        },
+        deadStockPercent: '0.0',
+        nonMovingPercent: '0.0',
+        slowMovingPercent: '0.0',
+        inStockPercent: '0.0'
+      };
+    }
+
+    // Default: system-wide network analytics for Superadmins
+    return {
+      isScopedToBranch: false,
+      totalUnits: snapshot?.globalMetrics?.totalUnits || 0,
+      totalValue: snapshot?.globalMetrics?.totalValue || 0,
+      uniqueParts: snapshot?.globalMetrics?.uniqueParts || 0,
+      sitesCount: snapshot?.globalMetrics?.sitesCount || 0,
+      investigationCount: snapshot?.globalMetrics?.investigationCount || snapshot?.investigationItems?.length || 0,
+      agingCounts: snapshot?.globalMetrics?.agingCounts || {},
+      deadStockPercent: snapshot?.globalMetrics?.deadStockPercent || '0.0',
+      nonMovingPercent: snapshot?.globalMetrics?.nonMovingPercent || '0.0',
+      slowMovingPercent: snapshot?.globalMetrics?.slowMovingPercent || '0.0',
+      inStockPercent: snapshot?.globalMetrics?.inStockPercent || '0.0'
+    };
+  }, [isSuperadmin, isPmgUser, userSiteData, userSiteCodeClean, snapshot?.globalMetrics, snapshot?.investigationItems]);
+
+  // Auto-switch to part aggregations or all stock if a PMG user views another site
+  useEffect(() => {
+    if (!isSuperadmin && isPmgUser && !isCurrentSiteAssignedToUser) {
+      if (['dead_stock', 'non_moving', 'slow_moving', 'active_stock', 'investigation'].includes(segmentedTab)) {
+        setSegmentedTab('part_aggregations');
+      }
+    }
+  }, [isSuperadmin, isPmgUser, isCurrentSiteAssignedToUser, segmentedTab]);
+
+  // Serial privacy rule: Superadmins see all serials; PMG users can ONLY view serials of their assigned site
+  const canViewCurrentSiteSerials = isSuperadmin || !isPmgUser || isCurrentSiteAssignedToUser;
+
+  // Sanitized items for site export (strictly prevents other-site serial leaks into Excel/CSV)
+  const itemsForBranchExport = useMemo(() => {
+    if (!currentSiteData?.items) return [];
+    if (canViewCurrentSiteSerials) return currentSiteData.items;
+    return currentSiteData.items.map(it => ({
+      ...it,
+      serialNumber: '[RESTRICTED]',
+      partSerial: '[RESTRICTED]'
+    }));
+  }, [currentSiteData?.items, canViewCurrentSiteSerials]);
 
   // Available Sites grouped by region
   const { metroManilaSitesList, provincialSitesList } = useMemo(() => {
@@ -720,10 +887,12 @@ export default function FixablyInventoryDashboard({
               </div>
               <div>
                 <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
-                  All Stocks &amp; Multi-Site Inventory
+                  {(!isSuperadmin && isPmgUser) ? 'Branch Inventory Health & Multi-Site Stock' : 'All Stocks & Multi-Site Inventory'}
                 </h2>
                 <div style={{ fontSize: '12.5px', color: '#64748b', marginTop: '2px' }}>
-                  Network-wide on-hand inventory visibility, Fixably aging health &amp; GSX repair reconciliation
+                  {(!isSuperadmin && isPmgUser)
+                    ? 'Branch on-hand health analytics with network-wide cross-site parts availability'
+                    : 'Network-wide on-hand inventory visibility, Fixably aging health & GSX repair reconciliation'}
                 </div>
               </div>
             </div>
@@ -738,34 +907,63 @@ export default function FixablyInventoryDashboard({
                   Synced: {new Date(snapshot.timestamp).toLocaleDateString()} {new Date(snapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
                 <span className="badge" style={{ background: '#0284c7', color: '#ffffff', fontSize: '11px', fontWeight: 800 }}>
-                  {snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0} Units On-Hand
+                  {(!isSuperadmin && isPmgUser)
+                    ? `${displayMetrics.totalUnits.toLocaleString()} Branch Units (${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Network Total)`
+                    : `${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Units On-Hand`}
                 </span>
                 <span className="badge" style={{ background: '#f1f5f9', color: '#0f172a', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 700 }}>
                   {snapshot.sites?.length || 0} Authorized Service Points
                 </span>
-                {(snapshot.investigationItems?.length > 0 || snapshot.globalMetrics?.investigationCount > 0) && (
-                  <span
-                    className="badge"
-                    onClick={() => {
-                      setViewMode('all_stocks');
-                      setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
-                    }}
-                    style={{
-                      background: '#fff1f2',
-                      color: '#be123c',
-                      border: '1.5px solid #fecdd3',
-                      fontSize: '11px',
-                      fontWeight: 800,
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                    title="Click to filter table to items appearing in closed GSX repairs"
-                  >
-                    <ShieldAlert size={12} color="#be123c" />
-                    <span>{snapshot.investigationItems?.length || snapshot.globalMetrics?.investigationCount} Flagged in KGB</span>
-                  </span>
+                {isSuperadmin ? (
+                  (snapshot.investigationItems?.length > 0 || snapshot.globalMetrics?.investigationCount > 0) && (
+                    <span
+                      className="badge"
+                      onClick={() => {
+                        setViewMode('all_stocks');
+                        setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
+                      }}
+                      style={{
+                        background: '#fff1f2',
+                        color: '#be123c',
+                        border: '1.5px solid #fecdd3',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title="Click to view items appearing in closed GSX repairs"
+                    >
+                      <ShieldAlert size={12} color="#be123c" />
+                      <span>{snapshot.investigationItems?.length || snapshot.globalMetrics?.investigationCount} Flagged in KGB</span>
+                    </span>
+                  )
+                ) : (
+                  userSiteData?.investigationCount > 0 && (
+                    <span
+                      className="badge"
+                      onClick={() => {
+                        if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                        setSegmentedTab('investigation');
+                      }}
+                      style={{
+                        background: '#fff1f2',
+                        color: '#be123c',
+                        border: '1.5px solid #fecdd3',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title="Click to view branch items appearing in closed GSX repairs"
+                    >
+                      <ShieldAlert size={12} color="#be123c" />
+                      <span>{userSiteData.investigationCount} Flagged in KGB (Branch)</span>
+                    </span>
+                  )
                 )}
               </div>
             )}
@@ -773,107 +971,100 @@ export default function FixablyInventoryDashboard({
 
           {/* View Switcher Pills & Action Buttons */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
-            <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '3px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
-              <button
-                type="button"
-                onClick={() => setViewMode('all_stocks')}
-                style={{
-                  padding: '7px 18px',
-                  borderRadius: '8px',
-                  border: 'none',
-                  fontSize: '12.5px',
-                  fontWeight: viewMode === 'all_stocks' ? 800 : 600,
-                  background: viewMode === 'all_stocks' ? '#0284c7' : 'transparent',
-                  color: viewMode === 'all_stocks' ? '#ffffff' : '#334155',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.15s ease',
-                  boxShadow: viewMode === 'all_stocks' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
-                }}
-              >
-                <Layers size={14} />
-                <span>All Stocks (Master Directory)</span>
-              </button>
+            {/* View Mode Switcher: Strictly Superadmins Only */}
+            {isSuperadmin && (
+              <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '3px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('all_stocks')}
+                  style={{
+                    padding: '7px 18px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    fontSize: '12.5px',
+                    fontWeight: viewMode === 'all_stocks' ? 800 : 600,
+                    background: viewMode === 'all_stocks' ? '#0284c7' : 'transparent',
+                    color: viewMode === 'all_stocks' ? '#ffffff' : '#334155',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.15s ease',
+                    boxShadow: viewMode === 'all_stocks' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
+                  }}
+                >
+                  <Layers size={14} />
+                  <span>All Stocks (Master Directory)</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setViewMode('multi_site')}
-                style={{
-                  padding: '7px 18px',
-                  borderRadius: '8px',
-                  border: 'none',
-                  fontSize: '12.5px',
-                  fontWeight: viewMode === 'multi_site' ? 800 : 600,
-                  background: viewMode === 'multi_site' ? '#0284c7' : 'transparent',
-                  color: viewMode === 'multi_site' ? '#ffffff' : '#334155',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  transition: 'all 0.15s ease',
-                  boxShadow: viewMode === 'multi_site' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
-                }}
-              >
-                <Building2 size={14} />
-                <span>Multi-Site (Branch Aging &amp; Health)</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('multi_site')}
+                  style={{
+                    padding: '7px 18px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    fontSize: '12.5px',
+                    fontWeight: viewMode === 'multi_site' ? 800 : 600,
+                    background: viewMode === 'multi_site' ? '#0284c7' : 'transparent',
+                    color: viewMode === 'multi_site' ? '#ffffff' : '#334155',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.15s ease',
+                    boxShadow: viewMode === 'multi_site' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
+                  }}
+                >
+                  <Building2 size={14} />
+                  <span>Multi-Site (Branch Aging &amp; Health)</span>
+                </button>
+              </div>
+            )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setIsDropzoneOpen(prev => !prev)}
-                style={{
-                  fontSize: '12px',
-                  padding: '6px 14px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontWeight: 700,
-                  color: '#0284c7',
-                  border: '1.5px solid #0284c7',
-                  background: isDropzoneOpen ? '#e0f2fe' : '#ffffff',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
-                }}
-              >
-                <UploadCloud size={14} color="#0284c7" />
-                <span>{isDropzoneOpen ? 'Close Upload Center' : 'Upload Reports (3-Slot)'}</span>
-              </button>
+            {/* PMG User Assigned Branch Pill */}
+            {!isSuperadmin && isPmgUser && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#f8fafc', padding: '7px 14px', borderRadius: '8px', border: '1.5px solid #cbd5e1', fontSize: '12px' }}>
+                <Building2 size={15} color="#0284c7" />
+                <span style={{ fontWeight: 700, color: '#334155' }}>Assigned Branch:</span>
+                <strong style={{ color: '#0284c7', fontWeight: 800 }}>{userSiteCodeClean ? `ASP ${userSiteCodeClean}` : 'PMG Branch'}</strong>
+                <span className="badge" style={{ fontSize: '10.5px', background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontWeight: 800 }}>
+                  Active
+                </span>
+              </div>
+            )}
 
-              {snapshot && (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => exportDeadStockToExcel(snapshot.items, 'NETWORK')}
-                    style={{
-                      fontSize: '12px',
-                      padding: '6px 14px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontWeight: 700,
-                      color: '#dc2626',
-                      border: '1.5px solid #f87171',
-                      background: '#fff1f2',
-                      borderRadius: '6px',
-                      cursor: 'pointer'
-                    }}
-                    title="Export all network dead stock (>= 180 days) for pull-out logistics"
-                  >
-                    <Download size={13} color="#dc2626" />
-                    <span>Dead Stock (.xlsx)</span>
-                  </button>
+            {/* Superadmin Upload Center and Network-Wide Export Tools */}
+            {isSuperadmin && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setIsDropzoneOpen(prev => !prev)}
+                  style={{
+                    fontSize: '12px',
+                    padding: '6px 14px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 700,
+                    color: '#0284c7',
+                    border: '1.5px solid #0284c7',
+                    background: isDropzoneOpen ? '#e0f2fe' : '#ffffff',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <UploadCloud size={14} color="#0284c7" />
+                  <span>{isDropzoneOpen ? 'Close Upload Center' : 'Upload Reports (3-Slot)'}</span>
+                </button>
 
-                  {snapshot.investigationItems?.length > 0 && (
+                {snapshot && (
+                  <>
                     <button
                       type="button"
                       className="btn btn-sm"
-                      onClick={() => exportInvestigationToExcel(snapshot.investigationItems, 'NETWORK')}
+                      onClick={() => exportDeadStockToExcel(snapshot.items, 'NETWORK')}
                       style={{
                         fontSize: '12px',
                         padding: '6px 14px',
@@ -881,21 +1072,46 @@ export default function FixablyInventoryDashboard({
                         alignItems: 'center',
                         gap: '6px',
                         fontWeight: 700,
-                        color: '#be123c',
-                        border: '1.5px solid #fecdd3',
-                        background: '#ffe4e6',
+                        color: '#dc2626',
+                        border: '1.5px solid #f87171',
+                        background: '#fff1f2',
                         borderRadius: '6px',
                         cursor: 'pointer'
                       }}
-                      title="Export all flagged investigation items (closed GSX repairs) for dispatch audit"
+                      title="Export all network dead stock (>= 180 days) for pull-out logistics"
                     >
-                      <ShieldAlert size={13} color="#be123c" />
-                      <span>Investigation (.xlsx)</span>
+                      <Download size={13} color="#dc2626" />
+                      <span>Dead Stock (.xlsx)</span>
                     </button>
-                  )}
-                </>
-              )}
-            </div>
+
+                    {snapshot.investigationItems?.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => exportInvestigationToExcel(snapshot.investigationItems, 'NETWORK')}
+                        style={{
+                          fontSize: '12px',
+                          padding: '6px 14px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontWeight: 700,
+                          color: '#be123c',
+                          border: '1.5px solid #fecdd3',
+                          background: '#ffe4e6',
+                          borderRadius: '6px',
+                          cursor: 'pointer'
+                        }}
+                        title="Export all flagged investigation items (closed GSX repairs) for dispatch audit"
+                      >
+                        <ShieldAlert size={13} color="#be123c" />
+                        <span>Investigation (.xlsx)</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
         </div>
@@ -1276,7 +1492,7 @@ export default function FixablyInventoryDashboard({
       )}
 
       {/* 3. Global Summary KPI Cards (Interactive Filters) */}
-      {snapshot?.globalMetrics && (
+      {(displayMetrics || snapshot?.globalMetrics) && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
           
           {/* Card 1: Total Active Value */}
@@ -1299,10 +1515,10 @@ export default function FixablyInventoryDashboard({
               </div>
             </div>
             <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
-              ${Number(snapshot.globalMetrics.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${Number(displayMetrics.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
-              Across {snapshot.globalMetrics.sitesCount} service sites
+              {displayMetrics.isScopedToBranch ? `Assigned Branch (${displayMetrics.branchCode})` : `Across ${displayMetrics.sitesCount} service sites`}
             </div>
           </div>
 
@@ -1310,8 +1526,13 @@ export default function FixablyInventoryDashboard({
           <div
             className="card"
             onClick={() => {
-              setAgingFilter('ALL');
-              setInvestigationFilter('ALL');
+              if (isSuperadmin) {
+                setAgingFilter('ALL');
+                setInvestigationFilter('ALL');
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('all_stock');
+              }
             }}
             style={{
               padding: '16px',
@@ -1321,7 +1542,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
             }}
-            title="Click to reset filters and view all on-hand units"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch on-hand units' : 'Click to reset filters and view all on-hand units'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1332,17 +1553,24 @@ export default function FixablyInventoryDashboard({
               </div>
             </div>
             <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a' }}>
-              {snapshot.globalMetrics.totalUnits.toLocaleString()}
+              {displayMetrics.totalUnits.toLocaleString()}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
-              {snapshot.globalMetrics.uniqueParts} catalog parts
+              {displayMetrics.uniqueParts} catalog parts {displayMetrics.isScopedToBranch ? '(Branch)' : ''}
             </div>
           </div>
 
           {/* Card 3: Dead Stock (>= 180 days) - Action Required */}
           <div
             className="card"
-            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.DEAD_STOCK ? 'ALL' : AGING_BRACKETS.DEAD_STOCK)}
+            onClick={() => {
+              if (isSuperadmin) {
+                setAgingFilter(prev => prev === AGING_BRACKETS.DEAD_STOCK ? 'ALL' : AGING_BRACKETS.DEAD_STOCK);
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('dead_stock');
+              }
+            }}
             style={{
               padding: '16px',
               background: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '#ffe4e6' : '#fff1f2',
@@ -1351,7 +1579,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to Dead Stock (>= 180 days)"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch Dead Stock (≥ 180 days)' : 'Click to filter to Dead Stock (≥ 180 days)'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1363,21 +1591,28 @@ export default function FixablyInventoryDashboard({
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
               <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
-                {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.DEAD_STOCK]?.toLocaleString() || 0}
+                {displayMetrics.agingCounts[AGING_BRACKETS.DEAD_STOCK]?.toLocaleString() || 0}
               </div>
               <span style={{ fontSize: '12px', fontWeight: 800, color: '#e11d48' }}>
-                ({snapshot.globalMetrics.deadStockPercent}%)
+                ({displayMetrics.deadStockPercent}%)
               </span>
             </div>
             <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
-              {agingFilter === AGING_BRACKETS.DEAD_STOCK ? 'Filtering Active (Click to reset)' : 'Action Required (RMA Pull-Out)'}
+              {displayMetrics.isScopedToBranch ? 'Assigned Branch (RMA Pull-Out)' : (agingFilter === AGING_BRACKETS.DEAD_STOCK ? 'Filtering Active (Click to reset)' : 'Action Required (RMA Pull-Out)')}
             </div>
           </div>
 
           {/* Card 4: Non-Moving (90 - 179 days) */}
           <div
             className="card"
-            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.NON_MOVING ? 'ALL' : AGING_BRACKETS.NON_MOVING)}
+            onClick={() => {
+              if (isSuperadmin) {
+                setAgingFilter(prev => prev === AGING_BRACKETS.NON_MOVING ? 'ALL' : AGING_BRACKETS.NON_MOVING);
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('non_moving');
+              }
+            }}
             style={{
               padding: '16px',
               background: agingFilter === AGING_BRACKETS.NON_MOVING ? '#ffedd5' : '#fff7ed',
@@ -1386,7 +1621,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to Non-Moving Stock (90–179 days)"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch Non-Moving Stock (90–179 days)' : 'Click to filter to Non-Moving Stock (90–179 days)'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1398,21 +1633,28 @@ export default function FixablyInventoryDashboard({
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
               <div style={{ fontSize: '21px', fontWeight: 900, color: '#c2410c' }}>
-                {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.NON_MOVING]?.toLocaleString() || 0}
+                {displayMetrics.agingCounts[AGING_BRACKETS.NON_MOVING]?.toLocaleString() || 0}
               </div>
               <span style={{ fontSize: '12px', fontWeight: 800, color: '#ea580c' }}>
-                ({snapshot.globalMetrics.nonMovingPercent}%)
+                ({displayMetrics.nonMovingPercent}%)
               </span>
             </div>
             <div style={{ fontSize: '10.5px', color: '#9a3412', marginTop: '3px', fontWeight: 700 }}>
-              {agingFilter === AGING_BRACKETS.NON_MOVING ? 'Filtering Active' : 'Pre-aging inventory tier'}
+              {displayMetrics.isScopedToBranch ? 'Assigned Branch Pre-Aging Tier' : (agingFilter === AGING_BRACKETS.NON_MOVING ? 'Filtering Active' : 'Pre-aging inventory tier')}
             </div>
           </div>
 
           {/* Card 5: Slow-Moving (60 - 89 days) */}
           <div
             className="card"
-            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.SLOW_MOVING ? 'ALL' : AGING_BRACKETS.SLOW_MOVING)}
+            onClick={() => {
+              if (isSuperadmin) {
+                setAgingFilter(prev => prev === AGING_BRACKETS.SLOW_MOVING ? 'ALL' : AGING_BRACKETS.SLOW_MOVING);
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('slow_moving');
+              }
+            }}
             style={{
               padding: '16px',
               background: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '#fef3c7' : '#fffbeb',
@@ -1421,7 +1663,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to Slow-Moving Stock (60–89 days)"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch Slow-Moving Stock (60–89 days)' : 'Click to filter to Slow-Moving Stock (60–89 days)'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1433,21 +1675,28 @@ export default function FixablyInventoryDashboard({
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
               <div style={{ fontSize: '21px', fontWeight: 900, color: '#b45309' }}>
-                {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.SLOW_MOVING]?.toLocaleString() || 0}
+                {displayMetrics.agingCounts[AGING_BRACKETS.SLOW_MOVING]?.toLocaleString() || 0}
               </div>
               <span style={{ fontSize: '12px', fontWeight: 800, color: '#d97706' }}>
-                ({snapshot.globalMetrics.slowMovingPercent}%)
+                ({displayMetrics.slowMovingPercent}%)
               </span>
             </div>
             <div style={{ fontSize: '10.5px', color: '#92400e', marginTop: '3px', fontWeight: 700 }}>
-              {agingFilter === AGING_BRACKETS.SLOW_MOVING ? 'Filtering Active' : 'Velocity slowing down'}
+              {displayMetrics.isScopedToBranch ? 'Assigned Branch Velocity Slowing' : (agingFilter === AGING_BRACKETS.SLOW_MOVING ? 'Filtering Active' : 'Velocity slowing down')}
             </div>
           </div>
 
           {/* Card 6: In Stock / Active (< 60 days) */}
           <div
             className="card"
-            onClick={() => setAgingFilter(prev => prev === AGING_BRACKETS.IN_STOCK ? 'ALL' : AGING_BRACKETS.IN_STOCK)}
+            onClick={() => {
+              if (isSuperadmin) {
+                setAgingFilter(prev => prev === AGING_BRACKETS.IN_STOCK ? 'ALL' : AGING_BRACKETS.IN_STOCK);
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('active_stock');
+              }
+            }}
             style={{
               padding: '16px',
               background: agingFilter === AGING_BRACKETS.IN_STOCK ? '#dcfce7' : '#f0fdf4',
@@ -1456,7 +1705,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to Active In-Stock (< 60 days)"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch Active In-Stock (< 60 days)' : 'Click to filter to Active In-Stock (< 60 days)'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1468,14 +1717,14 @@ export default function FixablyInventoryDashboard({
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
               <div style={{ fontSize: '21px', fontWeight: 900, color: '#15803d' }}>
-                {snapshot.globalMetrics.agingCounts[AGING_BRACKETS.IN_STOCK]?.toLocaleString() || 0}
+                {displayMetrics.agingCounts[AGING_BRACKETS.IN_STOCK]?.toLocaleString() || 0}
               </div>
               <span style={{ fontSize: '12px', fontWeight: 800, color: '#16a34a' }}>
-                ({snapshot.globalMetrics.inStockPercent}%)
+                ({displayMetrics.inStockPercent}%)
               </span>
             </div>
             <div style={{ fontSize: '10.5px', color: '#166534', marginTop: '3px', fontWeight: 700 }}>
-              {agingFilter === AGING_BRACKETS.IN_STOCK ? 'Filtering Active' : 'Fresh active rotation'}
+              {displayMetrics.isScopedToBranch ? 'Assigned Branch Fresh Active Rotation' : (agingFilter === AGING_BRACKETS.IN_STOCK ? 'Filtering Active' : 'Fresh active rotation')}
             </div>
           </div>
 
@@ -1483,8 +1732,13 @@ export default function FixablyInventoryDashboard({
           <div
             className="card"
             onClick={() => {
-              setViewMode('all_stocks');
-              setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
+              if (isSuperadmin) {
+                setViewMode('all_stocks');
+                setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
+              } else {
+                if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
+                setSegmentedTab('investigation');
+              }
             }}
             style={{
               padding: '16px',
@@ -1494,7 +1748,7 @@ export default function FixablyInventoryDashboard({
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            title="Click to filter Master Table to on-hand parts consumed in GSX repairs"
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch parts flagged in closed repairs' : 'Click to filter on-hand parts consumed in GSX repairs'}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -1506,14 +1760,14 @@ export default function FixablyInventoryDashboard({
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
               <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
-                {snapshot.globalMetrics?.investigationCount || snapshot.investigationItems?.length || 0}
+                {displayMetrics.investigationCount.toLocaleString()}
               </div>
               <span style={{ fontSize: '11px', fontWeight: 800, color: '#e11d48' }}>
                 UNITS
               </span>
             </div>
             <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
-              {investigationFilter === 'INVESTIGATION_ONLY' ? 'Filtering Active (Click to reset)' : 'On-hand parts used in GSX'}
+              {displayMetrics.isScopedToBranch ? 'Assigned branch repair flags' : (investigationFilter === 'INVESTIGATION_ONLY' ? 'Filtering Active (Click to reset)' : 'On-hand parts used in GSX')}
             </div>
           </div>
 
@@ -1523,7 +1777,7 @@ export default function FixablyInventoryDashboard({
       {/* ========================================================================= */}
       {/* VIEW 1: "ALL STOCKS" MASTER DIRECTORY TABLE (High-Visibility Redesign) */}
       {/* ========================================================================= */}
-      {viewMode === 'all_stocks' && (
+      {viewMode === 'all_stocks' && isSuperadmin && (
         <div
           className="card"
           style={{
@@ -2104,15 +2358,17 @@ export default function FixablyInventoryDashboard({
             {/* Individual Branch Selector Chips with Crisp Contrast */}
             <div style={{ paddingTop: '10px', borderTop: '1px solid #e2e8f0' }}>
               <div style={{ fontSize: '11.5px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '8px' }}>
-                Select Site to View Health &amp; Inventory Aging:
+                {(!isSuperadmin && isPmgUser) ? 'Select Site to View Available Inventory:' : 'Select Site to View Health & Inventory Aging:'}
               </div>
               
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {(selectedRegion === 'metro_manila' ? metroManilaSitesList : provincialSitesList).map(site => {
                   const cleanCode = site.siteCode.replace(/^(ASP|APP)\s+/, '');
                   const isSelected = selectedSiteCode.toUpperCase() === cleanCode.toUpperCase();
-                  const deadCount = site.metrics?.dcStock?.dead + site.metrics?.mspiOwned?.dead || 0;
-                  const invCount = site.investigationCount || site.metrics?.segmentedLists?.investigation?.length || 0;
+                  const isSiteAssignedToUser = isSiteMatchingUser(site);
+                  const showSiteHealthMetrics = isSuperadmin || isSiteAssignedToUser;
+                  const deadCount = showSiteHealthMetrics ? (site.metrics?.dcStock?.dead + site.metrics?.mspiOwned?.dead || 0) : 0;
+                  const invCount = showSiteHealthMetrics ? (site.investigationCount || site.metrics?.segmentedLists?.investigation?.length || 0) : 0;
 
                   return (
                     <button
@@ -2137,7 +2393,7 @@ export default function FixablyInventoryDashboard({
                         cursor: 'pointer',
                         fontWeight: isSelected ? 800 : 600,
                         fontSize: '12.5px',
-                        transition: 'all 0.1s ease'
+                        transition: 'all 0.15s ease'
                       }}
                     >
                       <span>{site.siteCode}</span>
@@ -2212,10 +2468,21 @@ export default function FixablyInventoryDashboard({
                         Ship-To: {currentSiteData.shipTo}
                       </span>
                     )}
-                    {currentSiteData.investigationCount > 0 && (
+                    {currentSiteData.investigationCount > 0 && (isSuperadmin || isCurrentSiteAssignedToUser) && (
                       <span className="badge" style={{ fontSize: '11.5px', background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontWeight: 800 }}>
                         ⚠️ {currentSiteData.investigationCount} Closed Repair Matches
                       </span>
+                    )}
+                    {isPmgUser && (
+                      canViewCurrentSiteSerials ? (
+                        <span className="badge" style={{ fontSize: '11.5px', background: '#ecfdf5', color: '#065f46', border: '1.5px solid #a7f3d0', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                          <CheckCircle2 size={12} color="#059669" /> Assigned Branch: Full Serial Access
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ fontSize: '11.5px', background: '#fef3c7', color: '#92400e', border: '1.5px solid #fde68a', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                          <Lock size={12} color="#d97706" /> Other Branch: Serials Masked
+                        </span>
+                      )
                     )}
                   </div>
 
@@ -2250,98 +2517,102 @@ export default function FixablyInventoryDashboard({
                   </div>
                 </div>
 
-                {/* Quick Action Exports for Dead Stock & Investigation */}
+                {/* Quick Action Exports: Dead Stock & Investigation exports restricted to Superadmin or assigned site staff */}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => {
-                      const deadItems = currentSiteData.metrics.segmentedLists.deadStock;
-                      if (deadItems.length === 0) {
-                        showToast?.(`No dead stock found for ${currentSiteData.siteCode}.`, 'info');
-                        return;
-                      }
-                      exportDeadStockToCsv(currentSiteData.items, currentSiteData.siteCode);
-                      showToast?.(`Exported ${deadItems.length} dead stock items for ${currentSiteData.siteCode}`, 'success');
-                    }}
-                    style={{
-                      fontSize: '12px',
-                      padding: '8px 12px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontWeight: 700,
-                      color: '#dc2626',
-                      border: '1.5px solid #f87171',
-                      background: '#fff1f2',
-                      borderRadius: '6px',
-                      cursor: 'pointer'
-                    }}
-                    title="Export Dead Stock CSV for RMA logistics"
-                  >
-                    <Download size={13} color="#dc2626" />
-                    <span>Dead Stock CSV</span>
-                  </button>
+                  {(isSuperadmin || isCurrentSiteAssignedToUser) && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          const deadItems = currentSiteData.metrics.segmentedLists.deadStock;
+                          if (deadItems.length === 0) {
+                            showToast?.(`No dead stock found for ${currentSiteData.siteCode}.`, 'info');
+                            return;
+                          }
+                          exportDeadStockToCsv(itemsForBranchExport, currentSiteData.siteCode);
+                          showToast?.(`Exported ${deadItems.length} dead stock items for ${currentSiteData.siteCode}`, 'success');
+                        }}
+                        style={{
+                          fontSize: '12px',
+                          padding: '8px 12px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontWeight: 700,
+                          color: '#dc2626',
+                          border: '1.5px solid #f87171',
+                          background: '#fff1f2',
+                          borderRadius: '6px',
+                          cursor: 'pointer'
+                        }}
+                        title="Export Dead Stock CSV for RMA logistics"
+                      >
+                        <Download size={13} color="#dc2626" />
+                        <span>Dead Stock CSV</span>
+                      </button>
 
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => {
-                      exportDeadStockToExcel(currentSiteData.items, currentSiteData.siteCode);
-                      showToast?.(`Exported Dead Stock Excel workbook for ${currentSiteData.siteCode}`, 'success');
-                    }}
-                    style={{
-                      fontSize: '12px',
-                      padding: '8px 12px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontWeight: 700,
-                      color: '#ea580c',
-                      border: '1.5px solid #fb923c',
-                      background: '#fff7ed',
-                      borderRadius: '6px',
-                      cursor: 'pointer'
-                    }}
-                    title="Export Dead Stock Excel (.xlsx)"
-                  >
-                    <FileSpreadsheet size={13} color="#ea580c" />
-                    <span>Dead Stock Excel</span>
-                  </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          exportDeadStockToExcel(itemsForBranchExport, currentSiteData.siteCode);
+                          showToast?.(`Exported Dead Stock Excel workbook for ${currentSiteData.siteCode}`, 'success');
+                        }}
+                        style={{
+                          fontSize: '12px',
+                          padding: '8px 12px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          fontWeight: 700,
+                          color: '#ea580c',
+                          border: '1.5px solid #fb923c',
+                          background: '#fff7ed',
+                          borderRadius: '6px',
+                          cursor: 'pointer'
+                        }}
+                        title="Export Dead Stock Excel (.xlsx)"
+                      >
+                        <FileSpreadsheet size={13} color="#ea580c" />
+                        <span>Dead Stock Excel</span>
+                      </button>
 
-                  {currentSiteData.investigationCount > 0 && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => {
-                        exportInvestigationToExcel(currentSiteData.items, currentSiteData.siteCode);
-                        showToast?.(`Exported ${currentSiteData.investigationCount} flagged items to Excel for ${currentSiteData.siteCode}`, 'success');
-                      }}
-                      style={{
-                        fontSize: '12px',
-                        padding: '8px 12px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        fontWeight: 700,
-                        color: '#be123c',
-                        border: '1.5px solid #fecdd3',
-                        background: '#ffe4e6',
-                        borderRadius: '6px',
-                        cursor: 'pointer'
-                      }}
-                      title="Export items flagged in closed repairs to Excel"
-                    >
-                      <ShieldAlert size={13} color="#be123c" />
-                      <span>Investigation XLSX</span>
-                    </button>
+                      {currentSiteData.investigationCount > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => {
+                            exportInvestigationToExcel(itemsForBranchExport, currentSiteData.siteCode);
+                            showToast?.(`Exported ${currentSiteData.investigationCount} flagged items to Excel for ${currentSiteData.siteCode}`, 'success');
+                          }}
+                          style={{
+                            fontSize: '12px',
+                            padding: '8px 12px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            fontWeight: 700,
+                            color: '#be123c',
+                            border: '1.5px solid #fecdd3',
+                            background: '#ffe4e6',
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                          }}
+                          title="Export items flagged in closed repairs to Excel"
+                        >
+                          <ShieldAlert size={13} color="#be123c" />
+                          <span>Investigation XLSX</span>
+                        </button>
+                      )}
+                    </>
                   )}
 
                   <button
                     type="button"
                     className="btn btn-sm"
                     onClick={() => {
-                      exportSiteToExcel(currentSiteData, snapshot.items);
+                      exportSiteToExcel(currentSiteData, itemsForBranchExport);
                       showToast?.(`Exported complete multi-tab inventory workbook for ${currentSiteData.siteCode}`, 'success');
                     }}
                     style={{
@@ -2398,143 +2669,174 @@ export default function FixablyInventoryDashboard({
             </div>
           )}
 
-          {/* SITE KPI HEALTH SUMMARY TABLE (High-Contrast Header & Borders) */}
+          {/* SITE KPI HEALTH SUMMARY TABLE: Visible ONLY for Superadmin OR User's Assigned Branch */}
           {currentSiteData?.metrics && (
-            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #cbd5e1', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.05)' }}>
-              <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Boxes size={18} color="#0284c7" />
-                  <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
-                    Inventory Aging &amp; Health Summary ({currentSiteData.siteCode})
-                  </h4>
+            (isSuperadmin || isCurrentSiteAssignedToUser) ? (
+              <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #cbd5e1', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.05)' }}>
+                <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Boxes size={18} color="#0284c7" />
+                    <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                      Inventory Aging &amp; Health Summary ({currentSiteData.siteCode})
+                    </h4>
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
+                    Parity Model matching <code style={{ fontWeight: 700, color: '#0284c7' }}>SIte Stocks (Fixably).xlsx</code>
+                  </div>
                 </div>
-                <div style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
-                  Parity Model matching <code style={{ fontWeight: 700, color: '#0284c7' }}>SIte Stocks (Fixably).xlsx</code>
+
+                <div className="table-container" style={{ overflowX: 'auto' }}>
+                  <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #0284c7' }}>
+                        <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Stock Classification</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Dead Stock (≥ 180d)</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Non-Moving (90–179d)</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Slow-Moving (60–89d)</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>In Stock (&lt; 60d)</th>
+                        <th style={{ textAlign: 'center', fontWeight: 900, background: '#0f172a', color: '#ffffff', padding: '12px 10px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Total Units</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Dead %</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Non-Moving %</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Slow %</th>
+                        <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>In Stock %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* DC Stock Row */}
+                      <tr style={{ background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={{ fontWeight: 800, color: '#6d28d9', padding: '12px 14px' }}>
+                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6', marginRight: '6px' }} />
+                          DC Stock
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.dead}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.nonMoving}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.slow}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.inStock}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 900, background: '#f8fafc', color: '#0f172a', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.units}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.deadPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.nonMovingPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.slowPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.dcStock.inStockPercent}
+                        </td>
+                      </tr>
+
+                      {/* MSPI-Owned / C/I REP Row */}
+                      <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
+                        <td style={{ fontWeight: 800, color: '#0369a1', padding: '12px 14px' }}>
+                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#0284c7', marginRight: '6px' }} />
+                          MSPI-Owned / C/I REP
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.dead}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.nonMoving}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.slow}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.inStock}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 900, background: '#f1f5f9', color: '#0f172a', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.units}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.deadPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.nonMovingPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.slowPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
+                          {currentSiteData.metrics.mspiOwned.inStockPercent}
+                        </td>
+                      </tr>
+
+                      {/* COMBINED TOTAL Row */}
+                      <tr style={{ background: '#f1f5f9', fontWeight: 900, borderTop: '2px solid #94a3b8' }}>
+                        <td style={{ color: '#0f172a', padding: '12px 14px' }}>COMBINED TOTAL</td>
+                        <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
+                          {currentSiteData.metrics.total.dead}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.total.nonMoving}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.total.slow}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.total.inStock}
+                        </td>
+                        <td style={{ textAlign: 'center', fontSize: '14px', color: '#0f172a', background: '#e2e8f0', padding: '12px 10px', fontWeight: 900 }}>
+                          {currentSiteData.metrics.total.units}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
+                          {currentSiteData.metrics.total.deadPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 700 }}>
+                          {currentSiteData.metrics.total.nonMovingPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 700 }}>
+                          {currentSiteData.metrics.total.slowPercent}
+                        </td>
+                        <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.total.inStockPercent}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
-
-              <div className="table-container" style={{ overflowX: 'auto' }}>
-                <table className="data-table" style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '2px solid #0284c7' }}>
-                      <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Stock Classification</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Dead Stock (≥ 180d)</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Non-Moving (90–179d)</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Slow-Moving (60–89d)</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>In Stock (&lt; 60d)</th>
-                      <th style={{ textAlign: 'center', fontWeight: 900, background: '#0f172a', color: '#ffffff', padding: '12px 10px', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Total Units</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fca5a5', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Dead %</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fdba74', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Non-Moving %</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#fde047', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>Slow %</th>
-                      <th style={{ textAlign: 'center', background: '#0f172a', color: '#86efac', padding: '12px 10px', fontSize: '11px', fontWeight: 800, whiteSpace: 'nowrap' }}>In Stock %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* DC Stock Row */}
-                    <tr style={{ background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
-                      <td style={{ fontWeight: 800, color: '#6d28d9', padding: '12px 14px' }}>
-                        <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#8b5cf6', marginRight: '6px' }} />
-                        DC Stock
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.dead}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.nonMoving}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.slow}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.inStock}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 900, background: '#f8fafc', color: '#0f172a', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.units}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.deadPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.nonMovingPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.slowPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.dcStock.inStockPercent}
-                      </td>
-                    </tr>
-
-                    {/* MSPI-Owned / C/I REP Row */}
-                    <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
-                      <td style={{ fontWeight: 800, color: '#0369a1', padding: '12px 14px' }}>
-                        <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#0284c7', marginRight: '6px' }} />
-                        MSPI-Owned / C/I REP
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.dead}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#ea580c', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.nonMoving}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#d97706', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.slow}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, color: '#16a34a', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.inStock}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 900, background: '#f1f5f9', color: '#0f172a', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.units}
-                      </td>
-                      <td style={{ textAlign: 'center', fontWeight: 800, color: '#dc2626', background: '#fff1f2', padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.deadPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c', fontWeight: 600, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.nonMovingPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#d97706', fontWeight: 600, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.slowPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a', fontWeight: 700, padding: '12px 10px' }}>
-                        {currentSiteData.metrics.mspiOwned.inStockPercent}
-                      </td>
-                    </tr>
-
-                    {/* COMBINED TOTAL Row */}
-                    <tr style={{ background: '#f1f5f9', fontWeight: 900, borderTop: '2px solid #94a3b8' }}>
-                      <td style={{ color: '#0f172a', padding: '12px 14px' }}>COMBINED TOTAL</td>
-                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
-                        {currentSiteData.metrics.total.dead}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.total.nonMoving}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.total.slow}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.total.inStock}
-                      </td>
-                      <td style={{ textAlign: 'center', fontSize: '14px', color: '#0f172a', background: '#e2e8f0', padding: '12px 10px', fontWeight: 900 }}>
-                        {currentSiteData.metrics.total.units}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#dc2626', background: '#ffe4e6', padding: '12px 10px', fontWeight: 900 }}>
-                        {currentSiteData.metrics.total.deadPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#ea580c', padding: '12px 10px', fontWeight: 700 }}>
-                        {currentSiteData.metrics.total.nonMovingPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#d97706', padding: '12px 10px', fontWeight: 700 }}>
-                        {currentSiteData.metrics.total.slowPercent}
-                      </td>
-                      <td style={{ textAlign: 'center', color: '#16a34a', padding: '12px 10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.total.inStockPercent}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+            ) : (
+              <div
+                className="card"
+                style={{
+                  padding: '16px 20px',
+                  background: '#f8fafc',
+                  border: '1.5px solid #cbd5e1',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+                }}
+              >
+                <div style={{ width: '38px', height: '38px', borderRadius: '8px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Lock size={18} color="#0284c7" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
+                    Cross-Branch Inventory Query: {currentSiteData.siteCode} ({currentSiteData.siteName || 'Service Branch'})
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                    Part availability and stock quantities are visible below for requisitions and stock queries. Aging health and dead stock metrics are restricted to the designated branch staff and Superadmin.
+                  </div>
+                </div>
+                <span className="badge" style={{ fontSize: '11px', background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', fontWeight: 700 }}>
+                  Stock Only Mode
+                </span>
               </div>
-            </div>
+            )
           )}
 
           {/* SEGMENTED LISTS & SUB-TABS */}
@@ -2544,144 +2846,149 @@ export default function FixablyInventoryDashboard({
               {/* Segmented Sub-Tab Header */}
               <div style={{ padding: '8px 16px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 
-                {/* Tab 1: Dead Stock */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('dead_stock')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'dead_stock' ? 800 : 600,
-                    background: segmentedTab === 'dead_stock' ? '#fff1f2' : 'transparent',
-                    color: segmentedTab === 'dead_stock' ? '#dc2626' : '#64748b',
-                    borderBottom: segmentedTab === 'dead_stock' ? '2px solid #dc2626' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <AlertTriangle size={13} color={segmentedTab === 'dead_stock' ? '#dc2626' : '#94a3b8'} />
-                  <span>Dead Stock (≥ 180d)</span>
-                  <span style={{ background: '#fecdd3', color: '#be123c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.metrics.segmentedLists.deadStock.length}
-                  </span>
-                </button>
+                {/* Aging & Investigation Sub-Tabs strictly for Superadmin or Assigned Site */}
+                {(isSuperadmin || isCurrentSiteAssignedToUser) && (
+                  <>
+                    {/* Tab 1: Dead Stock */}
+                    <button
+                      type="button"
+                      onClick={() => setSegmentedTab('dead_stock')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: segmentedTab === 'dead_stock' ? 800 : 600,
+                        background: segmentedTab === 'dead_stock' ? '#fff1f2' : 'transparent',
+                        color: segmentedTab === 'dead_stock' ? '#dc2626' : '#64748b',
+                        borderBottom: segmentedTab === 'dead_stock' ? '2px solid #dc2626' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <AlertTriangle size={13} color={segmentedTab === 'dead_stock' ? '#dc2626' : '#94a3b8'} />
+                      <span>Dead Stock (≥ 180d)</span>
+                      <span style={{ background: '#fecdd3', color: '#be123c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                        {currentSiteData.metrics.segmentedLists.deadStock.length}
+                      </span>
+                    </button>
 
-                {/* Tab 2: Non-Moving */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('non_moving')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'non_moving' ? 800 : 600,
-                    background: segmentedTab === 'non_moving' ? '#fff7ed' : 'transparent',
-                    color: segmentedTab === 'non_moving' ? '#ea580c' : '#64748b',
-                    borderBottom: segmentedTab === 'non_moving' ? '2px solid #ea580c' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Clock size={13} color={segmentedTab === 'non_moving' ? '#ea580c' : '#94a3b8'} />
-                  <span>Non-Moving (90–179d)</span>
-                  <span style={{ background: '#fed7aa', color: '#c2410c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.metrics.segmentedLists.nonMoving.length}
-                  </span>
-                </button>
+                    {/* Tab 2: Non-Moving */}
+                    <button
+                      type="button"
+                      onClick={() => setSegmentedTab('non_moving')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: segmentedTab === 'non_moving' ? 800 : 600,
+                        background: segmentedTab === 'non_moving' ? '#fff7ed' : 'transparent',
+                        color: segmentedTab === 'non_moving' ? '#ea580c' : '#64748b',
+                        borderBottom: segmentedTab === 'non_moving' ? '2px solid #ea580c' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <Clock size={13} color={segmentedTab === 'non_moving' ? '#ea580c' : '#94a3b8'} />
+                      <span>Non-Moving (90–179d)</span>
+                      <span style={{ background: '#fed7aa', color: '#c2410c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                        {currentSiteData.metrics.segmentedLists.nonMoving.length}
+                      </span>
+                    </button>
 
-                {/* Tab 3: Slow-Moving */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('slow_moving')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'slow_moving' ? 800 : 600,
-                    background: segmentedTab === 'slow_moving' ? '#fffbeb' : 'transparent',
-                    color: segmentedTab === 'slow_moving' ? '#d97706' : '#64748b',
-                    borderBottom: segmentedTab === 'slow_moving' ? '2px solid #d97706' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <TrendingDown size={13} color={segmentedTab === 'slow_moving' ? '#d97706' : '#94a3b8'} />
-                  <span>Slow-Moving (60–89d)</span>
-                  <span style={{ background: '#fde68a', color: '#b45309', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.metrics.segmentedLists.slowMoving.length}
-                  </span>
-                </button>
+                    {/* Tab 3: Slow-Moving */}
+                    <button
+                      type="button"
+                      onClick={() => setSegmentedTab('slow_moving')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: segmentedTab === 'slow_moving' ? 800 : 600,
+                        background: segmentedTab === 'slow_moving' ? '#fffbeb' : 'transparent',
+                        color: segmentedTab === 'slow_moving' ? '#d97706' : '#64748b',
+                        borderBottom: segmentedTab === 'slow_moving' ? '2px solid #d97706' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <TrendingDown size={13} color={segmentedTab === 'slow_moving' ? '#d97706' : '#94a3b8'} />
+                      <span>Slow-Moving (60–89d)</span>
+                      <span style={{ background: '#fde68a', color: '#b45309', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                        {currentSiteData.metrics.segmentedLists.slowMoving.length}
+                      </span>
+                    </button>
 
-                {/* Tab 4: Active Stock */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('active_stock')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'active_stock' ? 800 : 600,
-                    background: segmentedTab === 'active_stock' ? '#f0fdf4' : 'transparent',
-                    color: segmentedTab === 'active_stock' ? '#16a34a' : '#64748b',
-                    borderBottom: segmentedTab === 'active_stock' ? '2px solid #16a34a' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <CheckCircle2 size={13} color={segmentedTab === 'active_stock' ? '#16a34a' : '#94a3b8'} />
-                  <span>Active Stock (&lt; 60d)</span>
-                  <span style={{ background: '#bbf7d0', color: '#15803d', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.metrics.segmentedLists.activeStock.length}
-                  </span>
-                </button>
+                    {/* Tab 4: Active Stock */}
+                    <button
+                      type="button"
+                      onClick={() => setSegmentedTab('active_stock')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: segmentedTab === 'active_stock' ? 800 : 600,
+                        background: segmentedTab === 'active_stock' ? '#f0fdf4' : 'transparent',
+                        color: segmentedTab === 'active_stock' ? '#16a34a' : '#64748b',
+                        borderBottom: segmentedTab === 'active_stock' ? '2px solid #16a34a' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <CheckCircle2 size={13} color={segmentedTab === 'active_stock' ? '#16a34a' : '#94a3b8'} />
+                      <span>Active Stock (&lt; 60d)</span>
+                      <span style={{ background: '#bbf7d0', color: '#15803d', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                        {currentSiteData.metrics.segmentedLists.activeStock.length}
+                      </span>
+                    </button>
 
-                {/* Tab 5: Dispatch / For Investigation */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('investigation')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'investigation' ? 800 : 600,
-                    background: segmentedTab === 'investigation' ? '#fff1f2' : 'transparent',
-                    color: segmentedTab === 'investigation' ? '#be123c' : '#64748b',
-                    borderBottom: segmentedTab === 'investigation' ? '2px solid #be123c' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <ShieldAlert size={13} color={segmentedTab === 'investigation' ? '#be123c' : '#94a3b8'} />
-                  <span>Investigation / Cross-Used Serials</span>
-                  <span
-                    style={{
-                      background: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#fecdd3' : '#e2e8f0',
-                      color: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#be123c' : '#475569',
-                      padding: '1px 6px',
-                      borderRadius: '999px',
-                      fontSize: '10px',
-                      fontWeight: 800
-                    }}
-                  >
-                    {currentSiteData.metrics.segmentedLists.investigation.length}
-                  </span>
-                </button>
+                    {/* Tab 5: Dispatch / For Investigation */}
+                    <button
+                      type="button"
+                      onClick={() => setSegmentedTab('investigation')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: segmentedTab === 'investigation' ? 800 : 600,
+                        background: segmentedTab === 'investigation' ? '#fff1f2' : 'transparent',
+                        color: segmentedTab === 'investigation' ? '#be123c' : '#64748b',
+                        borderBottom: segmentedTab === 'investigation' ? '2px solid #be123c' : '2px solid transparent',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <ShieldAlert size={13} color={segmentedTab === 'investigation' ? '#be123c' : '#94a3b8'} />
+                      <span>Investigation / Cross-Used Serials</span>
+                      <span
+                        style={{
+                          background: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#fecdd3' : '#e2e8f0',
+                          color: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#be123c' : '#475569',
+                          padding: '1px 6px',
+                          borderRadius: '999px',
+                          fontSize: '10px',
+                          fontWeight: 800
+                        }}
+                      >
+                        {currentSiteData.metrics.segmentedLists.investigation.length}
+                      </span>
+                    </button>
+                  </>
+                )}
 
                 {/* Tab 6: Part Aggregations */}
                 <button
@@ -2749,8 +3056,10 @@ export default function FixablyInventoryDashboard({
                         <th style={{ minWidth: '240px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Description</th>
                         <th style={{ textAlign: 'center', width: '150px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Total Serials</th>
                         <th style={{ textAlign: 'center', width: '110px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>DC Stock</th>
-                        <th style={{ textAlign: 'center', width: '110px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>MSPI-Owned</th>
-                        <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging Breakdown</th>
+                        <th style={{ minWidth: '110px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>MSPI-Owned</th>
+                        <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>
+                          {(isSuperadmin || isCurrentSiteAssignedToUser) ? 'Aging Breakdown' : 'Stock Availability'}
+                        </th>
                         <th style={{ textAlign: 'center', width: '120px', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Action</th>
                       </tr>
                     </thead>
@@ -2801,28 +3110,34 @@ export default function FixablyInventoryDashboard({
                               </td>
 
                               <td style={{ verticalAlign: 'middle', padding: '11px 14px' }}>
-                                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                  {partRow.deadCount > 0 && (
-                                    <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', border: '1px solid #fecdd3', fontSize: '10.5px', fontWeight: 800 }}>
-                                      {partRow.deadCount} Dead
-                                    </span>
-                                  )}
-                                  {partRow.nonMovingCount > 0 && (
-                                    <span className="badge" style={{ background: '#ffedd5', color: '#ea580c', border: '1px solid #fed7aa', fontSize: '10.5px', fontWeight: 800 }}>
-                                      {partRow.nonMovingCount} Non-Moving
-                                    </span>
-                                  )}
-                                  {partRow.slowCount > 0 && (
-                                    <span className="badge" style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '10.5px', fontWeight: 800 }}>
-                                      {partRow.slowCount} Slow
-                                    </span>
-                                  )}
-                                  {partRow.inStockCount > 0 && (
-                                    <span className="badge" style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0', fontSize: '10.5px', fontWeight: 800 }}>
-                                      {partRow.inStockCount} Active
-                                    </span>
-                                  )}
-                                </div>
+                                {(isSuperadmin || isCurrentSiteAssignedToUser) ? (
+                                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                    {partRow.deadCount > 0 && (
+                                      <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', border: '1px solid #fecdd3', fontSize: '10.5px', fontWeight: 800 }}>
+                                        {partRow.deadCount} Dead
+                                      </span>
+                                    )}
+                                    {partRow.nonMovingCount > 0 && (
+                                      <span className="badge" style={{ background: '#ffedd5', color: '#ea580c', border: '1px solid #fed7aa', fontSize: '10.5px', fontWeight: 800 }}>
+                                        {partRow.nonMovingCount} Non-Moving
+                                      </span>
+                                    )}
+                                    {partRow.slowCount > 0 && (
+                                      <span className="badge" style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '10.5px', fontWeight: 800 }}>
+                                        {partRow.slowCount} Slow
+                                      </span>
+                                    )}
+                                    {partRow.inStockCount > 0 && (
+                                      <span className="badge" style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0', fontSize: '10.5px', fontWeight: 800 }}>
+                                        {partRow.inStockCount} Active
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="badge" style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #bbf7d0', fontSize: '11px', fontWeight: 700 }}>
+                                    {partRow.totalSerialsOnHand} In Branch Stock
+                                  </span>
+                                )}
                               </td>
 
                               <td style={{ textAlign: 'center', verticalAlign: 'middle', padding: '11px 10px' }}>
@@ -2850,18 +3165,23 @@ export default function FixablyInventoryDashboard({
                             {isExpanded && (
                               <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
                                 <td colSpan={7} style={{ padding: '14px 20px' }}>
-                                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#334155', marginBottom: '8px' }}>
-                                    Serials in Stock for {partRow.partNumber} ({partRow.serials.length} units):
+                                  <div style={{ fontSize: '12px', fontWeight: 800, color: '#334155', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <span>Serials in Stock for {partRow.partNumber} ({partRow.serials.length} units):</span>
+                                    {!canViewCurrentSiteSerials && (
+                                      <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, background: '#e2e8f0', padding: '2px 8px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                        <Lock size={11} color="#64748b" /> Serial numbers restricted to assigned site staff
+                                      </span>
+                                    )}
                                   </div>
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                     {currentSiteData.items
                                       .filter(it => it.partNumber === partRow.partNumber)
                                       .map((unit, sIdx) => (
                                         <div
-                                          key={`${unit.serialNumber}-${sIdx}`}
+                                          key={`${unit.serialNumber || 'noserial'}-${sIdx}`}
                                           style={{
                                             background: '#ffffff',
-                                            border: unit.isInvestigation ? '1.5px solid #f87171' : '1.5px solid #cbd5e1',
+                                            border: (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser)) ? '1.5px solid #f87171' : '1.5px solid #cbd5e1',
                                             borderRadius: '6px',
                                             padding: '4px 8px',
                                             display: 'inline-flex',
@@ -2870,25 +3190,35 @@ export default function FixablyInventoryDashboard({
                                             fontSize: '12px'
                                           }}
                                         >
-                                          <code style={{ color: unit.isInvestigation ? '#be123c' : '#0f172a', fontWeight: 800 }}>
-                                            {unit.serialNumber || 'NON-SERIALIZED'}
+                                          <code style={{ color: (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser)) ? '#be123c' : '#0f172a', fontWeight: 800 }}>
+                                            {!canViewCurrentSiteSerials ? (
+                                              <span style={{ color: '#64748b', fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                <Lock size={10} color="#94a3b8" /> ••••••••••••
+                                              </span>
+                                            ) : (
+                                              unit.serialNumber || 'NON-SERIALIZED'
+                                            )}
                                           </code>
-                                          <span style={{ fontSize: '10.5px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 800 }}>
-                                            {unit.agingDays}d
-                                          </span>
-                                          {unit.isInvestigation && (
+                                          {(isSuperadmin || isCurrentSiteAssignedToUser) && (
+                                            <span style={{ fontSize: '10.5px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 800 }}>
+                                              {unit.agingDays}d
+                                            </span>
+                                          )}
+                                          {(isSuperadmin || isCurrentSiteAssignedToUser) && unit.isInvestigation && (
                                             <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: '#ffe4e6', color: '#9f1239', fontWeight: 800 }}>
                                               KGB Used
                                             </span>
                                           )}
-                                          <button
-                                            type="button"
-                                            onClick={() => handleCopy(unit.serialNumber, 'Serial')}
-                                            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
-                                            title="Copy serial"
-                                          >
-                                            <Copy size={11} />
-                                          </button>
+                                          {canViewCurrentSiteSerials && unit.serialNumber && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleCopy(unit.serialNumber, 'Serial')}
+                                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                                              title="Copy serial"
+                                            >
+                                              <Copy size={11} />
+                                            </button>
+                                          )}
                                         </div>
                                       ))}
                                   </div>
@@ -2934,7 +3264,7 @@ export default function FixablyInventoryDashboard({
                             <button
                               type="button"
                               className="btn btn-sm"
-                              onClick={() => exportInvestigationToCsv(currentSiteData.items, currentSiteData.siteCode)}
+                              onClick={() => exportInvestigationToCsv(itemsForBranchExport, currentSiteData.siteCode)}
                               style={{
                                 fontSize: '11.5px',
                                 padding: '5px 12px',
@@ -2956,7 +3286,7 @@ export default function FixablyInventoryDashboard({
                             <button
                               type="button"
                               className="btn btn-sm"
-                              onClick={() => exportInvestigationToExcel(currentSiteData.items, currentSiteData.siteCode)}
+                              onClick={() => exportInvestigationToExcel(itemsForBranchExport, currentSiteData.siteCode)}
                               style={{
                                 fontSize: '11.5px',
                                 padding: '5px 12px',
@@ -2983,7 +3313,9 @@ export default function FixablyInventoryDashboard({
                               <th style={{ width: '45px', textAlign: 'center', padding: '12px 10px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>#</th>
                               <th style={{ minWidth: '150px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
                               <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Description</th>
-                              <th style={{ minWidth: '170px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Transferred Serial</th>
+                              <th style={{ minWidth: '170px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>
+                                Transferred Serial {!canViewCurrentSiteSerials && <span style={{ fontSize: '10px', color: '#fca5a5', textTransform: 'none', fontWeight: 600 }}>(Restricted)</span>}
+                              </th>
                               <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Stock Type</th>
                               <th style={{ minWidth: '130px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Order Number</th>
                               <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Closed Date</th>
@@ -3017,19 +3349,38 @@ export default function FixablyInventoryDashboard({
                                 </td>
 
                                 <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <code style={{ fontSize: '12px', color: '#9f1239', background: '#ffe4e6', border: '1.5px solid #fecdd3', padding: '3px 8px', borderRadius: '5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
-                                      {unit.serialNumber}
-                                    </code>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCopy(unit.serialNumber, 'Serial')}
-                                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
-                                      title="Copy Serial Number"
-                                    >
-                                      <Copy size={12} />
-                                    </button>
-                                  </div>
+                                  {!canViewCurrentSiteSerials ? (
+                                    <span style={{
+                                      fontSize: '11.5px',
+                                      color: '#64748b',
+                                      background: '#f1f5f9',
+                                      border: '1px solid #cbd5e1',
+                                      padding: '3px 8px',
+                                      borderRadius: '5px',
+                                      fontWeight: 600,
+                                      fontStyle: 'italic',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px'
+                                    }}>
+                                      <Lock size={11} color="#94a3b8" />
+                                      •••••••••••• (Restricted)
+                                    </span>
+                                  ) : (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      <code style={{ fontSize: '12px', color: '#9f1239', background: '#ffe4e6', border: '1.5px solid #fecdd3', padding: '3px 8px', borderRadius: '5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                                        {unit.serialNumber}
+                                      </code>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopy(unit.serialNumber, 'Serial')}
+                                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}
+                                        title="Copy Serial Number"
+                                      >
+                                        <Copy size={12} />
+                                      </button>
+                                    </div>
+                                  )}
                                 </td>
 
                                 <td style={{ verticalAlign: 'middle', padding: '11px 12px' }}>
@@ -3113,9 +3464,13 @@ export default function FixablyInventoryDashboard({
                             <th style={{ minWidth: '150px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Number</th>
                             <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Description</th>
                             <th style={{ width: '130px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Classification</th>
-                            <th style={{ minWidth: '175px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Serial Number</th>
+                            <th style={{ minWidth: '175px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>
+                              Serial Number {!canViewCurrentSiteSerials && <span style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'none', fontWeight: 600 }}>(Restricted)</span>}
+                            </th>
                             <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Last Received</th>
-                            <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging &amp; Status</th>
+                            <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>
+                              {(isSuperadmin || isCurrentSiteAssignedToUser) ? 'Aging & Status' : 'Stock Availability'}
+                            </th>
                             <th style={{ width: '110px', textAlign: 'right', padding: '12px 16px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Part Value</th>
                           </tr>
                         </thead>
@@ -3183,7 +3538,26 @@ export default function FixablyInventoryDashboard({
                                 </td>
 
                                 <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                                  {unit.serialNumber ? (
+                                  {!canViewCurrentSiteSerials ? (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                      <span style={{
+                                        fontSize: '11.5px',
+                                        color: '#64748b',
+                                        background: '#f1f5f9',
+                                        border: '1px solid #cbd5e1',
+                                        padding: '3px 8px',
+                                        borderRadius: '5px',
+                                        fontWeight: 600,
+                                        fontStyle: 'italic',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px'
+                                      }}>
+                                        <Lock size={11} color="#94a3b8" />
+                                        •••••••••••• (Restricted)
+                                      </span>
+                                    </div>
+                                  ) : unit.serialNumber ? (
                                     <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                                       <span style={{
                                         fontSize: '12px',
@@ -3216,7 +3590,65 @@ export default function FixablyInventoryDashboard({
                                 </td>
 
                                 <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                                  {(isSuperadmin || isCurrentSiteAssignedToUser) ? (
+                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '5px',
+                                          padding: '3px 9px',
+                                          borderRadius: '6px',
+                                          fontSize: '11.5px',
+                                          fontWeight: 700,
+                                          whiteSpace: 'nowrap',
+                                          background: unit.badgeBg,
+                                          color: unit.badgeColor,
+                                          border: unit.agingBracket === AGING_BRACKETS.DEAD_STOCK ? '1px solid #fca5a5'
+                                            : unit.agingBracket === AGING_BRACKETS.NON_MOVING ? '1px solid #fdba74'
+                                            : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING ? '1px solid #fde047'
+                                            : '1px solid #86efac'
+                                        }}
+                                        title={unit.statusLabel}
+                                      >
+                                        {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && <AlertTriangle size={12} color="#dc2626" />}
+                                        {unit.agingBracket === AGING_BRACKETS.NON_MOVING && <Clock size={12} color="#ea580c" />}
+                                        {unit.agingBracket === AGING_BRACKETS.SLOW_MOVING && <TrendingDown size={12} color="#d97706" />}
+                                        {unit.agingBracket === AGING_BRACKETS.IN_STOCK && <CheckCircle2 size={12} color="#16a34a" />}
+                                        <span>
+                                          {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK
+                                            ? `Dead Stock (${unit.agingDays}d)`
+                                            : unit.agingBracket === AGING_BRACKETS.NON_MOVING
+                                            ? `Non-Moving (${unit.agingDays}d)`
+                                            : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING
+                                            ? `Slow-Moving (${unit.agingDays}d)`
+                                            : `In Stock (${unit.agingDays}d)`}
+                                        </span>
+                                      </span>
+
+                                      {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            fontSize: '10px',
+                                            fontWeight: 800,
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.04em',
+                                            background: '#fee2e2',
+                                            color: '#b91c1c',
+                                            border: '1px solid #fca5a5',
+                                            whiteSpace: 'nowrap'
+                                          }}
+                                          title="Action Required: RMA pull-out or site reallocation"
+                                        >
+                                          Action Req.
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
                                     <span
                                       style={{
                                         display: 'inline-flex',
@@ -3227,52 +3659,16 @@ export default function FixablyInventoryDashboard({
                                         fontSize: '11.5px',
                                         fontWeight: 700,
                                         whiteSpace: 'nowrap',
-                                        background: unit.badgeBg,
-                                        color: unit.badgeColor,
-                                        border: unit.agingBracket === AGING_BRACKETS.DEAD_STOCK ? '1px solid #fca5a5'
-                                          : unit.agingBracket === AGING_BRACKETS.NON_MOVING ? '1px solid #fdba74'
-                                          : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING ? '1px solid #fde047'
-                                          : '1px solid #86efac'
+                                        background: '#ecfdf5',
+                                        color: '#15803d',
+                                        border: '1px solid #86efac'
                                       }}
-                                      title={unit.statusLabel}
+                                      title="Part is in physical stock at this branch and available for requisition/transfer"
                                     >
-                                      {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && <AlertTriangle size={12} color="#dc2626" />}
-                                      {unit.agingBracket === AGING_BRACKETS.NON_MOVING && <Clock size={12} color="#ea580c" />}
-                                      {unit.agingBracket === AGING_BRACKETS.SLOW_MOVING && <TrendingDown size={12} color="#d97706" />}
-                                      {unit.agingBracket === AGING_BRACKETS.IN_STOCK && <CheckCircle2 size={12} color="#16a34a" />}
-                                      <span>
-                                        {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK
-                                          ? `Dead Stock (${unit.agingDays}d)`
-                                          : unit.agingBracket === AGING_BRACKETS.NON_MOVING
-                                          ? `Non-Moving (${unit.agingDays}d)`
-                                          : unit.agingBracket === AGING_BRACKETS.SLOW_MOVING
-                                          ? `Slow-Moving (${unit.agingDays}d)`
-                                          : `In Stock (${unit.agingDays}d)`}
-                                      </span>
+                                      <CheckCircle2 size={12} color="#16a34a" />
+                                      <span>In Stock / Available</span>
                                     </span>
-
-                                    {unit.agingBracket === AGING_BRACKETS.DEAD_STOCK && (
-                                      <span
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          padding: '2px 6px',
-                                          borderRadius: '4px',
-                                          fontSize: '10px',
-                                          fontWeight: 800,
-                                          textTransform: 'uppercase',
-                                          letterSpacing: '0.04em',
-                                          background: '#fee2e2',
-                                          color: '#b91c1c',
-                                          border: '1px solid #fca5a5',
-                                          whiteSpace: 'nowrap'
-                                        }}
-                                        title="Action Required: RMA pull-out or site reallocation"
-                                      >
-                                        Action Req.
-                                      </span>
-                                    )}
-                                  </div>
+                                  )}
                                 </td>
 
                                 <td style={{ verticalAlign: 'middle', textAlign: 'right', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '13px', color: '#0f172a', padding: '12px 16px', whiteSpace: 'nowrap' }}>

@@ -104,7 +104,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     setParts,
     batchAddScanInUnits,
     supervisorSettings,
-    broadcastCloudEvent
+    broadcastCloudEvent,
+    fixablySnapshot,
+    setFixablySnapshot
   } = useApp();
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -1130,9 +1132,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     }).filter(it => {
       const pnClean = String(it.partNumber || '').trim().toUpperCase();
 
-      // 1. MUST be an active part in the system's parts master catalog
+      // 1. If part is explicitly marked inactive in parts catalog, filter out
       const catalogPart = activeCatalogPartsMap.get(pnClean);
-      if (!catalogPart) return false;
+      if (catalogPart && (catalogPart.is_active === false || catalogPart.status === 'inactive')) return false;
 
       // 2. Strict In-Stock check: If out of stock, do NOT display on the page
       if ((it.inStock || 0) <= 0) return false;
@@ -1184,7 +1186,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     const all = Object.values(siteStockData.partsSummary || {}).filter(it => {
       const pnClean = String(it.partNumber || '').trim().toUpperCase();
       const catalogPart = activeCatalogPartsMap.get(pnClean);
-      if (!catalogPart) return false;
+      if (catalogPart && (catalogPart.is_active === false || catalogPart.status === 'inactive')) return false;
       return (it.inStock || 0) > 0;
     });
 
@@ -1783,7 +1785,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           clearSiteParts={clearSiteParts}
           showToast={showToast}
           broadcastCloudEvent={broadcastCloudEvent}
-          initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
+          snapshot={fixablySnapshot}
+          setSnapshot={setFixablySnapshot}
+          initialViewMode={(!isSuperadmin || isPmgUser) ? 'multi_site' : (initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks'))}
           initialSelectedSiteId={allStocksSelectedSiteId}
         />
       </div>
@@ -3834,7 +3838,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           clearSiteParts={clearSiteParts}
           showToast={showToast}
           broadcastCloudEvent={broadcastCloudEvent}
-          initialViewMode={initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks')}
+          snapshot={fixablySnapshot}
+          setSnapshot={setFixablySnapshot}
+          initialViewMode={(!isSuperadmin || isPmgUser) ? 'multi_site' : (initialView || (defaultTab === 'multi_site' ? 'multi_site' : 'all_stocks'))}
           initialSelectedSiteId={allStocksSelectedSiteId}
         />
       ) : activeTab === 'all_stocks' && (

@@ -84,7 +84,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     activePackDraft,
     shipments,
     currentUser,
-    sites = []
+    sites = [],
+    getStockOnHandForSite,
+    fixablySnapshot
   } = useApp();
 
   const isPmgUser = currentUser?.role === 'parts_management';
@@ -223,6 +225,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Verified in-stock parts count for this branch to display on the tab badge
   const branchStockUnitsCount = useMemo(() => {
     if (!activeReceivingSite?.id && !activeReceivingSite?.code) return 0;
+    if (typeof getStockOnHandForSite === 'function') {
+      const siteStock = getStockOnHandForSite(activeReceivingSite.id || activeReceivingSite.code);
+      if (siteStock && typeof siteStock.totalInStock === 'number') {
+        return siteStock.totalInStock;
+      }
+    }
     const siteId = activeReceivingSite.id;
     const siteCode = activeReceivingSite.code;
     return (inventoryUnits || []).filter(u => {
@@ -231,7 +239,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const matchesSite = (siteId && uSiteId === siteId) || (siteCode && uSiteCode === siteCode);
       return matchesSite && String(u.status || '').toLowerCase() === 'in_stock';
     }).length;
-  }, [inventoryUnits, activeReceivingSite]);
+  }, [inventoryUnits, activeReceivingSite, getStockOnHandForSite, fixablySnapshot]);
   
   const [selectedPoId, setSelectedPoId] = useState(() => {
     return globalSelectedPoId || '';

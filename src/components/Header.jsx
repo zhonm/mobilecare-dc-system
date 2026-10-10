@@ -65,8 +65,8 @@ export default function Header() {
       ? { title: 'Branch Stock On Hand', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
       : (pmgSubTab === 'usage_history')
         ? { title: currentUser?.role === 'parts_management' ? 'Parts Consumption Log' : 'Used Parts History', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false }
-        : (pmgSubTab === 'all_stocks')
-          ? { title: 'All Stocks & Multi-Site', section: 'Operations & Logistics', showCategories: false }
+        : (pmgSubTab === 'all_stocks' || pmgSubTab === 'multi_site')
+          ? { title: currentUser?.role === 'parts_management' ? 'Multi-Site Inventory Dashboard' : 'All Stocks & Multi-Site', section: currentUser?.role === 'parts_management' ? 'Network Visibility' : 'Operations & Logistics', showCategories: false }
           : { title: currentUser?.role === 'parts_management' ? 'Parts Requests' : 'Parts Requests & Replenishment', section: currentUser?.role === 'parts_management' ? 'Branch Operations' : 'Operations & Logistics', showCategories: false },
     'all-stocks': { 
       title: 'All Stocks & Inventory', 
@@ -75,7 +75,7 @@ export default function Header() {
     },
     'multi-site': { 
       title: 'Multi-Site Inventory Dashboard', 
-      section: 'Operations & Logistics', 
+      section: currentUser?.role === 'parts_management' ? 'Network Visibility' : 'Operations & Logistics', 
       showCategories: false 
     },
     feedback: {

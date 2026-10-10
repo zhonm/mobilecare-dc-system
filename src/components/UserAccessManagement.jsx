@@ -105,7 +105,7 @@ export default function UserAccessManagement() {
   const isSuperadmin = currentUser?.role === 'superadmin';
   const isAdmin = currentUser?.role === 'admin';
 
-  const matrixPages = ALL_PAGES.filter(p => p.id !== 'user-access');
+  const matrixPages = ALL_PAGES.filter(p => p.id !== 'user-access' && p.id !== 'all-stocks');
   const adminUsers = useMemo(() => (usersList || []).filter(u => u.role === 'admin'), [usersList]);
 
   // Dynamic statistics calculations

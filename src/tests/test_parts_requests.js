@@ -22,14 +22,19 @@ function it(name, fn) {
 }
 
 // 1. ROLE & NAVIGATION CONFIGURATION TESTS
-it('ROLE_PRESETS has parts_management with [request-parts, scan-in, all-stocks]', () => {
+it('ROLE_PRESETS has parts_management with [request-parts, scan-in, multi-site]', () => {
   assert.ok(ROLE_PRESETS.parts_management, 'ROLE_PRESETS.parts_management exists');
-  ['request-parts', 'scan-in', 'all-stocks'].forEach(page => {
+  ['request-parts', 'scan-in', 'multi-site'].forEach(page => {
     assert.ok(
       ROLE_PRESETS.parts_management.includes(page),
       `Permitted pages must contain ${page}`
     );
   });
+  assert.strictEqual(
+    ROLE_PRESETS.parts_management.includes('all-stocks'),
+    false,
+    'all-stocks must NOT be in parts_management preset'
+  );
 });
 
 it('ROLE_OPTIONS includes updated description for parts_management', () => {
@@ -38,32 +43,37 @@ it('ROLE_OPTIONS includes updated description for parts_management', () => {
   assert.strictEqual(opt.label, 'Parts Management (PMG)');
 });
 
-it('ALL_PAGES and PAGE_TITLES include request-parts, scan-in, and all-stocks', () => {
+it('ALL_PAGES and PAGE_TITLES include request-parts, scan-in, all-stocks, and multi-site', () => {
   assert.ok(ALL_PAGES.find(p => p.id === 'request-parts'), 'request-parts in ALL_PAGES');
   assert.ok(ALL_PAGES.find(p => p.id === 'scan-in'), 'scan-in in ALL_PAGES');
   assert.ok(ALL_PAGES.find(p => p.id === 'all-stocks'), 'all-stocks in ALL_PAGES');
+  assert.ok(ALL_PAGES.find(p => p.id === 'multi-site'), 'multi-site in ALL_PAGES');
   assert.ok(PAGE_TITLES['request-parts'], 'request-parts in PAGE_TITLES');
   assert.ok(PAGE_TITLES['scan-in'], 'scan-in in PAGE_TITLES');
   assert.ok(PAGE_TITLES['all-stocks'], 'all-stocks in PAGE_TITLES');
+  assert.ok(PAGE_TITLES['multi-site'], 'multi-site in PAGE_TITLES');
 });
 
 // 2. PERMISSION GUARD (canAccess) SIMULATION
 function simulateCanAccess(user, pageId) {
   if (!user) return false;
   if (user.role === 'superadmin') return true;
-  if (pageId === 'user-access') return false;
+  if (pageId === 'user-access' || pageId === 'all-stocks') return false;
   if (user.isActive === false) return false;
   if (user.role === 'user') {
     return ROLE_PRESETS.user.includes(pageId);
+  }
+  if (user.role === 'parts_management') {
+    return (ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback']).includes(pageId);
   }
   if (Array.isArray(user.permittedPages)) {
     return user.permittedPages.includes(pageId);
   }
   const fallbackPreset = ROLE_PRESETS[user.role] || ROLE_PRESETS.user;
-  return fallbackPreset.includes(pageId) && pageId !== 'user-access';
+  return fallbackPreset.includes(pageId) && pageId !== 'user-access' && pageId !== 'all-stocks';
 }
 
-it('PMG role allows request-parts, scan-in, and all-stocks, while blocking dashboard/admin pages', () => {
+it('PMG role allows request-parts, scan-in, and multi-site, while strictly blocking all-stocks and admin pages', () => {
   const pmgUser = {
     id: 'usr-pmg-01',
     role: 'parts_management',
@@ -74,10 +84,11 @@ it('PMG role allows request-parts, scan-in, and all-stocks, while blocking dashb
 
   assert.strictEqual(simulateCanAccess(pmgUser, 'request-parts'), true, 'PMG can access request-parts');
   assert.strictEqual(simulateCanAccess(pmgUser, 'scan-in'), true, 'PMG can access scan-in');
-  assert.strictEqual(simulateCanAccess(pmgUser, 'all-stocks'), true, 'PMG can access all-stocks');
+  assert.strictEqual(simulateCanAccess(pmgUser, 'multi-site'), true, 'PMG can access multi-site');
+  assert.strictEqual(simulateCanAccess(pmgUser, 'all-stocks'), false, 'PMG strictly CANNOT access all-stocks');
 
   const blockedPages = [
-    'dashboard', 'import', 'forecast', 'records', 'orders',
+    'all-stocks', 'dashboard', 'import', 'forecast', 'records', 'orders',
     'allocation', 'scan-out', 'shipments', 'reports', 'forecast-reports',
     'audit', 'settings', 'user-access'
   ];

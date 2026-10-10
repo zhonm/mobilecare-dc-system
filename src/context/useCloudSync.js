@@ -104,6 +104,8 @@ export function useCloudSync({
   logDeletionAudit,
   setAutoLogoutConfig,
   setSessionAuditLogs,
+  fixablySnapshot = null,
+  setFixablySnapshot = null,
   isDataSyncPaused = false,
   resetInactivityTimer = null
 }) {
@@ -870,6 +872,7 @@ export function useCloudSync({
                       localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(hydrated));
                       localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
                     } catch (e) {}
+                    if (setFixablySnapshot) setFixablySnapshot(hydrated);
                   }
                 }
               } catch (err) {
@@ -881,6 +884,9 @@ export function useCloudSync({
                 ...remoteFixablyHeader,
                 snapshot_data: cachedFixably || null
               });
+              if (cachedFixably && setFixablySnapshot) {
+                setFixablySnapshot(cachedFixably);
+              }
             }
           }
 
@@ -2712,6 +2718,61 @@ export function useCloudSync({
           overlaySnapshotDoc(liveMasterInvDoc);
           overlaySnapshotDoc(branchMasterInvDoc);
 
+          // Overlay Fixably Master Inventory Snapshot for Retail Branches
+          const fixablyDoc = dbSavedRecords?.find(r => r.id === 'master_fixably_inventory_snapshot');
+          let fixablyItems = fixablyDoc?.snapshot_data?.items || cachedFixably?.items || null;
+          if (!fixablyItems) {
+            try {
+              const rawLocalFix = localStorage.getItem('mdc_fixably_snapshot');
+              if (rawLocalFix) {
+                const parsed = JSON.parse(rawLocalFix);
+                if (Array.isArray(parsed?.items)) fixablyItems = parsed.items;
+              }
+            } catch (e) {}
+          }
+          if (Array.isArray(fixablyItems) && fixablyItems.length > 0) {
+            fixablyItems.forEach(it => {
+              const s = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
+              if (s && !deletedSerialsSet.has(s)) {
+                const cleanPn = String(it.partNumber || it.part_number || '').trim().toUpperCase();
+                const partObj = (cleanPn ? partsByPnMap.get(cleanPn) : null) || null;
+                const siteCode = (it.siteCode || it.site_code || 'BRANCH').toUpperCase();
+                const siteJoined = (dbSites || sites || []).find(st => {
+                  const stClean = String(st.code || '').replace(/^(ASP|APP)\s+/, '').toUpperCase();
+                  const curClean = siteCode.replace(/^(ASP|APP)\s+/, '');
+                  return stClean === curClean || String(st.code || '').toUpperCase() === siteCode || st.id === it.siteId;
+                });
+                const siteId = siteJoined?.id || it.siteId || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+
+                const existing = map.get(s);
+                const isPackedOrShipped = existing && (existing.status === 'packed' || existing.status === 'shipped');
+                const targetStatus = isPackedOrShipped ? existing.status : 'in_stock';
+
+                map.set(s, {
+                  ...(existing || {}),
+                  id: existing?.id || `unit-fixably-${s}`,
+                  part_id: partObj?.id || existing?.part_id || `part-${cleanPn}`,
+                  part_number: cleanPn,
+                  description: partObj?.description || it.description || existing?.description || 'Apple Replacement Part',
+                  serial_number: s,
+                  current_site_id: siteId,
+                  site_code: siteJoined?.code || siteCode,
+                  site_name: siteJoined?.name || it.siteName || `${siteCode} Branch`,
+                  stockType: it.stockType || 'DC Stock',
+                  status: targetStatus,
+                  aging_days: it.agingDays,
+                  aging_bracket: it.agingBracket,
+                  status_label: it.statusLabel,
+                  received_at: it.lastReceivedDate || it.dateReceived || existing?.received_at || new Date().toISOString(),
+                  stocking_price: it.partValue || partObj?.stocking_price || 99,
+                  intake_assignment: `${siteCode} Stock`,
+                  notes: `${it.stockType || 'Branch Stock'}`,
+                  updated_at: it.updated_at || existing?.updated_at || new Date().toISOString()
+                });
+              }
+            });
+          }
+
           // Overlay Master Used Parts Registry to guarantee used units persistence
           const usedPartsRegistryDoc = dbSavedRecords?.find(r => r.id === 'master_used_parts_registry');
           let usedRegistryRecords = Array.isArray(usedPartsRegistryDoc?.snapshot_data?.records)
@@ -2731,9 +2792,15 @@ export function useCloudSync({
           } catch (e) {}
 
           if (usedRegistryRecords.length > 0) {
+            const fixablyDocUpdatedMs = fixablyDoc?.updated_at ? new Date(fixablyDoc.updated_at).getTime() : 0;
             usedRegistryRecords.forEach(rec => {
               const s = String(rec.serial_number || '').trim().toUpperCase();
               if (s && !deletedSerialsSet.has(s)) {
+                // If serial was marked used before the latest Fixably upload, but is on-hand in the new upload, Fixably takes precedence
+                const recUsedMs = rec.used_at ? new Date(rec.used_at).getTime() : 0;
+                if (fixablyDocUpdatedMs && recUsedMs && recUsedMs <= fixablyDocUpdatedMs && map.has(s)) {
+                  return;
+                }
                 if (map.has(s)) {
                   const target = map.get(s);
                   const isPackedOrShipped = target.status === 'packed' || target.status === 'shipped';
@@ -3082,6 +3149,7 @@ export function useCloudSync({
                 bus.postMessage({ type: 'FIXABLY_SNAPSHOT_UPDATED', payload: { snapshot: cloudSnap, timestamp: cloudTimestamp } });
                 bus.close();
               }
+              if (setFixablySnapshot) setFixablySnapshot(cloudSnap);
             }
           } catch (e) {
             console.warn('Fixably cloud hydration note:', e);

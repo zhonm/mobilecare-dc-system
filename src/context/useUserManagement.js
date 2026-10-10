@@ -97,7 +97,7 @@ export function useUserManagement({
             if (u.role === 'parts_management') {
               return {
                 ...u,
-                permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']
+                permittedPages: ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback']
               };
             }
             return u;

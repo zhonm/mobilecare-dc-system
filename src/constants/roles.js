@@ -1,11 +1,11 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'feedback'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'all-stocks', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback'],
   user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'orders', 'audit', 'feedback'],
-  parts_management: ['request-parts', 'scan-in', 'all-stocks', 'feedback'],
+  parts_management: ['request-parts', 'scan-in', 'multi-site', 'feedback'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'all-stocks', 'feedback'],
-  site_staff: ['request-parts', 'scan-in', 'all-stocks', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'feedback'],
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'multi-site', 'feedback'],
+  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'feedback'],
   management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'forecast-reports', 'audit', 'feedback']
 };
 

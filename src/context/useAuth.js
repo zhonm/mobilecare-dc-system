@@ -34,7 +34,7 @@ export function useAuth({
       const savedUser = getStoredUserSession();
       if (savedUser && typeof savedUser === 'object' && savedUser.email) {
         if (savedUser.role === 'parts_management') {
-          savedUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
+          savedUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback'];
         }
         return savedUser;
       }
@@ -196,7 +196,7 @@ export function useAuth({
           }
 
           if (dbUser.role === 'parts_management') {
-            dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks'];
+            dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback'];
           }
           persistUserSession(dbUser);
           setCurrentUser(dbUser);
@@ -389,10 +389,10 @@ export function useAuth({
   const canAccess = (pageId) => {
     if (!currentUser) return false;
     // 1. Superadmin has full unrestricted access to all modules
-    if (currentUser.role === 'superadmin') return true;
+    if (currentUser.role === 'superadmin' || Boolean(currentUser.isSuperAdmin)) return true;
 
-    // 2. User Access Management is strictly restricted to Superadmin
-    if (pageId === 'user-access') return false;
+    // 2. User Access Management and All Stocks & Inventory are strictly restricted to Superadmin
+    if (pageId === 'user-access' || pageId === 'all-stocks') return false;
 
     // 3. Deactivated accounts have zero access
     if (currentUser.isActive === false) return false;
@@ -404,7 +404,7 @@ export function useAuth({
 
     // 5. Parts Management (PMG) role: Allow all pages in ROLE_PRESETS.parts_management
     if (currentUser.role === 'parts_management') {
-      return (ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'all-stocks']).includes(pageId);
+      return (ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback']).includes(pageId);
     }
 
     // 6. Check explicit permitted pages assigned by Superadmin for admin accounts
@@ -414,7 +414,7 @@ export function useAuth({
 
     // 7. Fallback preset if permittedPages is not set on legacy user
     const fallbackPreset = ROLE_PRESETS[currentUser.role] || ROLE_PRESETS.user;
-    return fallbackPreset.includes(pageId) && pageId !== 'user-access';
+    return fallbackPreset.includes(pageId) && pageId !== 'user-access' && pageId !== 'all-stocks';
   };
 
 
