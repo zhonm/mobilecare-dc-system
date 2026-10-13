@@ -1,6 +1,4 @@
 import assert from 'assert';
-import { getCategoryForPart } from '../utils/categoryFilter.js';
-import { resolveCanonicalIPhoneModel } from '../utils/partResolver.js';
 
 function checkCanViewSiteSerials(user, targetSiteCode) {
   const isSuperadmin = user?.role === 'superadmin' || user?.role === 'SUPERADMIN' || Boolean(user?.isSuperAdmin);
@@ -76,10 +74,8 @@ const skus = [
   { pn: '661-04000', desc: 'Rear System, iPhone SE 2nd Gen', count: 1 }
 ];
 
-let totalUnitsGen = 0;
 skus.forEach((sku, sIdx) => {
   for (let i = 0; i < sku.count; i++) {
-    totalUnitsGen++;
     mockAnnexFixablyItems.push({
       id: `anx-unit-${sIdx}-${i}`,
       partNumber: sku.pn,
@@ -110,7 +106,7 @@ function simulateGetStockOnHandForSite({
   inventoryUnits = [],
   usedPartsRegistry = [],
   sites = mockSites,
-  parts = []
+  _parts = []
 }) {
   const targetSite = sites.find(s =>
     s.id === siteIdOrCode ||

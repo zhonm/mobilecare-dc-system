@@ -25,7 +25,8 @@ import {
   TrendingDown,
   ShieldAlert,
   Zap,
-  Lock
+  Lock,
+  ArrowRightLeft
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
 import { supabase } from '../supabase/client.js';
@@ -331,7 +332,7 @@ export default function FixablyInventoryDashboard({
     return () => {
       isMounted = false;
     };
-  }, [sites, syncSnapshotToCloud]);
+  }, [sites, syncSnapshotToCloud, setSnapshot]);
 
   // Real-time multi-user & cross-device snapshot synchronization listener
   useEffect(() => {
@@ -429,7 +430,7 @@ export default function FixablyInventoryDashboard({
         supabase.removeChannel(realtimeChannel).catch(() => {});
       }
     };
-  }, [sites]);
+  }, [sites, setSnapshot]);
 
   // Handle slot file assignment and validation
   const handleSlotFileChange = async (slotKey, file) => {

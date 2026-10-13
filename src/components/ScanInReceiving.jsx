@@ -86,7 +86,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     currentUser,
     sites = [],
     getStockOnHandForSite,
-    fixablySnapshot
   } = useApp();
 
   const isPmgUser = currentUser?.role === 'parts_management';
@@ -239,7 +238,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const matchesSite = (siteId && uSiteId === siteId) || (siteCode && uSiteCode === siteCode);
       return matchesSite && String(u.status || '').toLowerCase() === 'in_stock';
     }).length;
-  }, [inventoryUnits, activeReceivingSite, getStockOnHandForSite, fixablySnapshot]);
+  }, [inventoryUnits, activeReceivingSite, getStockOnHandForSite]);
   
   const [selectedPoId, setSelectedPoId] = useState(() => {
     return globalSelectedPoId || '';

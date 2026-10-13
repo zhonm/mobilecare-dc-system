@@ -295,7 +295,9 @@ export async function parseKgbUsedCsv(fileOrContent) {
     }
 
     const delim = lines[headerIdx].includes(';') ? ';' : ',';
-    const headers = parseDelimitedLine(lines[headerIdx], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''));
+    const rawHeaders = parseDelimitedLine(lines[headerIdx], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, '').replace(/^\ufeff/, ''));
+    const firstEmptyHeaderIdx = rawHeaders.findIndex((h, i) => i >= 4 && !h);
+    const headers = firstEmptyHeaderIdx !== -1 ? rawHeaders.slice(0, firstEmptyHeaderIdx) : rawHeaders;
 
     const getIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
 
@@ -469,17 +471,34 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       return { success: false, error: 'CSV file contains no inventory records.' };
     }
 
-    // Auto-detect delimiter (; or ,)
-    const delim = lines[0].includes(';') ? ';' : ',';
-    const headerRow = parseDelimitedLine(lines[0], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''));
+    // Determine header row (typically row 0, or row 1 when a report title row is present)
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      const lower = lines[i].toLowerCase();
+      if (
+        lower.includes('part number') ||
+        lower.includes('part description') ||
+        lower.includes('product code') ||
+        (lower.includes('stock name') && (lower.includes('serial') || lower.includes('quantity')))
+      ) {
+        headerIdx = i;
+        break;
+      }
+    }
+
+    // Auto-detect delimiter (; or ,) from header row
+    const delim = lines[headerIdx].includes(';') ? ';' : ',';
+    const rawHeaderRow = parseDelimitedLine(lines[headerIdx], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, '').replace(/^\ufeff/, ''));
+    const firstEmptyColIdx = rawHeaderRow.findIndex((h, i) => i >= 4 && !h);
+    const headerRow = firstEmptyColIdx !== -1 ? rawHeaderRow.slice(0, firstEmptyColIdx) : rawHeaderRow;
 
     const getColIdx = (aliases) => headerRow.findIndex(h => aliases.some(a => h.includes(a)));
 
     const idxStockName = getColIdx(['stock name', 'location', 'site', 'branch']);
     const idxStockType = getColIdx(['stock type', 'type']);
-    const idxPartNumber = getColIdx(['part number', 'part #', 'p/n', 'code']);
-    const idxPartDesc = getColIdx(['part description', 'description', 'desc', 'product name']);
-    const idxPartSerial = getColIdx(['part serial', 'serial', 's/n', 'imei']);
+    const idxPartNumber = getColIdx(['part number', 'part #', 'p/n', 'product code', 'code']);
+    const idxPartDesc = getColIdx(['part description', 'product description', 'description', 'desc', 'product name']);
+    const idxPartSerial = getColIdx(['part serial', 'serial number', 'serial', 's/n', 'imei']);
     const idxPartImei = getColIdx(['part imei', 'imei']);
     const idxLastReceived = getColIdx(['last received date', 'received date', 'last received', 'date']);
     const idxQty = getColIdx(['quantity', 'qty']);
@@ -512,7 +531,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       'MSPI-Owned / C/I REP': 0
     };
 
-    for (let i = 1; i < lines.length; i++) {
+    for (let i = headerIdx + 1; i < lines.length; i++) {
       const cols = parseDelimitedLine(lines[i], delim);
       if (!cols || cols.length <= 1) continue;
 

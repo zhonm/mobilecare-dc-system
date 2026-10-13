@@ -1,6 +1,5 @@
 import assert from 'assert';
 import { ROLE_PRESETS } from '../constants/roles.js';
-import { ALL_PAGES } from '../constants/navigation.js';
 
 console.log('========================================================================');
 console.log('TEST SUITE: PMG All Stocks Restriction & Multi-Site Serial Privacy');
@@ -296,4 +295,3 @@ console.log('  ✓ PASS: PMG users cannot view dead stock/non-moving health metr
 console.log('\n========================================================================');
 console.log('ALL PMG ALL-STOCKS RESTRICTION & SERIAL PRIVACY TESTS PASSED (100%)');
 console.log('========================================================================\n');
-

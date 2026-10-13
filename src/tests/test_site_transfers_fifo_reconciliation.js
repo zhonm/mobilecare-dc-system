@@ -1,10 +1,10 @@
 import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
-import * as XLSX from 'xlsx';
 import { fileURLToPath } from 'url';
 import {
   reconcileSiteTransfers,
+  parseFifoMonitoringWorkbook,
   normalizeSite,
   normalizeDate,
   isIPhone13AndUp
@@ -51,47 +51,31 @@ assert.strictEqual(normalizeDate(46066), '2026-02-13');
 assert.strictEqual(normalizeDate('46181.333333333336'), '2026-06-08');
 console.log('  ✓ PASS: Dates normalize from ISO string, slash format, and Excel serial numbers\n');
 
-// 3. Test Full Dataset Reconciliation
-console.log('Test 3: Reconciliation with Real Workspace Datasets');
-const gsxCsvPath = path.join(workspaceDir, 'Custom reports - GSX KBB  KGBs Used.csv');
-const transCsvPath = path.join(workspaceDir, 'Custom reports - Stock Transfers (All).csv');
+// 3. Test Full Dataset Reconciliation against FIFO & (DC stocks only) Aging Stocks  Monitoring.xlsx
+console.log('Test 3: Reconciliation with FIFO & (DC stocks only) Aging Stocks  Monitoring.xlsx');
+const workbookPath = path.join(workspaceDir, 'FIFO & (DC stocks only) Aging Stocks  Monitoring.xlsx');
 
-if (fs.existsSync(gsxCsvPath) && fs.existsSync(transCsvPath)) {
-  // Read and parse GSX
-  const gsxBuf = fs.readFileSync(gsxCsvPath);
-  const gsxWb = XLSX.read(gsxBuf, { type: 'buffer' });
-  const rawGsxRows = XLSX.utils.sheet_to_json(gsxWb.Sheets[gsxWb.SheetNames[0]]);
-  const gsxRecords = rawGsxRows.map(r => ({
-    order_id: String(r['Order id'] || '').trim(),
-    location_name: String(r['Location Name'] || '').trim(),
-    gsx_repair_number: String(r['GSX Repair Number'] || '').trim(),
-    gsx_repair_strategy: String(r['GSX Repair Strategy'] || '').trim(),
-    current_gsx_status: String(r['Current GSX Status'] || '').trim(),
-    repair_closed_date: normalizeDate(r['Repair Closed Date']),
-    product_code: String(r['Product Code'] || '').trim(),
-    product_description: String(r['Product Description'] || '').trim(),
-    product_kgb: String(r['Product KGB'] || '').trim().toUpperCase(),
-    product_kbb: String(r['Product KBB'] || '').trim().toUpperCase()
-  }));
+if (fs.existsSync(workbookPath)) {
+  const wbBuf = fs.readFileSync(workbookPath);
+  const mockFile = {
+    name: 'FIFO & (DC stocks only) Aging Stocks  Monitoring.xlsx',
+    arrayBuffer: async () => wbBuf.buffer.slice(wbBuf.byteOffset, wbBuf.byteOffset + wbBuf.byteLength)
+  };
+  const parsedWb = await parseFifoMonitoringWorkbook(mockFile);
+  assert.strictEqual(parsedWb.success, true, 'Expected workbook parse to succeed');
 
-  // Read and parse Stock Transfers
-  const transBuf = fs.readFileSync(transCsvPath);
-  const transWb = XLSX.read(transBuf, { type: 'buffer' });
-  const rawTransRows = XLSX.utils.sheet_to_json(transWb.Sheets[transWb.SheetNames[0]]);
-  const transRecords = rawTransRows.map(r => ({
-    transfer_received_date: normalizeDate(r['Transfer Received Date']),
-    from_stock: String(r['From Stock'] || '').trim(),
-    to_stock: String(r['To Stock'] || '').trim(),
-    product_code: String(r['Product Code'] || '').trim(),
-    product_name: String(r['Product Name'] || '').trim(),
-    transfer_quantity: Number(r['Transfer Quantity']) || 1,
-    serial_number: String(r['Serial Number'] || '').trim().toUpperCase(),
-    transfer_value: Number(r['Transfer Value']) || 0
-  }));
+  const transRecords = parsedWb.transfers;
+  const gsxRecords = parsedWb.gsxRecords;
 
-  console.log(`  Read ${gsxRecords.length} GSX rows and ${transRecords.length} Transfer rows.`);
+  console.log(`  Read ${gsxRecords.length} KGB Used rows and ${transRecords.length} Stock Transfer rows.`);
 
-  const reconciliation = reconcileSiteTransfers(transRecords, gsxRecords, []);
+  const reconciliation = reconcileSiteTransfers(transRecords, gsxRecords, [], {
+    dcStocksOnly: true,
+    preserveDuplicateTransfers: true,
+    agingPolicy: 'EXCEL_PARITY',
+    referenceDate: '2026-10-13',
+    customPriceMap: parsedWb.customPrices
+  });
 
   console.log('  Reconciliation KPIs:');
   console.log(`    Total Serials: ${reconciliation.kpis.totalSerials}`);
@@ -99,17 +83,25 @@ if (fs.existsSync(gsxCsvPath) && fs.existsSync(transCsvPath)) {
   console.log(`    In Stock (Unused): ${reconciliation.kpis.inStockCount}`);
   console.log(`    FIFO Violations: ${reconciliation.kpis.fifoViolationsCount}`);
   console.log(`    FIFO Compliance Rate: ${reconciliation.kpis.fifoComplianceRate}%`);
+  console.log(`    Non-Moving: ${reconciliation.kpis.nonMovingCount} ($${reconciliation.kpis.nonMovingValue})`);
+  console.log(`    Slow-Moving: ${reconciliation.kpis.slowMovingCount} ($${reconciliation.kpis.slowMovingValue})`);
   console.log(`    Cross-Site Usages: ${reconciliation.kpis.crossSiteDiscrepanciesCount}`);
   console.log(`    Sites Audited: ${reconciliation.sitesScorecard.length}`);
 
-  assert(reconciliation.kpis.totalSerials > 3000, 'Expected >3,000 unique serials');
-  assert(reconciliation.kpis.usedCount > 1500, 'Expected >1,500 used serials');
-  assert(reconciliation.kpis.inStockCount > 1500, 'Expected >1,500 in stock serials');
-  assert(reconciliation.sitesScorecard.length > 20, 'Expected >20 branches audited');
+  assert.strictEqual(reconciliation.kpis.totalSerials, 2962, 'Expected 2,962 DC transfer rows');
+  assert.strictEqual(reconciliation.kpis.usedCount, 1534, 'Expected 1,534 used serials');
+  assert.strictEqual(reconciliation.kpis.inStockCount, 1428, 'Expected 1,428 in stock serials');
+  assert.strictEqual(reconciliation.kpis.fifoViolationsCount, 197, 'Expected 197 FIFO violations');
+  assert.strictEqual(reconciliation.kpis.nonMovingCount, 609, 'Expected 609 Non-Moving units');
+  assert.strictEqual(reconciliation.kpis.nonMovingValue, 120261, 'Expected $120,261 Non-Moving cost');
+  assert.strictEqual(reconciliation.kpis.slowMovingCount, 631, 'Expected 631 Slow-Moving units');
+  assert.strictEqual(reconciliation.kpis.slowMovingValue, 101619, 'Expected $101,619 Slow-Moving cost');
+  assert.strictEqual(reconciliation.kpis.crossSiteDiscrepanciesCount, 62, 'Expected 62 Cross-Site usages');
+  assert.strictEqual(reconciliation.sitesScorecard.length, 26, 'Expected 26 branches audited');
 
-  console.log('  ✓ PASS: Large-scale multi-site dataset reconciled accurately\n');
+  console.log('  ✓ PASS: 100% mathematical parity with FIFO & (DC stocks only) Aging Stocks Monitoring.xlsx\n');
 } else {
-  console.log('  (Skipping dataset load: files not found)');
+  console.log('  (Skipping dataset load: workbook not found)');
 }
 
 // 4. Test FIFO Violation Edge Case Specifically

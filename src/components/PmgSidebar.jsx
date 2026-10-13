@@ -26,7 +26,6 @@ export default function PmgSidebar() {
     partsRequests = [],
     getStockOnHandForSite,
     inventoryUnits = [],
-    fixablySnapshot,
     isAutoRefreshing,
     isMobileNavOpen,
     setIsMobileNavOpen
@@ -48,7 +47,7 @@ export default function PmgSidebar() {
       return (uSiteId === userSite.id || uSiteCode === userSite.code) && String(u.status || '').toLowerCase() === 'in_stock';
     });
     return { totalInStock: units.length };
-  }, [getStockOnHandForSite, userSite, inventoryUnits, fixablySnapshot]);
+  }, [getStockOnHandForSite, userSite, inventoryUnits]);
 
   // Requests metrics for this branch
   const branchRequests = useMemo(() => {

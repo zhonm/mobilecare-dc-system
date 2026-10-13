@@ -81,7 +81,7 @@ export default function Login() {
     }
 
     if (!emailInput.trim().toLowerCase().endsWith('@mobilecareph.com')) {
-      setErrorMessage('Access restricted: Only official @mobilecareph.com email accounts are authorized.');
+      setErrorMessage('Access restricted: Please sign in using company email address.');
       return;
     }
 

@@ -15,7 +15,7 @@ import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel
 import { getPartCategory } from './categoryFilter.js';
 import { getShipmentRiderName } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
-import { normalizeSite } from './siteTransfersReconciler.js';
+import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -3463,7 +3463,20 @@ export async function parseFixablyInventoryValueCsv(
       return { success: false, error: 'CSV file is empty or contains no data rows.' };
     }
 
-    const delim = lines[0].includes(';') ? ';' : ',';
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      const lower = lines[i].toLowerCase();
+      if (
+        lower.includes('part number') ||
+        lower.includes('part description') ||
+        (lower.includes('stock name') && (lower.includes('serial') || lower.includes('quantity')))
+      ) {
+        headerIdx = i;
+        break;
+      }
+    }
+
+    const delim = lines[headerIdx].includes(';') ? ';' : ',';
 
     function parseCSVLine(line) {
       const regex = new RegExp(`(?:^|${delim})(?:"([^"]*(?:""[^"]*)*)"|([^"${delim}]*))`, 'g');
@@ -3476,7 +3489,9 @@ export async function parseFixablyInventoryValueCsv(
       return row;
     }
 
-    const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+    const rawHeaders = parseCSVLine(lines[headerIdx]).map(h => h.trim().toLowerCase().replace(/^\ufeff/, ''));
+    const firstEmptyColIdx = rawHeaders.findIndex((h, i) => i >= 4 && !h);
+    const headers = firstEmptyColIdx !== -1 ? rawHeaders.slice(0, firstEmptyColIdx) : rawHeaders;
     const getIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
 
     const idxStock = getIdx(['stock name', 'location', 'site']);
@@ -3542,7 +3557,7 @@ export async function parseFixablyInventoryValueCsv(
     const siteBreakdown = {};
     let totalValue = 0;
 
-    for (let i = 1; i < lines.length; i++) {
+    for (let i = headerIdx + 1; i < lines.length; i++) {
       const cols = parseCSVLine(lines[i]);
       if (!cols || cols.length <= 1) continue;
 
@@ -4505,11 +4520,11 @@ export async function parseStockTransfersReportFile(file) {
     const workbook = XLSX.read(buffer, { type: 'array' });
     
     let targetSheetName = workbook.SheetNames[0];
-    for (const name of workbook.SheetNames) {
-      if (/transfer|stock|report/i.test(name)) {
-        targetSheetName = name;
-        break;
-      }
+    const preferredSheet = workbook.SheetNames.find(name => /^stock\s*transfers?$/i.test(String(name).trim()))
+      || workbook.SheetNames.find(name => /stock\s*transfer/i.test(name))
+      || workbook.SheetNames.find(name => /transfer/i.test(name));
+    if (preferredSheet) {
+      targetSheetName = preferredSheet;
     }
 
     const worksheet = workbook.Sheets[targetSheetName];
@@ -4544,18 +4559,27 @@ export async function parseStockTransfersReportFile(file) {
     
     let dateCol = -1, fromCol = -1, toCol = -1, codeCol = -1, nameCol = -1, qtyCol = -1, snCol = -1, imeiCol = -1, valCol = -1;
     
-    headers.forEach((h, idx) => {
+    // First locate 'from stock' so multi-table sheets (like Used Serial.csv) anchor to the Transfer table block
+    const explicitFromIdx = headers.findIndex(h => /fromstock|fromlocation|fromsite/i.test(h.replace(/[^a-z0-9]/gi, '')));
+    const startSearchIdx = explicitFromIdx > 0 ? Math.max(0, explicitFromIdx - 1) : 0;
+
+    for (let idx = startSearchIdx; idx < headers.length; idx++) {
+      const h = headers[idx];
       const clean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (/receiveddate|transferreceiveddate|transferdate|date|received/.test(clean)) dateCol = idx;
-      else if (/fromstock|fromlocation|fromsite|source|from/.test(clean)) fromCol = idx;
-      else if (/tostock|tolocation|tosite|destination|dest|to/.test(clean)) toCol = idx;
-      else if (/productcode|partnumber|partno|partcode|itemcode|pn|code/.test(clean)) codeCol = idx;
-      else if (/productname|partdescription|description|itemname|product|desc|name/.test(clean)) nameCol = idx;
-      else if (/transferquantity|quantity|qty|count/.test(clean)) qtyCol = idx;
-      else if (/serialnumber|serialno|serial|sn/.test(clean)) snCol = idx;
-      else if (/imeinumber|imei/.test(clean)) imeiCol = idx;
-      else if (/transfervalue|totalvalue|value|price|cost|amount/.test(clean)) valCol = idx;
-    });
+      if (!clean) {
+        if (fromCol !== -1 && toCol !== -1 && snCol !== -1) break;
+        continue;
+      }
+      if (dateCol === -1 && /receiveddate|transferreceiveddate|transferdate|date|received/.test(clean)) dateCol = idx;
+      else if (fromCol === -1 && /fromstock|fromlocation|fromsite|source|from/.test(clean)) fromCol = idx;
+      else if (toCol === -1 && /tostock|tolocation|tosite|destination|dest|to/.test(clean)) toCol = idx;
+      else if (codeCol === -1 && /productcode|partnumber|partno|partcode|itemcode|pn|code/.test(clean)) codeCol = idx;
+      else if (nameCol === -1 && /productname|partdescription|description|itemname|product|desc|name/.test(clean)) nameCol = idx;
+      else if (qtyCol === -1 && /transferquantity|quantity|qty|count/.test(clean)) qtyCol = idx;
+      else if (snCol === -1 && /serialnumber|serialno|serial|sn/.test(clean)) snCol = idx;
+      else if (imeiCol === -1 && /imeinumber|imei/.test(clean)) imeiCol = idx;
+      else if (valCol === -1 && /transfervalue|totalvalue|value|price|cost|amount/.test(clean)) valCol = idx;
+    }
 
     if (dateCol === -1) dateCol = 0;
     if (fromCol === -1) fromCol = 1;
@@ -4597,7 +4621,10 @@ export async function parseStockTransfersReportFile(file) {
 
       const qty = Number(row[qtyCol]) || 1;
       let val = 0;
-      if (valCol >= 0 && row[valCol] !== undefined && row[valCol] !== null && row[valCol] !== '') {
+      const sheet35Price = lookupSheet35StockPrice(codeVal);
+      if (sheet35Price > 0) {
+        val = sheet35Price * qty;
+      } else if (valCol >= 0 && row[valCol] !== undefined && row[valCol] !== null && row[valCol] !== '') {
         const cleanVal = String(row[valCol]).replace(/[^0-9.-]/g, '');
         val = parseFloat(cleanVal) || 0;
       }
@@ -5138,9 +5165,9 @@ export async function exportSiteTransfersFifoAuditToExcel({
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
-  ws1.mergeCells('A1:J1');
+  ws1.mergeCells('A1:N1');
   const t1 = ws1.getCell('A1');
-  t1.value = 'MOBILE CARE SERVICES PHILS. INC. — Multi-Site Stock Transfers & FIFO Compliance Audit';
+  t1.value = 'MOBILE CARE SERVICES PHILS. INC. — Multi-Site Stock Transfers, FIFO & DC Aging Stocks Audit';
   t1.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
   t1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
   t1.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -5160,7 +5187,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
   ws1.getCell('C2').alignment = { horizontal: 'center', vertical: 'middle' };
 
   ws1.mergeCells('E2:F2');
-  ws1.getCell('E2').value = `IN STOCK (UNUSED): ${(kpis.inStockCount || 0).toLocaleString()} ($${(kpis.inStockValue || 0).toLocaleString()})`;
+  ws1.getCell('E2').value = `IN STOCK: ${(kpis.inStockCount || 0).toLocaleString()} ($${(kpis.inStockValue || 0).toLocaleString()})`;
   ws1.getCell('E2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
   ws1.getCell('E2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
   ws1.getCell('E2').alignment = { horizontal: 'center', vertical: 'middle' };
@@ -5171,16 +5198,23 @@ export async function exportSiteTransfersFifoAuditToExcel({
   ws1.getCell('G2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: (kpis.fifoComplianceRate || 100) >= 90 ? 'FF16A34A' : 'FFDC2626' } };
   ws1.getCell('G2').alignment = { horizontal: 'center', vertical: 'middle' };
 
-  ws1.mergeCells('I2:J2');
-  ws1.getCell('I2').value = `CROSS-SITE LEAKAGE: ${(kpis.crossSiteDiscrepanciesCount || 0).toLocaleString()}`;
+  ws1.mergeCells('I2:K2');
+  ws1.getCell('I2').value = `NON-MOVING: ${(kpis.nonMovingCount || 0).toLocaleString()} ($${(kpis.nonMovingValue || 0).toLocaleString()})`;
   ws1.getCell('I2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
-  ws1.getCell('I2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF7C3AED' } };
+  ws1.getCell('I2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF991B1B' } };
   ws1.getCell('I2').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  ws1.mergeCells('L2:N2');
+  ws1.getCell('L2').value = `SLOW-MOVING: ${(kpis.slowMovingCount || 0).toLocaleString()} ($${(kpis.slowMovingValue || 0).toLocaleString()})`;
+  ws1.getCell('L2').font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  ws1.getCell('L2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB45309' } };
+  ws1.getCell('L2').alignment = { horizontal: 'center', vertical: 'middle' };
   ws1.getRow(2).height = 22;
 
   const scoreHeaders = [
     'Branch Code', 'Branch Full Name', 'Total Received', 'Used in Repairs',
     'In Stock (Unused)', 'FIFO Compliant', 'FIFO Violations', 'Compliance Rate (%)',
+    'Non-Moving Units', 'Non-Moving Cost ($)', 'Slow-Moving Units', 'Slow-Moving Cost ($)',
     'Cross-Site Usages', 'In-Stock Value ($)'
   ];
   const sHeadRow = ws1.addRow(scoreHeaders);
@@ -5201,6 +5235,10 @@ export async function exportSiteTransfersFifoAuditToExcel({
       s.fifoCompliantCount,
       s.fifoViolationsCount,
       `${s.complianceRate}%`,
+      s.nonMovingCount || 0,
+      s.nonMovingValue || 0,
+      s.slowMovingCount || 0,
+      s.slowMovingValue || 0,
       s.crossSiteCount,
       s.inStockValue
     ]);
@@ -5217,7 +5255,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
         }
       } else if (cNum === 2) {
         cell.alignment = { horizontal: 'left', vertical: 'middle' };
-      } else if (cNum === 10) {
+      } else if (cNum === 10 || cNum === 12 || cNum === 14) {
         cell.numFmt = '$#,##0.00';
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
       } else {
@@ -5229,26 +5267,27 @@ export async function exportSiteTransfersFifoAuditToExcel({
   ws1.columns = [
     { width: 14 }, { width: 38 }, { width: 15 }, { width: 16 },
     { width: 18 }, { width: 16 }, { width: 16 }, { width: 20 },
+    { width: 18 }, { width: 20 }, { width: 18 }, { width: 20 },
     { width: 18 }, { width: 18 }
   ];
 
-  // ── Sheet 2: Master Reconciliation Ledger ───────────────────────────────────
-  const ws2 = workbook.addWorksheet('Reconciliation Master', {
+  // ── Sheet 2: Master Reconciliation Ledger ('KGB Used Serials') ──────────────
+  const ws2 = workbook.addWorksheet('KGB Used Serials', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
-  ws2.mergeCells('A1:L1');
+  ws2.mergeCells('A1:J1');
   const t2 = ws2.getCell('A1');
-  t2.value = 'MOBILE CARE SERVICES PHILS. INC. — Complete Stock Transfers & GSX Usage Reconciliation Ledger';
+  t2.value = 'MOBILE CARE SERVICES PHILS. INC. — KGB Used Serials Master Reconciliation Ledger';
   t2.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
   t2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
   t2.alignment = { horizontal: 'center', vertical: 'middle' };
   ws2.getRow(1).height = 28;
 
   const mHeaders = [
-    'Serial Number', 'Part Number', 'Part Description', 'Received Date',
-    'From Stock', 'Current Site', 'Usage Status', 'Repair Closed Date',
-    'GSX Location', 'GSX Order #', 'FIFO Status', 'Days in Stock'
+    'Transfer Received Date', 'From Stock', 'To Stock', 'Serial Used by:',
+    'Part Number', 'Part Description', 'Transferred Serial', 'Repair Closed Date',
+    'Order Number', 'Remarks'
   ];
   const mHeadRow = ws2.addRow(mHeaders);
   mHeadRow.height = 24;
@@ -5260,18 +5299,16 @@ export async function exportSiteTransfersFifoAuditToExcel({
 
   records.forEach((r, idx) => {
     const row = ws2.addRow([
-      sanitizeForSpreadsheet(r.serial_number),
-      sanitizeForSpreadsheet(r.product_code),
-      sanitizeForSpreadsheet(r.product_name),
       sanitizeForSpreadsheet(r.transfer_received_date),
       sanitizeForSpreadsheet(r.from_stock),
-      sanitizeForSpreadsheet(r.current_site.name),
-      r.is_used ? 'Used in GSX' : 'In Stock (Unused)',
-      sanitizeForSpreadsheet(r.repair_closed_date || '—'),
-      sanitizeForSpreadsheet(r.gsx_location_name || '—'),
-      sanitizeForSpreadsheet(r.gsx_order_id || '—'),
-      r.fifo_status.replace(/_/g, ' '),
-      r.days_in_stock
+      sanitizeForSpreadsheet(r.to_stock),
+      sanitizeForSpreadsheet(r.serial_used_by_label || r.gsx_location_name || ''),
+      sanitizeForSpreadsheet(r.product_code),
+      sanitizeForSpreadsheet(r.product_name),
+      sanitizeForSpreadsheet(r.serial_number),
+      sanitizeForSpreadsheet(r.repair_closed_date || ''),
+      sanitizeForSpreadsheet(r.gsx_order_id || ''),
+      r.remarks || (r.is_used ? (r.fifo_status.includes('VIOLATION') ? 'FIFO Violation (Older Stock Exists)' : 'FIFO Compliant') : 'In Stock')
     ]);
     row.height = 20;
     const isAlt = idx % 2 === 1;
@@ -5279,34 +5316,34 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.font = { name: 'Arial', size: 9 };
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
-      if (cNum === 1) {
+      if (cNum === 7) {
         cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
       }
-      if (cNum === 7) {
-        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: r.is_used ? 'FF15803D' : 'FFD97706' } };
+      if (cNum === 4 && r.is_cross_site_discrepancy) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF7C3AED' } };
       }
-      if (cNum === 11) {
+      if (cNum === 10) {
         const isVio = r.fifo_status.includes('VIOLATION');
-        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: isVio ? 'FFDC2626' : r.is_used ? 'FF15803D' : 'FF64748B' } };
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: isVio ? 'FFDC2626' : r.is_used ? 'FF15803D' : 'FFD97706' } };
       }
     });
   });
 
   ws2.columns = [
-    { width: 22 }, { width: 14 }, { width: 32 }, { width: 14 },
-    { width: 20 }, { width: 32 }, { width: 16 }, { width: 18 },
-    { width: 32 }, { width: 14 }, { width: 26 }, { width: 14 }
+    { width: 18 }, { width: 18 }, { width: 20 }, { width: 34 },
+    { width: 16 }, { width: 32 }, { width: 22 }, { width: 18 },
+    { width: 16 }, { width: 28 }
   ];
 
-  // ── Sheet 3: Unused Stocks (In-Stock Site by Site) ──────────────────────────
+  // ── Sheet 3: Unused & Aging Stocks (In-Stock Site by Site) ──────────────────
   const unusedList = records.filter(r => !r.is_used);
-  const ws3 = workbook.addWorksheet('Unused Stocks (In-Stock)', {
+  const ws3 = workbook.addWorksheet('DC Aging Stocks (Unused)', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
   ws3.mergeCells('A1:I1');
   const t3 = ws3.getCell('A1');
-  t3.value = `MOBILE CARE SERVICES PHILS. INC. — Active In-Stock & Idle Parts Audit (${unusedList.length.toLocaleString()} Units)`;
+  t3.value = `MOBILE CARE SERVICES PHILS. INC. — DC Aging Stocks (Non-Moving & Slow-Moving) (${unusedList.length.toLocaleString()} Units)`;
   t3.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
   t3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
   t3.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -5314,7 +5351,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
 
   const uHeaders = [
     'Holding Site', 'Part Number', 'Part Description', 'Serial Number',
-    'Received Date', 'Days In Stock', 'Aging Category', 'Transfer Origin', 'Unit Valuation ($)'
+    'Received Date', 'Days In Stock', 'Excel Aging Status', 'Aging Category', 'Cost (Stock Price $)'
   ];
   const uHeadRow = ws3.addRow(uHeaders);
   uHeadRow.height = 24;
@@ -5332,8 +5369,8 @@ export async function exportSiteTransfersFifoAuditToExcel({
       sanitizeForSpreadsheet(r.serial_number),
       sanitizeForSpreadsheet(r.transfer_received_date),
       r.days_in_stock,
+      r.aging_status_label || 'Active (<31d)',
       r.aging_bucket,
-      sanitizeForSpreadsheet(r.from_stock),
       r.unit_price
     ]);
     row.height = 20;
@@ -5343,8 +5380,10 @@ export async function exportSiteTransfersFifoAuditToExcel({
       cell.border = borderThin;
       if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
       if (cNum === 4) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
-      if (cNum === 7 && (r.days_in_stock > 60)) {
+      if (cNum === 7 && r.aging_category === 'NON_MOVING') {
         cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+      } else if (cNum === 7 && r.aging_category === 'SLOW_MOVING') {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFB45309' } };
       }
       if (cNum === 9) {
         cell.numFmt = '$#,##0.00';
@@ -5355,7 +5394,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
 
   ws3.columns = [
     { width: 32 }, { width: 14 }, { width: 32 }, { width: 22 },
-    { width: 14 }, { width: 14 }, { width: 18 }, { width: 20 }, { width: 18 }
+    { width: 14 }, { width: 14 }, { width: 24 }, { width: 20 }, { width: 20 }
   ];
 
   // ── Sheet 4: FIFO Violations Audit ──────────────────────────────────────────
@@ -5394,7 +5433,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
       sanitizeForSpreadsheet(r.serial_number),
       sanitizeForSpreadsheet(r.transfer_received_date),
       sanitizeForSpreadsheet(r.repair_closed_date),
-      r.fifo_status === 'FIFO_VIOLATION_OLDER_IN_STOCK' ? 'Older Stock Left Idle' : 'Used Out of Sequence',
+      r.remarks || 'FIFO Violation (Older Stock Exists)',
       sanitizeForSpreadsheet(olderSerialsStr || '—'),
       sanitizeForSpreadsheet(firstReason.olderArrival || '—'),
       firstReason.olderDaysInStock || '—'
@@ -5412,7 +5451,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
 
   ws4.columns = [
     { width: 32 }, { width: 14 }, { width: 32 }, { width: 22 },
-    { width: 14 }, { width: 18 }, { width: 24 }, { width: 26 }, { width: 18 }, { width: 16 }
+    { width: 14 }, { width: 18 }, { width: 28 }, { width: 26 }, { width: 18 }, { width: 16 }
   ];
 
   // ── Sheet 5: Cross-Site Usage Discrepancies ─────────────────────────────────
@@ -5431,7 +5470,7 @@ export async function exportSiteTransfersFifoAuditToExcel({
 
   const dHeaders = [
     'Serial Number', 'Part Number', 'Part Description', 'Transferred Destination',
-    'Actual GSX Consuming Site', 'Transfer Received Date', 'Repair Closed Date', 'GSX Order #'
+    'Serial Used by: (Excel Col D)', 'Transfer Received Date', 'Repair Closed Date', 'GSX Order #'
   ];
   const dHeadRow = ws5.addRow(dHeaders);
   dHeadRow.height = 24;
@@ -5446,8 +5485,8 @@ export async function exportSiteTransfersFifoAuditToExcel({
       sanitizeForSpreadsheet(r.serial_number),
       sanitizeForSpreadsheet(r.product_code),
       sanitizeForSpreadsheet(r.product_name),
-      sanitizeForSpreadsheet(r.current_site.name),
-      sanitizeForSpreadsheet(r.gsx_location_name),
+      sanitizeForSpreadsheet(r.to_stock),
+      sanitizeForSpreadsheet(r.serial_used_by_label || r.gsx_location_name),
       sanitizeForSpreadsheet(r.transfer_received_date),
       sanitizeForSpreadsheet(r.repair_closed_date),
       sanitizeForSpreadsheet(r.gsx_order_id)
@@ -5464,91 +5503,155 @@ export async function exportSiteTransfersFifoAuditToExcel({
   });
 
   ws5.columns = [
-    { width: 22 }, { width: 14 }, { width: 32 }, { width: 32 },
-    { width: 32 }, { width: 16 }, { width: 18 }, { width: 16 }
+    { width: 22 }, { width: 14 }, { width: 32 }, { width: 24 },
+    { width: 36 }, { width: 16 }, { width: 18 }, { width: 16 }
   ];
 
-  // ── Sheets 6+: Individual PMG Branch Monitoring Sheets (GL5, GB3, BHS, etc.) ──
-  // Matches the exact schema of 'Used_ Unused Stocks from DC.xlsx' so each site can monitor & input data
+  // ── Sheets 6+: 26 Individual PMG Branch Monitoring Sheets (BHS..LAN) ────────
+  // Matches the exact 4-table side-by-side layout of 'FIFO & (DC stocks only) Aging Stocks  Monitoring.xlsx'
   sitesScorecard.forEach(site => {
-    const siteRecords = records.filter(r => r.current_site.code === site.code);
+    const siteRecords = site.ledgerRows || records.filter(r => r.current_site.code === site.code);
     if (!siteRecords.length) return;
 
-    // Excel worksheet names have a 31-char limit
+    const violationRows = site.violationRows || siteRecords.filter(r => r.fifo_status.includes('VIOLATION'));
+    const nonMovingRows = site.nonMovingRows || siteRecords.filter(r => r.aging_category === 'NON_MOVING');
+    const slowMovingRows = site.slowMovingRows || siteRecords.filter(r => r.aging_category === 'SLOW_MOVING');
+
     const safeSheetName = site.code.substring(0, 31);
     const wsSite = workbook.addWorksheet(safeSheetName, {
       pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
     });
 
-    const bHeaders = [
+    // Row 1: 4 Side-by-Side Table Headers (A:J, L:T, V:AA, AD:AI)
+    const headerRowValues = new Array(35).fill('');
+    // Table 1 (Cols 1-10: A-J)
+    const t1Headers = [
       'Transfer Received Date', 'To Stock', 'Serial Used by:', 'Part Number',
       'Part Description', 'Tranferred Serial', 'Repair Closed Date', 'Order Number',
       'Remarks', 'Status'
     ];
-    const bHeadRow = wsSite.addRow(bHeaders);
+    t1Headers.forEach((h, i) => { headerRowValues[i] = h; });
+
+    // Table 2 (Cols 12-20: L-T)
+    const t2Headers = [
+      'Transfer Received Date', 'To Stock', 'Serial Used by:', 'Part Number',
+      'Part Description', 'Tranferred Serial', 'Repair Closed Date', 'Order Number', 'Remarks'
+    ];
+    t2Headers.forEach((h, i) => { headerRowValues[11 + i] = h; });
+
+    // Table 3 (Cols 22-27: V-AA — Non-Moving)
+    const t3Headers = [
+      'Transfer Received Date', 'To Stock', 'Part Number', 'Part Description',
+      'Tranferred Serial', 'Non-Moving', 'Cost (Stock Price)'
+    ];
+    t3Headers.forEach((h, i) => { headerRowValues[20 + i] = h; });
+
+    // Table 4 (Cols 29-35: AC-AI — Slow-Moving)
+    const t4Headers = [
+      'Transfer Received Date', 'To Stock', 'Part Number', 'Part Description',
+      'Tranferred Serial', 'Slow-Moving', 'Cost (Stock Price)'
+    ];
+    t4Headers.forEach((h, i) => { headerRowValues[28 + i] = h; });
+
+    const bHeadRow = wsSite.addRow(headerRowValues);
     bHeadRow.height = 24;
-    bHeadRow.eachCell(c => {
-      c.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    bHeadRow.eachCell({ includeEmpty: false }, (c, colNum) => {
+      if (!c.value) return;
+      c.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+      let bg = 'FF1E293B';
+      if (colNum >= 12 && colNum <= 20) bg = 'FFDC2626';
+      else if (colNum >= 21 && colNum <= 27) bg = 'FF991B1B';
+      else if (colNum >= 29 && colNum <= 35) bg = 'FFB45309';
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bg } };
       c.alignment = { horizontal: 'center', vertical: 'middle' };
     });
 
-    siteRecords.forEach((r, idx) => {
-      let remarks = 'In Stock';
-      if (r.is_used) {
-        if (r.fifo_status === 'FIFO_VIOLATION_OLDER_IN_STOCK') {
-          remarks = 'FIFO Violation (Older Stock Exists)';
-        } else if (r.fifo_status === 'FIFO_VIOLATION_OUT_OF_SEQUENCE') {
-          remarks = 'FIFO Violation (Used Out of Sequence)';
-        } else {
-          remarks = 'FIFO Compliant';
-        }
+    const maxDataRows = Math.max(
+      siteRecords.length,
+      violationRows.length,
+      nonMovingRows.length + 1,
+      slowMovingRows.length + 1
+    );
+
+    for (let idx = 0; idx < maxDataRows; idx++) {
+      const rowVals = new Array(35).fill('');
+      const r1 = siteRecords[idx];
+      if (r1) {
+        rowVals[0] = sanitizeForSpreadsheet(r1.transfer_received_date);
+        rowVals[1] = sanitizeForSpreadsheet(r1.to_stock);
+        rowVals[2] = sanitizeForSpreadsheet(r1.serial_used_by_label || r1.gsx_location_name || '');
+        rowVals[3] = sanitizeForSpreadsheet(r1.product_code);
+        rowVals[4] = sanitizeForSpreadsheet(r1.product_name);
+        rowVals[5] = sanitizeForSpreadsheet(r1.serial_number);
+        rowVals[6] = sanitizeForSpreadsheet(r1.repair_closed_date || '');
+        rowVals[7] = sanitizeForSpreadsheet(r1.gsx_order_id || '');
+        rowVals[8] = r1.remarks || (r1.is_used ? (r1.fifo_status.includes('VIOLATION') ? 'FIFO Violation (Older Stock Exists)' : 'FIFO Compliant') : 'In Stock');
+        rowVals[9] = r1.aging_status_label || '';
       }
 
-      let status = '';
-      if (!r.is_used) {
-        status = r.days_in_stock >= 30 ? `Non-Moving (${r.days_in_stock} days)` : `Active (${r.days_in_stock} days)`;
+      const r2 = violationRows[idx];
+      if (r2) {
+        rowVals[11] = sanitizeForSpreadsheet(r2.transfer_received_date);
+        rowVals[12] = sanitizeForSpreadsheet(r2.to_stock);
+        rowVals[13] = sanitizeForSpreadsheet(r2.serial_used_by_label || r2.gsx_location_name || '');
+        rowVals[14] = sanitizeForSpreadsheet(r2.product_code);
+        rowVals[15] = sanitizeForSpreadsheet(r2.product_name);
+        rowVals[16] = sanitizeForSpreadsheet(r2.serial_number);
+        rowVals[17] = sanitizeForSpreadsheet(r2.repair_closed_date || '');
+        rowVals[18] = sanitizeForSpreadsheet(r2.gsx_order_id || '');
+        rowVals[19] = r2.remarks || 'FIFO Violation (Older Stock Exists)';
       }
 
-      const row = wsSite.addRow([
-        sanitizeForSpreadsheet(r.transfer_received_date),
-        sanitizeForSpreadsheet(r.to_stock),
-        sanitizeForSpreadsheet(r.gsx_location_name || ''),
-        sanitizeForSpreadsheet(r.product_code),
-        sanitizeForSpreadsheet(r.product_name),
-        sanitizeForSpreadsheet(r.serial_number),
-        sanitizeForSpreadsheet(r.repair_closed_date || ''),
-        sanitizeForSpreadsheet(r.gsx_order_id || ''),
-        remarks,
-        status
-      ]);
-      row.height = 20;
-      const isAlt = idx % 2 === 1;
-      row.eachCell({ includeEmpty: true }, (cell, cNum) => {
-        cell.font = { name: 'Arial', size: 9 };
+      const r3 = nonMovingRows[idx];
+      if (r3) {
+        rowVals[20] = sanitizeForSpreadsheet(r3.transfer_received_date);
+        rowVals[21] = sanitizeForSpreadsheet(r3.to_stock);
+        rowVals[22] = sanitizeForSpreadsheet(r3.product_code);
+        rowVals[23] = sanitizeForSpreadsheet(r3.product_name);
+        rowVals[24] = sanitizeForSpreadsheet(r3.serial_number);
+        rowVals[25] = r3.aging_status_label || '';
+        rowVals[26] = r3.unit_price || 0;
+      } else if (idx === nonMovingRows.length && nonMovingRows.length > 0) {
+        rowVals[25] = 'TOTAL COST';
+        rowVals[26] = site.nonMovingValue || 0;
+      }
+
+      const r4 = slowMovingRows[idx];
+      if (r4) {
+        rowVals[28] = sanitizeForSpreadsheet(r4.transfer_received_date);
+        rowVals[29] = sanitizeForSpreadsheet(r4.to_stock);
+        rowVals[30] = sanitizeForSpreadsheet(r4.product_code);
+        rowVals[31] = sanitizeForSpreadsheet(r4.product_name);
+        rowVals[32] = sanitizeForSpreadsheet(r4.serial_number);
+        rowVals[33] = r4.aging_status_label || '';
+        rowVals[34] = r4.unit_price || 0;
+      } else if (idx === slowMovingRows.length && slowMovingRows.length > 0) {
+        rowVals[33] = 'TOTAL COST';
+        rowVals[34] = site.slowMovingValue || 0;
+      }
+
+      const row = wsSite.addRow(rowVals);
+      row.height = 19;
+      row.eachCell({ includeEmpty: false }, (cell, cNum) => {
+        cell.font = { name: 'Arial', size: 8.5 };
         cell.border = borderThin;
-        if (isAlt) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
-        if (cNum === 6) cell.font = { name: 'Consolas, monospace', size: 9, bold: true };
-        if (cNum === 9) {
-          const isVio = remarks.includes('Violation');
-          cell.font = {
-            name: 'Arial',
-            size: 9,
-            bold: true,
-            color: { argb: isVio ? 'FFDC2626' : r.is_used ? 'FF15803D' : 'FFD97706' }
-          };
+        if (cNum === 6 || cNum === 17 || cNum === 25 || cNum === 33) {
+          cell.font = { name: 'Consolas, monospace', size: 8.5, bold: true };
         }
-        if (cNum === 10 && status.startsWith('Non-Moving')) {
-          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFDC2626' } };
+        if (cNum === 9 && String(cell.value).includes('Violation')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FFDC2626' } };
+        }
+        if (cNum === 10 && String(cell.value).startsWith('Non-Moving')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FFDC2626' } };
+        } else if (cNum === 10 && String(cell.value).startsWith('Slow-Moving')) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: 'FFB45309' } };
+        }
+        if (cNum === 27 || cNum === 35) {
+          cell.numFmt = '$#,##0.00';
+          cell.font = { name: 'Arial', size: 8.5, bold: true };
         }
       });
-    });
-
-    wsSite.columns = [
-      { width: 18 }, { width: 20 }, { width: 34 }, { width: 16 },
-      { width: 32 }, { width: 24 }, { width: 18 }, { width: 16 },
-      { width: 28 }, { width: 24 }
-    ];
+    }
   });
 
   // Write and download

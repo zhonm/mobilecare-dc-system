@@ -435,7 +435,7 @@ export function useAuth({
     if (!isAllowedCompanyEmail(email)) {
       return {
         success: false,
-        error: 'Access restricted: Only official @mobilecareph.com email accounts are authorized.'
+        error: 'Access restricted: Please sign in using company email address.'
       };
     }
 
@@ -664,7 +664,7 @@ export function useAuth({
     if (!isAllowedCompanyEmail(cleanEmail)) {
       return {
         success: false,
-        error: 'Access restricted: Only official @mobilecareph.com email accounts are authorized.'
+        error: 'Access restricted: Please sign in using company email address.'
       };
     }
 

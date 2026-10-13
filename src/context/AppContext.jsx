@@ -14,7 +14,6 @@ import { matchUserByEmail } from '../utils/userMatcher';
 import { isUUID, safeUUID, reconcileUnitsWithPackedDrafts, canUserDeleteRecord } from '../utils/appContextHelpers';
 import { isSupabaseConfigured } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
-import { hydrateFixablySnapshot } from '../utils/fixablyInventoryEngine';
 
 // Domain Hooks
 import { useAuth } from './useAuth';
