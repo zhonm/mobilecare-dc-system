@@ -846,46 +846,99 @@ export function useCloudSync({
             let cachedFixably = null;
             try { cachedFixably = await dbStorage.getItem('mdc_fixably_snapshot'); } catch (e) {}
             const hasLocalFixably = Boolean(cachedFixably && cachedFixably.items && cachedFixably.items.length > 0);
-            const isTimestampMismatch = Boolean(remoteFixablyHeader.updated_at && remoteFixablyHeader.updated_at !== localFixablyUpdatedAt);
-            // Egress Defense: Only download 2MB snapshot if local cache is empty, cloud is newer, or forced
-            const needsFixablyDownload = (isForce || !hasLocalFixably || isTimestampMismatch) && remoteFixablyHeader.notes !== '__CLEARED__';
 
-            if (needsFixablyDownload) {
-              try {
-                const { data: fullFixablyDoc } = await supabase
-                  .from('saved_records')
-                  .select('*')
-                  .eq('id', 'master_fixably_inventory_snapshot')
-                  .maybeSingle();
-                if (fullFixablyDoc) {
-                  systemRows.push(fullFixablyDoc);
-                  const effectiveUpdated = fullFixablyDoc.updated_at || new Date().toISOString();
-                  try {
-                    localStorage.setItem('mdc_fixably_updated_at', effectiveUpdated);
-                    localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
-                  } catch (e) {}
-                  try { await dbStorage.setItem('mdc_fixably_updated_at', effectiveUpdated); } catch (e) {}
-                  if (fullFixablyDoc?.snapshot_data?.items) {
-                    const hydrated = hydrateFixablySnapshot(fullFixablyDoc.snapshot_data, sites);
-                    await dbStorage.setItem('mdc_fixably_snapshot', hydrated);
-                    try {
-                      localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(hydrated));
-                      localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
-                    } catch (e) {}
-                    if (setFixablySnapshot) setFixablySnapshot(hydrated);
-                  }
-                }
-              } catch (err) {
-                console.warn('Full fixably snapshot fetch note:', err);
-                systemRows.push(remoteFixablyHeader);
-              }
-            } else {
+            const remoteMs = remoteFixablyHeader.updated_at ? new Date(remoteFixablyHeader.updated_at).getTime() : 0;
+            const localMs = localFixablyUpdatedAt ? new Date(localFixablyUpdatedAt).getTime() : (cachedFixably?.timestamp ? new Date(cachedFixably.timestamp).getTime() : 0);
+
+            const isCloudStrictlyNewer = Boolean(remoteMs && (!localMs || remoteMs > localMs));
+            const isLocalStrictlyNewer = Boolean(hasLocalFixably && localMs && remoteMs && localMs > remoteMs);
+
+            if (isLocalStrictlyNewer) {
+              // Local user has NEWER inventory snapshot than cloud!
+              // NEVER overwrite local with stale cloud data.
               systemRows.push({
                 ...remoteFixablyHeader,
-                snapshot_data: cachedFixably || null
+                snapshot_data: cachedFixably,
+                updated_at: localFixablyUpdatedAt
               });
               if (cachedFixably && setFixablySnapshot) {
                 setFixablySnapshot(cachedFixably);
+              }
+              // Auto-heal by pushing newer local snapshot to cloud
+              if (supabase) {
+                (async () => {
+                  try {
+                    const compact = compactFixablySnapshot(cachedFixably);
+                    await supabase.from('saved_records').upsert({
+                      id: 'master_fixably_inventory_snapshot',
+                      record_type: 'fixably_snapshot',
+                      period_label: 'Master Fixably Inventory Snapshot',
+                      period_year: new Date().getFullYear(),
+                      period_month: new Date().getMonth() + 1,
+                      snapshot_data: compact,
+                      saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
+                      updated_at: localFixablyUpdatedAt
+                    }, { onConflict: 'id' });
+                  } catch (e) {
+                    console.warn('Auto-heal push newer snapshot to cloud notice:', e);
+                  }
+                })();
+              }
+            } else {
+              // Only download if cloud is strictly newer OR local cache has no data
+              const needsFixablyDownload = (!hasLocalFixably || isCloudStrictlyNewer) && remoteFixablyHeader.notes !== '__CLEARED__';
+
+              if (needsFixablyDownload) {
+                try {
+                  const { data: fullFixablyDoc } = await supabase
+                    .from('saved_records')
+                    .select('*')
+                    .eq('id', 'master_fixably_inventory_snapshot')
+                    .maybeSingle();
+                  if (fullFixablyDoc) {
+                    const cloudDocMs = fullFixablyDoc.updated_at ? new Date(fullFixablyDoc.updated_at).getTime() : 0;
+                    // Double check before applying: ensure cloud document is NOT older than local!
+                    if (!hasLocalFixably || cloudDocMs >= localMs) {
+                      systemRows.push(fullFixablyDoc);
+                      const effectiveUpdated = fullFixablyDoc.updated_at || new Date().toISOString();
+                      try {
+                        localStorage.setItem('mdc_fixably_updated_at', effectiveUpdated);
+                        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
+                      } catch (e) {}
+                      try { await dbStorage.setItem('mdc_fixably_updated_at', effectiveUpdated); } catch (e) {}
+                      if (fullFixablyDoc?.snapshot_data?.items) {
+                        const hydrated = hydrateFixablySnapshot(fullFixablyDoc.snapshot_data, sites);
+                        await dbStorage.setItem('mdc_fixably_snapshot', hydrated);
+                        try {
+                          localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(hydrated));
+                          localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
+                        } catch (e) {}
+                        if (setFixablySnapshot) setFixablySnapshot(hydrated);
+                      }
+                    } else {
+                      // Local is actually newer: retain local snapshot!
+                      systemRows.push({
+                        ...remoteFixablyHeader,
+                        snapshot_data: cachedFixably,
+                        updated_at: localFixablyUpdatedAt
+                      });
+                      if (cachedFixably && setFixablySnapshot) {
+                        setFixablySnapshot(cachedFixably);
+                      }
+                    }
+                  }
+                } catch (err) {
+                  console.warn('Full fixably snapshot fetch note:', err);
+                  systemRows.push(remoteFixablyHeader);
+                }
+              } else {
+                systemRows.push({
+                  ...remoteFixablyHeader,
+                  snapshot_data: cachedFixably || null
+                });
+                if (cachedFixably && setFixablySnapshot) {
+                  setFixablySnapshot(cachedFixably);
+                }
               }
             }
           }
@@ -3126,11 +3179,19 @@ export function useCloudSync({
 
             let localSnap = null;
             try {
-              const rawLocal = localStorage.getItem('mdc_fixably_snapshot');
-              if (rawLocal) localSnap = JSON.parse(rawLocal);
+              localSnap = await dbStorage.getItem('mdc_fixably_snapshot');
             } catch (e) {}
+            if (!localSnap || !localSnap.items?.length) {
+              try {
+                const rawLocal = localStorage.getItem('mdc_fixably_snapshot');
+                if (rawLocal) localSnap = JSON.parse(rawLocal);
+              } catch (e) {}
+            }
 
-            const shouldUpdateLocal = !localSnap || !localSnap.items || localSnap.items.length === 0 || (cloudTimestamp && cloudTimestamp > localTimestamp);
+            const effectiveLocalTimestamp = localTimestamp || localSnap?.timestamp || '';
+            const shouldUpdateLocal = (!localSnap || !localSnap.items || localSnap.items.length === 0) 
+              ? true 
+              : Boolean(cloudTimestamp && effectiveLocalTimestamp && new Date(cloudTimestamp).getTime() > new Date(effectiveLocalTimestamp).getTime());
             if (shouldUpdateLocal) {
               try {
                 localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cloudSnap));
@@ -3150,6 +3211,27 @@ export function useCloudSync({
                 bus.close();
               }
               if (setFixablySnapshot) setFixablySnapshot(cloudSnap);
+            } else if (supabase && localSnap?.items?.length > 0) {
+              // Local is strictly newer than cloud doc: push local snapshot to cloud to auto-heal
+              try {
+                const compact = compactFixablySnapshot(localSnap);
+                await supabase.from('saved_records').upsert({
+                  id: 'master_fixably_inventory_snapshot',
+                  record_type: 'fixably_snapshot',
+                  period_label: 'Master Fixably Inventory Snapshot',
+                  period_year: new Date().getFullYear(),
+                  period_month: new Date().getMonth() + 1,
+                  snapshot_data: compact,
+                  saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
+                  updated_at: effectiveLocalTimestamp || new Date().toISOString()
+                }, { onConflict: 'id' });
+                broadcastCloudEvent('FIXABLY_SNAPSHOT_UPDATED', {
+                  timestamp: effectiveLocalTimestamp,
+                  totalUnits: localSnap.items.length
+                });
+              } catch (pushErr) {
+                console.warn('Fixably auto-push newer local snapshot notice:', pushErr);
+              }
             }
           } catch (e) {
             console.warn('Fixably cloud hydration note:', e);

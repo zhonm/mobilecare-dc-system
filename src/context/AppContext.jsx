@@ -276,9 +276,19 @@ export function AppProvider({ children }) {
     let isMounted = true;
     (async () => {
       try {
-        const idb = await dbStorage.getItem('mdc_fixably_snapshot');
+        let idb = await dbStorage.getItem('mdc_fixably_snapshot');
+        if (!idb?.items?.length) {
+          const recs = await dbStorage.getAllSavedRecords();
+          const fixRec = recs?.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
+          if (fixRec?.snapshot?.items?.length) idb = fixRec.snapshot;
+        }
         if (isMounted && idb?.items?.length) {
-          setFixablySnapshot(prev => prev?.timestamp === idb.timestamp ? prev : idb);
+          setFixablySnapshot(prev => {
+            const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+            const idbMs = idb?.timestamp ? new Date(idb.timestamp).getTime() : 0;
+            if (prevMs > idbMs) return prev;
+            return (prev?.timestamp === idb.timestamp && prev?.items?.length === idb.items?.length) ? prev : idb;
+          });
         }
       } catch (e) {}
     })();
@@ -290,7 +300,12 @@ export function AppProvider({ children }) {
       if (e.key === 'mdc_fixably_snapshot' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          setFixablySnapshot(parsed);
+          setFixablySnapshot(prev => {
+            const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+            const incomingMs = parsed?.timestamp ? new Date(parsed.timestamp).getTime() : 0;
+            if (prevMs > incomingMs) return prev;
+            return parsed;
+          });
         } catch (err) {}
       }
     };
@@ -300,7 +315,12 @@ export function AppProvider({ children }) {
       bc = new BroadcastChannel('mdc_sync_bus');
       bc.onmessage = (msg) => {
         if (msg.data?.type === 'FIXABLY_SNAPSHOT_UPDATED' && msg.data?.payload?.snapshot) {
-          setFixablySnapshot(msg.data.payload.snapshot);
+          setFixablySnapshot(prev => {
+            const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+            const incomingMs = msg.data.payload.snapshot?.timestamp ? new Date(msg.data.payload.snapshot.timestamp).getTime() : 0;
+            if (prevMs > incomingMs) return prev;
+            return msg.data.payload.snapshot;
+          });
         }
       };
     }

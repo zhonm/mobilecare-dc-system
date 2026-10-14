@@ -1163,36 +1163,36 @@ export function exportSiteToExcel(siteData, items = []) {
 export function compactFixablySnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return snapshot;
 
-  const compactItems = snapshot.items.map(it => ({
-    id: it.id,
-    stockName: it.stockName || '',
-    stockType: it.stockType || 'MSPI-Owned / C/I REP',
-    partNumber: it.partNumber || it.part_number || '',
-    description: it.description || '',
-    serialNumber: it.serialNumber || it.serial_number || '',
-    imei: it.imei || '',
-    lastReceivedDate: it.lastReceivedDate || it.dateReceived || '',
-    quantity: it.quantity || 1,
-    partValue: it.partValue || 0,
-    totalValue: it.totalValue || 0,
-    siteCode: it.siteCode || it.site_code || '',
-    siteName: it.siteName || it.site_name || '',
-    siteId: it.siteId || it.current_site_id || '',
-    agingDays: typeof it.agingDays === 'number' ? it.agingDays : 0,
-    agingBracket: it.agingBracket || AGING_BRACKETS.IN_STOCK,
-    statusLabel: it.statusLabel || 'In Stock',
-    badgeColor: it.badgeColor || '#15803d',
-    badgeBg: it.badgeBg || '#dcfce7',
-    isSerialized: it.isSerialized !== false,
-    isInvestigation: Boolean(it.isInvestigation || it.isFlaggedInvestigation),
-    investigationDetails: it.investigationDetails || null
-  }));
+  const compactItems = snapshot.items.map(it => {
+    const item = {
+      id: it.id,
+      stockType: it.stockType || 'MSPI-Owned / C/I REP',
+      partNumber: it.partNumber || it.part_number || '',
+      description: it.description || '',
+      serialNumber: it.serialNumber || it.serial_number || '',
+      lastReceivedDate: it.lastReceivedDate || it.dateReceived || '',
+      quantity: it.quantity || 1,
+      partValue: it.partValue || 0,
+      totalValue: it.totalValue || 0,
+      siteCode: it.siteCode || it.site_code || '',
+      agingDays: typeof it.agingDays === 'number' ? it.agingDays : 0,
+      agingBracket: it.agingBracket || AGING_BRACKETS.IN_STOCK
+    };
+    if (it.stockName) item.stockName = it.stockName;
+    if (it.siteName) item.siteName = it.siteName;
+    if (it.siteId) item.siteId = it.siteId;
+    if (it.imei) item.imei = it.imei;
+    if (it.isInvestigation || it.isFlaggedInvestigation) {
+      item.isInvestigation = true;
+      if (it.investigationDetails) item.investigationDetails = it.investigationDetails;
+    }
+    return item;
+  });
 
   return {
     fileName: snapshot.fileName || 'output.csv',
     timestamp: snapshot.timestamp || new Date().toISOString(),
     items: compactItems,
-    investigationItems: snapshot.investigationItems || [],
     globalMetrics: snapshot.globalMetrics || null,
     batchSummary: snapshot.batchSummary || null
   };
@@ -1214,6 +1214,29 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
 
   const siteMap = new Map();
   snapshot.items.forEach(it => {
+    if (!it.badgeColor || !it.badgeBg) {
+      if (it.agingBracket === AGING_BRACKETS.DEAD_STOCK) {
+        it.badgeColor = '#dc2626';
+        it.badgeBg = '#fee2e2';
+        it.statusLabel = 'Dead Stock';
+      } else if (it.agingBracket === AGING_BRACKETS.NON_MOVING) {
+        it.badgeColor = '#d97706';
+        it.badgeBg = '#fef3c7';
+        it.statusLabel = 'Non-Moving';
+      } else if (it.agingBracket === AGING_BRACKETS.SLOW_MOVING) {
+        it.badgeColor = '#ea580c';
+        it.badgeBg = '#ffedd5';
+        it.statusLabel = 'Slow-Moving';
+      } else {
+        it.badgeColor = '#15803d';
+        it.badgeBg = '#dcfce7';
+        it.statusLabel = 'In Stock';
+      }
+    }
+    if (it.isSerialized === undefined) {
+      it.isSerialized = it.serialNumber && !it.serialNumber.startsWith('Non-serialized');
+    }
+
     const siteCode = (it.siteCode || it.site_code || 'UNKNOWN').toUpperCase().replace(/^(ASP|APP)\s+/, '');
     if (!siteMap.has(siteCode)) {
       const matchedSite = (sitesList || []).find(s => (s.code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '') === siteCode);
@@ -1251,8 +1274,13 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
 
   siteSummaries.sort((a, b) => a.siteCode.localeCompare(b.siteCode));
 
+  const investigationItems = Array.isArray(snapshot.investigationItems) && snapshot.investigationItems.length > 0
+    ? snapshot.investigationItems
+    : snapshot.items.filter(it => it.isInvestigation);
+
   return {
     ...snapshot,
+    investigationItems,
     sites: siteSummaries
   };
 }

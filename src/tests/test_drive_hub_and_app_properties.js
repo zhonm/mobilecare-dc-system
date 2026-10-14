@@ -36,12 +36,13 @@ console.log('  ✓ PASS: getOrCreateFolderPath safely normalizes boundary inputs
 console.log('\n--- Test 2: searchDriveFiles Query Builder & AppProperties Filter ---');
 assert.strictEqual(typeof searchDriveFiles, 'function', 'searchDriveFiles must be exported as a function');
 
-// 3. Verify Role Presets include drive-hub
-console.log('\n--- Test 3: Role Presets include drive-hub permission ---');
+// 3. Verify Role Presets restrict drive-hub strictly to superadmin
+console.log('\n--- Test 3: Role Presets restrict drive-hub strictly to superadmin ---');
 assert.ok(ROLE_PRESETS.superadmin.includes('drive-hub'), 'Superadmin role must have access to drive-hub');
-assert.ok(ROLE_PRESETS.admin.includes('drive-hub'), 'Admin role must have access to drive-hub');
-assert.ok(ROLE_PRESETS.parts_management.includes('drive-hub'), 'Parts Management role must have access to drive-hub');
-console.log('  ✓ PASS: drive-hub route permission registered across all target roles');
+assert.ok(!ROLE_PRESETS.admin.includes('drive-hub'), 'Admin role must NOT have access to drive-hub');
+assert.ok(!ROLE_PRESETS.parts_management.includes('drive-hub'), 'Parts Management role must NOT have access to drive-hub');
+assert.ok(!ROLE_PRESETS.user.includes('drive-hub'), 'User role must NOT have access to drive-hub');
+console.log('  ✓ PASS: drive-hub route permission strictly restricted to superadmin');
 
 // 4. Verify App.jsx imports DriveDocumentHub with React.lazy
 console.log('\n--- Test 4: App.jsx Lazy-Loading & Suspense Architecture ---');

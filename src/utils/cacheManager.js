@@ -11,7 +11,7 @@ import { dbStorage } from './dbStorage.js';
  * List of keys that must NEVER be deleted during operational cache wipes
  * to ensure the user stays securely logged in.
  */
-const PRESERVED_SESSION_KEYS = [
+export const PRESERVED_SESSION_KEYS = [
   'mdc_current_user',
   'mdc_session_sig',
   'mdc_users',
@@ -27,16 +27,19 @@ const PRESERVED_SESSION_KEYS = [
   'mdc_fixably_snapshot_timestamp',
   'inventory_sync_batches',
   'mdc_saved_records',
-  'mdc_auto_logout_settings'
+  'mdc_auto_logout_settings',
+  'mdc_uploaded_slot_site_stock',
+  'mdc_uploaded_slot_kgb_used',
+  'mdc_uploaded_slot_stock_transfer'
 ];
 
 /**
  * Checks whether a key is an auth/session key that must be kept.
  */
-function isPreservedKey(key) {
+export function isPreservedKey(key) {
   if (!key) return false;
   if (PRESERVED_SESSION_KEYS.includes(key)) return true;
-  if (key.startsWith('sb-') || key.includes('supabase.auth') || key.includes('turnstile')) {
+  if (key.startsWith('sb-') || key.includes('supabase.auth') || key.includes('turnstile') || key.startsWith('mdc_uploaded_slot_')) {
     return true;
   }
   return false;

@@ -11,8 +11,7 @@ import {
   MessageSquare,
   ChevronRight,
   Building2,
-  PackageCheck,
-  HardDrive
+  PackageCheck
 } from 'lucide-react';
 
 export default function PmgSidebar() {
@@ -114,17 +113,6 @@ export default function PmgSidebar() {
         if (setPmgSubTab) setPmgSubTab('multi_site');
       },
       isActive: activeTab === 'multi-site'
-    },
-    {
-      id: 'drive-hub',
-      label: 'Drive Document Archive',
-      description: 'Signed PLs & branch receipts',
-      section: 'Network Visibility',
-      icon: HardDrive,
-      onClick: () => {
-        setActiveTab('drive-hub');
-      },
-      isActive: activeTab === 'drive-hub'
     },
     {
       id: 'feedback',

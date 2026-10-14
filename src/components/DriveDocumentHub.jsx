@@ -16,8 +16,7 @@ import {
   X,
   FileCheck,
   ShieldCheck,
-  FolderOpen,
-  Loader2
+  FolderOpen
 } from 'lucide-react';
 import {
   isGoogleDriveConfigured,
@@ -686,32 +685,72 @@ export default function DriveDocumentHub() {
               animation: 'slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
             }}
           >
-            {/* Themed Icon with Pulse & Spinner */}
+            {/* Themed Icon with Clean Encircling Orbit Spinner Ring (No Overlap) */}
             <div
               style={{
-                width: '64px',
-                height: '64px',
-                borderRadius: '16px',
-                background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
-                border: '2px solid #bfdbfe',
+                position: 'relative',
+                width: '84px',
+                height: '84px',
+                margin: '0 auto 20px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 18px',
-                position: 'relative',
-                boxShadow: '0 8px 16px -4px rgba(37, 99, 235, 0.15)'
+                justifyContent: 'center'
               }}
             >
-              <Loader2
-                size={34}
+              {/* Outer Circular Spinner Track & Rotating Blue Arc */}
+              <svg
+                viewBox="0 0 84 84"
                 className="animate-spin"
-                color="#2563eb"
-                style={{ position: 'absolute' }}
-              />
-              {(() => {
-                const TabIcon = loadingTab?.icon || HardDrive;
-                return <TabIcon size={22} color="#1d4ed8" style={{ opacity: 0.9 }} />;
-              })()}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  pointerEvents: 'none'
+                }}
+              >
+                {/* Static Background Ring Track */}
+                <circle
+                  cx="42"
+                  cy="42"
+                  r="37"
+                  fill="none"
+                  stroke="#e2e8f0"
+                  strokeWidth="3.5"
+                />
+                {/* Dynamic Primary Rotating Arc */}
+                <circle
+                  cx="42"
+                  cy="42"
+                  r="37"
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth="3.5"
+                  strokeDasharray="60 172"
+                  strokeLinecap="round"
+                />
+              </svg>
+
+              {/* Centered Crisp Icon Badge - 100% Unobstructed */}
+              <div
+                style={{
+                  width: '54px',
+                  height: '54px',
+                  borderRadius: '16px',
+                  background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                  border: '1.5px solid #bfdbfe',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 12px -2px rgba(37, 99, 235, 0.15)',
+                  zIndex: 1
+                }}
+              >
+                {(() => {
+                  const TabIcon = loadingTab?.icon || HardDrive;
+                  return <TabIcon size={26} color="#1d4ed8" />;
+                })()}
+              </div>
             </div>
 
             <h3

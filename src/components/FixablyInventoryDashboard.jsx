@@ -37,6 +37,7 @@ import {
   reconcileFixablyMultiFile,
   compactFixablySnapshot,
   hydrateFixablySnapshot,
+  extractTextContent,
   exportDeadStockToCsv,
   exportDeadStockToExcel,
   exportInvestigationToCsv,
@@ -48,6 +49,7 @@ import {
 export default function FixablyInventoryDashboard({
   currentUser = null,
   sites = [],
+  parts = [],
   _parts = [],
   _inventoryUnits = [],
   batchAddScanInUnits = null,
@@ -86,19 +88,45 @@ export default function FixablyInventoryDashboard({
   }, [isSuperadmin, viewMode]);
 
   const [localSnapshot, setLocalSnapshot] = useState(propSnapshot || null);
-  const snapshot = propSnapshot || localSnapshot;
+  const snapshotTimestampRef = useRef(propSnapshot?.timestamp || '');
+
+  // Keep snapshotTimestampRef synchronized whenever localSnapshot updates
+  useEffect(() => {
+    if (localSnapshot?.timestamp) {
+      snapshotTimestampRef.current = localSnapshot.timestamp;
+    }
+  }, [localSnapshot?.timestamp]);
+
   const setSnapshot = useCallback((val) => {
+    if (val?.timestamp) {
+      snapshotTimestampRef.current = val.timestamp;
+    }
     setLocalSnapshot(val);
     if (typeof propSetSnapshot === 'function') {
       propSetSnapshot(val);
     }
   }, [propSetSnapshot]);
 
+  // Synchronize from parent propSnapshot ONLY if propSnapshot is newer or equal
   useEffect(() => {
     if (propSnapshot) {
-      setLocalSnapshot(propSnapshot);
+      const incomingMs = propSnapshot.timestamp ? new Date(propSnapshot.timestamp).getTime() : 0;
+      const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+      if (incomingMs >= currentMs || !currentMs) {
+        snapshotTimestampRef.current = propSnapshot.timestamp || '';
+        setLocalSnapshot(propSnapshot);
+      }
     }
   }, [propSnapshot]);
+
+  // Evaluate active snapshot by timestamp to guarantee newly uploaded data is never shadowed
+  const snapshot = useMemo(() => {
+    if (!propSnapshot) return localSnapshot;
+    if (!localSnapshot) return propSnapshot;
+    const propMs = propSnapshot.timestamp ? new Date(propSnapshot.timestamp).getTime() : 0;
+    const localMs = localSnapshot.timestamp ? new Date(localSnapshot.timestamp).getTime() : 0;
+    return localMs > propMs ? localSnapshot : propSnapshot;
+  }, [propSnapshot, localSnapshot]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isParsing, setIsParsing] = useState(false);
@@ -149,6 +177,24 @@ export default function FixablyInventoryDashboard({
   const [segmentedTab, setSegmentedTab] = useState('dead_stock'); // 'dead_stock' | 'non_moving' | 'slow_moving' | 'active_stock' | 'investigation' | 'part_aggregations' | 'all_stock'
   const [expandedPartPn, setExpandedPartPn] = useState(null);
 
+  // 5. Cross-Site Part Number Search & Autocomplete State
+  const [partSearchInput, setPartSearchInput] = useState('');
+  const [partSearchQuery, setPartSearchQuery] = useState('');
+  const [isPartDropdownOpen, setIsPartDropdownOpen] = useState(false);
+  const [highlightedPartIndex, setHighlightedPartIndex] = useState(-1);
+  const partSearchContainerRef = useRef(null);
+
+  // Close autocomplete dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (partSearchContainerRef.current && !partSearchContainerRef.current.contains(e.target)) {
+        setIsPartDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // format file size helper
   const formatFileSize = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -162,7 +208,7 @@ export default function FixablyInventoryDashboard({
     if (!supabase || !snapToSync?.items?.length) return false;
     try {
       const compact = compactFixablySnapshot(snapToSync);
-      const nowIso = new Date().toISOString();
+      const effectiveTimestamp = snapToSync.timestamp || compact.timestamp || new Date().toISOString();
       const cloudPayload = {
         id: 'master_fixably_inventory_snapshot',
         record_type: 'fixably_snapshot',
@@ -171,7 +217,7 @@ export default function FixablyInventoryDashboard({
         period_month: new Date().getMonth() + 1,
         snapshot_data: compact,
         saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
-        updated_at: nowIso
+        updated_at: effectiveTimestamp
       };
       const { error: cloudErr } = await supabase
         .from('saved_records')
@@ -183,14 +229,14 @@ export default function FixablyInventoryDashboard({
       }
 
       try {
-        localStorage.setItem('mdc_fixably_snapshot_timestamp', nowIso);
-        localStorage.setItem('mdc_fixably_updated_at', nowIso);
-        await dbStorage.setItem('mdc_fixably_updated_at', nowIso);
+        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTimestamp);
+        localStorage.setItem('mdc_fixably_updated_at', effectiveTimestamp);
+        await dbStorage.setItem('mdc_fixably_updated_at', effectiveTimestamp);
       } catch (e) {}
 
       if (typeof broadcastCloudEvent === 'function') {
         broadcastCloudEvent('FIXABLY_SNAPSHOT_UPDATED', {
-          timestamp: nowIso,
+          timestamp: effectiveTimestamp,
           totalUnits: snapToSync.items.length
         });
       }
@@ -198,7 +244,7 @@ export default function FixablyInventoryDashboard({
         const bus = new BroadcastChannel('mdc_sync_bus');
         bus.postMessage({
           type: 'FIXABLY_SNAPSHOT_UPDATED',
-          payload: { snapshot: snapToSync, timestamp: nowIso }
+          payload: { snapshot: snapToSync, timestamp: effectiveTimestamp }
         });
         bus.close();
       }
@@ -216,6 +262,23 @@ export default function FixablyInventoryDashboard({
     async function loadInitialData() {
       setIsLoading(true);
       try {
+        // 1. Hydrate persistent uploaded slots from IndexedDB
+        let [savedSiteStock, savedKgb, savedTransfer] = await Promise.all([
+          dbStorage.getItem('mdc_uploaded_slot_site_stock'),
+          dbStorage.getItem('mdc_uploaded_slot_kgb_used'),
+          dbStorage.getItem('mdc_uploaded_slot_stock_transfer')
+        ]);
+
+        if (savedSiteStock || savedKgb || savedTransfer) {
+          if (isMounted) {
+            setSlots({
+              site_stock: savedSiteStock ? { ...savedSiteStock, file: null, valid: true } : { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
+              kgb_used: savedKgb ? { ...savedKgb, file: null, valid: true } : { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
+              stock_transfer: savedTransfer ? { ...savedTransfer, file: null, valid: true } : { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null }
+            });
+          }
+        }
+
         let cached = await dbStorage.getItem('mdc_fixably_snapshot');
 
         // Secondary fallback to localStorage
@@ -236,6 +299,35 @@ export default function FixablyInventoryDashboard({
               await dbStorage.setItem('mdc_fixably_snapshot', cached);
             }
           } catch (e) {}
+        }
+
+        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored
+        if ((!cached || !cached.items || cached.items.length === 0) && savedSiteStock?.content) {
+          try {
+            const autoReconciled = await reconcileFixablyMultiFile({
+              siteStockContent: savedSiteStock.content,
+              kgbUsedContent: savedKgb?.content || null,
+              stockTransferContent: savedTransfer?.content || null,
+              options: { sites, currentDate: new Date('2026-10-09T00:00:00Z') }
+            });
+
+            if (autoReconciled.success && autoReconciled.items?.length > 0) {
+              cached = autoReconciled;
+              await dbStorage.setItem('mdc_fixably_snapshot', cached);
+              try {
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
+                localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
+              } catch (e) {}
+              await dbStorage.putSavedRecord({
+                id: 'master_fixably_inventory_snapshot',
+                record_type: 'fixably_snapshot',
+                snapshot: cached,
+                created_at: cached.timestamp || new Date().toISOString()
+              });
+            }
+          } catch (autoRecErr) {
+            console.warn('Auto-reconcile from saved slots error:', autoRecErr);
+          }
         }
 
         // Quaternary fallback to Supabase cloud master_fixably_inventory_snapshot
@@ -265,8 +357,8 @@ export default function FixablyInventoryDashboard({
           }
         }
 
-        // Quinary auto-seed fallback: If neither local nor cloud has Fixably snapshot, auto-sync from server export file
-        if ((!cached || !cached.items || cached.items.length === 0) && typeof fetch !== 'undefined') {
+        // Quinary auto-seed fallback: ONLY if no local, cloud, or user-uploaded file exists
+        if ((!cached || !cached.items || cached.items.length === 0) && !savedSiteStock?.content && typeof fetch !== 'undefined') {
           try {
             const resp = await fetch('/output.csv');
             if (resp.ok) {
@@ -341,6 +433,12 @@ export default function FixablyInventoryDashboard({
 
     const handleApplySyncedSnapshot = (incomingSnapshot) => {
       if (incomingSnapshot && Array.isArray(incomingSnapshot.items) && incomingSnapshot.items.length > 0) {
+        const incomingMs = incomingSnapshot.timestamp ? new Date(incomingSnapshot.timestamp).getTime() : 0;
+        const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+        if (currentMs > 0 && incomingMs > 0 && incomingMs < currentMs) {
+          console.log('[FixablyDashboard] Ignoring older incoming snapshot:', incomingSnapshot.timestamp, 'vs active:', snapshotTimestampRef.current);
+          return;
+        }
         setSnapshot(incomingSnapshot);
         setIsDropzoneOpen(false);
         setIsLoading(false);
@@ -402,17 +500,29 @@ export default function FixablyInventoryDashboard({
               return;
             }
             if (payload.new && payload.new.snapshot_data && Array.isArray(payload.new.snapshot_data.items)) {
+              const remoteTimestamp = payload.new.updated_at || payload.new.snapshot_data?.timestamp || '';
+              const remoteMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
+              const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+              if (currentMs > 0 && remoteMs > 0 && remoteMs < currentMs) {
+                console.log('[FixablyDashboard Realtime] Ignoring older cloud payload:', remoteTimestamp, 'vs active:', snapshotTimestampRef.current);
+                return;
+              }
               const newSnapshot = hydrateFixablySnapshot(payload.new.snapshot_data, sites);
+              if (remoteTimestamp && !newSnapshot.timestamp) {
+                newSnapshot.timestamp = remoteTimestamp;
+              }
               await dbStorage.setItem('mdc_fixably_snapshot', newSnapshot);
               try {
                 localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(newSnapshot));
-                localStorage.setItem('mdc_fixably_snapshot_timestamp', payload.new.updated_at || newSnapshot.timestamp || '');
+                localStorage.setItem('mdc_fixably_snapshot_timestamp', remoteTimestamp || newSnapshot.timestamp || '');
+                localStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
+                await dbStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
               } catch (e) {}
               await dbStorage.putSavedRecord({
                 id: 'master_fixably_inventory_snapshot',
                 record_type: 'fixably_snapshot',
                 snapshot: newSnapshot,
-                created_at: payload.new.updated_at || newSnapshot.timestamp || new Date().toISOString()
+                created_at: remoteTimestamp || newSnapshot.timestamp || new Date().toISOString()
               });
               handleApplySyncedSnapshot(newSnapshot);
             }
@@ -432,11 +542,12 @@ export default function FixablyInventoryDashboard({
     };
   }, [sites, setSnapshot]);
 
-  // Handle slot file assignment and validation
+  // Handle slot file assignment, validation, and persistent storage
   const handleSlotFileChange = async (slotKey, file) => {
     if (!file) return;
     try {
-      const validation = await validateFixablyFile(file, slotKey);
+      const textContent = await extractTextContent(file);
+      const validation = await validateFixablyFile(textContent, slotKey);
       if (!validation.valid) {
         setSlots(prev => ({
           ...prev,
@@ -447,26 +558,36 @@ export default function FixablyInventoryDashboard({
             rowCount: 0,
             valid: false,
             error: validation.error,
-            content: null
+            content: null,
+            updatedAt: null
           }
         }));
         showToast?.(validation.error, 'error');
         return;
       }
 
+      const slotData = {
+        name: file.name,
+        size: file.size,
+        rowCount: validation.rowCount,
+        valid: true,
+        error: null,
+        content: textContent,
+        updatedAt: new Date().toISOString()
+      };
+
       setSlots(prev => ({
         ...prev,
         [slotKey]: {
-          file,
-          name: file.name,
-          size: file.size,
-          rowCount: validation.rowCount,
-          valid: true,
-          error: null,
-          content: file
+          ...slotData,
+          file
         }
       }));
-      showToast?.(`Verified ${file.name} (${validation.rowCount.toLocaleString()} rows)`, 'success');
+
+      // Automatically persist to IndexedDB so uploaded files survive page refreshes, logouts, & restarts
+      await dbStorage.setItem('mdc_uploaded_slot_' + slotKey, slotData);
+
+      showToast?.(`Verified & saved ${file.name} (${validation.rowCount.toLocaleString()} rows)`, 'success');
     } catch (err) {
       setSlots(prev => ({
         ...prev,
@@ -477,15 +598,16 @@ export default function FixablyInventoryDashboard({
           rowCount: 0,
           valid: false,
           error: err.message,
-          content: null
+          content: null,
+          updatedAt: null
         }
       }));
       showToast?.(`File validation failed: ${err.message}`, 'error');
     }
   };
 
-  // Clear specific slot
-  const handleClearSlot = (slotKey) => {
+  // Clear specific slot from state and IndexedDB
+  const handleClearSlot = async (slotKey) => {
     setSlots(prev => ({
       ...prev,
       [slotKey]: {
@@ -495,18 +617,29 @@ export default function FixablyInventoryDashboard({
         rowCount: 0,
         valid: false,
         error: null,
-        content: null
+        content: null,
+        updatedAt: null
       }
     }));
+    try {
+      await dbStorage.removeItem('mdc_uploaded_slot_' + slotKey);
+    } catch (e) {}
   };
 
-  // Clear all slots
-  const handleClearAllSlots = () => {
+  // Clear all slots from state and IndexedDB
+  const handleClearAllSlots = async () => {
     setSlots({
-      site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
-      kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
-      stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null }
+      site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
+      kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null },
+      stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, updatedAt: null }
     });
+    try {
+      await Promise.all([
+        dbStorage.removeItem('mdc_uploaded_slot_site_stock'),
+        dbStorage.removeItem('mdc_uploaded_slot_kgb_used'),
+        dbStorage.removeItem('mdc_uploaded_slot_stock_transfer')
+      ]);
+    } catch (e) {}
   };
 
   // Process & Reconcile Multi-File Sync
@@ -548,11 +681,19 @@ export default function FixablyInventoryDashboard({
       setParseProgress({ stage: 'Calculating aging metrics and branch health...', percent: 75 });
       await new Promise(r => setTimeout(r, 60));
 
+      const effectiveTs = reconciled.timestamp || new Date().toISOString();
+      if (!reconciled.timestamp) {
+        reconciled.timestamp = effectiveTs;
+      }
+      snapshotTimestampRef.current = effectiveTs;
+
       // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
       await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
       try {
         localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(reconciled));
-        localStorage.setItem('mdc_fixably_snapshot_timestamp', reconciled.timestamp);
+        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTs);
+        localStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+        await dbStorage.setItem('mdc_fixably_updated_at', effectiveTs);
         const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
         const updatedBatches = [
           reconciled.batchSummary,
@@ -565,17 +706,18 @@ export default function FixablyInventoryDashboard({
           id: 'master_fixably_inventory_snapshot',
           record_type: 'fixably_snapshot',
           snapshot: reconciled,
-          created_at: reconciled.timestamp || new Date().toISOString()
+          created_at: effectiveTs
         });
       } catch (e) {
         console.warn('Fixably snapshot backup note:', e);
       }
 
-      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
-      await syncSnapshotToCloud(reconciled);
-
+      // Immediately anchor UI state so it displays the newly processed inventory
       setSnapshot(reconciled);
       setIsDropzoneOpen(false);
+
+      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
+      await syncSnapshotToCloud(reconciled);
 
       // Optional: synchronize with batchAddScanInUnits
       if (syncWithAppInventory && typeof batchAddScanInUnits === 'function') {
@@ -850,7 +992,172 @@ export default function FixablyInventoryDashboard({
     setTimeout(() => setCopiedSerial(null), 2000);
   };
 
-  // Reset page when filters change
+  // 6. Cross-Site Part Number Search Computations
+  // Catalog of all unique active part numbers across the network with total units & stocking site counts
+  const activePartCatalog = useMemo(() => {
+    const map = new Map();
+    // Gather from snapshot.items (Fixably ground truth)
+    if (Array.isArray(snapshot?.items)) {
+      snapshot.items.forEach(it => {
+        const pn = String(it.partNumber || '').trim();
+        if (!pn) return;
+        const cleanPn = pn.toUpperCase();
+        if (!map.has(cleanPn)) {
+          map.set(cleanPn, {
+            partNumber: it.partNumber || cleanPn,
+            description: it.description || it.partDescription || '',
+            totalUnits: 0,
+            sitesSet: new Set()
+          });
+        }
+        const entry = map.get(cleanPn);
+        entry.totalUnits += 1;
+        const site = it.siteCode || it.siteName || '';
+        if (site) entry.sitesSet.add(site);
+        if (!entry.description && (it.description || it.partDescription)) {
+          entry.description = it.description || it.partDescription;
+        }
+      });
+    }
+
+    // Also incorporate active parts list from props/context
+    const partsArray = parts?.length > 0 ? parts : _parts;
+    if (Array.isArray(partsArray)) {
+      partsArray.forEach(p => {
+        const pn = String(p.part_number || p.partNumber || '').trim();
+        if (!pn) return;
+        const cleanPn = pn.toUpperCase();
+        if (!map.has(cleanPn)) {
+          map.set(cleanPn, {
+            partNumber: p.part_number || p.partNumber || cleanPn,
+            description: p.description || p.part_description || '',
+            totalUnits: 0,
+            sitesSet: new Set()
+          });
+        } else {
+          const entry = map.get(cleanPn);
+          if (!entry.description && (p.description || p.part_description)) {
+            entry.description = p.description || p.part_description;
+          }
+        }
+      });
+    }
+
+    return Array.from(map.values())
+      .map(entry => ({
+        ...entry,
+        siteCount: entry.sitesSet.size
+      }))
+      .sort((a, b) => {
+        if (b.totalUnits !== a.totalUnits) return b.totalUnits - a.totalUnits;
+        return a.partNumber.localeCompare(b.partNumber);
+      });
+  }, [snapshot?.items, parts, _parts]);
+
+  // Autocomplete filtered list based on user search input
+  const filteredPartCatalog = useMemo(() => {
+    const raw = String(partSearchInput || '').trim();
+    if (!raw) return activePartCatalog.slice(0, 40);
+    const q = raw.toUpperCase();
+    const qClean = q.replace(/[^A-Z0-9]/g, '');
+
+    return activePartCatalog.filter(p => {
+      const pn = p.partNumber.toUpperCase();
+      const pnClean = pn.replace(/[^A-Z0-9]/g, '');
+      const desc = (p.description || '').toUpperCase();
+      return pn.includes(q) || (qClean && pnClean.includes(qClean)) || desc.includes(q);
+    }).slice(0, 40);
+  }, [activePartCatalog, partSearchInput]);
+
+  // Available stock per site for the currently searched part number
+  const partStockBySite = useMemo(() => {
+    const query = String(partSearchQuery || '').trim().toUpperCase();
+    if (!query) return null;
+    const queryClean = query.replace(/[^A-Z0-9]/g, '');
+
+    const provCodes = new Set(['ABR', 'CDO', 'CEB', 'COT', 'CBO', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM']);
+
+    // Find all matching items across all sites
+    const matchingItems = (snapshot?.items || []).filter(it => {
+      const itPn = String(it.partNumber || '').trim().toUpperCase();
+      const itPnClean = itPn.replace(/[^A-Z0-9]/g, '');
+      return itPn === query || (queryClean && itPnClean === queryClean);
+    });
+
+    const catalogEntry = activePartCatalog.find(p => {
+      const pPn = p.partNumber.toUpperCase();
+      return pPn === query || (queryClean && pPn.replace(/[^A-Z0-9]/g, '') === queryClean);
+    });
+
+    const partDescription = matchingItems[0]?.description || catalogEntry?.description || '';
+    const canonicalPartNumber = catalogEntry?.partNumber || matchingItems[0]?.partNumber || query;
+
+    // Group items by site
+    const siteStockMap = new Map();
+
+    matchingItems.forEach(it => {
+      const rawSiteCode = String(it.siteCode || '').trim();
+      const cleanSiteCode = rawSiteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '');
+
+      if (!siteStockMap.has(cleanSiteCode)) {
+        const siteObj = (snapshot?.sites || []).find(s => {
+          const sc = String(s.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+          return sc === cleanSiteCode;
+        }) || (sites || []).find(s => {
+          const sc = String(s.code || s.site_code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+          return sc === cleanSiteCode;
+        });
+
+        const isProv = provCodes.has(cleanSiteCode) || isProvincialSite(siteObj || { code: cleanSiteCode, name: it.siteName });
+
+        siteStockMap.set(cleanSiteCode, {
+          siteCode: it.siteCode || cleanSiteCode,
+          cleanCode: cleanSiteCode,
+          siteName: it.siteName || siteObj?.siteName || siteObj?.name || `Service Branch ${cleanSiteCode}`,
+          region: isProv ? 'provincial' : 'metro_manila',
+          totalUnits: 0,
+          dcStockUnits: 0,
+          mspiOwnedUnits: 0,
+          agingBrackets: {
+            inStock: 0,
+            slow: 0,
+            nonMoving: 0,
+            dead: 0
+          }
+        });
+      }
+
+      const sEntry = siteStockMap.get(cleanSiteCode);
+      sEntry.totalUnits += 1;
+      if (it.stockType === 'DC_STOCK') {
+        sEntry.dcStockUnits += 1;
+      } else {
+        sEntry.mspiOwnedUnits += 1;
+      }
+
+      if (it.agingBracket === 'IN_STOCK') sEntry.agingBrackets.inStock += 1;
+      else if (it.agingBracket === 'SLOW_MOVING') sEntry.agingBrackets.slow += 1;
+      else if (it.agingBracket === 'NON_MOVING') sEntry.agingBrackets.nonMoving += 1;
+      else if (it.agingBracket === 'DEAD_STOCK') sEntry.agingBrackets.dead += 1;
+    });
+
+    const sitesWithStock = Array.from(siteStockMap.values()).sort((a, b) => b.totalUnits - a.totalUnits);
+
+    return {
+      searchedPartNumber: canonicalPartNumber,
+      partDescription,
+      totalNetworkUnits: matchingItems.length,
+      sitesCount: sitesWithStock.length,
+      sitesWithStock
+    };
+  }, [partSearchQuery, snapshot?.items, snapshot?.sites, sites, activePartCatalog]);
+
+  const handleSelectSiteFromSearch = useCallback((site) => {
+    setSelectedRegion(site.region);
+    setSelectedSiteCode(site.cleanCode);
+    setSegmentedTab('part_aggregations');
+    showToast?.(`Selected ${site.siteCode} (${site.totalUnits} on-hand for Part #${partStockBySite?.searchedPartNumber})`, 'info');
+  }, [showToast, partStockBySite?.searchedPartNumber]);
   useEffect(() => {
     setCurrentPage(1);
   }, [masterSearch, siteFilter, agingFilter, classificationFilter, investigationFilter, rowsPerPage]);
@@ -1134,21 +1441,30 @@ export default function FixablyInventoryDashboard({
           <input
             type="file"
             ref={siteStockInputRef}
-            onChange={(e) => e.target.files?.[0] && handleSlotFileChange('site_stock', e.target.files[0])}
+            onChange={(e) => {
+              if (e.target.files?.[0]) handleSlotFileChange('site_stock', e.target.files[0]);
+              e.target.value = '';
+            }}
             accept=".csv,.txt"
             style={{ display: 'none' }}
           />
           <input
             type="file"
             ref={kgbInputRef}
-            onChange={(e) => e.target.files?.[0] && handleSlotFileChange('kgb_used', e.target.files[0])}
+            onChange={(e) => {
+              if (e.target.files?.[0]) handleSlotFileChange('kgb_used', e.target.files[0]);
+              e.target.value = '';
+            }}
             accept=".csv,.txt"
             style={{ display: 'none' }}
           />
           <input
             type="file"
             ref={stockTransferInputRef}
-            onChange={(e) => e.target.files?.[0] && handleSlotFileChange('stock_transfer', e.target.files[0])}
+            onChange={(e) => {
+              if (e.target.files?.[0]) handleSlotFileChange('stock_transfer', e.target.files[0]);
+              e.target.value = '';
+            }}
             accept=".csv,.txt"
             style={{ display: 'none' }}
           />
@@ -1219,19 +1535,48 @@ export default function FixablyInventoryDashboard({
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
                       {formatFileSize(slots.site_stock.size)} • {slots.site_stock.rowCount.toLocaleString()} inventory units
+                      {slots.site_stock.updatedAt && (
+                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.site_stock.updatedAt).toLocaleDateString()}</span>
+                      )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleClearSlot('site_stock');
-                    }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                    title="Remove file"
-                  >
-                    <X size={13} />
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        siteStockInputRef.current?.click();
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        border: '1px solid #86efac',
+                        background: '#f0fdf4',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        color: '#15803d'
+                      }}
+                      title="Replace / Update File"
+                    >
+                      <RefreshCw size={11} />
+                      <span>Replace</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('site_stock');
+                      }}
+                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               ) : slots.site_stock.error ? (
                 <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
@@ -1298,19 +1643,48 @@ export default function FixablyInventoryDashboard({
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
                       {formatFileSize(slots.kgb_used.size)} • {slots.kgb_used.rowCount.toLocaleString()} repair log rows
+                      {slots.kgb_used.updatedAt && (
+                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.kgb_used.updatedAt).toLocaleDateString()}</span>
+                      )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleClearSlot('kgb_used');
-                    }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                    title="Remove file"
-                  >
-                    <X size={13} />
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        kgbInputRef.current?.click();
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        border: '1px solid #86efac',
+                        background: '#f0fdf4',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        color: '#15803d'
+                      }}
+                      title="Replace / Update File"
+                    >
+                      <RefreshCw size={11} />
+                      <span>Replace</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('kgb_used');
+                      }}
+                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               ) : slots.kgb_used.error ? (
                 <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
@@ -1377,19 +1751,48 @@ export default function FixablyInventoryDashboard({
                     </div>
                     <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
                       {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
+                      {slots.stock_transfer.updatedAt && (
+                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
+                      )}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleClearSlot('stock_transfer');
-                    }}
-                    style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                    title="Remove file"
-                  >
-                    <X size={13} />
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        stockTransferInputRef.current?.click();
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        border: '1px solid #86efac',
+                        background: '#f0fdf4',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        color: '#15803d'
+                      }}
+                      title="Replace / Update File"
+                    >
+                      <RefreshCw size={11} />
+                      <span>Replace</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('stock_transfer');
+                      }}
+                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
               ) : slots.stock_transfer.error ? (
                 <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
@@ -2278,6 +2681,403 @@ export default function FixablyInventoryDashboard({
       {viewMode === 'multi_site' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
+          {/* ========================================================================= */}
+          {/* CROSS-SITE PART NUMBER AVAILABILITY SEARCH BAR & AUTOCOMPLETE */}
+          {/* ========================================================================= */}
+          <div
+            className="card"
+            style={{
+              padding: '18px 22px',
+              background: '#ffffff',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)',
+              position: 'relative'
+            }}
+          >
+            {/* Header with Title, Description, and Catalog Count Badge */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Search size={18} color="#0284c7" />
+                  <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
+                    Search Stock Availability by Part Number
+                  </h3>
+                </div>
+                <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#64748b' }}>
+                  Lookup any active Apple part number to view immediate on-hand quantities across all 26 authorized service sites.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span
+                  style={{
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    padding: '4px 10px',
+                    borderRadius: '20px',
+                    background: '#f0f9ff',
+                    color: '#0369a1',
+                    border: '1px solid #bae6fd'
+                  }}
+                >
+                  {activePartCatalog.length.toLocaleString()} Active Part Numbers
+                </span>
+              </div>
+            </div>
+
+            {/* Interactive Search Bar with Autocomplete Dropdown */}
+            <div ref={partSearchContainerRef} style={{ position: 'relative' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  background: '#f8fafc',
+                  border: isPartDropdownOpen ? '2px solid #0284c7' : '1.5px solid #cbd5e1',
+                  borderRadius: '10px',
+                  padding: '4px 12px',
+                  transition: 'all 0.15s ease',
+                  boxShadow: isPartDropdownOpen ? '0 0 0 3px rgba(2, 132, 199, 0.12)' : 'none'
+                }}
+              >
+                <Search size={18} color={isPartDropdownOpen ? '#0284c7' : '#94a3b8'} style={{ flexShrink: 0, marginRight: '10px' }} />
+                <input
+                  type="text"
+                  value={partSearchInput}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPartSearchInput(val);
+                    setIsPartDropdownOpen(true);
+                    setHighlightedPartIndex(-1);
+                    if (!val.trim()) {
+                      setPartSearchQuery('');
+                    }
+                  }}
+                  onFocus={() => setIsPartDropdownOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setHighlightedPartIndex(prev => Math.min(prev + 1, filteredPartCatalog.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setHighlightedPartIndex(prev => Math.max(prev - 1, 0));
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (highlightedPartIndex >= 0 && filteredPartCatalog[highlightedPartIndex]) {
+                        const sel = filteredPartCatalog[highlightedPartIndex];
+                        setPartSearchInput(sel.partNumber);
+                        setPartSearchQuery(sel.partNumber);
+                        setIsPartDropdownOpen(false);
+                      } else if (partSearchInput.trim()) {
+                        setPartSearchQuery(partSearchInput.trim());
+                        setIsPartDropdownOpen(false);
+                      }
+                    } else if (e.key === 'Escape') {
+                      setIsPartDropdownOpen(false);
+                    }
+                  }}
+                  placeholder="Type or select Part Number (e.g. 661-30401, 661-24546, or part description)..."
+                  style={{
+                    flex: 1,
+                    border: 'none',
+                    outline: 'none',
+                    background: 'transparent',
+                    fontSize: '13.5px',
+                    fontWeight: 600,
+                    color: '#0f172a',
+                    padding: '8px 0'
+                  }}
+                />
+                {partSearchInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPartSearchInput('');
+                      setPartSearchQuery('');
+                      setIsPartDropdownOpen(false);
+                      setHighlightedPartIndex(-1);
+                    }}
+                    style={{
+                      background: '#e2e8f0',
+                      border: 'none',
+                      borderRadius: '50%',
+                      width: '22px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      color: '#475569',
+                      marginLeft: '8px'
+                    }}
+                    title="Clear search"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {/* Autocomplete Dropdown List */}
+              {isPartDropdownOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 1000,
+                    background: '#ffffff',
+                    border: '1.5px solid #cbd5e1',
+                    borderRadius: '10px',
+                    boxShadow: '0 12px 30px -4px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(226, 232, 240, 0.8)',
+                    maxHeight: '320px',
+                    overflowY: 'auto'
+                  }}
+                  className="custom-scrollbar"
+                >
+                  <div style={{ padding: '8px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Active Part Number Catalog</span>
+                    <span>{filteredPartCatalog.length} Matching Results</span>
+                  </div>
+
+                  {filteredPartCatalog.length === 0 ? (
+                    <div style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>
+                      No active part numbers matching <code style={{ color: '#0f172a', fontWeight: 700 }}>"{partSearchInput}"</code>
+                    </div>
+                  ) : (
+                    filteredPartCatalog.map((item, idx) => {
+                      const isHighlighted = idx === highlightedPartIndex;
+                      const isSelected = partSearchQuery.toUpperCase() === item.partNumber.toUpperCase();
+
+                      return (
+                        <div
+                          key={item.partNumber}
+                          onClick={() => {
+                            setPartSearchInput(item.partNumber);
+                            setPartSearchQuery(item.partNumber);
+                            setIsPartDropdownOpen(false);
+                          }}
+                          onMouseEnter={() => setHighlightedPartIndex(idx)}
+                          style={{
+                            padding: '10px 14px',
+                            borderBottom: '1px solid #f1f5f9',
+                            cursor: 'pointer',
+                            background: isSelected ? '#f0f9ff' : (isHighlighted ? '#f8fafc' : '#ffffff'),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            transition: 'background 0.1s ease'
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0284c7', fontFamily: 'monospace' }}>
+                                {item.partNumber}
+                              </span>
+                              {isSelected && (
+                                <span style={{ fontSize: '10px', fontWeight: 800, background: '#0284c7', color: '#ffffff', padding: '1px 6px', borderRadius: '4px' }}>
+                                  Active Query
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {item.description || 'Apple Service Component'}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 800,
+                                padding: '2px 8px',
+                                borderRadius: '999px',
+                                background: item.totalUnits > 0 ? '#ecfdf5' : '#fee2e2',
+                                color: item.totalUnits > 0 ? '#065f46' : '#991b1b',
+                                border: item.totalUnits > 0 ? '1px solid #a7f3d0' : '1px solid #fecdd3'
+                              }}
+                            >
+                              {item.totalUnits} on-hand
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                borderRadius: '999px',
+                                background: '#f1f5f9',
+                                color: '#334155'
+                              }}
+                            >
+                              {item.siteCount} {item.siteCount === 1 ? 'site' : 'sites'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* RESULTS PANEL: When a part number is searched */}
+            {partStockBySite && (
+              <div
+                style={{
+                  marginTop: '16px',
+                  padding: '16px',
+                  background: '#f8fafc',
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '10px'
+                }}
+              >
+                {/* Result Summary Bar */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid #cbd5e1' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '38px', height: '38px', borderRadius: '8px', background: '#eff6ff', border: '1px solid #bfdbfe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Package size={20} color="#0284c7" />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'monospace' }}>
+                          {partStockBySite.searchedPartNumber}
+                        </span>
+                        <span style={{ fontSize: '11px', fontWeight: 800, background: '#0284c7', color: '#ffffff', padding: '2px 8px', borderRadius: '999px' }}>
+                          {partStockBySite.totalNetworkUnits} Total Units On-Hand
+                        </span>
+                        <span style={{ fontSize: '11px', fontWeight: 700, background: '#e0e7ff', color: '#3730a3', border: '1px solid #c7d2fe', padding: '2px 8px', borderRadius: '999px' }}>
+                          Available at {partStockBySite.sitesCount} {partStockBySite.sitesCount === 1 ? 'Branch Site' : 'Branch Sites'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '2px' }}>
+                        {partStockBySite.partDescription || 'Apple Genuine Service Part'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPartSearchInput('');
+                      setPartSearchQuery('');
+                      setIsPartDropdownOpen(false);
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 12px',
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      color: '#64748b',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={13} />
+                    <span>Clear Search</span>
+                  </button>
+                </div>
+
+                {/* Branch Stock Availability Listing */}
+                {partStockBySite.sitesWithStock.length === 0 ? (
+                  <div style={{ padding: '28px 16px', textAlign: 'center', background: '#ffffff', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                    <AlertTriangle size={32} color="#d97706" style={{ margin: '0 auto 8px', opacity: 0.8 }} />
+                    <div style={{ fontSize: '14.5px', fontWeight: 800, color: '#0f172a' }}>
+                      No Available Stock for Part #{partStockBySite.searchedPartNumber}
+                    </div>
+                    <div style={{ fontSize: '12.5px', color: '#64748b', marginTop: '4px' }}>
+                      Currently 0 on-hand units across all 26 authorized service locations. You may create a parts requisition or check alternative part numbers.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
+                    {partStockBySite.sitesWithStock.map(site => {
+                      const isCurrentSelected = selectedSiteCode.toUpperCase() === site.cleanCode.toUpperCase();
+
+                      return (
+                        <div
+                          key={site.siteCode}
+                          style={{
+                            background: '#ffffff',
+                            border: isCurrentSelected ? '2px solid #0284c7' : '1px solid #cbd5e1',
+                            borderRadius: '8px',
+                            padding: '12px 14px',
+                            boxShadow: isCurrentSelected ? '0 4px 12px rgba(2, 132, 199, 0.15)' : '0 1px 3px rgba(15, 23, 42, 0.04)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ background: '#0f172a', color: '#ffffff', padding: '2px 7px', borderRadius: '4px', fontSize: '11px', fontWeight: 800 }}>
+                                  {site.siteCode}
+                                </span>
+                                <span style={{ fontSize: '10.5px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: site.region === 'metro_manila' ? '#eff6ff' : '#fffbeb', color: site.region === 'metro_manila' ? '#0369a1' : '#b45309' }}>
+                                  {site.region === 'metro_manila' ? 'Metro Manila' : 'Provincial'}
+                                </span>
+                              </div>
+
+                              <span style={{ fontSize: '12.5px', fontWeight: 800, color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '2px 8px', borderRadius: '999px' }}>
+                                {site.totalUnits} {site.totalUnits === 1 ? 'unit' : 'units'} on-hand
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginBottom: '6px' }}>
+                              {site.siteName}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '10px', fontSize: '11.5px', color: '#64748b', marginBottom: '10px' }}>
+                              <span>DC Stock: <strong style={{ color: '#0f172a' }}>{site.dcStockUnits}</strong></span>
+                              <span>•</span>
+                              <span>MSPI-Owned: <strong style={{ color: '#0f172a' }}>{site.mspiOwnedUnits}</strong></span>
+                              {site.agingBrackets.dead > 0 && (
+                                <>
+                                  <span>•</span>
+                                  <span style={{ color: '#dc2626', fontWeight: 700 }}>{site.agingBrackets.dead} dead</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSelectSiteFromSearch(site)}
+                            style={{
+                              width: '100%',
+                              padding: '7px 10px',
+                              borderRadius: '6px',
+                              border: isCurrentSelected ? '1.5px solid #0284c7' : '1px solid #cbd5e1',
+                              background: isCurrentSelected ? '#0284c7' : '#f8fafc',
+                              color: isCurrentSelected ? '#ffffff' : '#0369a1',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '6px',
+                              transition: 'all 0.15s ease'
+                            }}
+                          >
+                            <Building2 size={13} />
+                            <span>{isCurrentSelected ? 'Currently Viewing This Branch' : `View ${site.siteCode} Stock →`}</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Site Navigation Card: Region tabs & Branch Selector Chips */}
           <div className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1.5px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)' }}>
             

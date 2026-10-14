@@ -134,7 +134,7 @@ function MainApp() {
       case 'feedback':
         return currentUser?.role === 'parts_management' ? <Feedback /> : <SettingsCatalog defaultTab="feedback" />;
       case 'drive-hub':
-        return <DriveDocumentHub />;
+        return currentUser?.role === 'superadmin' ? <DriveDocumentHub /> : <UnauthorizedAccess />;
       default:
         return <Dashboard />;
     }

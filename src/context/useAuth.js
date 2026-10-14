@@ -391,8 +391,8 @@ export function useAuth({
     // 1. Superadmin has full unrestricted access to all modules
     if (currentUser.role === 'superadmin' || Boolean(currentUser.isSuperAdmin)) return true;
 
-    // 2. User Access Management and All Stocks & Inventory are strictly restricted to Superadmin
-    if (pageId === 'user-access' || pageId === 'all-stocks') return false;
+    // 2. User Access Management, All Stocks & Inventory, and Drive Document Hub are strictly restricted to Superadmin
+    if (pageId === 'user-access' || pageId === 'all-stocks' || pageId === 'drive-hub') return false;
 
     // 3. Deactivated accounts have zero access
     if (currentUser.isActive === false) return false;
