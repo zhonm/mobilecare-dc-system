@@ -12,7 +12,6 @@ import {
   isUUID,
   safeUUID,
   parseDcIntakeRecordFromDb,
-  isLockedConfirmedShipment,
   getBasePoNumber,
   normalizeDateToIso,
   generateAppleSerialNumber,
@@ -36,7 +35,7 @@ import { clearOperationalLocalStorage } from '../utils/cacheManager';
 import { clearStoredUserSession } from '../utils/security';
 import { scanMasterlistData, setActiveScannedMasterlist, getActiveMasterlist } from '../utils/rawMasterlistScanner.js';
 import { resolvePartCategoryId, resolvePartCategoryUUID, getPartCategory, DEFAULT_PART_CATEGORIES } from '../utils/categoryFilter';
-import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName } from '../utils/shipmentHelpers';
+import { buildSerialDictionary, healShipmentItem, isUnknownPn, isUnknownDesc, getShipmentRiderName, isShipmentReceived } from '../utils/shipmentHelpers';
 import {
   ARCHIVE_CUTOFF_DAYS,
   getArchiveCutoffDate,
@@ -2029,7 +2028,7 @@ export function useCloudSync({
               ? s.prepared_by_name
               : (s.saved_by_name && s.saved_by_name !== 'Warehouse Staff' ? s.saved_by_name : (currentUser?.fullName || 'Zhon Manaois'));
 
-            const isConfirmed = isLockedConfirmedShipment(s) || s.status === 'received_confirmed' || s.status === 'delivered';
+            const isConfirmed = isShipmentReceived(s);
             const resolvedStatus = isConfirmed ? 'received_confirmed' : (s.status || 'pending_pickup');
             const isArchived = isShipmentArchived(s, ARCHIVE_CUTOFF_DAYS);
 

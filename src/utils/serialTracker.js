@@ -3,6 +3,7 @@
  * Resolves complete lifecycle, current location, arrival dates, and repair consumption records.
  */
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
+import { isShipmentActive, isShipmentReceived } from './shipmentHelpers.js';
 
 /**
  * Normalizes and cleans raw barcode / serial input
@@ -187,8 +188,7 @@ export function resolveSerialFullDetails(serialInput, {
   const isShippedInTransit = Boolean(
     !isUsed &&
     linkedShipment &&
-    (linkedShipment.status === 'shipped' || linkedShipment.status === 'pending_pickup') &&
-    linkedShipment.status !== 'received_confirmed'
+    isShipmentActive(linkedShipment)
   );
 
   let statusKey;
@@ -218,7 +218,7 @@ export function resolveSerialFullDetails(serialInput, {
   let siteArrivalDate = null;
   let siteArrivalFormatted = null;
 
-  if (linkedShipment && linkedShipment.status === 'received_confirmed') {
+  if (linkedShipment && isShipmentReceived(linkedShipment)) {
     siteArrivalDate = linkedShipment.received_date || linkedShipment.received_at;
   } else if (!isDcSite && (unit?.received_at || unit?.received_date)) {
     siteArrivalDate = unit.received_date || unit.received_at;

@@ -5,7 +5,7 @@ import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord
 import { unmarkDeletedShipmentIds, unmarkDeletedSerials } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
-import { getTodayDateString } from '../utils/shipmentHelpers';
+import { getTodayDateString, isShipmentReceived } from '../utils/shipmentHelpers';
 
 export function useShipments({
   currentUser,
@@ -59,7 +59,7 @@ export function useShipments({
             .map(s => {
               if (!s) return s;
               const cleanPreparedBy = (s.prepared_by_name && s.prepared_by_name !== 'Warehouse Staff') ? s.prepared_by_name : (currentUser?.fullName || 'Zhon Manaois');
-              const isReceived = isLockedConfirmedShipment(s) || s.status === 'received_confirmed' || s.status === 'delivered';
+              const isReceived = isShipmentReceived(s);
               return {
                 ...s,
                 status: isReceived ? 'received_confirmed' : (s.status || 'pending_pickup'),

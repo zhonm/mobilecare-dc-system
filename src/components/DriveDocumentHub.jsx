@@ -122,7 +122,7 @@ export default function DriveDocumentHub() {
         setIsTabLoadingModalOpen(false);
       }, remainingWait);
     }
-  }, [activeCategory, driveAvailable, showToast]);
+  }, [activeCategory, showToast]);
 
   const handleTabSwitch = (cat) => {
     if (cat.id === activeCategory && !isLoading) return;

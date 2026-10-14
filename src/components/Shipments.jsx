@@ -52,7 +52,8 @@ import {
   detectRecommendedShippingMode,
   hasBatteryItem,
   getShipmentRiderName,
-  getTodayDateString
+  getTodayDateString,
+  isShipmentReceived
 } from '../utils/shipmentHelpers';
 import { isShipmentArchived } from '../utils/archiveManager';
 
@@ -379,7 +380,7 @@ export default function Shipments() {
   // Helper to normalize status
   const getNormalizedStatus = useCallback((sh) => {
     if (!sh) return 'pending_pickup';
-    if (isLockedConfirmedShipment(sh) || sh.status === 'received_confirmed' || sh.status === 'delivered') {
+    if (isShipmentReceived(sh)) {
       return 'received_confirmed';
     }
     if (sh.status === 'shipped' || sh.status === 'in_transit') {

@@ -6,7 +6,7 @@ import { getCategoryForPart, getCategoryBadgeStyle } from '../utils/categoryFilt
 import { defaultPartsCatalog } from '../data/defaultCatalog';
 import * as XLSX from 'xlsx';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
-import { formatCourierWithMode, buildSerialDictionary, healShipmentItem, getShipmentRiderName } from '../utils/shipmentHelpers';
+import { formatCourierWithMode, buildSerialDictionary, healShipmentItem, getShipmentRiderName, isShipmentActive } from '../utils/shipmentHelpers';
 import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import ConfirmReceiveModal from './ConfirmReceiveModal';
 import AllStocksImportModal from './AllStocksImportModal';
@@ -449,8 +449,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
     const filtered = (shipments || []).filter(sh => {
       if (!sh.items || sh.items.length === 0) return false;
-      const isPending = sh.status === 'pending_pickup' || sh.status === 'shipped' || sh.status === 'in_transit' || sh.status === 'draft';
-      if (!isPending) return false;
+      if (!isShipmentActive(sh)) return false;
+
+      // Draft or packing manifests are DC packing lists that have not been dispatched
+      const normStatus = String(sh.status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+      if (normStatus === 'draft' || normStatus === 'packing') return false;
 
       if (selectedSiteId === 'ALL' && isSuperadmin) return true;
 
