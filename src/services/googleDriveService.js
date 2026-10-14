@@ -144,35 +144,45 @@ export function isGoogleDriveConfigured() {
   return Boolean(GOOGLE_DRIVE_CONFIG.sharedDriveId && GOOGLE_DRIVE_CONFIG.clientEmail && pem);
 }
 
+function normalizePrivateKey(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+
+  const normalized = value.trim().replace(/^['"]|['"]$/g, '').replace(/\\n/g, '\n');
+  if (normalized.includes('BEGIN PRIVATE KEY')) return normalized;
+
+  try {
+    const parsed = JSON.parse(normalized);
+    return normalizePrivateKey(parsed?.private_key);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Helper to resolve the private key string from env, module, localStorage, or globals
  */
 export function resolvePrivateKeyPem() {
   // 1. Env variable override (if configured in Vercel or .env)
   const envKey = import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (envKey && typeof envKey === 'string' && envKey.trim()) {
-    return envKey.replace(/\\n/g, '\n');
-  }
+  const envPem = normalizePrivateKey(envKey);
+  if (envPem) return envPem;
 
   // 2. Embedded credentials module (src/config/googleDriveCredentials.js)
-  if (EMBEDDED_KEY?.private_key) {
-    return EMBEDDED_KEY.private_key.replace(/\\n/g, '\n');
-  }
+  const embeddedPem = normalizePrivateKey(EMBEDDED_KEY?.private_key);
+  if (embeddedPem) return embeddedPem;
 
   // 3. LocalStorage override / configuration (Superadmin key setup)
-  const localKey = getLocalStorageCredential('private_key');
-  if (localKey && typeof localKey === 'string' && localKey.trim()) {
-    return localKey.replace(/\\n/g, '\n');
-  }
+  const localPem = normalizePrivateKey(getLocalStorageCredential('private_key'));
+  if (localPem) return localPem;
 
   // 4. Global object fallback (Node.js runtime or window)
-  if (typeof globalThis !== 'undefined' && globalThis.__GOOGLE_SERVICE_KEY__?.private_key) {
-    return globalThis.__GOOGLE_SERVICE_KEY__.private_key.replace(/\\n/g, '\n');
-  }
+  const globalPem = normalizePrivateKey(globalThis?.__GOOGLE_SERVICE_KEY__?.private_key);
+  if (globalPem) return globalPem;
 
   // 5. Node.js process.env fallback
-  if (typeof process !== 'undefined' && process.env?.GOOGLE_PRIVATE_KEY) {
-    return process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+  if (typeof process !== 'undefined') {
+    const processPem = normalizePrivateKey(process.env?.GOOGLE_PRIVATE_KEY);
+    if (processPem) return processPem;
   }
 
   return null;
