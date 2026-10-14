@@ -76,7 +76,9 @@ export default function DriveDocumentHub() {
 
   // Fetch files from Google Drive
   const loadFiles = useCallback(async (targetCatId = activeCategory) => {
-    if (!driveAvailable) {
+    const isConfigured = isGoogleDriveConfigured();
+    setDriveAvailable(isConfigured);
+    if (!isConfigured) {
       setIsTabLoadingModalOpen(false);
       return;
     }
