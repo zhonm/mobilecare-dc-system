@@ -74,15 +74,15 @@ export function setGoogleDriveCredentialsOverride(credentials) {
 
 // Credentials fallback chain:
 // 1. Deployment environment variables (VITE_GOOGLE_SERVICE_ACCOUNT_KEY / EMAIL)
-// 2. Embedded credentials module (src/config/googleDriveCredentials.js)
+// 2. Embedded credentials module (src/config/googleDriveCredentials.js - git-ignored)
 // 3. Browser localStorage override (set via Superadmin Settings)
 // 4. Global / Node.js runtime globals (testing & CLI scripts)
 export const GOOGLE_SERVICE_ACCOUNT_KEY = {
   get client_email() {
     return (
       import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL ||
-      EMBEDDED_KEY?.client_email ||
       getLocalStorageCredential('client_email') ||
+      EMBEDDED_KEY?.client_email ||
       'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com'
     );
   },
@@ -106,8 +106,8 @@ export const GOOGLE_DRIVE_CONFIG = {
   get clientEmail() {
     return (
       import.meta?.env?.VITE_GOOGLE_SERVICE_ACCOUNT_EMAIL ||
-      EMBEDDED_KEY?.client_email ||
       getLocalStorageCredential('client_email') ||
+      EMBEDDED_KEY?.client_email ||
       'mdc-dc-storage-bot@lateral-journey-510307-f7.iam.gserviceaccount.com'
     );
   }
@@ -179,7 +179,7 @@ export function resolvePrivateKeyPem() {
   const globalPem = normalizePrivateKey(globalThis?.__GOOGLE_SERVICE_KEY__?.private_key);
   if (globalPem) return globalPem;
 
-  // 5. Node.js process.env fallback
+  // 6. Node.js process.env fallback
   if (typeof process !== 'undefined') {
     const processPem = normalizePrivateKey(process.env?.GOOGLE_PRIVATE_KEY);
     if (processPem) return processPem;
