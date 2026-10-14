@@ -45,11 +45,20 @@ export async function autoArchivePackingListToDrive(shipment, items = [], site =
 
     const pdfBlob = doc.output('blob');
 
+    const siteCodeClean = resolvePmgSiteFolderName(site || shipment?.site_name || shipment?.site_code);
     const result = await uploadToGoogleDrive({
       name: filename,
       mimeType: 'application/pdf',
       data: pdfBlob,
-      folderType: 'shipments'
+      folderType: 'shipments',
+      appProperties: {
+        system: 'MDC-DC',
+        docType: 'packing_list',
+        invoiceRef: String(shipment.invoice_ref || shipment.shipment_number || ''),
+        siteCode: siteCodeClean,
+        serialCount: String(sourceItems.length || 0),
+        status: String(shipment.status || 'pending_pickup')
+      }
     });
 
     return {
@@ -425,7 +434,15 @@ export async function uploadPmgSignedPackingListToDrive({
       mimeType,
       data: file,
       folderId: siteFolderId,
-      useDateFolder: false
+      useDateFolder: false,
+      appProperties: {
+        system: 'MDC-DC',
+        docType: 'signed_packing_list',
+        invoiceRef,
+        siteFolder: siteFolderName,
+        siteId: String(shipment?.site_id || site?.id || ''),
+        status: 'received_confirmed'
+      }
     });
 
     if (!result.success) {

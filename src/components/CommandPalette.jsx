@@ -21,7 +21,8 @@ import {
   Command,
   X,
   Package,
-  Layers
+  Layers,
+  HardDrive
 } from 'lucide-react';
 
 const PAGE_ICONS = {
@@ -38,7 +39,8 @@ const PAGE_ICONS = {
   reports: FileSpreadsheet,
   audit: History,
   settings: Settings,
-  'user-access': Users
+  'user-access': Users,
+  'drive-hub': HardDrive
 };
 
 export default function CommandPalette({ isOpen, onClose }) {
@@ -175,6 +177,20 @@ export default function CommandPalette({ isOpen, onClose }) {
           setActiveTab('request-parts');
           if (setPmgSubTab) setPmgSubTab('usage_history');
           setTimeout(() => window.dispatchEvent(new CustomEvent('mdc:open-mark-used')), 50);
+          handleClose();
+        }
+      });
+    }
+
+    if (canAccess('drive-hub')) {
+      quickActions.push({
+        id: 'action-drive-hub',
+        title: 'Google Drive Document Hub',
+        subtitle: 'Search archived packing lists, signed manifests & workbooks',
+        icon: HardDrive,
+        keywords: 'google drive documents archive signed packing list pdf backups receipts',
+        action: () => {
+          setActiveTab('drive-hub');
           handleClose();
         }
       });

@@ -24,7 +24,8 @@ import {
   ChevronDown,
   ChevronRight,
   Package,
-  Building2
+  Building2,
+  HardDrive
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -184,6 +185,7 @@ export default function Sidebar() {
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
     { id: 'site-transfers-fifo', label: 'Site Transfers & FIFO Audit', icon: GitCompare, section: 'Reports & Traceability' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
+    { id: 'drive-hub', label: 'Drive Document Hub', icon: HardDrive, section: 'Reports & Traceability' },
 
     // 4. Administration
     { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },

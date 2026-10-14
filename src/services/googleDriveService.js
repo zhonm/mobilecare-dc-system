@@ -395,6 +395,31 @@ export async function getOrCreateDateFolder(parentFolderId, dateString = getLoca
 }
 
 /**
+ * Resolves or recursively creates a nested hierarchy of subfolders (e.g. ['2026', '10', 'APP_BHS'])
+ * inside a designated parent folder. Caches each resolved path segment.
+ * 
+ * @param {string} parentFolderId - Target root folder ID
+ * @param {string[]|string} folderPath - Array of folder segment names or slash-separated string
+ * @param {string} [customAccessToken] - Optional access token
+ * @returns {Promise<string>} The ID of the deepest folder in the hierarchy
+ */
+export async function getOrCreateFolderPath(parentFolderId, folderPath, customAccessToken = null) {
+  if (!parentFolderId || !folderPath) return parentFolderId;
+  const segments = Array.isArray(folderPath)
+    ? folderPath.filter(Boolean)
+    : String(folderPath).split('/').map(s => s.trim()).filter(Boolean);
+
+  if (segments.length === 0) return parentFolderId;
+
+  const token = customAccessToken || await getGoogleDriveAccessToken();
+  let currentParentId = parentFolderId;
+  for (const segment of segments) {
+    currentParentId = await getOrCreateFolder(currentParentId, segment, token);
+  }
+  return currentParentId;
+}
+
+/**
  * Uploads a file to Google Shared Drive inside a designated folder and date subfolder
  * 
  * @param {Object} params
@@ -435,9 +460,11 @@ export async function normalizeToFileBytes(data) {
  * @param {string} [params.folderId] - Explicit folder ID
  * @param {boolean} [params.useDateFolder=true] - Whether to organize into date subfolder
  * @param {string} [params.dateString] - Date string for subfolder
+ * @param {string[]|string} [params.folderPath] - Optional hierarchical subfolder path (e.g. ['2026', '10', 'APP_BHS'])
+ * @param {Object} [params.appProperties] - Custom metadata key-values for instant Drive queries
  * @param {number} [params.chunkSize] - Chunk size in bytes (must be multiple of 256KB, default 2MB)
  * @param {Function} [params.onProgress] - Progress callback: ({ uploadedBytes, totalBytes, percent })
- * @returns {Promise<{ success: boolean, fileId?: string, name?: string, webViewLink?: string, webContentLink?: string, parentFolderId?: string, isResumable?: boolean, error?: string }>}
+ * @returns {Promise<{ success: boolean, fileId?: string, name?: string, webViewLink?: string, webContentLink?: string, parentFolderId?: string, isResumable?: boolean, appProperties?: Object, error?: string }>}
  */
 export async function uploadResumableToGoogleDrive({
   name,
@@ -447,6 +474,8 @@ export async function uploadResumableToGoogleDrive({
   folderId,
   useDateFolder = true,
   dateString,
+  folderPath,
+  appProperties = null,
   chunkSize = 2 * 1024 * 1024, // 2MB default (multiple of 256KB)
   onProgress
 }) {
@@ -457,7 +486,9 @@ export async function uploadResumableToGoogleDrive({
     let targetFolder = designatedFolder;
     let resolvedDateFolderName = null;
 
-    if (useDateFolder && designatedFolder) {
+    if (folderPath && designatedFolder) {
+      targetFolder = await getOrCreateFolderPath(designatedFolder, folderPath, accessToken);
+    } else if (useDateFolder && designatedFolder) {
       const todayDateStr = dateString || getLocalDateString();
       resolvedDateFolderName = todayDateStr;
       targetFolder = await getOrCreateDateFolder(designatedFolder, todayDateStr, accessToken);
@@ -469,7 +500,8 @@ export async function uploadResumableToGoogleDrive({
     // 1. Initiate Resumable Upload Session
     const metadata = {
       name,
-      parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId]
+      parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId],
+      ...(appProperties && typeof appProperties === 'object' ? { appProperties } : {})
     };
 
     const initRes = await fetchDrive(
@@ -565,7 +597,8 @@ export async function uploadResumableToGoogleDrive({
       webContentLink: uploadResult?.webContentLink,
       parentFolderId: targetFolder,
       dateFolder: resolvedDateFolderName,
-      isResumable: true
+      isResumable: true,
+      appProperties: uploadResult?.appProperties || appProperties
     };
   } catch (err) {
     console.error(`[Google Drive] Resumable upload failed for ${name}:`, err);
@@ -577,7 +610,7 @@ export async function uploadResumableToGoogleDrive({
 }
 
 /**
- * Uploads a file to Google Shared Drive inside a designated folder and date subfolder.
+ * Uploads a file to Google Shared Drive inside a designated folder, hierarchical subfolder, or date subfolder.
  * Automatically delegates to resumable chunked upload if file size exceeds 5MB (Feature C).
  * 
  * @param {Object} params
@@ -588,8 +621,10 @@ export async function uploadResumableToGoogleDrive({
  * @param {string} [params.folderId] - Explicit target folder ID (defaults to folderType or Shared Drive root)
  * @param {boolean} [params.useDateFolder=true] - Whether to organize files inside a date subfolder (e.g. "2026-10-01")
  * @param {string} [params.dateString] - Custom date string for subfolder (defaults to today YYYY-MM-DD)
+ * @param {string[]|string} [params.folderPath] - Optional hierarchical subfolder path (e.g. ['2026', '10', 'APP_BHS'])
+ * @param {Object} [params.appProperties] - Custom metadata key-values for instant Drive queries
  * @param {Function} [params.onProgress] - Optional progress callback
- * @returns {Promise<{ success: boolean, fileId: string, name: string, webViewLink: string, webContentLink: string, parentFolderId?: string, dateFolder?: string, isResumable?: boolean }>}
+ * @returns {Promise<{ success: boolean, fileId: string, name: string, webViewLink: string, webContentLink: string, parentFolderId?: string, dateFolder?: string, isResumable?: boolean, appProperties?: Object }>}
  */
 export async function uploadToGoogleDrive({
   name,
@@ -599,6 +634,8 @@ export async function uploadToGoogleDrive({
   folderId,
   useDateFolder = true,
   dateString,
+  folderPath,
+  appProperties = null,
   onProgress
 }) {
   try {
@@ -615,6 +652,8 @@ export async function uploadToGoogleDrive({
         folderId,
         useDateFolder,
         dateString,
+        folderPath,
+        appProperties,
         onProgress
       });
     }
@@ -625,7 +664,9 @@ export async function uploadToGoogleDrive({
     let targetFolder = designatedFolder;
     let resolvedDateFolderName = null;
 
-    if (useDateFolder && designatedFolder) {
+    if (folderPath && designatedFolder) {
+      targetFolder = await getOrCreateFolderPath(designatedFolder, folderPath, accessToken);
+    } else if (useDateFolder && designatedFolder) {
       const todayDateStr = dateString || getLocalDateString();
       resolvedDateFolderName = todayDateStr;
       targetFolder = await getOrCreateDateFolder(designatedFolder, todayDateStr, accessToken);
@@ -633,7 +674,8 @@ export async function uploadToGoogleDrive({
 
     const metadata = {
       name,
-      parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId]
+      parents: targetFolder ? [targetFolder] : [GOOGLE_DRIVE_CONFIG.sharedDriveId],
+      ...(appProperties && typeof appProperties === 'object' ? { appProperties } : {})
     };
 
     const boundary = '-------mdc_boundary_' + Math.random().toString(36).substring(2);
@@ -658,7 +700,7 @@ export async function uploadToGoogleDrive({
     combined.set(closeBytes, offset);
 
     const uploadRes = await fetchDrive(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink,webContentLink',
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink,webContentLink,appProperties',
       {
         method: 'POST',
         headers: {
@@ -686,7 +728,8 @@ export async function uploadToGoogleDrive({
       webContentLink: result.webContentLink,
       parentFolderId: targetFolder,
       dateFolder: resolvedDateFolderName,
-      isResumable: false
+      isResumable: false,
+      appProperties: result.appProperties || appProperties
     };
   } catch (err) {
     console.error(`[Google Drive] Failed to upload ${name}:`, err);
@@ -725,14 +768,14 @@ export async function downloadJsonFromGoogleDrive(fileId) {
 }
 
 /**
- * Lists files in a designated folder and its date subfolders
+ * Lists files in a designated folder and its subfolders (including metadata & appProperties)
  */
 export async function listFilesInDriveFolder(folderType = 'shipments', pageSize = 50) {
   try {
     const accessToken = await getGoogleDriveAccessToken();
     const folderId = GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
 
-    // Discover any subfolders (such as date folders) inside the designated folder
+    // Discover any subfolders inside the designated folder (up to 2 levels deep)
     const subQuery = `mimeType = 'application/vnd.google-apps.folder' and '${folderId}' in parents and trashed = false`;
     const subUrl = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(subQuery)}&fields=files(id,name)`;
     
@@ -743,13 +786,25 @@ export async function listFilesInDriveFolder(folderType = 'shipments', pageSize 
         const subData = await subRes.json();
         if (subData.files && subData.files.length > 0) {
           parentIds.push(...subData.files.map(f => f.id));
+          // Explore one deeper level (e.g. Year -> Month or Site)
+          for (const subF of subData.files.slice(0, 15)) {
+            const deepQuery = `mimeType = 'application/vnd.google-apps.folder' and '${subF.id}' in parents and trashed = false`;
+            const deepUrl = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(deepQuery)}&fields=files(id,name)`;
+            const deepRes = await fetch(deepUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+            if (deepRes.ok) {
+              const deepData = await deepRes.json();
+              if (deepData.files?.length > 0) {
+                parentIds.push(...deepData.files.map(f => f.id));
+              }
+            }
+          }
         }
       }
     } catch (_) {}
 
     const parentClauses = parentIds.map(id => `'${id}' in parents`).join(' or ');
     const query = `(${parentClauses}) and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
-    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(query)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,webViewLink,parents)&orderBy=createdTime desc`;
+    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(query)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
 
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -758,6 +813,64 @@ export async function listFilesInDriveFolder(folderType = 'shipments', pageSize 
     return data.files || [];
   } catch (err) {
     console.error('[Google Drive] Failed to list folder files:', err);
+    return [];
+  }
+}
+
+/**
+ * Searches files across Google Drive with structured filters, full-text queries, and appProperties
+ * 
+ * @param {Object} options
+ * @param {string} [options.folderType] - Folder key ('shipments', 'reports', 'snapshots', 'backups', 'allocation', 'forecasting', 'pmg_signed_pl')
+ * @param {string} [options.folderId] - Specific folder ID
+ * @param {string} [options.query] - Free text search query matching filename
+ * @param {Object} [options.appProperties] - Key-value metadata criteria (e.g. { invoiceRef: '...', docType: 'packing_list' })
+ * @param {number} [options.pageSize=50] - Result page size
+ * @returns {Promise<Array>} Array of matching file descriptors
+ */
+export async function searchDriveFiles({
+  folderType = null,
+  folderId = null,
+  query = '',
+  appProperties = {},
+  pageSize = 50
+} = {}) {
+  try {
+    const accessToken = await getGoogleDriveAccessToken();
+    const clauses = ["trashed = false", "mimeType != 'application/vnd.google-apps.folder'"];
+
+    if (query && query.trim()) {
+      const cleanQ = query.trim().replace(/'/g, "\\'");
+      clauses.push(`(name contains '${cleanQ}')`);
+    }
+
+    if (appProperties && typeof appProperties === 'object') {
+      for (const [key, val] of Object.entries(appProperties)) {
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          const cleanVal = String(val).trim().replace(/'/g, "\\'");
+          clauses.push(`appProperties has { key='${key}' and value='${cleanVal}' }`);
+        }
+      }
+    }
+
+    const targetFolder = folderId || (folderType ? GOOGLE_DRIVE_CONFIG.folders[folderType] : null);
+    if (targetFolder) {
+      clauses.push(`'${targetFolder}' in parents`);
+    }
+
+    const fullQ = clauses.join(' and ');
+    const url = `https://www.googleapis.com/drive/v3/files?corpora=drive&driveId=${GOOGLE_DRIVE_CONFIG.sharedDriveId}&includeItemsFromAllDrives=true&supportsAllDrives=true&q=${encodeURIComponent(fullQ)}&pageSize=${pageSize}&fields=files(id,name,mimeType,size,createdTime,webViewLink,webContentLink,parents,appProperties)&orderBy=createdTime desc`;
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      const errTxt = await res.text();
+      console.warn('[Google Drive] Search query failed:', errTxt);
+      return [];
+    }
+    const data = await res.json();
+    return data.files || [];
+  } catch (err) {
+    console.error('[Google Drive] Search error:', err);
     return [];
   }
 }

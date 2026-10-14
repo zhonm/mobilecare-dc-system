@@ -82,6 +82,11 @@ export default function Header() {
       title: 'Developer Direct Support',
       section: 'Support & Help',
       showCategories: false
+    },
+    'drive-hub': {
+      title: 'Google Drive Document Hub & Archive',
+      section: 'Cloud Storage & Documents',
+      showCategories: false
     }
   };
 

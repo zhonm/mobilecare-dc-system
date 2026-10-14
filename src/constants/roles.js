@@ -1,12 +1,12 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback'],
-  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'orders', 'audit', 'feedback'],
-  parts_management: ['request-parts', 'scan-in', 'multi-site', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback', 'drive-hub'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback', 'drive-hub'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'orders', 'audit', 'feedback', 'drive-hub'],
+  parts_management: ['request-parts', 'scan-in', 'multi-site', 'feedback', 'drive-hub'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'multi-site', 'feedback'],
-  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'feedback'],
-  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'forecast-reports', 'audit', 'feedback']
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'multi-site', 'feedback', 'drive-hub'],
+  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'feedback', 'drive-hub'],
+  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'forecast-reports', 'audit', 'feedback', 'drive-hub']
 };
 
 export const ROLE_OPTIONS = [

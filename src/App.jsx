@@ -1,4 +1,4 @@
-import { Component } from 'react';
+import { Component, lazy, Suspense } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
@@ -7,25 +7,47 @@ import Sidebar from './components/Sidebar';
 import PmgSidebar from './components/PmgSidebar';
 import Header from './components/Header';
 import CommandPalette from './components/CommandPalette';
-import Dashboard from './components/Dashboard';
-import DataImport from './components/DataImport';
-import Forecasting from './components/Forecasting';
-import PurchaseOrders from './components/PurchaseOrders';
-import ScanInReceiving from './components/ScanInReceiving';
-import AllocationMatrix from './components/AllocationMatrix';
-import ScanOutPacking from './components/ScanOutPacking';
-import Shipments from './components/Shipments';
-import SiteTransfersFifoReport from './components/SiteTransfersFifoReport';
-import ForecastingReports from './components/ForecastingReports';
-import AuditTrail from './components/AuditTrail';
-import SettingsCatalog from './components/SettingsCatalog';
-import UserAccessManagement from './components/UserAccessManagement';
-import RequestParts from './components/RequestParts';
-import Feedback from './components/Feedback';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
 import MobileNoticeModal from './components/MobileNoticeModal';
-import { CheckCircle2, AlertCircle, Info } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
 import './App.css';
+
+// Route-based code splitting: Lazy load heavy modules to optimize initial bundle size & load speed
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const DataImport = lazy(() => import('./components/DataImport'));
+const Forecasting = lazy(() => import('./components/Forecasting'));
+const PurchaseOrders = lazy(() => import('./components/PurchaseOrders'));
+const ScanInReceiving = lazy(() => import('./components/ScanInReceiving'));
+const AllocationMatrix = lazy(() => import('./components/AllocationMatrix'));
+const ScanOutPacking = lazy(() => import('./components/ScanOutPacking'));
+const Shipments = lazy(() => import('./components/Shipments'));
+const SiteTransfersFifoReport = lazy(() => import('./components/SiteTransfersFifoReport'));
+const ForecastingReports = lazy(() => import('./components/ForecastingReports'));
+const AuditTrail = lazy(() => import('./components/AuditTrail'));
+const SettingsCatalog = lazy(() => import('./components/SettingsCatalog'));
+const UserAccessManagement = lazy(() => import('./components/UserAccessManagement'));
+const RequestParts = lazy(() => import('./components/RequestParts'));
+const Feedback = lazy(() => import('./components/Feedback'));
+const DriveDocumentHub = lazy(() => import('./components/DriveDocumentHub'));
+
+function ModuleLoadingFallback() {
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '55vh',
+      gap: '14px',
+      color: '#64748b'
+    }}>
+      <Loader2 size={36} className="animate-spin" color="#2563eb" />
+      <span style={{ fontSize: '13px', fontWeight: 600, letterSpacing: '0.02em' }}>
+        Loading module...
+      </span>
+    </div>
+  );
+}
 
 function MainApp() {
   const {
@@ -111,6 +133,8 @@ function MainApp() {
         return <UserAccessManagement />;
       case 'feedback':
         return currentUser?.role === 'parts_management' ? <Feedback /> : <SettingsCatalog defaultTab="feedback" />;
+      case 'drive-hub':
+        return <DriveDocumentHub />;
       default:
         return <Dashboard />;
     }
@@ -123,7 +147,9 @@ function MainApp() {
       <div className={`main-content ${currentUser?.role === 'parts_management' ? 'pmg-main-content' : ''}`}>
         <Header />
         <main className="page-body">
-          {renderActiveTab()}
+          <Suspense fallback={<ModuleLoadingFallback />}>
+            {renderActiveTab()}
+          </Suspense>
         </main>
       </div>
 
