@@ -58,7 +58,11 @@ export default function DriveDocumentHub() {
   const [previewBlobUrl, setPreviewBlobUrl] = useState(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
-  const driveAvailable = useMemo(() => isGoogleDriveConfigured(), []);
+  const [driveAvailable, setDriveAvailable] = useState(() => isGoogleDriveConfigured());
+
+  useEffect(() => {
+    setDriveAvailable(isGoogleDriveConfigured());
+  }, []);
 
   // Fetch pending offline queue items
   const loadOfflineQueue = useCallback(async () => {
