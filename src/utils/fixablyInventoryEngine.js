@@ -260,12 +260,64 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
       };
     }
 
+    // Determine exact header row index (accounting for report title lines like "Custom reports - Inventory Value")
+    let headerIdx = 0;
+    if (detectedType === 'site_stock') {
+      for (let i = 0; i < Math.min(10, lines.length); i++) {
+        const lower = lines[i].toLowerCase();
+        if (
+          lower.includes('part number') ||
+          lower.includes('part description') ||
+          lower.includes('product code') ||
+          (lower.includes('stock name') && (lower.includes('serial') || lower.includes('quantity')))
+        ) {
+          headerIdx = i;
+          delimiter = lines[i].includes(';') ? ';' : ',';
+          break;
+        }
+      }
+    } else if (detectedType === 'kgb_used') {
+      for (let i = 0; i < Math.min(5, lines.length); i++) {
+        const lower = lines[i].toLowerCase();
+        if (lower.includes('product kgb') || lower.includes('order id') || lower.includes('repair closed')) {
+          headerIdx = i;
+          delimiter = lines[i].includes(';') ? ';' : ',';
+          break;
+        }
+      }
+    } else if (detectedType === 'stock_transfer') {
+      for (let i = 0; i < Math.min(5, lines.length); i++) {
+        const lower = lines[i].toLowerCase();
+        if (lower.includes('from stock') || lower.includes('to stock') || lower.includes('serial number')) {
+          headerIdx = i;
+          delimiter = lines[i].includes(';') ? ';' : ',';
+          break;
+        }
+      }
+    }
+
+    let calculatedRowCount = 0;
+    if (detectedType === 'site_stock') {
+      const rawHeaderRow = parseDelimitedLine(lines[headerIdx], delimiter).map(h => h.trim().toLowerCase().replace(/^"|"$/g, '').replace(/^\ufeff/, ''));
+      const idxQty = rawHeaderRow.findIndex(h => h.includes('quantity') || h.includes('qty'));
+      for (let i = headerIdx + 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const cols = parseDelimitedLine(lines[i], delimiter);
+        if (!cols || cols.length <= 1) continue;
+        const qty = idxQty !== -1 ? (parseInt((cols[idxQty] || '1').replace(/[^0-9]/g, ''), 10) || 1) : 1;
+        calculatedRowCount += qty;
+      }
+    } else {
+      calculatedRowCount = Math.max(0, lines.length - headerIdx - 1);
+    }
+
     return {
       valid: true,
       detectedType,
-      rowCount: lines.length - 1,
+      rowCount: calculatedRowCount,
       delimiter,
-      message: `Valid ${detectedType === 'site_stock' ? 'Site Stocks' : detectedType === 'kgb_used' ? 'KGB Used' : 'Stock Transfers'} file (${lines.length - 1} rows)`
+      message: `Valid ${detectedType === 'site_stock' ? 'Site Stocks' : detectedType === 'kgb_used' ? 'KGB Used' : 'Stock Transfers'} file (${calculatedRowCount.toLocaleString()} rows)`
     };
   } catch (err) {
     return { valid: false, error: `Validation error: ${err.message}` };
@@ -579,71 +631,79 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       const kgbMatch = !isBlankSerial && kgbUsedMap ? kgbUsedMap.get(cleanSerial) : null;
       const isFlaggedInvestigation = Boolean(kgbMatch);
 
-      const itemRecord = {
-        id: `fixably-${i}-${cleanPn}-${cleanSerial || 'noserial'}`,
-        rowIndex: i,
-        stockName: rawStockName,
-        stockType: stockClassification,
-        rawStockType,
-        partNumber: cleanPn,
-        part_number: cleanPn,
-        description: rawDescription,
-        serialNumber: cleanSerial,
-        serial_number: cleanSerial,
-        raw_serial: cleanSerial,
-        imei: rawImei,
-        lastReceivedDate: aging.receivedDate,
-        dateReceived: aging.receivedDate,
-        received_at: aging.receivedDate,
-        quantity: rawQty,
-        partValue: rawPartVal,
-        totalValue: rawTotalVal,
-        stocking_price: rawPartVal,
-        siteCode,
-        site_code: siteCode,
-        siteName,
-        site_name: siteName,
-        siteId,
-        current_site_id: siteId,
-        agingDays: aging.days,
-        agingBracket: aging.bracket,
-        statusLabel: aging.statusLabel,
-        badgeColor: aging.badgeColor,
-        badgeBg: aging.badgeBg,
-        isSerialized: !isBlankSerial,
-        status: 'VALID',
-        isInvestigation: isFlaggedInvestigation,
-        isFlaggedInvestigation,
-        investigationDetails: kgbMatch || null
-      };
+      const shouldExpandQty = Boolean(options.expandQuantity);
+      const qtyUnits = (shouldExpandQty && rawQty > 1) ? rawQty : 1;
+      const effectivePartVal = rawPartVal;
+      const effectiveUnitVal = shouldExpandQty ? rawPartVal : rawTotalVal;
+      const effectiveUnitQty = shouldExpandQty ? 1 : rawQty;
 
-      items.push(itemRecord);
-      if (isFlaggedInvestigation) {
-        investigationItems.push(itemRecord);
-      }
-
-      totalNetworkUnits += 1;
-      totalNetworkValue += rawTotalVal;
-
-      globalAgingCounts[aging.bracket] = (globalAgingCounts[aging.bracket] || 0) + 1;
-      globalClassificationCounts[stockClassification] = (globalClassificationCounts[stockClassification] || 0) + 1;
-
-      // Group per Site
-      if (!siteMap.has(siteCode)) {
-        siteMap.set(siteCode, {
+      for (let q = 1; q <= qtyUnits; q++) {
+        const itemRecord = {
+          id: `fixably-${i}-${cleanPn}-${cleanSerial || 'noserial'}${qtyUnits > 1 ? `-${q}` : ''}`,
+          rowIndex: i,
+          stockName: rawStockName,
+          stockType: stockClassification,
+          rawStockType,
+          partNumber: cleanPn,
+          part_number: cleanPn,
+          description: rawDescription,
+          serialNumber: cleanSerial ? (q > 1 ? `${cleanSerial}-DUP${q}` : cleanSerial) : '',
+          serial_number: cleanSerial ? (q > 1 ? `${cleanSerial}-DUP${q}` : cleanSerial) : '',
+          raw_serial: cleanSerial,
+          imei: rawImei,
+          lastReceivedDate: aging.receivedDate,
+          dateReceived: aging.receivedDate,
+          received_at: aging.receivedDate,
+          quantity: effectiveUnitQty,
+          partValue: effectivePartVal,
+          totalValue: effectiveUnitVal,
+          stocking_price: effectivePartVal,
           siteCode,
+          site_code: siteCode,
           siteName,
+          site_name: siteName,
           siteId,
-          shipTo: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.ship_to || matchedSite?.ship_to || '',
-          supervisor: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_person || matchedSite?.contact_person || 'Branch Supervisor',
-          phone: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_phone || matchedSite?.contact_phone || '',
-          email: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_email || matchedSite?.contact_email || '',
-          address: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.full_address || matchedSite?.full_address || matchedSite?.address || '',
-          region: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.region || (['ABR', 'CDO', 'CEB', 'COT', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM'].includes(siteCode) ? 'Provincial' : 'Metro Manila'),
-          items: []
-        });
+          current_site_id: siteId,
+          agingDays: aging.days,
+          agingBracket: aging.bracket,
+          statusLabel: aging.statusLabel,
+          badgeColor: aging.badgeColor,
+          badgeBg: aging.badgeBg,
+          isSerialized: !isBlankSerial,
+          status: 'VALID',
+          isInvestigation: isFlaggedInvestigation,
+          isFlaggedInvestigation,
+          investigationDetails: kgbMatch || null
+        };
+
+        items.push(itemRecord);
+        if (isFlaggedInvestigation) {
+          investigationItems.push(itemRecord);
+        }
+
+        totalNetworkUnits += effectiveUnitQty;
+        totalNetworkValue += effectiveUnitVal;
+
+        globalAgingCounts[aging.bracket] = (globalAgingCounts[aging.bracket] || 0) + effectiveUnitQty;
+        globalClassificationCounts[stockClassification] = (globalClassificationCounts[stockClassification] || 0) + effectiveUnitQty;
+
+        // Group per Site
+        if (!siteMap.has(siteCode)) {
+          siteMap.set(siteCode, {
+            siteCode,
+            siteName,
+            siteId,
+            shipTo: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.ship_to || matchedSite?.ship_to || '',
+            supervisor: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_person || matchedSite?.contact_person || 'Branch Supervisor',
+            phone: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_phone || matchedSite?.contact_phone || '',
+            email: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_email || matchedSite?.contact_email || '',
+            address: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.full_address || matchedSite?.full_address || matchedSite?.address || '',
+            region: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.region || (['ABR', 'CDO', 'CEB', 'COT', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM'].includes(siteCode) ? 'Provincial' : 'Metro Manila'),
+            items: []
+          });
+        }
+        siteMap.get(siteCode).items.push(itemRecord);
       }
-      siteMap.get(siteCode).items.push(itemRecord);
 
       // Parts catalog summary
       if (!partsCatalogMap.has(cleanPn)) {
@@ -749,6 +809,7 @@ export async function reconcileFixablyMultiFile({
     // 3. Parse Site Stocks with joined cross-file sets
     const stockRes = await parseFixablyExportCsv(siteStockContent, {
       ...options,
+      expandQuantity: options.expandQuantity !== undefined ? options.expandQuantity : true,
       dynamicDcSerials,
       kgbUsedMap
     });

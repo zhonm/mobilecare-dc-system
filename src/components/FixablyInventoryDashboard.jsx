@@ -269,6 +269,15 @@ export default function FixablyInventoryDashboard({
           dbStorage.getItem('mdc_uploaded_slot_stock_transfer')
         ]);
 
+        if (savedSiteStock?.content) {
+          try {
+            const v = await validateFixablyFile(savedSiteStock.content, 'site_stock');
+            if (v.valid && v.rowCount) {
+              savedSiteStock.rowCount = v.rowCount;
+            }
+          } catch (e) {}
+        }
+
         if (savedSiteStock || savedKgb || savedTransfer) {
           if (isMounted) {
             setSlots({
@@ -301,14 +310,22 @@ export default function FixablyInventoryDashboard({
           } catch (e) {}
         }
 
-        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored
-        if ((!cached || !cached.items || cached.items.length === 0) && savedSiteStock?.content) {
+        // Auto-heal discrepancy if cached snapshot item count differs from valid saved site stock units
+        const needsDiscrepancyHeal = Boolean(
+          savedSiteStock?.content &&
+          cached?.items &&
+          savedSiteStock.rowCount &&
+          cached.items.length !== savedSiteStock.rowCount
+        );
+
+        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored or has discrepancy
+        if ((needsDiscrepancyHeal || !cached || !cached.items || cached.items.length === 0) && savedSiteStock?.content) {
           try {
             const autoReconciled = await reconcileFixablyMultiFile({
               siteStockContent: savedSiteStock.content,
               kgbUsedContent: savedKgb?.content || null,
               stockTransferContent: savedTransfer?.content || null,
-              options: { sites, currentDate: new Date('2026-10-09T00:00:00Z') }
+              options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
             });
 
             if (autoReconciled.success && autoReconciled.items?.length > 0) {
@@ -324,6 +341,7 @@ export default function FixablyInventoryDashboard({
                 snapshot: cached,
                 created_at: cached.timestamp || new Date().toISOString()
               });
+              await syncSnapshotToCloud(cached);
             }
           } catch (autoRecErr) {
             console.warn('Auto-reconcile from saved slots error:', autoRecErr);
@@ -668,7 +686,7 @@ export default function FixablyInventoryDashboard({
         siteStockContent,
         kgbUsedContent,
         stockTransferContent,
-        options: { sites, currentDate: new Date('2026-10-09T00:00:00Z') }
+        options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
       });
 
       if (!reconciled.success) {
@@ -2345,7 +2363,7 @@ export default function FixablyInventoryDashboard({
             {/* Results count & active filters display */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#475569', marginTop: '12px', paddingTop: '8px', borderTop: '1px solid #e2e8f0' }}>
               <div>
-                Showing <strong style={{ color: '#0f172a' }}>{filteredMasterItems.length.toLocaleString()}</strong> of {snapshot?.items?.length.toLocaleString() || 0} total serialized units
+                Showing <strong style={{ color: '#0f172a' }}>{filteredMasterItems.length.toLocaleString()}</strong> of {snapshot?.items?.length.toLocaleString() || 0} total units
                 {investigationFilter === 'INVESTIGATION_ONLY' && (
                   <span style={{ marginLeft: '8px', color: '#be123c', fontWeight: 800 }}>
                     (Filtered to units matching closed GSX repair consumption)

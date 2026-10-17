@@ -11,7 +11,6 @@ import {
   Building2,
   Sparkles,
   MessageCircle,
-  Users,
   Boxes,
   Code
 } from 'lucide-react';
@@ -129,55 +128,6 @@ export default function Feedback() {
         </div>
       </div>
 
-      {/* 2. Routing Guidance Banner */}
-      <div
-        className="card"
-        style={{
-          marginBottom: '24px',
-          background: 'linear-gradient(135deg, #f8fafc 0%, #f0fdf4 40%, #f0f9ff 70%, #faf5ff 100%)',
-          border: '1.5px solid #cbd5e1',
-          borderLeft: '5px solid #0284c7',
-          padding: '16px 20px',
-          borderRadius: '12px',
-          boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
-          <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: '#0284c7', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '2px' }}>
-            <Users size={20} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-              <h4 style={{ margin: 0, fontSize: '14.5px', fontWeight: 800, color: '#0f172a' }}>
-                Support Contact Guidelines
-              </h4>
-              <span style={{ fontSize: '11px', fontWeight: 700, background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: '999px', border: '1px solid #bbf7d0' }}>
-                Primary Points of Contact
-              </span>
-            </div>
-            
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '10px', marginBottom: '10px' }}>
-              <div style={{ background: '#ffffff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-                <span style={{ fontSize: '12.5px', color: '#0f172a', lineHeight: 1.5 }}>
-                  📦 Contact <strong>Joshua Juvida</strong> for <strong>MDC concerns</strong> (branch requisitions, stock replenishment, parts availability, and warehouse distribution).
-                </span>
-              </div>
-              <div style={{ background: '#ffffff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #ddd6fe' }}>
-                <span style={{ fontSize: '12.5px', color: '#0f172a', lineHeight: 1.5 }}>
-                  💻 Contact <strong>Zhon Manaois</strong> for <strong>system-related issues</strong> (system bug reports, software errors, login/access problems, and data sync).
-                </span>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#334155', background: '#ffffff', padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-              <span style={{ fontSize: '15px' }}>🤝</span>
-              <span>
-                <strong>Flexible Reach-Out:</strong> While Joshua is primarily for MDC concerns and Zhon for system issues, <em>you may reach out to either of them for any concern</em> — our team coordinates closely to ensure prompt resolution.
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* 3. Contact Profile Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px', marginBottom: '24px' }}>
