@@ -750,8 +750,7 @@ export function useCloudSync({
             const remoteUpdatedMs = remoteLiveInvHeader.updated_at ? new Date(remoteLiveInvHeader.updated_at).getTime() : 0;
             const localUpdatedMs = localInvUpdatedAt ? new Date(localInvUpdatedAt).getTime() : 0;
             const isRemoteNewer = Boolean(remoteLiveInvHeader.updated_at && (!localInvUpdatedAt || remoteUpdatedMs > localUpdatedMs));
-            const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('inventory_units')));
-            const needsInvDownload = (isForce || !hasLocalUnits || isRemoteNewer || isTargetedSync) && remoteLiveInvHeader.notes !== '__CLEARED__';
+            const needsInvDownload = (isForce || !hasLocalUnits || isRemoteNewer) && remoteLiveInvHeader.notes !== '__CLEARED__';
 
             if (needsInvDownload) {
               try {
@@ -797,9 +796,10 @@ export function useCloudSync({
             let cachedBranchUnits = null;
             try { cachedBranchUnits = await dbStorage.getItem('mdc_branch_inventory_units'); } catch (e) {}
             const hasLocalBranchUnits = Array.isArray(cachedBranchUnits) && cachedBranchUnits.length > 0;
-            const isTimestampMismatch = Boolean(remoteBranchInvHeader.updated_at && remoteBranchInvHeader.updated_at !== localBranchInvUpdatedAt);
-            const isTargetedSync = Boolean(selectiveTables && (selectiveTables.includes('saved_records') || selectiveTables.includes('inventory_units')));
-            const needsBranchInvDownload = (isForce || !hasLocalBranchUnits || isTimestampMismatch || isTargetedSync) && remoteBranchInvHeader.notes !== '__CLEARED__';
+            const remoteBranchMs = remoteBranchInvHeader.updated_at ? new Date(remoteBranchInvHeader.updated_at).getTime() : 0;
+            const localBranchMs = localBranchInvUpdatedAt ? new Date(localBranchInvUpdatedAt).getTime() : 0;
+            const isRemoteBranchNewer = Boolean(remoteBranchInvHeader.updated_at && (!localBranchInvUpdatedAt || remoteBranchMs > localBranchMs));
+            const needsBranchInvDownload = (isForce || !hasLocalBranchUnits || isRemoteBranchNewer) && remoteBranchInvHeader.notes !== '__CLEARED__';
 
             if (needsBranchInvDownload) {
               try {

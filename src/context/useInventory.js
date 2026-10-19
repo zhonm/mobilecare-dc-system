@@ -238,31 +238,33 @@ export function useInventory({
   const unmarkDeletedSerials = async (serialsToKeep, options = {}) => {
     if (!serialsToKeep || serialsToKeep.length === 0) return;
     const serialSetToKeep = new Set(serialsToKeep.map(s => String(s).trim().toUpperCase()));
+    let hadDeletedMatch = false;
     try {
       const localDeleted = JSON.parse(localStorage.getItem('mdc_deleted_unit_serials') || '[]');
-      const filtered = localDeleted.filter(s => !serialSetToKeep.has(String(s).trim().toUpperCase()));
-      localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filtered));
-      dbStorage.setItem('mdc_deleted_unit_serials', filtered);
+      const filtered = localDeleted.filter(s => {
+        const clean = String(s).trim().toUpperCase();
+        if (serialSetToKeep.has(clean)) {
+          hadDeletedMatch = true;
+          return false;
+        }
+        return true;
+      });
+      if (hadDeletedMatch) {
+        localStorage.setItem('mdc_deleted_unit_serials', JSON.stringify(filtered));
+        dbStorage.setItem('mdc_deleted_unit_serials', filtered);
+      }
     } catch (e) {}
 
-    if (supabase) {
+    // Free-Tier Egress Optimization: Only query/upsert deleted_unit_serials_registry in Supabase
+    // if one of the serials was actually in the deleted registry
+    if (supabase && hadDeletedMatch) {
       try {
         const { data: reg } = await supabase.from('saved_records').select('snapshot_data').eq('id', 'deleted_unit_serials_registry').maybeSingle();
         if (reg?.snapshot_data?.deletedSerials && Array.isArray(reg.snapshot_data.deletedSerials)) {
           const updatedCloud = reg.snapshot_data.deletedSerials.filter(serial =>
             !serialSetToKeep.has(String(serial).trim().toUpperCase())
           );
-          if (options.immediate) {
-            await supabase.from('saved_records').upsert({
-              id: 'deleted_unit_serials_registry',
-              record_type: 'deletion_registry',
-              period_label: 'Deleted Unit Serials Registry',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              snapshot_data: { deletedSerials: updatedCloud },
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'id' });
-          } else {
+          if (updatedCloud.length !== reg.snapshot_data.deletedSerials.length) {
             await queuedSavedRecordsUpsert({
               id: 'deleted_unit_serials_registry',
               record_type: 'deletion_registry',
@@ -271,7 +273,7 @@ export function useInventory({
               period_month: new Date().getMonth() + 1,
               snapshot_data: { deletedSerials: updatedCloud },
               updated_at: new Date().toISOString()
-            }, { debounceMs: 1000, immediate: false });
+            }, { debounceMs: 1000, immediate: Boolean(options.immediate) });
           }
         }
       } catch (e) {}
@@ -500,9 +502,17 @@ export function useInventory({
     });
   }, [purchaseOrders, currentUser, setDcIntakeRecords, inventoryUnits]);
 
+  // In-memory UUID lookup cache to prevent redundant full-table fetches on every scan (Supabase Free-Tier Egress Optimization)
+  const dbCatalogCacheRef = useRef({
+    cats: null,
+    sites: null,
+    partsMap: new Map(),
+    fallbackPartId: null
+  });
+
   const saveUnitsToSupabase = async (units, options = {}) => {
     if (!supabase || !units || units.length === 0) return;
-    // Start unmarkDeletedSerials immediately (its localStorage cleanup runs synchronously on first tick)
+    // Start unmarkDeletedSerials immediately (its localStorage cleanup runs synchronously on first tick, and only hits Supabase if serial was actually deleted)
     const unmarkPromise = unmarkDeletedSerials(units.map(u => u.serial_number), { immediate: Boolean(options.immediate) });
     if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
 
@@ -596,25 +606,9 @@ export function useInventory({
         } catch (e) {}
         dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
 
-        if (options.immediate) {
-          await Promise.all([
-            unmarkPromise,
-            supabase.from('saved_records').upsert({
-              id: 'live_master_dc_inventory',
-              record_type: 'inventory_master',
-              period_label: 'Live Master DC Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              period_week: 1,
-              notes: 'Master In-Stock inventory pool across all accounts',
-              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-              snapshot_data: { units: allPoolUnits },
-              updated_at: nowIso
-            }, { onConflict: 'id' })
-          ]);
-        } else {
-          await unmarkPromise;
-          await queuedSavedRecordsUpsert({
+        await Promise.all([
+          unmarkPromise,
+          queuedSavedRecordsUpsert({
             id: 'live_master_dc_inventory',
             record_type: 'inventory_master',
             period_label: 'Live Master DC Inventory',
@@ -627,35 +621,23 @@ export function useInventory({
               units: allPoolUnits
             },
             updated_at: nowIso
-          }, { debounceMs: 800, immediate: false });
-        }
+          }, { debounceMs: 800, immediate: Boolean(options.immediate) })
+        ]);
 
-        // Synchronize dedicated retail branch inventory registry for PMG Users & multi-site tracking
+        // Synchronize dedicated retail branch inventory registry ONLY when branch units are modified
         const isDcUnit = (item) => {
           const sId = String(item.current_site_id || item.site_id || item.siteId || '').toLowerCase();
           const sCode = String(item.site_code || item.siteCode || '').toUpperCase();
           return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || (!sId && !sCode && item.is_dc);
         };
-        const branchUnitsList = allPoolUnits.filter(item => !isDcUnit(item));
-        if (branchUnitsList.length > 0) {
-          dbStorage.setItem('mdc_branch_inventory_units', branchUnitsList);
-          try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
-          dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+        const hasBranchChanges = Boolean(options.replaceExistingBranchStock) || units.some(item => !isDcUnit(item));
+        if (hasBranchChanges) {
+          const branchUnitsList = allPoolUnits.filter(item => !isDcUnit(item));
+          if (branchUnitsList.length > 0) {
+            dbStorage.setItem('mdc_branch_inventory_units', branchUnitsList);
+            try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
+            dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
 
-          if (options.immediate) {
-            await supabase.from('saved_records').upsert({
-              id: 'master_branch_inventory_registry',
-              record_type: 'branch_inventory',
-              period_label: 'Master Retail Branch Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              period_week: 1,
-              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
-              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-              snapshot_data: { units: branchUnitsList },
-              updated_at: nowIso
-            }, { onConflict: 'id' });
-          } else {
             await queuedSavedRecordsUpsert({
               id: 'master_branch_inventory_registry',
               record_type: 'branch_inventory',
@@ -669,21 +651,35 @@ export function useInventory({
                 units: branchUnitsList
               },
               updated_at: nowIso
-            }, { debounceMs: 800, immediate: false });
+            }, { debounceMs: 800, immediate: Boolean(options.immediate) });
           }
         }
       } catch (poolErr) {
         console.warn('live_master_dc_inventory sync note:', poolErr.message);
       }
 
-      // STEP 2: Synchronize normalized rows to public.inventory_units
-      const { data: dbCats } = await supabase.from('part_categories').select('id, code');
-      const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
-      const defaultCatId = dbCats?.[0]?.id || null;
+      // STEP 2: Synchronize normalized rows to public.inventory_units (with Free-Tier Cache Optimization)
+      const cache = dbCatalogCacheRef.current;
 
-      // Fetch all sites to resolve UUIDs accurately
-      const { data: dbSites } = await supabase.from('sites').select('id, code, name, is_dc');
-      const siteList = dbSites || [];
+      // 2a. Resolve categories from cache or fetch once per session
+      if (!cache.cats || cache.cats.length === 0) {
+        const { data: dbCats } = await supabase.from('part_categories').select('id, code');
+        if (Array.isArray(dbCats) && dbCats.length > 0) cache.cats = dbCats;
+      }
+      const catMap = new Map((cache.cats || []).map(c => [c.code, c.id]));
+      const defaultCatId = cache.cats?.[0]?.id || null;
+
+      // 2b. Resolve sites from in-memory props/cache or fetch once per session
+      if (!cache.sites || cache.sites.length === 0) {
+        const inMemUuidSites = (sites || []).filter(s => isUUID(s?.id));
+        if (inMemUuidSites.length > 0) {
+          cache.sites = inMemUuidSites;
+        } else {
+          const { data: dbSites } = await supabase.from('sites').select('id, code, name, is_dc');
+          if (Array.isArray(dbSites) && dbSites.length > 0) cache.sites = dbSites;
+        }
+      }
+      const siteList = cache.sites || [];
 
       let dcSiteId = null;
       const dcSite = siteList.find(s => s.is_dc || s.code === 'DC-MDC' || s.code === 'DC');
@@ -693,9 +689,35 @@ export function useInventory({
         dcSiteId = siteList[0].id;
       }
 
-      const { data: existingParts } = await supabase.from('parts').select('id, part_number').limit(10000);
-      const pMap = new Map((existingParts || []).map(p => [p.part_number.toUpperCase(), p.id]));
-      const fallbackDbPartId = existingParts?.[0]?.id || null;
+      // 2c. Seed parts UUID map from in-memory parts catalog first
+      const pMap = cache.partsMap;
+      (parts || []).forEach(p => {
+        if (p?.part_number && isUUID(p?.id)) {
+          const upperPn = p.part_number.toUpperCase();
+          pMap.set(upperPn, p.id);
+          if (!cache.fallbackPartId) cache.fallbackPartId = p.id;
+        }
+      });
+
+      // Only query Supabase `parts` for part numbers in `units` that are not yet in our UUID cache
+      const unknownPNs = Array.from(new Set(
+        units
+          .map(u => String(u.part_number || '').trim().toUpperCase())
+          .filter(pn => pn && !pMap.has(pn))
+      ));
+
+      if (unknownPNs.length > 0) {
+        const { data: matchedDbParts } = await supabase
+          .from('parts')
+          .select('id, part_number')
+          .in('part_number', unknownPNs.slice(0, 200));
+        (matchedDbParts || []).forEach(p => {
+          if (p.part_number && p.id) {
+            pMap.set(p.part_number.toUpperCase(), p.id);
+            if (!cache.fallbackPartId) cache.fallbackPartId = p.id;
+          }
+        });
+      }
 
       // Batch create any missing parts in a single query
       const missingPartsMap = new Map();
@@ -722,12 +744,23 @@ export function useInventory({
             { onConflict: 'part_number' }
           ).select('id, part_number');
           (createdParts || []).forEach(p => {
-            if (p.part_number && p.id) pMap.set(p.part_number.toUpperCase(), p.id);
+            if (p.part_number && p.id) {
+              pMap.set(p.part_number.toUpperCase(), p.id);
+              if (!cache.fallbackPartId) cache.fallbackPartId = p.id;
+            }
           });
         } catch (err) {
           console.warn('Batch parts upsert notice:', err.message);
         }
       }
+
+      if (!cache.fallbackPartId) {
+        try {
+          const { data: onePart } = await supabase.from('parts').select('id').limit(1).maybeSingle();
+          if (onePart?.id) cache.fallbackPartId = onePart.id;
+        } catch (e) {}
+      }
+      const fallbackDbPartId = cache.fallbackPartId;
 
       const VALID_DB_STATUSES = new Set(['in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned']);
       const unitRows = [];
