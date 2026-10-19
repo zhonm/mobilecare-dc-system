@@ -35,7 +35,8 @@ import {
   Truck,
   Plane,
   Ship,
-  Loader2
+  Loader2,
+  ArrowLeftRight
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
@@ -633,10 +634,35 @@ export default function ScanOutPacking() {
     });
   }, [inventoryUnits, currentShipment, shipments, sites, packedSerialsSet, otherUsersReservedSerialsMap]);
 
+  // Shipped Part Override Modal State (for parts returned to DC & reassigned to a new Packing List)
+  const [packOverrideModalState, setPackOverrideModalState] = useState(null);
+  const [packOverrideReason, setPackOverrideReason] = useState('Returned to DC — Reassigned to New Site');
+
+  const openPackOverrideModal = useCallback((candidate) => {
+    if (!candidate) return;
+    if (autoPackTimerRef.current) {
+      clearTimeout(autoPackTimerRef.current);
+      autoPackTimerRef.current = null;
+    }
+    const defaultReason = candidate.manifest_ref
+      ? `Returned to DC from ${candidate.previous_site_code || 'Site'} (${candidate.manifest_ref}) — Reassigned to ${selectedSite?.code || 'New Site'}`
+      : `Returned to DC — Reassigned to ${selectedSite?.code || 'New Site'}`;
+    setPackOverrideReason(defaultReason);
+    setPackOverrideModalState(candidate);
+  }, [selectedSite?.code]);
+
   // Unified Serial-Based Auto-Pack Engine (Instant Match & Pack on Scan or Paste)
   // This command reads mutable scanner/draft refs so it always uses live state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const packUnitBySerial = (targetSerialInput) => {
+  const packUnitBySerial = (targetSerialInput, options = {}) => {
+    const {
+      allowOverride = false,
+      overrideReason = null,
+      previousManifestRef = null,
+      previousSiteCode = null,
+      fallbackUnit = null
+    } = options;
+
     const rawInput = String(targetSerialInput !== undefined ? targetSerialInput : (serialInputRef.current?.value || serialInput || '')).trim();
     const cleanSerial = extractSerialNumber(rawInput);
     if (!cleanSerial) {
@@ -702,52 +728,116 @@ export default function ScanOutPacking() {
       return { success: false, error: conflictMsg };
     }
 
-    // 1.8 Conflict check against other saved/finalized shipments
-    const conflictingShipment = (shipments || []).find(sh => {
-      if (!sh || sh.status === 'cancelled' || !Array.isArray(sh.items)) return false;
-      if (sh.id === currentShipment?.id) return false;
-      return sh.items.some(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
-    });
-    if (conflictingShipment) {
-      barcodeAudio?.playError?.();
-      const ref = conflictingShipment.invoice_ref || conflictingShipment.shipment_number || 'another manifest';
-      const isShipped = conflictingShipment.status === 'shipped' || conflictingShipment.status === 'received_confirmed';
-      const statusLabel = isShipped ? 'already shipped/delivered' : 'already packed in manifest';
-      const msg = `Manifest Conflict: Unit #${cleanSerial} is ${statusLabel} (${ref}).`;
-      setScanResult({
-        type: 'error',
-        message: msg
-      });
-      showToast(msg, 'warning');
-      highlightSerialInput(cleanSerial);
-      return { success: false, error: msg };
-    }
-
-    // 2. Lookup matching unit in Available DC Stock
+    // Lookup matching unit in Available DC Stock or Global Inventory
     const matchingUnit = (availableStockUnits || []).find(u => {
       const uClean = cleanSerialNumberInput(u.serial_number);
       const uRaw = String(u.serial_number || '').trim().toUpperCase();
       return uClean === cleanSerial || uRaw === cleanSerial;
     });
 
-    if (!matchingUnit) {
-      barcodeAudio?.playError?.();
-      const anyUnit = (inventoryUnits || []).find(u => {
-        const uClean = cleanSerialNumberInput(u.serial_number);
-        const uRaw = String(u.serial_number || '').trim().toUpperCase();
-        return uClean === cleanSerial || uRaw === cleanSerial;
-      });
+    const anyUnit = (inventoryUnits || []).find(u => {
+      const uClean = cleanSerialNumberInput(u.serial_number);
+      const uRaw = String(u.serial_number || '').trim().toUpperCase();
+      return uClean === cleanSerial || uRaw === cleanSerial;
+    });
 
+    // 1.8 Conflict check against other saved/finalized shipments
+    const conflictingShipment = (shipments || []).find(sh => {
+      if (!sh || sh.status === 'cancelled' || !Array.isArray(sh.items)) return false;
+      if (sh.id === currentShipment?.id) return false;
+      return sh.items.some(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
+    });
+
+    if (conflictingShipment && !allowOverride) {
+      barcodeAudio?.playError?.();
+      const ref = conflictingShipment.invoice_ref || conflictingShipment.shipment_number || 'another manifest';
+      const isShipped = conflictingShipment.status === 'shipped' || conflictingShipment.status === 'received_confirmed';
+      const statusLabel = isShipped ? 'already shipped/delivered' : 'already packed in manifest';
+      const conflictingItem = (conflictingShipment.items || []).find(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
+      const prevSiteObj = (sites || []).find(s =>
+        s.id === conflictingShipment.site_id ||
+        s.code === conflictingShipment.site_code ||
+        s.name === conflictingShipment.site_name ||
+        s.name === conflictingShipment.destination_site_name
+      );
+      const prevSiteCode = prevSiteObj?.code || conflictingShipment.site_code || conflictingShipment.destination_site_code || 'Branch Site';
+      const prevSiteName = prevSiteObj?.name || conflictingShipment.site_name || conflictingShipment.destination_site_name || 'Service Partner Site';
+      const unitInfo = matchingUnit || anyUnit || conflictingItem || {
+        part_number: conflictingItem?.part_number || 'UNKNOWN',
+        description: conflictingItem?.description || 'Apple Genuine Part',
+        serial_number: cleanSerial
+      };
+      const candidate = {
+        serial_number: cleanSerial,
+        part_number: unitInfo.part_number || conflictingItem?.part_number || 'N/A',
+        description: unitInfo.description || conflictingItem?.description || 'Apple Genuine Service Part',
+        manifest_ref: ref,
+        shipment_id: conflictingShipment.id,
+        shipment_status: conflictingShipment.status || 'shipped',
+        shipment_date: conflictingShipment.shipment_date || conflictingShipment.created_date || (conflictingShipment.created_at ? new Date(conflictingShipment.created_at).toLocaleDateString('en-US') : 'N/A'),
+        previous_site_code: prevSiteCode,
+        previous_site_name: prevSiteName,
+        carrier: conflictingShipment.carrier || conflictingShipment.courier || 'Standard Freight',
+        tracking_number: conflictingShipment.tracking_number || '',
+        assignment: unitInfo.intake_assignment || unitInfo.notes || 'Transfer Parts',
+        in_dc_stock: Boolean(matchingUnit),
+        unitInfo
+      };
+      const msg = `Manifest Conflict: Unit #${cleanSerial} is ${statusLabel} (${ref} → ${prevSiteCode}). Use "Override" if returned to DC for reassignment.`;
+      setScanResult({
+        type: 'error',
+        message: msg,
+        overrideCandidate: candidate
+      });
+      openPackOverrideModal(candidate);
+      highlightSerialInput(cleanSerial);
+      return { success: false, error: msg };
+    }
+
+    // 2. Check Available DC Stock (or trigger Override if unit is assigned to a branch / marked shipped)
+    const effectiveUnit = matchingUnit || (allowOverride ? (anyUnit || fallbackUnit) : null);
+
+    if (!effectiveUnit) {
+      barcodeAudio?.playError?.();
       let errMsg = `Stock Error: Serial #${cleanSerial} not found in DC inventory records.`;
       if (anyUnit) {
         const isDc = anyUnit.current_site_id === 'site-dc' || anyUnit.site_code === 'DC-MDC' || anyUnit.site_code === 'DC' || (!anyUnit.current_site_id && !anyUnit.site_code);
+        const prevSiteObj = (sites || []).find(s => s.id === (anyUnit.current_site_id || anyUnit.destination_site_id) || s.code === anyUnit.site_code);
+        const prevSiteCode = prevSiteObj?.code || anyUnit.site_code || 'Branch Site';
+        const prevSiteName = prevSiteObj?.name || anyUnit.site_name || 'Service Partner Site';
+
         if (!isDc) {
-          errMsg = `Unavailable: Unit #${cleanSerial} is assigned to branch ${anyUnit.site_code || anyUnit.site_name || 'non-DC location'}.`;
+          errMsg = `Unavailable: Unit #${cleanSerial} is assigned to branch ${prevSiteCode} (${prevSiteName}). Use "Override" to transfer/reassign.`;
         } else if (anyUnit.status && anyUnit.status !== 'in_stock' && anyUnit.status !== 'allocated') {
-          errMsg = `Unavailable: Unit #${cleanSerial} is currently marked "${anyUnit.status}".`;
+          errMsg = `Unavailable: Unit #${cleanSerial} is currently marked "${anyUnit.status}". Use "Override" if returned to DC.`;
         } else {
           errMsg = `Unavailable: Unit #${cleanSerial} is not currently available for packing in DC.`;
         }
+
+        const candidate = {
+          serial_number: cleanSerial,
+          part_number: anyUnit.part_number || 'N/A',
+          description: anyUnit.description || 'Apple Genuine Service Part',
+          manifest_ref: anyUnit.previous_manifest_ref || anyUnit.shipment_number || 'Branch Stock Record',
+          shipment_status: anyUnit.status || 'shipped',
+          shipment_date: anyUnit.shipped_at ? new Date(anyUnit.shipped_at).toLocaleDateString('en-US') : (anyUnit.received_at ? new Date(anyUnit.received_at).toLocaleDateString('en-US') : 'N/A'),
+          previous_site_code: prevSiteCode,
+          previous_site_name: prevSiteName,
+          carrier: '',
+          tracking_number: '',
+          assignment: anyUnit.intake_assignment || anyUnit.notes || 'Transfer Parts',
+          in_dc_stock: isDc,
+          unitInfo: anyUnit
+        };
+
+        setScanResult({
+          type: 'error',
+          message: errMsg,
+          overrideCandidate: candidate
+        });
+        openPackOverrideModal(candidate);
+        highlightSerialInput(cleanSerial);
+        return { success: false, error: errMsg };
       }
 
       setScanResult({
@@ -759,25 +849,34 @@ export default function ScanOutPacking() {
       return { success: false, error: errMsg };
     }
 
-    // 3. Execute Pack
+    // 3. Execute Pack (with optional Override)
     markLocalDraftEdit();
     sessionPackedSerialsRef.current.add(cleanSerial);
 
     const res = addScanOutUnit({
       shipmentId: currentShipment.id,
       siteId: selectedSiteId,
-      partNumber: matchingUnit.part_number,
-      serialNumber: matchingUnit.serial_number || cleanSerial,
-      boxNumber: boxNumber
+      partNumber: effectiveUnit.part_number,
+      serialNumber: effectiveUnit.serial_number || cleanSerial,
+      boxNumber: boxNumber,
+      allowOverride,
+      overrideReason,
+      previousManifestRef,
+      previousSiteCode,
+      fallbackUnit: effectiveUnit
     });
 
     if (res.success) {
       barcodeAudio?.playSuccess?.();
+      setPackOverrideModalState(null);
+      const overrideLabel = allowOverride
+        ? ` [Override Reassigned${previousManifestRef ? ` from ${previousManifestRef}` : ''}]`
+        : '';
       setScanResult({
         type: 'success',
-        message: `⚡ Auto-Packed: ${res.item.description || matchingUnit.description || 'Part'} (SN: ${cleanSerial}) → Box ${boxNumber}`
+        message: `⚡ ${allowOverride ? 'Override Packed' : 'Auto-Packed'}: ${res.item.description || effectiveUnit.description || 'Part'} (SN: ${cleanSerial})${overrideLabel} → Box ${boxNumber}`
       });
-      showToast(`Packed ${matchingUnit.part_number} (${cleanSerial}) into Box #${boxNumber}`, 'success');
+      showToast(`Packed ${effectiveUnit.part_number} (${cleanSerial})${allowOverride ? ' [Override]' : ''} into Box #${boxNumber}`, 'success');
 
       setCurrentShipment(prev => {
         const prevItems = prev.items || [];
@@ -799,6 +898,7 @@ export default function ScanOutPacking() {
 
         const updatedDraft = {
           ...prev,
+          site_id: prev.site_id || selectedSiteId,
           items: nextItems,
           carrier: nextCarrier,
           courier: nextCarrier,
@@ -806,6 +906,10 @@ export default function ScanOutPacking() {
           updated_at: new Date().toISOString()
         };
         currentShipmentRef.current = updatedDraft;
+        try {
+          localStorage.setItem(userDraftStorageKey, JSON.stringify(updatedDraft));
+          localStorage.setItem('mdc_active_pack_draft', JSON.stringify(updatedDraft));
+        } catch (e) {}
         sendPresence(true, updatedDraft.items);
         return updatedDraft;
       });
@@ -2232,21 +2336,47 @@ export default function ScanOutPacking() {
             className={`scanner-feedback-box ${
               scanResult.type === 'success' ? 'scanner-feedback-success' : 'scanner-feedback-error'
             }`}
-            style={{ marginBottom: '14px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}
+            style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}
           >
-            {scanResult.type === 'success' ? (
-              <CheckCircle2 size={18} color="#10b981" style={{ marginTop: '2px', flexShrink: 0 }} />
-            ) : (
-              <AlertCircle size={18} color="#ef4444" style={{ marginTop: '2px', flexShrink: 0 }} />
-            )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
-              {scanResult.type === 'error' && (
-                <span style={{ fontSize: '11.5px', color: '#fca5a5', fontWeight: 600 }}>
-                  ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
-                </span>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', flex: 1 }}>
+              {scanResult.type === 'success' ? (
+                <CheckCircle2 size={18} color="#10b981" style={{ marginTop: '2px', flexShrink: 0 }} />
+              ) : (
+                <AlertCircle size={18} color="#ef4444" style={{ marginTop: '2px', flexShrink: 0 }} />
               )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>{scanResult.message}</span>
+                {scanResult.type === 'error' && (
+                  <span style={{ fontSize: '11.5px', color: '#fca5a5', fontWeight: 600 }}>
+                    ⚡ Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
+                  </span>
+                )}
+              </div>
             </div>
+            {scanResult.overrideCandidate && (
+              <button
+                type="button"
+                onClick={() => openPackOverrideModal(scanResult.overrideCandidate)}
+                style={{
+                  background: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+                  border: '1px solid #fbbf24',
+                  color: '#ffffff',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 8px rgba(217, 119, 6, 0.35)'
+                }}
+              >
+                <ArrowLeftRight size={14} />
+                <span>Override &amp; Pack Unit</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -4617,6 +4747,262 @@ export default function ScanOutPacking() {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shipped / Returned Part Override Confirmation Modal (Pack Scan-Out & PL Process) */}
+      {packOverrideModalState && (
+        <div
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPackOverrideModalState(null);
+          }}
+        >
+          <div className="modal-content" style={{ maxWidth: '580px', borderRadius: '14px', overflow: 'hidden', border: '1px solid #f59e0b', boxShadow: '0 20px 50px rgba(0, 0, 0, 0.45)' }}>
+            <div
+              className="modal-header"
+              style={{
+                background: 'linear-gradient(135deg, #78350f 0%, #92400e 50%, #b45309 100%)',
+                borderBottom: '1px solid #f59e0b',
+                padding: '16px 20px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(251, 191, 36, 0.2)', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(251, 191, 36, 0.4)' }}>
+                  <ArrowLeftRight size={20} color="#fbbf24" />
+                </div>
+                <div>
+                  <h3 style={{ color: '#ffffff', fontSize: '16.5px', fontWeight: 800, margin: 0 }}>
+                    Part Already Shipped to Another Site — Override
+                  </h3>
+                  <div style={{ fontSize: '11.5px', color: '#fde68a', marginTop: '2px' }}>
+                    Packing List Reassignment &amp; Authorized Transfer Verification
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPackOverrideModalState(null)}
+                style={{ background: 'transparent', border: 'none', color: '#fde68a', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: '18px 20px', background: '#ffffff', color: '#0f172a' }}>
+              {/* Warning Notice Banner */}
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fcd34d',
+                  borderRadius: '8px',
+                  padding: '12px 14px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  fontSize: '12.5px',
+                  color: '#92400e',
+                  lineHeight: 1.45
+                }}
+              >
+                <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+                <div>
+                  <strong>Manifest Conflict Notice:</strong> Unit <strong className="font-mono">#{packOverrideModalState.serial_number}</strong> has already been shipped to{' '}
+                  <strong>{packOverrideModalState.previous_site_code} — {packOverrideModalState.previous_site_name}</strong> under Packing List{' '}
+                  <strong className="font-mono">{packOverrideModalState.manifest_ref}</strong>. If this part was returned to the DC for a valid reason, click{' '}
+                  <strong>&ldquo;Override &amp; Pack Unit&rdquo;</strong> to proceed with the transfer or reassignment into the active Packing List for{' '}
+                  <strong>{selectedSite?.code} — {selectedSite?.name}</strong>.
+                </div>
+              </div>
+
+              {/* Relevant Part & Shipment Information Grid */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '14px 16px',
+                  marginBottom: '16px',
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '12px'
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Serial Number (S/N)
+                  </div>
+                  <div className="font-mono" style={{ fontSize: '13.5px', fontWeight: 800, color: '#0369a1', marginTop: '2px' }}>
+                    {packOverrideModalState.serial_number}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Part Number &amp; Description
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    <span className="font-mono">{packOverrideModalState.part_number}</span>
+                    <span style={{ fontWeight: 500, color: '#475569', marginLeft: '6px', fontSize: '12px' }}>
+                      — {packOverrideModalState.description}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previously Shipped To Site
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#b45309', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Building2 size={13} color="#d97706" />
+                    <span>{packOverrideModalState.previous_site_code} — {packOverrideModalState.previous_site_name}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previous Packing List Ref
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    <span className="font-mono" style={{ background: '#fef3c7', color: '#92400e', padding: '1px 6px', borderRadius: '4px', border: '1px solid #fde68a' }}>
+                      {packOverrideModalState.manifest_ref}
+                    </span>
+                    {packOverrideModalState.shipment_date && (
+                      <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 500, marginLeft: '6px' }}>
+                        ({packOverrideModalState.shipment_date})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    New Destination Site
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#047857', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <CheckCircle2 size={13} color="#10b981" />
+                    <span>{selectedSite?.code} — {selectedSite?.name}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Target Packing List &amp; Box
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    <span className="font-mono" style={{ color: '#0284c7' }}>
+                      {currentShipment?.invoice_ref || currentShipment?.shipment_number || 'Active Draft'}
+                    </span>
+                    <span style={{ fontSize: '11.5px', color: '#475569', marginLeft: '6px' }}>
+                      • Box #{boxNumber}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Override Reason Selection & Input */}
+              <div>
+                <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Authorized Transfer / Reassignment Reason:
+                </label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  {[
+                    `Returned to DC from ${packOverrideModalState.previous_site_code || 'Site'} — Reassigned to ${selectedSite?.code || 'New Site'}`,
+                    'Transfer Parts Between Sites',
+                    'Unused / Excess Branch Stock Returned to DC',
+                    'Cancelled Repair / KGB Reassignment'
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setPackOverrideReason(preset)}
+                      style={{
+                        fontSize: '11px',
+                        padding: '4px 9px',
+                        borderRadius: '14px',
+                        border: packOverrideReason === preset ? '1px solid #d97706' : '1px solid #cbd5e1',
+                        background: packOverrideReason === preset ? '#fef3c7' : '#f8fafc',
+                        color: packOverrideReason === preset ? '#92400e' : '#475569',
+                        fontWeight: packOverrideReason === preset ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={packOverrideReason}
+                  onChange={(e) => setPackOverrideReason(e.target.value)}
+                  placeholder="Enter reason for override / transfer..."
+                  style={{ width: '100%', fontSize: '12.5px', height: '36px' }}
+                />
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                background: '#f8fafc',
+                borderTop: '1px solid #e2e8f0',
+                padding: '12px 20px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                Authorized by: <strong style={{ color: '#0f172a' }}>{currentUser?.fullName || 'Warehouse Staff'}</strong>
+              </span>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setPackOverrideModalState(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    background: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+                    border: '1px solid #f59e0b',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    padding: '8px 18px',
+                    borderRadius: '8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '7px',
+                    cursor: 'pointer',
+                    boxShadow: '0 3px 10px rgba(217, 119, 6, 0.3)'
+                  }}
+                  onClick={() => {
+                    if (!selectedSiteId || !selectedSite) {
+                      showToast('Please select a destination site first before packing parts.', 'warning');
+                      setIsSiteModalOpen(true);
+                      return;
+                    }
+                    packUnitBySerial(packOverrideModalState.serial_number, {
+                      allowOverride: true,
+                      overrideReason: packOverrideReason.trim() || `Returned to DC — Reassigned to ${selectedSite?.code || 'New Site'}`,
+                      previousManifestRef: packOverrideModalState.manifest_ref,
+                      previousSiteCode: packOverrideModalState.previous_site_code,
+                      fallbackUnit: packOverrideModalState.unitInfo
+                    });
+                  }}
+                >
+                  <ArrowLeftRight size={15} />
+                  <span>Override &amp; Pack Unit</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

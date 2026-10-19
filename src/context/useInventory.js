@@ -873,7 +873,11 @@ export function useInventory({
     notes = null,
     targetSiteId = null,
     targetSiteCode = null,
-    targetSiteName = null
+    targetSiteName = null,
+    allowOverride = false,
+    overrideReason = null,
+    previousManifestRef = null,
+    previousSiteCode = null
   }) => {
     const rawPN = String(partNumber || '').trim();
     const cleanSerial = String(serialNumber || '').trim().toUpperCase();
@@ -938,7 +942,7 @@ export function useInventory({
       return u.current_site_id === resolvedSiteId || u.site_code === resolvedSiteCode;
     });
 
-    if (existingUnit) {
+    if (existingUnit && !allowOverride) {
       barcodeAudio.playError();
       showToast(`Duplicate Serial: ${cleanSerial} already exists in ${isDcDest ? 'DC stock' : resolvedSiteCode}!`, 'error');
       logScan('RECEIVE_IN', cleanPN, cleanSerial, false, 'Duplicate serial number');
@@ -999,7 +1003,7 @@ export function useInventory({
     const nowIso = new Date().toISOString();
 
     const newUnit = {
-      id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: existingUnit?.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       part_id: part.id || `part-${part.part_number}`,
       part_number: part.part_number,
       description: part.description,
@@ -1016,13 +1020,19 @@ export function useInventory({
       is_deleted: false,
       box_number: 1,
       received_at: nowIso,
-      created_at: nowIso,
+      created_at: existingUnit?.created_at || nowIso,
       updated_at: nowIso,
       received_by: currentUser?.fullName || 'Warehouse Staff',
       received_by_id: currentUser?.id || null,
       added_by_user_id: currentUser?.id || null,
       created_by_site_id: currentUser?.siteId || resolvedSiteId,
-      stocking_price: part.stocking_price || 99
+      stocking_price: part.stocking_price || 99,
+      is_returned_override: Boolean(allowOverride),
+      override_reason: overrideReason || null,
+      overridden_by: allowOverride ? (currentUser?.fullName || 'Warehouse Staff') : null,
+      overridden_at: allowOverride ? nowIso : null,
+      previous_manifest_ref: previousManifestRef || null,
+      previous_site_code: previousSiteCode || null
     };
 
     // Clean any stale local packing drafts that might contain this serial from a previous session
@@ -2530,15 +2540,40 @@ export function useInventory({
     }, 1200);
   }, [flushPackUpserts]);
 
-  const addScanOutUnit = ({ shipmentId, siteId, partNumber, serialNumber, boxNumber = 1 }) => {
+  const addScanOutUnit = ({
+    shipmentId,
+    siteId,
+    partNumber,
+    serialNumber,
+    boxNumber = 1,
+    allowOverride = false,
+    overrideReason = null,
+    previousManifestRef = null,
+    previousSiteCode = null,
+    fallbackUnit = null
+  }) => {
     const rawSerial = String(serialNumber || '').trim().toUpperCase();
     const cleanSerial = cleanSerialNumberInput(rawSerial) || rawSerial;
 
-    const currentUnit = (inventoryUnits || []).find(u => {
+    let currentUnit = (inventoryUnits || []).find(u => {
       const uRaw = String(u.serial_number || '').trim().toUpperCase();
       const uClean = cleanSerialNumberInput(uRaw);
       return uClean === cleanSerial || uRaw === rawSerial || uRaw === cleanSerial;
     });
+
+    if (!currentUnit && allowOverride && fallbackUnit) {
+      const resolvedPart = resolvePartInfo(partNumber || fallbackUnit.part_number, parts);
+      currentUnit = {
+        id: fallbackUnit.id || `unit-${cleanSerial}`,
+        part_id: fallbackUnit.part_id || resolvedPart?.id || `part-${fallbackUnit.part_number || partNumber || 'UNKNOWN'}`,
+        part_number: fallbackUnit.part_number || resolvedPart?.part_number || partNumber || 'UNKNOWN',
+        description: fallbackUnit.description || resolvedPart?.description || 'Apple Genuine Part',
+        serial_number: cleanSerial,
+        status: 'in_stock',
+        current_site_id: 'site-dc',
+        site_code: 'DC-MDC'
+      };
+    }
 
     const cleanPN = String(partNumber || currentUnit?.part_number || '').trim().toUpperCase();
 
@@ -2549,45 +2584,83 @@ export function useInventory({
       return { success: false, error: 'Unit not found in DC stock' };
     }
 
-    if (currentUnit.status !== 'in_stock' && currentUnit.status !== 'allocated') {
+    if (!allowOverride && currentUnit.status !== 'in_stock' && currentUnit.status !== 'allocated') {
       barcodeAudio.playError();
       showToast(`Unit ${cleanSerial} cannot be scanned out (Status: ${currentUnit.status})`, 'error');
       logScan('PACK_OUT', cleanPN, cleanSerial, false, `Invalid status: ${currentUnit.status}`);
       return { success: false, error: `Unit is already ${currentUnit.status}` };
     }
 
+    const nowIso = new Date().toISOString();
     const itemToAdd = {
       id: currentUnit.id || `unit-${cleanSerial}`,
       part_id: currentUnit.part_id,
       part_number: currentUnit.part_number,
       description: currentUnit.description,
       serial_number: currentUnit.serial_number,
-      box_number: boxNumber
+      box_number: boxNumber,
+      ...(allowOverride ? {
+        is_override_transfer: true,
+        override_reason: overrideReason || 'Returned to DC — Reassigned to New Site',
+        overridden_by: currentUser?.fullName || 'Warehouse Staff',
+        overridden_at: nowIso,
+        previous_manifest_ref: previousManifestRef || null,
+        previous_site_code: previousSiteCode || null
+      } : {})
     };
 
     setInventoryUnits(prev => {
+      let matchedInList = false;
       const updated = (prev || []).map(u => {
         const uRaw = String(u.serial_number || '').trim().toUpperCase();
         const uClean = cleanSerialNumberInput(uRaw);
         if (uClean === cleanSerial || uRaw === rawSerial || uRaw === cleanSerial) {
+          matchedInList = true;
           return {
             ...u,
             status: 'packed',
             // Parts in draft packing station remain DC stock inventory (not transferred to branch until PL is finalized)
-            current_site_id: u.current_site_id || 'site-dc',
+            current_site_id: 'site-dc',
+            site_code: 'DC-MDC',
             destination_site_id: siteId || null,
             box_number: boxNumber,
-            shipped_at: new Date().toISOString(),
-            shipped_by: currentUser?.fullName || 'Warehouse Staff'
+            shipped_at: nowIso,
+            shipped_by: currentUser?.fullName || 'Warehouse Staff',
+            ...(allowOverride ? {
+              is_override_transfer: true,
+              override_reason: overrideReason || 'Returned to DC — Reassigned to New Site',
+              overridden_by: currentUser?.fullName || 'Warehouse Staff',
+              overridden_at: nowIso,
+              previous_manifest_ref: previousManifestRef || null,
+              previous_site_code: previousSiteCode || null
+            } : {})
           };
         }
         return u;
       });
+      const finalUpdated = (!matchedInList && allowOverride && currentUnit)
+        ? [{
+            ...currentUnit,
+            status: 'packed',
+            current_site_id: 'site-dc',
+            site_code: 'DC-MDC',
+            destination_site_id: siteId || null,
+            box_number: boxNumber,
+            shipped_at: nowIso,
+            shipped_by: currentUser?.fullName || 'Warehouse Staff',
+            is_override_transfer: true,
+            override_reason: overrideReason || 'Returned to DC — Reassigned to New Site',
+            overridden_by: currentUser?.fullName || 'Warehouse Staff',
+            overridden_at: nowIso,
+            previous_manifest_ref: previousManifestRef || null,
+            previous_site_code: previousSiteCode || null
+          }, ...updated]
+        : updated;
       try {
-        saveInventoryToLocalStorage(updated);
+        saveInventoryToLocalStorage(finalUpdated);
       } catch (e) {}
-      dbStorage.setItem('mdc_inventory', updated);
-      return updated;
+      dbStorage.setItem('mdc_inventory', finalUpdated);
+      return finalUpdated;
     });
 
     // Supabase Quota Protection: Queue row into debounced batcher instead of sending 1 HTTP request per scan
@@ -2596,8 +2669,8 @@ export function useInventory({
       serial_number: cleanSerial,
       status: 'packed',
       box_number: boxNumber,
-      current_site_id: currentUnit.current_site_id || 'site-dc',
-      shipped_at: new Date().toISOString()
+      current_site_id: 'site-dc',
+      shipped_at: nowIso
     });
 
     if (setShipments) {

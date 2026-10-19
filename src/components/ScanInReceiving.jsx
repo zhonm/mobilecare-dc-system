@@ -452,6 +452,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
   // Fast lookup map for any serial number already present in the system (Session, Inventory, Batch Archives, Shipments)
   // Fast lookup map for serial numbers already present in the active site (Session, Inventory, Batch Archives)
+  // Fast lookup map for serial numbers already present in the active site (Session, Inventory, Batch Archives)
   const systemSerialsMap = useMemo(() => {
     const map = new Map();
     const isDcMode = Boolean(activeReceivingSite?.is_dc) ||
@@ -516,15 +517,139 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     return map;
   }, [sessionScans, inventoryUnits, activeReceivingSite, dcSiteObj?.id, dcSiteObj?.code]);
 
-  // Check if current serial input is already scanned / present in the system
+  // Fast lookup map for parts previously shipped to another site (for Return / Transfer Override feature)
+  const shippedSerialsLookupMap = useMemo(() => {
+    const map = new Map();
+    const sitesById = new Map((sites || []).map(s => [s.id, s]));
+    const sitesByCode = new Map((sites || []).map(s => [String(s.code || '').toUpperCase(), s]));
+
+    // 1. Scan all non-cancelled shipments (most recent first)
+    const sortedShipments = [...(shipments || [])].reverse();
+    sortedShipments.forEach(sh => {
+      if (!sh || sh.status === 'cancelled' || !Array.isArray(sh.items)) return;
+      const siteObj = sitesById.get(sh.site_id) ||
+        sitesByCode.get(String(sh.site_code || sh.destination_site_code || '').toUpperCase()) ||
+        (sites || []).find(s => s.name === sh.site_name || s.name === sh.destination_site_name);
+      const resolvedSiteCode = siteObj?.code || sh.site_code || sh.destination_site_code || 'Branch Site';
+      const resolvedSiteName = siteObj?.name || sh.site_name || sh.destination_site_name || 'Service Partner Site';
+      const manifestRef = sh.invoice_ref || sh.shipment_number || 'Packing List';
+      const shipDate = sh.shipment_date || sh.created_date || (sh.created_at ? new Date(sh.created_at).toLocaleDateString('en-US') : 'N/A');
+
+      sh.items.forEach(it => {
+        if (!it) return;
+        const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+        if (s && !map.has(s)) {
+          map.set(s, {
+            serial_number: s,
+            part_number: it.part_number || '',
+            description: it.description || 'Genuine Apple Part',
+            manifest_ref: manifestRef,
+            shipment_id: sh.id,
+            shipment_status: sh.status || 'shipped',
+            shipment_date: shipDate,
+            site_code: resolvedSiteCode,
+            site_name: resolvedSiteName,
+            carrier: sh.carrier || sh.courier || 'Standard Freight',
+            tracking_number: sh.tracking_number || '',
+            box_number: it.box_number || 1,
+            assignment: it.intake_assignment || 'Transfer Parts',
+            location: `Shipped to ${resolvedSiteCode} (${manifestRef})`,
+            isShippedToSite: true
+          });
+        }
+      });
+    });
+
+    // 2. Also include any inventoryUnits currently assigned to another branch site or marked 'shipped'/'packed'
+    (inventoryUnits || []).forEach(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return;
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (!s || map.has(s)) return;
+      const unitIsDc = u.current_site_id === 'site-dc' ||
+        u.current_site_id === dcSiteObj?.id ||
+        u.site_code === 'DC-MDC' ||
+        u.site_code === 'DC' ||
+        (!u.current_site_id && !u.site_code);
+      if (!unitIsDc || u.status === 'shipped' || u.status === 'packed') {
+        const siteObj = sitesById.get(u.current_site_id || u.destination_site_id) ||
+          sitesByCode.get(String(u.site_code || '').toUpperCase());
+        const resolvedSiteCode = siteObj?.code || u.site_code || 'Branch Site';
+        const resolvedSiteName = siteObj?.name || u.site_name || 'Service Partner Site';
+        map.set(s, {
+          serial_number: s,
+          part_number: u.part_number || '',
+          description: u.description || 'Genuine Apple Part',
+          manifest_ref: u.previous_manifest_ref || u.shipment_number || 'Branch Assignment',
+          shipment_status: u.status || 'shipped',
+          shipment_date: u.shipped_at ? new Date(u.shipped_at).toLocaleDateString('en-US') : (u.received_at ? new Date(u.received_at).toLocaleDateString('en-US') : 'N/A'),
+          site_code: resolvedSiteCode,
+          site_name: resolvedSiteName,
+          carrier: '',
+          tracking_number: '',
+          box_number: u.box_number || 1,
+          assignment: u.intake_assignment || u.notes || 'Transfer Parts',
+          location: `Assigned to ${resolvedSiteCode} (${resolvedSiteName})`,
+          isShippedToSite: true
+        });
+      }
+    });
+
+    return map;
+  }, [shipments, inventoryUnits, sites, dcSiteObj?.id]);
+
+  // Override Modal State for Returned / Previously Shipped Parts
+  const [overrideModalState, setOverrideModalState] = useState(null);
+  const [overrideReason, setOverrideReason] = useState('Returned to DC — Valid Site Return / Reassignment');
+  const [overrideAssignmentTag, setOverrideAssignmentTag] = useState('Transfer Parts');
+
+  const openReceiveOverrideModal = useCallback((info, pnCandidate = '', snCandidate = '') => {
+    if (!info) return;
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
+    }
+    const resolvedPn = (pnCandidate || info.part_number || partNumberInput || '').trim();
+    if (resolvedPn && !partNumberInput) {
+      setPartNumberInput(resolvedPn);
+    }
+    const resolvedPartObj = resolvePartInfo(resolvedPn, parts);
+    const defaultReason = info.isShippedToSite
+      ? `Returned to DC from ${info.site_code || 'Site'} (${info.manifest_ref || 'Previous Shipment'}) — Valid Return / Reassignment`
+      : 'Returned to DC — Authorized Stock Reassignment / Transfer';
+    setOverrideReason(defaultReason);
+    setOverrideAssignmentTag(intakeAssignmentRef.current || intakeAssignment || 'Transfer Parts');
+    setOverrideModalState({
+      serial_number: (snCandidate || info.serial_number || serialInput).trim().toUpperCase(),
+      part_number: resolvedPartObj?.part_number || resolvedPn || info.part_number || '',
+      description: resolvedPartObj?.description || info.description || matchedPart?.description || 'Apple Genuine Service Part',
+      manifest_ref: info.manifest_ref || 'Previous Record',
+      shipment_status: info.shipment_status || 'shipped',
+      shipment_date: info.shipment_date || (info.received_at ? new Date(info.received_at).toLocaleDateString('en-US') : 'N/A'),
+      site_code: info.site_code || activeReceivingSite?.code || 'Site',
+      site_name: info.site_name || info.location || 'Previous Site',
+      carrier: info.carrier || null,
+      tracking_number: info.tracking_number || null,
+      box_number: info.box_number || null,
+      assignment: info.assignment || 'MDC - Forecasting',
+      location: info.location || 'System Stock',
+      isShippedToSite: Boolean(info.isShippedToSite)
+    });
+  }, [partNumberInput, parts, intakeAssignment, serialInput, matchedPart, activeReceivingSite?.code]);
+
+  // Check if current serial input is already scanned / present in the system or previously shipped
   const duplicateSerialMatch = useMemo(() => {
     const clean = String(serialInput || '').trim().toUpperCase();
     if (!clean || clean.length < 4) return null;
     if (lastSuccessScanRef.current.serial === clean && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
       return null;
     }
-    return systemSerialsMap.get(clean) || null;
-  }, [serialInput, systemSerialsMap]);
+    const localMatch = systemSerialsMap.get(clean);
+    const shippedMatch = shippedSerialsLookupMap.get(clean);
+    if (localMatch && shippedMatch) {
+      return { ...localMatch, ...shippedMatch, location: `${localMatch.location} • ${shippedMatch.location}` };
+    }
+    return localMatch || shippedMatch || null;
+  }, [serialInput, systemSerialsMap, shippedSerialsLookupMap]);
 
   // Real-time Serial Number Security Validation
   const serialValidation = useMemo(() => {
@@ -542,7 +667,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // so warehouse operators immediately see the duplicate entry and can scan or type the correct serial number
   // without needing to click the "X" clear button
   useEffect(() => {
-    if (duplicateSerialMatch && serialInputRef.current) {
+    if (duplicateSerialMatch && !overrideModalState && serialInputRef.current) {
       const timer = setTimeout(() => {
         if (serialInputRef.current) {
           serialInputRef.current.focus();
@@ -551,7 +676,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }, 30);
       return () => clearTimeout(timer);
     }
-  }, [duplicateSerialMatch]);
+  }, [duplicateSerialMatch, overrideModalState]);
 
   // Select part from autocomplete dropdown
   const handleSelectSuggestedPart = (p) => {
@@ -601,7 +726,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     return null;
   };
 
-  const executeScan = (overridePn = null, overrideSn = null) => {
+  const executeScan = (overridePn = null, overrideSn = null, scanOptions = {}) => {
+    const {
+      allowOverride = false,
+      overrideReason: customOverrideReason = null,
+      overrideAssignment = null,
+      previousManifestRef = null,
+      previousSiteCode = null
+    } = scanOptions;
+
     if (isScanningRef.current) return false;
     isScanningRef.current = true;
 
@@ -628,36 +761,44 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         return false;
       }
 
-      // 1. Immediate Duplicate Detection: Check if serial is already in the system (Session, Inventory, Batches, Shipments)
+      // 1. Immediate Duplicate / Shipped Part Detection
       const cleanSN = rawSn.toUpperCase();
-      if (lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+      if (!allowOverride && lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
         if (serialInputRef.current) serialInputRef.current.value = '';
         setSerialInput('');
         return true;
       }
 
       const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
-      const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+      const shippedInfo = shippedSerialsLookupMap.get(cleanSN);
+      const localDupInfo = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+        serial_number: cleanSN,
         part_number: rawPn,
         description: 'Received in Current Session',
         assignment: intakeAssignmentRef.current || intakeAssignment,
         location: 'Current Session'
       } : null);
+      const dup = (localDupInfo && shippedInfo)
+        ? { ...localDupInfo, ...shippedInfo, location: `${localDupInfo.location} • ${shippedInfo.location}` }
+        : (shippedInfo || localDupInfo);
 
-      if (dup) {
+      if (dup && !allowOverride) {
         barcodeAudio.playError();
-        const dupMsg = `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`;
+        const isShipped = Boolean(dup.isShippedToSite);
+        const dupMsg = isShipped
+          ? `[PREVIOUSLY SHIPPED PART] S/N "${cleanSN}" was previously shipped to ${dup.site_code} — ${dup.site_name} (${dup.manifest_ref || 'Packing List'}). Click "Override & Receive" to authorize receiving this returned part.`
+          : `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Click "Override & Receive" if this is a returned/reassigned part.`;
         setScanResult({
           type: 'error',
-          message: dupMsg
+          message: dupMsg,
+          overrideCandidate: dup
         });
-        showToast(`Duplicate S/N: ${cleanSN} is already scanned in the system!`, 'error');
-        serialInputRef.current?.focus();
-        serialInputRef.current?.select();
+        openReceiveOverrideModal(dup, rawPn || dup.part_number, cleanSN);
         return false;
       }
 
-      if (!rawPn) {
+      const effectiveRawPn = rawPn || dup?.part_number || '';
+      if (!effectiveRawPn) {
         barcodeAudio.playError();
         setScanResult({
           type: 'error',
@@ -668,8 +809,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
 
       // Resolve canonical Apple Part Number (661-xxxxx)
-      const resolved = resolvePartInfo(rawPn, parts);
-      const pnToUse = resolved ? resolved.part_number : rawPn;
+      const resolved = resolvePartInfo(effectiveRawPn, parts);
+      const pnToUse = resolved ? resolved.part_number : effectiveRawPn;
 
       // Security Verification: Validate Serial Number before adding
       const validation = validateAppleSerialNumber(rawSn, pnToUse, parts);
@@ -685,23 +826,28 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
 
       const snToUse = validation.cleanSerial;
-      const currentAssignment = intakeAssignmentRef.current || intakeAssignment;
+      const currentAssignment = overrideAssignment || intakeAssignmentRef.current || intakeAssignment;
 
       const res = addScanInUnit({
         partNumber: pnToUse,
         serialNumber: snToUse,
         poId: selectedPoId || null,
         intakeAssignment: currentAssignment,
-        notes: currentAssignment,
+        notes: customOverrideReason ? `${currentAssignment} [Override: ${customOverrideReason}]` : currentAssignment,
         targetSiteId: activeReceivingSite.id,
         targetSiteCode: activeReceivingSite.code,
-        targetSiteName: activeReceivingSite.name
+        targetSiteName: activeReceivingSite.name,
+        allowOverride,
+        overrideReason: customOverrideReason,
+        previousManifestRef: previousManifestRef || dup?.manifest_ref || null,
+        previousSiteCode: previousSiteCode || dup?.site_code || null
       });
 
       if (res.success) {
         barcodeAudio.playSuccess();
         sessionSerialsSetRef.current.add(snToUse);
         lastSuccessScanRef.current = { serial: snToUse.toUpperCase(), timestamp: Date.now() };
+        setOverrideModalState(null);
         let poDetail;
         const matchedPo = res.matchedPo;
         if (matchedPo) {
@@ -710,13 +856,15 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           const totalOrd = poItem ? (poItem.quantity_ordered || 0) : 1;
           const routeLabel = res.isAutoRouted ? ` Auto-Assigned to PO ${matchedPo.po_number}` : ` [PO ${matchedPo.po_number}]`;
           poDetail = `${routeLabel} [${recCount}/${totalOrd} Units Received] (Recorded in Parts Saved History Records)`;
+        } else if (allowOverride) {
+          poDetail = ` [OVERRIDE APPROVED — Returned from ${previousSiteCode || dup?.site_code || 'Site'} & Re-Received into ${activeReceivingSite.code}]`;
         } else {
           poDetail = ` [Direct Stock Intake — Added to DC Warehouse]`;
         }
 
         setScanResult({
           type: 'success',
-          message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
+          message: `[RECEIVED ${currentAssignment}${allowOverride ? ' • OVERRIDE' : ''}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
         });
         setSessionScans(prev => [res.unit, ...prev.filter(u => String(u.serial_number || '').trim().toUpperCase() !== snToUse.toUpperCase())]);
         setShowPnDropdown(false);
@@ -786,7 +934,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     }
   };
 
-  // Handle Serial change with security verification and real-time duplicate alerting
+  // Handle Serial change with security verification and real-time duplicate / shipped-part alerting
   const handleSerialChange = (e) => {
     const val = e.target.value;
     setSerialInput(val);
@@ -815,7 +963,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return;
     }
 
-    // Immediate Duplicate Alert: If entered value matches an existing serial in the system (even if Part Number is empty!), warn user immediately
+    // Immediate Duplicate / Shipped-Part Alert: If entered value matches an existing or shipped serial in the system
     const cleanSN = cleanSerial.toUpperCase();
     if (cleanSN && lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
       if (serialInputRef.current) serialInputRef.current.value = '';
@@ -823,27 +971,40 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       return;
     }
     const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
-    const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+    const shippedInfo = shippedSerialsLookupMap.get(cleanSN);
+    const localDup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
+      serial_number: cleanSN,
       part_number: cleanPn,
       description: 'Received in Current Session',
       assignment: intakeAssignmentRef.current || intakeAssignment,
       location: 'Current Session'
     } : null);
+    const dup = (localDup && shippedInfo)
+      ? { ...localDup, ...shippedInfo, location: `${localDup.location} • ${shippedInfo.location}` }
+      : (shippedInfo || localDup);
 
     if (dup) {
       barcodeAudio.playError();
+      const isShipped = Boolean(dup.isShippedToSite);
       setScanResult({
         type: 'error',
-        message: `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}). Duplicate scans are prevented.`
+        message: isShipped
+          ? `[PREVIOUSLY SHIPPED PART] S/N "${cleanSN}" was previously shipped to ${dup.site_code} — ${dup.site_name} (${dup.manifest_ref || 'Packing List'}). Use Override to receive this returned part.`
+          : `[DUPLICATE SERIAL DETECTED] S/N "${cleanSN}" has already been received in the system (${dup.part_number} — ${dup.description}, Tagged: ${dup.assignment}, Location: ${dup.location}).`,
+        overrideCandidate: dup
       });
-      // Automatically highlight/select entered text immediately so user can rescan directly without clicking "X"
-      setTimeout(() => {
-        if (serialInputRef.current) {
-          serialInputRef.current.focus();
-          serialInputRef.current.select();
-        }
-      }, 20);
-      return; // Do NOT auto-receive duplicate serial numbers!
+      // Automatically open Override Popup if this part was shipped to another site or exists outside the immediate session
+      if (isShipped || !isLocalDup) {
+        openReceiveOverrideModal(dup, cleanPn || dup.part_number, cleanSN);
+      } else {
+        setTimeout(() => {
+          if (serialInputRef.current) {
+            serialInputRef.current.focus();
+            serialInputRef.current.select();
+          }
+        }, 20);
+      }
+      return; // Do NOT auto-receive without explicit Override confirmation!
     }
 
     // Security Verification: If entered value is an Apple Part Number, block auto-receive and alert user!
@@ -864,17 +1025,13 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     }
 
     // When valid serial number is scanned and part number is present, auto-receive!
-    // Protect against premature cutoff while barcode scanner is actively transmitting keystrokes.
-    // For Apple component replacement parts (661-xxxxx, batteries, displays), full serial is at least 17 characters.
     if (autoReceive && cleanPn && validation.isValid) {
       const isComponent = /^66[0-9]-?\d{4,6}$/i.test(cleanPn);
       const isCompleteLength = isComponent ? validation.cleanSerial.length >= 17 : validation.cleanSerial.length >= 10;
 
       // NEVER schedule auto-receive on timer for partial/incomplete serial lengths
       if (isCompleteLength) {
-        // Debounce delay of 300ms ensures the physical barcode scanner has completely finished transmitting all characters
         autoScanTimerRef.current = setTimeout(() => {
-          // Read true latest DOM input value at execution time rather than stale closure
           const latestDomVal = (serialInputRef.current?.value || '').trim();
           const latestValidation = validateAppleSerialNumber(latestDomVal, cleanPn, parts);
           if (latestValidation.isValid) {
@@ -937,8 +1094,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
       if (duplicateSerialMatch || sessionSerialsSetRef.current.has(cleanSN)) {
         barcodeAudio.playError();
-        serialInputRef.current?.focus();
-        serialInputRef.current?.select();
+        if (duplicateSerialMatch) {
+          openReceiveOverrideModal(duplicateSerialMatch, partNumberInput || duplicateSerialMatch.part_number, cleanSN);
+        } else {
+          serialInputRef.current?.focus();
+          serialInputRef.current?.select();
+        }
         return;
       }
       const combined = parseBarcodeData(domSn);
@@ -954,12 +1115,17 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           setSerialInput('');
           return;
         }
-        if (cleanCombinedSn && (systemSerialsMap.get(cleanCombinedSn) || sessionSerialsSetRef.current.has(cleanCombinedSn))) {
+        const combinedDup = shippedSerialsLookupMap.get(cleanCombinedSn) || systemSerialsMap.get(cleanCombinedSn);
+        if (cleanCombinedSn && (combinedDup || sessionSerialsSetRef.current.has(cleanCombinedSn))) {
           barcodeAudio.playError();
-          setTimeout(() => {
-            serialInputRef.current?.focus();
-            serialInputRef.current?.select();
-          }, 20);
+          if (combinedDup) {
+            openReceiveOverrideModal(combinedDup, actualPn, cleanCombinedSn);
+          } else {
+            setTimeout(() => {
+              serialInputRef.current?.focus();
+              serialInputRef.current?.select();
+            }, 20);
+          }
           return;
         }
         if (autoReceive) {
@@ -2202,14 +2368,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               {duplicateSerialMatch ? (
                 <span 
                   className="badge badge-danger" 
-                  onClick={() => {
-                    serialInputRef.current?.focus();
-                    serialInputRef.current?.select();
-                  }}
-                  title="Click to highlight and replace duplicate S/N"
-                  style={{ fontSize: '11px', padding: '2px 8px', background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, cursor: 'pointer' }}
+                  onClick={() => openReceiveOverrideModal(duplicateSerialMatch, partNumberInput || duplicateSerialMatch.part_number, serialInput.trim().toUpperCase())}
+                  title="Click to open Override dialog for returned/reassigned part"
+                  style={{ fontSize: '11px', padding: '2px 8px', background: duplicateSerialMatch.isShippedToSite ? '#d97706' : '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, cursor: 'pointer' }}
                 >
-                  <AlertCircle size={11} /> DUPLICATE S/N (ALREADY RECEIVED)
+                  <AlertCircle size={11} /> {duplicateSerialMatch.isShippedToSite ? `SHIPPED TO ${duplicateSerialMatch.site_code} (CLICK TO OVERRIDE)` : 'DUPLICATE S/N (CLICK TO OVERRIDE)'}
                 </span>
               ) : serialValidation && serialValidation.isPartNumber ? (
                 <span className="badge badge-danger" style={{ fontSize: '11px', padding: '2px 6px', background: '#dc2626', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
@@ -2232,18 +2395,18 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 onChange={handleSerialChange}
                 onKeyDown={handleSerialKeyDown}
                 onFocus={(e) => {
-                  if (duplicateSerialMatch) {
+                  if (duplicateSerialMatch && !overrideModalState) {
                     e.target.select();
                   }
                 }}
                 onClick={(e) => {
-                  if (duplicateSerialMatch) {
+                  if (duplicateSerialMatch && !overrideModalState) {
                     e.target.select();
                   }
                 }}
                 style={{
-                  borderColor: duplicateSerialMatch ? '#ef4444' : serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
-                  boxShadow: duplicateSerialMatch ? '0 0 0 2px rgba(239, 68, 68, 0.5)' : serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined,
+                  borderColor: duplicateSerialMatch ? (duplicateSerialMatch.isShippedToSite ? '#f59e0b' : '#ef4444') : serialValidation?.isPartNumber ? '#ef4444' : serialValidation?.isValid ? '#10b981' : undefined,
+                  boxShadow: duplicateSerialMatch ? (duplicateSerialMatch.isShippedToSite ? '0 0 0 2px rgba(245, 158, 11, 0.5)' : '0 0 0 2px rgba(239, 68, 68, 0.5)') : serialValidation?.isPartNumber ? '0 0 0 1px rgba(239, 68, 68, 0.4)' : undefined,
                   background: duplicateSerialMatch ? '#241419' : undefined
                 }}
               />
@@ -2273,40 +2436,59 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               )}
             </div>
 
-            {/* Serial Number Duplicate Alert Banner */}
+            {/* Serial Number Duplicate / Shipped Part Alert Banner with Override Button */}
             {duplicateSerialMatch && (
               <div 
-                onClick={() => {
-                  serialInputRef.current?.focus();
-                  serialInputRef.current?.select();
-                }}
-                title="Click to highlight and replace duplicate S/N"
                 style={{
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  border: '1px solid rgba(239, 68, 68, 0.45)',
+                  background: duplicateSerialMatch.isShippedToSite ? 'rgba(245, 158, 11, 0.14)' : 'rgba(239, 68, 68, 0.15)',
+                  border: duplicateSerialMatch.isShippedToSite ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid rgba(239, 68, 68, 0.45)',
                   borderRadius: '6px',
                   padding: '8px 12px',
                   marginTop: '6px',
                   display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '8px',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
                   fontSize: '12px',
                   color: '#fca5a5',
-                  cursor: 'pointer'
+                  flexWrap: 'wrap'
                 }}
               >
-                <AlertTriangle size={16} color="#ef4444" style={{ marginTop: '1px', flexShrink: 0 }} />
-                <div>
-                  <div style={{ color: '#f87171', fontWeight: 700 }}>
-                    Duplicate Serial Detected: &quot;{serialInput.trim()}&quot; has already been received in the system!
-                  </div>
-                  <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '2px' }}>
-                    <strong>Recorded Unit:</strong> {duplicateSerialMatch.part_number} — {duplicateSerialMatch.description} ({duplicateSerialMatch.assignment}) • <strong>Location:</strong> {duplicateSerialMatch.location}
-                  </div>
-                  <div style={{ color: '#f87171', fontSize: '11px', marginTop: '3px', fontWeight: 600 }}>
-                    Text auto-highlighted: scan next barcode or type to overwrite directly without clicking &ldquo;✕&rdquo;.
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1 }}>
+                  <AlertTriangle size={16} color={duplicateSerialMatch.isShippedToSite ? '#f59e0b' : '#ef4444'} style={{ marginTop: '1px', flexShrink: 0 }} />
+                  <div>
+                    <div style={{ color: duplicateSerialMatch.isShippedToSite ? '#fbbf24' : '#f87171', fontWeight: 700 }}>
+                      {duplicateSerialMatch.isShippedToSite
+                        ? `Previously Shipped Part: "${serialInput.trim().toUpperCase()}" was shipped to ${duplicateSerialMatch.site_code} — ${duplicateSerialMatch.site_name}`
+                        : `Duplicate Serial Detected: "${serialInput.trim().toUpperCase()}" has already been received in the system!`}
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '2px' }}>
+                      <strong>Recorded Unit:</strong> {duplicateSerialMatch.part_number} — {duplicateSerialMatch.description} ({duplicateSerialMatch.assignment}) • <strong>Location:</strong> {duplicateSerialMatch.location}
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => openReceiveOverrideModal(duplicateSerialMatch, partNumberInput || duplicateSerialMatch.part_number, serialInput.trim().toUpperCase())}
+                  style={{
+                    background: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+                    border: '1px solid #fbbf24',
+                    color: '#ffffff',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 2px 6px rgba(217, 119, 6, 0.35)'
+                  }}
+                >
+                  <ArrowLeftRight size={13} />
+                  <span>Override &amp; Receive</span>
+                </button>
               </div>
             )}
 
@@ -2349,7 +2531,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             )}
           </div>
 
-          {/* Receive Submit Button Column with Alignment Spacer & Duplicate Guard */}
+          {/* Receive Submit Button Column with Alignment Spacer & Override Action */}
           <div className="receive-btn-col">
             <div
               className="receive-btn-spacer"
@@ -2367,27 +2549,27 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             </div>
             <button
               type="button"
-              disabled={Boolean(duplicateSerialMatch)}
-              className={`btn ${autoReceive && !duplicateSerialMatch ? 'btn-primary' : 'btn-secondary'} btn-lg`}
+              className={`btn ${duplicateSerialMatch ? 'btn-warning' : autoReceive ? 'btn-primary' : 'btn-secondary'} btn-lg`}
               onClick={() => {
-                if (duplicateSerialMatch) return;
+                if (duplicateSerialMatch) {
+                  openReceiveOverrideModal(duplicateSerialMatch, partNumberInput || duplicateSerialMatch.part_number, serialInput.trim().toUpperCase());
+                  return;
+                }
                 executeScan();
               }}
               style={{
                 height: '48px',
                 minWidth: '130px',
                 background: duplicateSerialMatch
-                  ? 'rgba(239, 68, 68, 0.16)'
+                  ? 'linear-gradient(135deg, #d97706 0%, #b45309 100%)'
                   : autoReceive
                   ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)'
                   : '#1e293b',
-                borderColor: duplicateSerialMatch ? '#ef4444' : autoReceive ? '#38bdf8' : '#475569',
-                color: duplicateSerialMatch ? '#f87171' : '#fff',
-                fontWeight: 600,
+                borderColor: duplicateSerialMatch ? '#fbbf24' : autoReceive ? '#38bdf8' : '#475569',
+                color: '#fff',
+                fontWeight: 700,
                 borderRadius: '10px',
-                cursor: duplicateSerialMatch ? 'not-allowed' : 'pointer',
-                opacity: duplicateSerialMatch ? 0.6 : 1,
-                boxShadow: duplicateSerialMatch ? 'none' : undefined,
+                cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -2396,7 +2578,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               }}
               title={
                 duplicateSerialMatch
-                  ? `Duplicate Serial: "${serialInput.trim()}" is already received in the system. Receiving is disabled.`
+                  ? `Previously Shipped / Existing Serial: Click to open Override dialog and receive returned part`
                   : autoReceive
                   ? "Auto-Receive is Active: Press Enter or scan barcode to receive automatically"
                   : "Click to manually confirm and receive part"
@@ -2404,8 +2586,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             >
               {duplicateSerialMatch ? (
                 <>
-                  <Ban size={18} color="#ef4444" />
-                  <span>Receive (Blocked)</span>
+                  <ArrowLeftRight size={18} color="#fff" />
+                  <span>Override</span>
                 </>
               ) : (
                 <>
@@ -2423,13 +2605,39 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             className={`scanner-feedback-box ${
               scanResult.type === 'success' ? 'scanner-feedback-success' : 'scanner-feedback-error'
             }`}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}
           >
-            {scanResult.type === 'success' ? (
-              <CheckCircle2 size={20} color="#10b981" />
-            ) : (
-              <AlertCircle size={20} color="#ef4444" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+              {scanResult.type === 'success' ? (
+                <CheckCircle2 size={20} color="#10b981" style={{ flexShrink: 0 }} />
+              ) : (
+                <AlertCircle size={20} color="#ef4444" style={{ flexShrink: 0 }} />
+              )}
+              <span style={{ fontSize: '14px', fontWeight: 600 }}>{scanResult.message}</span>
+            </div>
+            {scanResult.overrideCandidate && (
+              <button
+                type="button"
+                onClick={() => openReceiveOverrideModal(scanResult.overrideCandidate, partNumberInput || scanResult.overrideCandidate.part_number, scanResult.overrideCandidate.serial_number)}
+                style={{
+                  background: '#d97706',
+                  border: '1px solid #fbbf24',
+                  color: '#ffffff',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <ArrowLeftRight size={14} />
+                <span>Override &amp; Receive</span>
+              </button>
             )}
-            <span style={{ fontSize: '14px', fontWeight: 600 }}>{scanResult.message}</span>
           </div>
         )}
       </div>
@@ -3934,6 +4142,311 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>
               <button className="btn btn-danger" onClick={handleConfirmDeletePart}>Delete Unit</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shipped / Returned Part Override Confirmation Modal */}
+      {overrideModalState && (
+        <div
+          className="modal-backdrop"
+          style={{ zIndex: 9999 }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOverrideModalState(null);
+          }}
+        >
+          <div className="modal-content" style={{ maxWidth: '580px', borderRadius: '14px', overflow: 'hidden', border: '1px solid #f59e0b', boxShadow: '0 20px 50px rgba(0, 0, 0, 0.45)' }}>
+            <div
+              className="modal-header"
+              style={{
+                background: 'linear-gradient(135deg, #78350f 0%, #92400e 50%, #b45309 100%)',
+                borderBottom: '1px solid #f59e0b',
+                padding: '16px 20px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(251, 191, 36, 0.2)', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(251, 191, 36, 0.4)' }}>
+                  <ArrowLeftRight size={20} color="#fbbf24" />
+                </div>
+                <div>
+                  <h3 style={{ color: '#ffffff', fontSize: '16.5px', fontWeight: 800, margin: 0 }}>
+                    {overrideModalState.isShippedToSite
+                      ? 'Part Previously Shipped to Another Site — Override'
+                      : 'Existing System Serial Detected — Override'}
+                  </h3>
+                  <div style={{ fontSize: '11.5px', color: '#fde68a', marginTop: '2px' }}>
+                    Authorized DC Return / Part Transfer &amp; Reassignment Verification
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOverrideModalState(null)}
+                style={{ background: 'transparent', border: 'none', color: '#fde68a', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: '18px 20px', background: '#ffffff', color: '#0f172a' }}>
+              {/* Warning Notice Banner */}
+              <div
+                style={{
+                  background: '#fffbeb',
+                  border: '1px solid #fcd34d',
+                  borderRadius: '8px',
+                  padding: '12px 14px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  fontSize: '12.5px',
+                  color: '#92400e',
+                  lineHeight: 1.45
+                }}
+              >
+                <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0, marginTop: '1px' }} />
+                <div>
+                  <strong>Notice:</strong> This part (S/N <strong className="font-mono">{overrideModalState.serial_number}</strong>) has already been{' '}
+                  {overrideModalState.isShippedToSite ? (
+                    <>
+                      shipped to <strong>{overrideModalState.site_code} — {overrideModalState.site_name}</strong> under Packing List{' '}
+                      <strong className="font-mono">{overrideModalState.manifest_ref}</strong>.
+                    </>
+                  ) : (
+                    <>
+                      recorded in the system under <strong>{overrideModalState.location}</strong>.
+                    </>
+                  )}{' '}
+                  If this unit was returned to the DC for a valid reason, click <strong>&ldquo;Override &amp; Receive Part&rdquo;</strong> below to proceed with receiving and reassignment.
+                </div>
+              </div>
+
+              {/* Relevant Part & Previous Shipment Information Grid */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '14px 16px',
+                  marginBottom: '16px',
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '12px'
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Serial Number (S/N)
+                  </div>
+                  <div className="font-mono" style={{ fontSize: '13.5px', fontWeight: 800, color: '#0369a1', marginTop: '2px' }}>
+                    {overrideModalState.serial_number}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Part Number &amp; Description
+                  </div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    <span className="font-mono" style={{ color: '#0f172a' }}>{overrideModalState.part_number || 'N/A'}</span>
+                    <span style={{ fontWeight: 500, color: '#475569', marginLeft: '6px', fontSize: '12px' }}>
+                      — {overrideModalState.description}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previously Shipped To Site
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#b45309', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Building2 size={13} color="#d97706" />
+                    <span>{overrideModalState.site_code} — {overrideModalState.site_name}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previous Packing List / Ref
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    <span className="font-mono" style={{ background: '#fef3c7', color: '#92400e', padding: '1px 6px', borderRadius: '4px', border: '1px solid #fde68a' }}>
+                      {overrideModalState.manifest_ref || 'Previous Record'}
+                    </span>
+                    {overrideModalState.shipment_date && (
+                      <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 500, marginLeft: '6px' }}>
+                        ({overrideModalState.shipment_date})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Previous Status / Location
+                  </div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginTop: '2px' }}>
+                    {overrideModalState.location}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    New Receiving Site
+                  </div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#047857', marginTop: '2px' }}>
+                    ✓ {activeReceivingSite.code} — {activeReceivingSite.name}
+                  </div>
+                </div>
+              </div>
+
+              {/* Editable Part Number (if blank) + Part Assignment Tag */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Apple Part Number (P/N):
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input font-mono"
+                    value={overrideModalState.part_number}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const resolved = resolvePartInfo(val, parts);
+                      setOverrideModalState(prev => ({
+                        ...prev,
+                        part_number: val,
+                        description: resolved ? resolved.description : prev.description
+                      }));
+                    }}
+                    placeholder="e.g. 661-44732"
+                    style={{ width: '100%', fontSize: '12.5px', height: '36px' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                    Reassign Part Tag:
+                  </label>
+                  <select
+                    className="form-select"
+                    value={overrideAssignmentTag}
+                    onChange={(e) => setOverrideAssignmentTag(e.target.value)}
+                    style={{ width: '100%', fontSize: '12.5px', height: '36px', fontWeight: 600 }}
+                  >
+                    <option value="Transfer Parts">Transfer Parts</option>
+                    <option value="MDC - Forecasting">MDC - Forecasting</option>
+                    <option value="DC - CRBR">DC - CRBR</option>
+                    <option value="SVNR - Service Non-Repair">SVNR</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Override Reason Selection & Input */}
+              <div>
+                <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                  Authorized Return / Override Reason:
+                </label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  {[
+                    `Returned to DC from ${overrideModalState.site_code || 'Site'} — Valid Return / Reassignment`,
+                    'Transfer Parts Between Sites',
+                    'Unused / Excess Branch Stock Returned to DC',
+                    'Cancelled Repair / KGB Return to DC'
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setOverrideReason(preset)}
+                      style={{
+                        fontSize: '11px',
+                        padding: '4px 9px',
+                        borderRadius: '14px',
+                        border: overrideReason === preset ? '1px solid #d97706' : '1px solid #cbd5e1',
+                        background: overrideReason === preset ? '#fef3c7' : '#f8fafc',
+                        color: overrideReason === preset ? '#92400e' : '#475569',
+                        fontWeight: overrideReason === preset ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="Enter reason for override / return to DC..."
+                  style={{ width: '100%', fontSize: '12.5px', height: '36px' }}
+                />
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                background: '#f8fafc',
+                borderTop: '1px solid #e2e8f0',
+                padding: '12px 20px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <span style={{ fontSize: '11.5px', color: '#64748b' }}>
+                Authorized by: <strong style={{ color: '#0f172a' }}>{currentUser?.fullName || 'Warehouse Staff'}</strong>
+              </span>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setOverrideModalState(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    background: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+                    border: '1px solid #f59e0b',
+                    color: '#ffffff',
+                    fontWeight: 800,
+                    padding: '8px 18px',
+                    borderRadius: '8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '7px',
+                    cursor: 'pointer',
+                    boxShadow: '0 3px 10px rgba(217, 119, 6, 0.3)'
+                  }}
+                  onClick={() => {
+                    const targetPn = (overrideModalState.part_number || partNumberInput || '').trim();
+                    const targetSn = (overrideModalState.serial_number || serialInput || '').trim();
+                    if (!targetPn) {
+                      showToast('Please enter a valid Apple Part Number (e.g. 661-xxxxx) before overriding.', 'error');
+                      return;
+                    }
+                    setPartNumberInput(targetPn);
+                    setIntakeAssignment(overrideAssignmentTag);
+                    intakeAssignmentRef.current = overrideAssignmentTag;
+                    executeScan(targetPn, targetSn, {
+                      allowOverride: true,
+                      overrideReason: overrideReason.trim() || 'Returned to DC — Authorized Override',
+                      overrideAssignment: overrideAssignmentTag,
+                      previousManifestRef: overrideModalState.manifest_ref,
+                      previousSiteCode: overrideModalState.site_code
+                    });
+                  }}
+                >
+                  <ArrowLeftRight size={15} />
+                  <span>Override &amp; Receive Part</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

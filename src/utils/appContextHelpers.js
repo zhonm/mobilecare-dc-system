@@ -2176,13 +2176,19 @@ export function isDraftSupersededOrFulfilled(draft, allShipments = [], sitesList
   if (completedShipments.length === 0) return false;
 
   // Check 1: Serial number overlap
-  if (draftItems.length > 0) {
-    const draftSerials = draftItems
+  // Overridden / returned units reassigned to a new packing list must NEVER trigger false superseding!
+  const nonOverrideDraftItems = draftItems.filter(it => !it.is_override_transfer);
+  if (nonOverrideDraftItems.length > 0) {
+    const draftSerials = nonOverrideDraftItems
       .map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase())
       .filter(Boolean);
 
     if (draftSerials.length > 0) {
       for (const comp of completedShipments) {
+        // Site MUST match: a draft for one site can NEVER be superseded by a completed shipment to a different site
+        const sitesMatch = areShipmentSitesEquivalent(draft, comp, effectiveSites);
+        if (!sitesMatch) continue;
+
         const compItems = Array.isArray(comp.items) ? comp.items : (Array.isArray(comp.shipment_items) ? comp.shipment_items : []);
         if (compItems.length === 0) continue;
 
