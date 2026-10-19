@@ -133,6 +133,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         const targetStatus = isReceived ? 'in_stock' : (isShipped ? 'shipped' : 'packed');
         const shipDateStr = sh.shipment_date || sh.created_at || new Date().toISOString();
         const recvDateStr = sh.received_at || sh.received_date || shipDateStr;
+        const shEventTime = sh.received_at || sh.received_date || sh.updated_at || sh.created_at || sh.shipment_date || null;
         const receiverName = sh.received_by_name || sh.receiving_signature || 'Branch Staff';
 
         sh.items.forEach(it => {
@@ -146,6 +147,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
               shipped_at: shipDateStr,
               received_at: isReceived ? recvDateStr : null,
               received_by: isReceived ? receiverName : null,
+              event_time: shEventTime,
               isDraft: false,
               part_number: it.part_number,
               description: it.description,
@@ -192,6 +194,22 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
     seenSerials.add(s);
     const packInfo = packedSerialsMap.get(s);
     if (packInfo) {
+      const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
+      const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+      const isUnitAtDc = uSiteId === 'site-dc' || uSiteCode === 'DC-MDC' || uSiteCode === 'DC' || (!uSiteId && !uSiteCode);
+      const uReceiveTimeMs = Math.max(
+        u.received_at ? new Date(u.received_at).getTime() : 0,
+        u.updated_at ? new Date(u.updated_at).getTime() : 0
+      );
+      const packEventTimeMs = Math.max(
+        packInfo.event_time ? new Date(packInfo.event_time).getTime() : 0,
+        packInfo.received_at ? new Date(packInfo.received_at).getTime() : 0,
+        packInfo.shipped_at ? new Date(packInfo.shipped_at).getTime() : 0
+      );
+      if (u.status === 'in_stock' && isUnitAtDc && uReceiveTimeMs > 0 && packEventTimeMs > 0 && uReceiveTimeMs > packEventTimeMs) {
+        return u;
+      }
+
       // Terminal lifecycle protection: If a unit is already used, outtake, or transferred,
       // a historical received shipment must NOT downgrade its status back to in_stock!
       const isTerminalLifecycle = u.status === 'used' || u.status === 'outtake' || u.status === 'transferred' || Boolean(u.used_at) || Boolean(u.outtake_at) || Boolean(u.transferred_at);

@@ -392,14 +392,16 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const dropdownRef = useRef(null);
   const isScanningRef = useRef(false);
   const sessionSerialsSetRef = useRef(new Set());
+  const lastSuccessScanRef = useRef({ serial: '', timestamp: 0 });
 
   // Keep synchronous deduplication set in sync with session scans
   useEffect(() => {
-    const set = sessionSerialsSetRef.current;
+    const nextSet = new Set();
     (sessionScans || []).forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
-      if (s) set.add(s);
+      if (s) nextSet.add(s);
     });
+    sessionSerialsSetRef.current = nextSet;
   }, [sessionScans]);
 
   // Auto-focus Part Number input on mount
@@ -452,7 +454,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Fast lookup map for serial numbers already present in the active site (Session, Inventory, Batch Archives)
   const systemSerialsMap = useMemo(() => {
     const map = new Map();
-    const isDcMode = activeReceivingSite.id === 'site-dc' ||
+    const isDcMode = Boolean(activeReceivingSite?.is_dc) ||
+      activeReceivingSite.id === 'site-dc' ||
       activeReceivingSite.code === 'DC-MDC' ||
       activeReceivingSite.code === 'DC' ||
       activeReceivingSite.id === dcSiteObj?.id ||
@@ -460,6 +463,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // 1. Current Session Scans (highest priority / most immediate)
     (sessionScans || []).forEach((u, idx) => {
+      if (!u || u.is_deleted || u.status === 'deleted') return;
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s && !map.has(s)) {
         map.set(s, {
@@ -475,6 +479,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // 2. Active Site Inventory Units (Strict Site Isolation)
     (inventoryUnits || []).forEach(u => {
+      if (!u || u.is_deleted || u.status === 'deleted') return;
       const unitIsDc = u.current_site_id === 'site-dc' ||
         u.current_site_id === dcSiteObj?.id ||
         u.current_site_id === activeReceivingSite?.id ||
@@ -485,6 +490,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         (!u.current_site_id && !u.site_code);
       const isSiteMatch = isDcMode ? unitIsDc : (u.current_site_id === activeReceivingSite.id || u.site_code === activeReceivingSite.code);
       if (!isSiteMatch) return; // Completely ignore other sites to avoid false cross-site conflicts
+
+      if (isDcMode) {
+        const recvDate = (u.received_at || '').substring(0, 10);
+        if (recvDate && recvDate < '2026-09-01') return;
+        if (u.is_generated || String(u.id || '').startsWith('unit-mdc') || (recvDate === '2026-09-01' && u.po_number)) return;
+      }
 
       // Only check active units that are currently in stock, allocated, or packed
       if (u.status !== 'in_stock' && u.status !== 'allocated' && u.status !== 'packed' && u.status) return;
@@ -509,6 +520,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const duplicateSerialMatch = useMemo(() => {
     const clean = String(serialInput || '').trim().toUpperCase();
     if (!clean || clean.length < 4) return null;
+    if (lastSuccessScanRef.current.serial === clean && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+      return null;
+    }
     return systemSerialsMap.get(clean) || null;
   }, [serialInput, systemSerialsMap]);
 
@@ -602,6 +616,9 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       const rawSn = (overrideSn !== null ? overrideSn : (domSn || serialInput)).trim();
 
       if (!rawSn) {
+        if ((Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+          return true;
+        }
         barcodeAudio.playError();
         setScanResult({
           type: 'error',
@@ -613,6 +630,12 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
       // 1. Immediate Duplicate Detection: Check if serial is already in the system (Session, Inventory, Batches, Shipments)
       const cleanSN = rawSn.toUpperCase();
+      if (lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+        if (serialInputRef.current) serialInputRef.current.value = '';
+        setSerialInput('');
+        return true;
+      }
+
       const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
       const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
         part_number: rawPn,
@@ -678,6 +701,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       if (res.success) {
         barcodeAudio.playSuccess();
         sessionSerialsSetRef.current.add(snToUse);
+        lastSuccessScanRef.current = { serial: snToUse.toUpperCase(), timestamp: Date.now() };
         let poDetail;
         const matchedPo = res.matchedPo;
         if (matchedPo) {
@@ -694,7 +718,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
           type: 'success',
           message: `[RECEIVED ${currentAssignment}] ${res.unit.part_number} — ${res.unit.description} (SN: ${res.unit.serial_number})${poDetail}`
         });
-        setSessionScans(prev => [res.unit, ...prev]);
+        setSessionScans(prev => [res.unit, ...prev.filter(u => String(u.serial_number || '').trim().toUpperCase() !== snToUse.toUpperCase())]);
         setShowPnDropdown(false);
         
         // Immediately and synchronously clear DOM input and state
@@ -793,6 +817,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // Immediate Duplicate Alert: If entered value matches an existing serial in the system (even if Part Number is empty!), warn user immediately
     const cleanSN = cleanSerial.toUpperCase();
+    if (cleanSN && lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+      if (serialInputRef.current) serialInputRef.current.value = '';
+      setSerialInput('');
+      return;
+    }
     const isLocalDup = sessionSerialsSetRef.current.has(cleanSN);
     const dup = systemSerialsMap.get(cleanSN) || (isLocalDup ? {
       part_number: cleanPn,
@@ -898,6 +927,14 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       }
       const domSn = (serialInputRef.current?.value || serialInput).trim();
       const cleanSN = domSn.toUpperCase();
+      if (!cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+        return;
+      }
+      if (cleanSN && lastSuccessScanRef.current.serial === cleanSN && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+        if (serialInputRef.current) serialInputRef.current.value = '';
+        setSerialInput('');
+        return;
+      }
       if (duplicateSerialMatch || sessionSerialsSetRef.current.has(cleanSN)) {
         barcodeAudio.playError();
         serialInputRef.current?.focus();
@@ -912,6 +949,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         setSerialInput(combined.sn);
         setShowPnDropdown(false);
         const cleanCombinedSn = String(combined.sn || '').trim().toUpperCase();
+        if (cleanCombinedSn && lastSuccessScanRef.current.serial === cleanCombinedSn && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
+          if (serialInputRef.current) serialInputRef.current.value = '';
+          setSerialInput('');
+          return;
+        }
         if (cleanCombinedSn && (systemSerialsMap.get(cleanCombinedSn) || sessionSerialsSetRef.current.has(cleanCombinedSn))) {
           barcodeAudio.playError();
           setTimeout(() => {
@@ -1140,14 +1182,14 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Serials that are currently in an active packing list draft or saved/dispatched shipments
   const packedSerialsSet = useMemo(() => {
     const set = new Set();
-    if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+    if (activePackDraft?.items && Array.isArray(activePackDraft.items) && activePackDraft.status !== 'cancelled') {
       activePackDraft.items.forEach(it => {
         const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
         if (s) set.add(s);
       });
     }
     (shipments || []).forEach(sh => {
-      if (sh.items && Array.isArray(sh.items)) {
+      if (sh && sh.status !== 'cancelled' && sh.items && Array.isArray(sh.items)) {
         sh.items.forEach(it => {
           const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
           if (s) set.add(s);
@@ -1160,7 +1202,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   // Filter for currently available IN-STOCK units in DC or Branch (normalized to ensure Apple P/N and exclude mislabeled/packed units)
   const availableInStockUnits = useMemo(() => {
     // For Central DC Warehouse mode, use canonical shared filter for 100% system-wide parity
-    if (!isPmgUser && (!activeReceivingSite || activeReceivingSite?.code === 'DC-MDC' || activeReceivingSite?.id === 'site-dc')) {
+    if (!isPmgUser && (!activeReceivingSite || activeReceivingSite?.is_dc || activeReceivingSite?.code === 'DC-MDC' || activeReceivingSite?.code === 'DC' || activeReceivingSite?.id === 'site-dc')) {
       const rawDc = filterAvailableDcInStockUnits({
         inventoryUnits,
         activePackDraft,
@@ -1173,6 +1215,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     // 1. Combine inventoryUnits with sessionScans for branch receiving
     const serialMap = new Map();
+    const sessionSet = new Set();
     (inventoryUnits || []).forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s) serialMap.set(s, u);
@@ -1180,6 +1223,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     (sessionScans || []).forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s) {
+        sessionSet.add(s);
         const existing = serialMap.get(s);
         serialMap.set(s, { ...existing, ...u });
       }
@@ -1188,7 +1232,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
 
     const raw = pool.filter(u => {
       const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
-      if (cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
+      const isInSession = cleanSerial && sessionSet.has(cleanSerial);
+      if (!isInSession && cleanSerial && packedSerialsSet.has(cleanSerial)) return false;
       if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated' || u.status === 'deleted' || u.is_deleted) return false;
       if (u.status !== 'in_stock' && u.status) return false;
 

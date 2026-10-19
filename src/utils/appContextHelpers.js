@@ -160,7 +160,11 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
           const saved = localStorage.getItem(key);
           if (saved) {
             const d = JSON.parse(saved);
-            if (d && Array.isArray(d.items) && d.status !== 'shipped' && d.status !== 'delivered') {
+            if (d && Array.isArray(d.items) && d.status !== 'shipped' && d.status !== 'delivered' && d.status !== 'cancelled') {
+              if (explicitDraft && d.id && d.id === explicitDraft.id) {
+                continue;
+              }
+              const draftEventTime = d.updated_at || d.created_at || d.shipment_date || null;
               d.items.forEach(it => {
                 const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
                 if (s) {
@@ -168,7 +172,8 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
                     status: 'packed',
                     box_number: it.box_number || 1,
                     current_site_id: d.site_id || 'site-dc',
-                    shipped_at: d.shipment_date || new Date().toISOString(),
+                    shipped_at: draftEventTime,
+                    event_time: draftEventTime,
                     isDraft: true
                   });
                 }
@@ -222,6 +227,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
         const targetStatus = isReceived ? 'in_stock' : (isShipped ? 'shipped' : 'packed');
         const shipDateStr = sh.shipment_date || sh.created_at || new Date().toISOString();
         const recvDateStr = sh.received_at || sh.received_date || shipDateStr;
+        const shEventTime = sh.received_at || sh.received_date || sh.updated_at || sh.created_at || sh.shipment_date || null;
         const receiverName = sh.received_by_name || sh.receiving_signature || 'Branch Staff';
 
         sh.items.forEach(it => {
@@ -235,6 +241,7 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
               shipped_at: shipDateStr,
               received_at: isReceived ? recvDateStr : null,
               received_by: isReceived ? receiverName : null,
+              event_time: shEventTime,
               isDraft: false,
               part_number: it.part_number,
               description: it.description,
@@ -306,28 +313,57 @@ export function reconcileUnitsWithPackedDrafts(units = [], shipmentsList = [], e
     const usedInfo = usedSerialsMap.get(s);
 
     if (usedInfo) {
-      // Guaranteed terminal used status
-      return {
-        ...u,
-        ...(packInfo ? {
-          box_number: packInfo.box_number || u.box_number || 1,
-          current_site_id: packInfo.current_site_id || u.current_site_id,
-          site_code: packInfo.site_code || u.site_code,
-          shipped_at: packInfo.shipped_at || u.shipped_at,
-          received_at: packInfo.received_at || u.received_at,
-          received_by: packInfo.received_by || u.received_by
-        } : {}),
-        status: 'used',
-        work_order_number: usedInfo.work_order_number || u.work_order_number || null,
-        usage_notes: usedInfo.usage_notes || u.usage_notes || null,
-        used_at: usedInfo.used_at || u.used_at || new Date().toISOString(),
-        dateUsed: usedInfo.date_used || (usedInfo.used_at ? String(usedInfo.used_at).substring(0, 10) : (u.dateUsed || null)),
-        used_by_name: usedInfo.used_by || usedInfo.used_by_name || u.used_by_name || null,
-        notes: u.notes || usedInfo.usage_notes || 'Used in Repair'
-      };
+      // If unit was newly scanned into DC in_stock AFTER the used_at timestamp, preserve the new DC intake
+      const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
+      const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+      const isUnitAtDc = uSiteId === 'site-dc' || uSiteCode === 'DC-MDC' || uSiteCode === 'DC' || (!uSiteId && !uSiteCode);
+      const uReceiveTimeMs = Math.max(
+        u.received_at ? new Date(u.received_at).getTime() : 0,
+        u.updated_at ? new Date(u.updated_at).getTime() : 0
+      );
+      const usedTimeMs = usedInfo.used_at ? new Date(usedInfo.used_at).getTime() : 0;
+      if (!(u.status === 'in_stock' && isUnitAtDc && uReceiveTimeMs > 0 && usedTimeMs > 0 && uReceiveTimeMs > usedTimeMs)) {
+        // Guaranteed terminal used status
+        return {
+          ...u,
+          ...(packInfo ? {
+            box_number: packInfo.box_number || u.box_number || 1,
+            current_site_id: packInfo.current_site_id || u.current_site_id,
+            site_code: packInfo.site_code || u.site_code,
+            shipped_at: packInfo.shipped_at || u.shipped_at,
+            received_at: packInfo.received_at || u.received_at,
+            received_by: packInfo.received_by || u.received_by
+          } : {}),
+          status: 'used',
+          work_order_number: usedInfo.work_order_number || u.work_order_number || null,
+          usage_notes: usedInfo.usage_notes || u.usage_notes || null,
+          used_at: usedInfo.used_at || u.used_at || new Date().toISOString(),
+          dateUsed: usedInfo.date_used || (usedInfo.used_at ? String(usedInfo.used_at).substring(0, 10) : (u.dateUsed || null)),
+          used_by_name: usedInfo.used_by || usedInfo.used_by_name || u.used_by_name || null,
+          notes: u.notes || usedInfo.usage_notes || 'Used in Repair'
+        };
+      }
     }
 
     if (packInfo) {
+      // Guard: If unit is currently in_stock at DC and was received/updated AFTER the historical shipment/draft,
+      // do NOT overwrite the newly received DC unit with the older shipment!
+      const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
+      const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
+      const isUnitAtDc = uSiteId === 'site-dc' || uSiteCode === 'DC-MDC' || uSiteCode === 'DC' || (!uSiteId && !uSiteCode);
+      const uReceiveTimeMs = Math.max(
+        u.received_at ? new Date(u.received_at).getTime() : 0,
+        u.updated_at ? new Date(u.updated_at).getTime() : 0
+      );
+      const packEventTimeMs = Math.max(
+        packInfo.event_time ? new Date(packInfo.event_time).getTime() : 0,
+        packInfo.received_at ? new Date(packInfo.received_at).getTime() : 0,
+        packInfo.shipped_at ? new Date(packInfo.shipped_at).getTime() : 0
+      );
+      if (u.status === 'in_stock' && isUnitAtDc && uReceiveTimeMs > 0 && packEventTimeMs > 0 && uReceiveTimeMs > packEventTimeMs) {
+        return u;
+      }
+
       // Terminal lifecycle protection: If a unit is already used, outtake, or transferred,
       // a historical received shipment must NOT downgrade its status back to in_stock!
       const isTerminalLifecycle = u.status === 'used' || u.status === 'outtake' || u.status === 'transferred' || Boolean(u.used_at) || Boolean(u.outtake_at) || Boolean(u.transferred_at);
@@ -1735,14 +1771,24 @@ export function filterAvailableDcInStockUnits({
   sessionScans = null,
   sites = []
 } = {}) {
-  // 1. Serials that are currently in an active packing list draft or saved/dispatched shipments
-  const packedSerialsSet = new Set();
+  // 1. Track serials in active packing drafts and finalized shipments with their event timestamps
+  const packedSerialsTimeMap = new Map();
+
+  const recordPackedSerial = (serial, eventTimeStr) => {
+    const s = String(serial || '').trim().toUpperCase();
+    if (!s) return;
+    const tMs = eventTimeStr ? (new Date(eventTimeStr).getTime() || 0) : 0;
+    const prevMs = packedSerialsTimeMap.get(s);
+    if (prevMs === undefined || tMs > prevMs) {
+      packedSerialsTimeMap.set(s, tMs);
+    }
+  };
 
   // 1a. Items in active packing draft state
-  if (activePackDraft?.items && Array.isArray(activePackDraft.items)) {
+  if (activePackDraft?.items && Array.isArray(activePackDraft.items) && activePackDraft.status !== 'cancelled') {
+    const draftTime = activePackDraft.updated_at || activePackDraft.created_at || activePackDraft.shipment_date || null;
     activePackDraft.items.forEach(it => {
-      const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-      if (s) packedSerialsSet.add(s);
+      recordPackedSerial(it.serial_number || it.serialNumber || it.serial, it.scanned_at || it.updated_at || draftTime);
     });
   }
 
@@ -1751,10 +1797,10 @@ export function filterAvailableDcInStockUnits({
     try {
       if (!activePackDraft) {
         const localDraft = JSON.parse(localStorage.getItem('mdc_active_pack_draft') || 'null');
-        if (localDraft?.items && Array.isArray(localDraft.items)) {
+        if (localDraft?.items && Array.isArray(localDraft.items) && localDraft.status !== 'shipped' && localDraft.status !== 'delivered' && localDraft.status !== 'cancelled') {
+          const draftTime = localDraft.updated_at || localDraft.created_at || localDraft.shipment_date || null;
           localDraft.items.forEach(it => {
-            const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-            if (s) packedSerialsSet.add(s);
+            recordPackedSerial(it.serial_number || it.serialNumber || it.serial, it.scanned_at || it.updated_at || draftTime);
           });
         }
       }
@@ -1768,10 +1814,10 @@ export function filterAvailableDcInStockUnits({
             if (activePackDraft && d?.id === activePackDraft.id) {
               continue;
             }
-            if (d?.items && Array.isArray(d.items)) {
+            if (d?.items && Array.isArray(d.items) && d.status !== 'shipped' && d.status !== 'delivered' && d.status !== 'cancelled') {
+              const draftTime = d.updated_at || d.created_at || d.shipment_date || null;
               d.items.forEach(it => {
-                const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-                if (s) packedSerialsSet.add(s);
+                recordPackedSerial(it.serial_number || it.serialNumber || it.serial, it.scanned_at || it.updated_at || draftTime);
               });
             }
           }
@@ -1786,14 +1832,15 @@ export function filterAvailableDcInStockUnits({
       if (activePackDraft && sh.id === activePackDraft.id) {
         return;
       }
+      const shEventTime = sh.received_at || sh.received_date || sh.updated_at || sh.created_at || sh.shipment_date || null;
       sh.items.forEach(it => {
-        const s = String(it.serial_number || it.serialNumber || it.serial || '').trim().toUpperCase();
-        if (s) packedSerialsSet.add(s);
+        recordPackedSerial(it.serial_number || it.serialNumber || it.serial, shEventTime);
       });
     }
   });
 
   // 2. Unit pooling: overlay sessionScans if provided (for zero-latency scan-in updates)
+  const sessionSerialsSet = new Set();
   let pool = inventoryUnits || [];
   if (sessionScans && Array.isArray(sessionScans) && sessionScans.length > 0) {
     const serialMap = new Map();
@@ -1804,8 +1851,14 @@ export function filterAvailableDcInStockUnits({
     sessionScans.forEach(u => {
       const s = String(u.serial_number || '').trim().toUpperCase();
       if (s) {
+        sessionSerialsSet.add(s);
         const existing = serialMap.get(s);
-        serialMap.set(s, { ...existing, ...u });
+        serialMap.set(s, {
+          ...existing,
+          ...u,
+          is_deleted: false,
+          status: (u.status && u.status !== 'deleted') ? u.status : 'in_stock'
+        });
       }
     });
     pool = Array.from(serialMap.values());
@@ -1816,15 +1869,25 @@ export function filterAvailableDcInStockUnits({
     const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
     if (!cleanSerial) return false;
 
-    // Exclude items in active packing draft or shipments
-    if (packedSerialsSet.has(cleanSerial)) return false;
-
     // Exclude items marked with deleted status
     if (u.is_deleted || u.status === 'deleted') return false;
 
     // Exclude items marked with status packed, shipped, dispatched, or allocated
     if (u.status === 'packed' || u.status === 'shipped' || u.status === 'dispatched' || u.status === 'allocated') return false;
     if (u.status !== 'in_stock' && u.status) return false;
+
+    // Exclude items in active packing draft or shipments UNLESS the unit was scanned in the current receiving session
+    // or newly received into DC warehouse after that historical shipment/draft
+    if (packedSerialsTimeMap.has(cleanSerial) && !sessionSerialsSet.has(cleanSerial)) {
+      const packEventMs = packedSerialsTimeMap.get(cleanSerial) || 0;
+      const uReceiveMs = Math.max(
+        u.received_at ? new Date(u.received_at).getTime() : 0,
+        u.updated_at ? new Date(u.updated_at).getTime() : 0
+      );
+      if (!(uReceiveMs > 0 && packEventMs > 0 && uReceiveMs > packEventMs)) {
+        return false;
+      }
+    }
 
     // Must be physically in DC warehouse (strictly exclude branch stock)
     const isDc = u.current_site_id === 'site-dc' || 

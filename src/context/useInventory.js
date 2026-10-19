@@ -55,15 +55,7 @@ export function useInventory({
       const parsed = readInventoryFromLocalStorage();
       let baseUnits = [];
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // If parsed has fewer than 100 units, but cloud records exist (system has thousands of units),
-        // do NOT initialize with truncated partial 29 units as it flashes misleading 0 used parts!
-        const hasCloudRecord = Boolean(
-          localStorage.getItem('mdc_live_inventory_updated_at') ||
-          localStorage.getItem('mdc_masterlist_data')
-        );
-        if (!(parsed.length < 100 && hasCloudRecord)) {
-          baseUnits = parsed;
-        }
+        baseUnits = parsed;
       }
 
       // Filter out deleted serials and pre-September DC stock units (delivered to sites prior to September)
@@ -87,7 +79,7 @@ export function useInventory({
     try {
       if (isExplicitlyCleared()) return true;
       const parsed = readInventoryFromLocalStorage();
-      if (Array.isArray(parsed) && parsed.length >= 100) return true;
+      if (Array.isArray(parsed) && parsed.length > 0) return true;
     } catch (e) {}
     return false;
   });
@@ -510,9 +502,181 @@ export function useInventory({
 
   const saveUnitsToSupabase = async (units, options = {}) => {
     if (!supabase || !units || units.length === 0) return;
-    await unmarkDeletedSerials(units.map(u => u.serial_number), { immediate: Boolean(options.immediate) });
+    // Start unmarkDeletedSerials immediately (its localStorage cleanup runs synchronously on first tick)
+    const unmarkPromise = unmarkDeletedSerials(units.map(u => u.serial_number), { immediate: Boolean(options.immediate) });
     if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+
+    const resolveUnitAssignment = (u) => {
+      const raw = u?.intake_assignment || u?.notes || '';
+      const upper = String(raw).toUpperCase();
+      if (upper.includes('TRANSFER PARTS') || upper === 'TRANSFER') return 'Transfer Parts';
+      if (upper.includes('SVNR') || upper.includes('NON-REPAIR') || upper.includes('NON REPAIR')) return 'SVNR - Service Non-Repair';
+      if (upper.includes('CRBR')) return 'DC - CRBR';
+      return u?.intake_assignment || 'MDC - Forecasting';
+    };
+
     try {
+      // STEP 1: Immediately merge and persist to local storage + IndexedDB + live_master_dc_inventory snapshot
+      // BEFORE running multi-step table queries so a quick page refresh never loses newly scanned parts!
+      try {
+        let currentInv = [];
+        try {
+          currentInv = readInventoryFromLocalStorage();
+        } catch (e) {}
+        if ((!Array.isArray(currentInv) || currentInv.length === 0) && Array.isArray(inventoryUnits) && inventoryUnits.length > 0) {
+          currentInv = inventoryUnits;
+        }
+        if (!Array.isArray(currentInv) || currentInv.length === 0) {
+          try {
+            const idbInv = await dbStorage.getItem('mdc_inventory');
+            if (Array.isArray(idbInv) && idbInv.length > 0) currentInv = idbInv;
+          } catch (e) {}
+        }
+        if (options.replaceExistingBranchStock) {
+          // If replacing branch stock (clean slate import), preserve DC units while replacing branch units
+          const isDc = (item) => {
+            const sId = String(item.current_site_id || '').toLowerCase();
+            const sCode = String(item.site_code || '').toUpperCase();
+            return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
+          };
+          currentInv = (currentInv || []).filter(isDc);
+        }
+        const mergedMap = new Map();
+        currentInv.forEach(u => {
+          const s = String(u.serial_number || '').toUpperCase();
+          if (s) mergedMap.set(s, u);
+        });
+        const nowIso = new Date().toISOString();
+        units.forEach(u => {
+          const s = String(u.serial_number || '').toUpperCase();
+          if (s) {
+            const assign = resolveUnitAssignment(u);
+            const prevEntry = mergedMap.get(s) || {};
+            mergedMap.set(s, {
+              ...prevEntry,
+              ...u,
+              id: u.id || prevEntry.id || `unit-${u.serial_number}`,
+              part_id: u.part_id || prevEntry.part_id || `part-${u.part_number}`,
+              part_number: u.part_number,
+              description: u.description || prevEntry.description || 'Service Replacement Part',
+              serial_number: u.serial_number,
+              intake_assignment: assign,
+              notes: assign,
+              current_site_id: u.current_site_id || prevEntry.current_site_id || 'site-dc',
+              site_code: u.site_code || prevEntry.site_code || 'DC-MDC',
+              site_name: u.site_name || prevEntry.site_name || null,
+              status: u.status || prevEntry.status || 'in_stock',
+              is_deleted: false,
+              work_order_number: u.work_order_number || prevEntry.work_order_number || null,
+              usage_notes: u.usage_notes || prevEntry.usage_notes || null,
+              used_at: u.used_at || prevEntry.used_at || null,
+              outtake_at: u.outtake_at || prevEntry.outtake_at || null,
+              outtake_reason: u.outtake_reason || prevEntry.outtake_reason || null,
+              transferred_at: u.transferred_at || prevEntry.transferred_at || null,
+              transfer_slip_number: u.transfer_slip_number || prevEntry.transfer_slip_number || null,
+              transferred_to_site_code: u.transferred_to_site_code || prevEntry.transferred_to_site_code || null,
+              box_number: u.box_number || prevEntry.box_number || 1,
+              received_at: u.received_at || prevEntry.received_at || nowIso,
+              received_by: u.received_by || prevEntry.received_by || currentUser?.fullName || 'Warehouse Staff',
+              received_by_id: u.received_by_id || prevEntry.received_by_id || currentUser?.id || null,
+              added_by_user_id: u.added_by_user_id || prevEntry.added_by_user_id || currentUser?.id || null,
+              shipped_at: u.shipped_at || prevEntry.shipped_at || null,
+              stocking_price: u.stocking_price || prevEntry.stocking_price || 99,
+              updated_at: u.updated_at || nowIso
+            });
+          }
+        });
+        const allPoolUnits = Array.from(mergedMap.values());
+
+        saveInventoryToLocalStorage(allPoolUnits);
+        dbStorage.setItem('mdc_inventory', allPoolUnits);
+        try {
+          localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+          localStorage.setItem('mdc_last_inventory_write_time', String(Date.now()));
+        } catch (e) {}
+        dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+
+        if (options.immediate) {
+          await Promise.all([
+            unmarkPromise,
+            supabase.from('saved_records').upsert({
+              id: 'live_master_dc_inventory',
+              record_type: 'inventory_master',
+              period_label: 'Live Master DC Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master In-Stock inventory pool across all accounts',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: { units: allPoolUnits },
+              updated_at: nowIso
+            }, { onConflict: 'id' })
+          ]);
+        } else {
+          await unmarkPromise;
+          await queuedSavedRecordsUpsert({
+            id: 'live_master_dc_inventory',
+            record_type: 'inventory_master',
+            period_label: 'Live Master DC Inventory',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            period_week: 1,
+            notes: 'Master In-Stock inventory pool across all accounts',
+            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+            snapshot_data: {
+              units: allPoolUnits
+            },
+            updated_at: nowIso
+          }, { debounceMs: 800, immediate: false });
+        }
+
+        // Synchronize dedicated retail branch inventory registry for PMG Users & multi-site tracking
+        const isDcUnit = (item) => {
+          const sId = String(item.current_site_id || item.site_id || item.siteId || '').toLowerCase();
+          const sCode = String(item.site_code || item.siteCode || '').toUpperCase();
+          return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || (!sId && !sCode && item.is_dc);
+        };
+        const branchUnitsList = allPoolUnits.filter(item => !isDcUnit(item));
+        if (branchUnitsList.length > 0) {
+          dbStorage.setItem('mdc_branch_inventory_units', branchUnitsList);
+          try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
+          dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
+
+          if (options.immediate) {
+            await supabase.from('saved_records').upsert({
+              id: 'master_branch_inventory_registry',
+              record_type: 'branch_inventory',
+              period_label: 'Master Retail Branch Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: { units: branchUnitsList },
+              updated_at: nowIso
+            }, { onConflict: 'id' });
+          } else {
+            await queuedSavedRecordsUpsert({
+              id: 'master_branch_inventory_registry',
+              record_type: 'branch_inventory',
+              period_label: 'Master Retail Branch Inventory',
+              period_year: new Date().getFullYear(),
+              period_month: new Date().getMonth() + 1,
+              period_week: 1,
+              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
+              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+              snapshot_data: {
+                units: branchUnitsList
+              },
+              updated_at: nowIso
+            }, { debounceMs: 800, immediate: false });
+          }
+        }
+      } catch (poolErr) {
+        console.warn('live_master_dc_inventory sync note:', poolErr.message);
+      }
+
+      // STEP 2: Synchronize normalized rows to public.inventory_units
       const { data: dbCats } = await supabase.from('part_categories').select('id, code');
       const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
       const defaultCatId = dbCats?.[0]?.id || null;
@@ -531,6 +695,7 @@ export function useInventory({
 
       const { data: existingParts } = await supabase.from('parts').select('id, part_number').limit(10000);
       const pMap = new Map((existingParts || []).map(p => [p.part_number.toUpperCase(), p.id]));
+      const fallbackDbPartId = existingParts?.[0]?.id || null;
 
       // Batch create any missing parts in a single query
       const missingPartsMap = new Map();
@@ -571,7 +736,7 @@ export function useInventory({
         const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
         if (!cleanPN || !cleanSerial) continue;
 
-        const pId = pMap.get(cleanPN);
+        const pId = pMap.get(cleanPN) || (isUUID(u.part_id) ? u.part_id : fallbackDbPartId);
 
         // Resolve Target Site UUID: match against Supabase sites by ID, code, or name
         const unitSiteKey = String(u.current_site_id || u.site_id || u.targetSiteId || '').trim();
@@ -588,9 +753,12 @@ export function useInventory({
         const targetSiteId = matchedSite?.id || (isUUID(unitSiteKey) ? unitSiteKey : (isBranchUnit ? (siteList.find(s => !s.is_dc)?.id || dcSiteId) : dcSiteId));
 
         if (pId && targetSiteId) {
-          const assign = u.intake_assignment || u.notes || (u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+          const assign = resolveUnitAssignment(u);
           const dbStatus = VALID_DB_STATUSES.has(u.status) ? u.status : (u.status === 'outtake' ? 'returned' : 'in_stock');
           const metaPayload = {
+            part_number: cleanPN,
+            description: u.description || null,
+            intake_assignment: assign,
             lifecycle_status: u.status || 'in_stock',
             work_order_number: u.work_order_number || null,
             usage_notes: u.usage_notes || null,
@@ -651,151 +819,6 @@ export function useInventory({
             await new Promise(r => setTimeout(r, 0));
           }
         }
-      }
-
-      try {
-        let currentInv = [];
-        try {
-          currentInv = readInventoryFromLocalStorage();
-        } catch (e) {}
-        if (!Array.isArray(currentInv) || currentInv.length === 0) {
-          try {
-            const idbInv = await dbStorage.getItem('mdc_inventory');
-            if (Array.isArray(idbInv) && idbInv.length > 0) currentInv = idbInv;
-          } catch (e) {}
-        }
-        if (options.replaceExistingBranchStock) {
-          // If replacing branch stock (clean slate import), preserve DC units while replacing branch units
-          const isDc = (item) => {
-            const sId = String(item.current_site_id || '').toLowerCase();
-            const sCode = String(item.site_code || '').toUpperCase();
-            return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC';
-          };
-          currentInv = (currentInv || []).filter(isDc);
-        }
-        const mergedMap = new Map();
-        currentInv.forEach(u => {
-          const s = String(u.serial_number || '').toUpperCase();
-          if (s) mergedMap.set(s, u);
-        });
-        units.forEach(u => {
-          const s = String(u.serial_number || '').toUpperCase();
-          if (s) {
-            const assign = u.intake_assignment || u.notes || (u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-            const prevEntry = mergedMap.get(s) || {};
-            mergedMap.set(s, {
-              ...prevEntry,
-              ...u,
-              id: u.id || prevEntry.id || `unit-${u.serial_number}`,
-              part_id: u.part_id || prevEntry.part_id || `part-${u.part_number}`,
-              part_number: u.part_number,
-              description: u.description || prevEntry.description || 'Service Replacement Part',
-              serial_number: u.serial_number,
-              intake_assignment: assign,
-              notes: assign,
-              current_site_id: u.current_site_id || prevEntry.current_site_id || 'site-dc',
-              site_code: u.site_code || prevEntry.site_code || 'DC-MDC',
-              site_name: u.site_name || prevEntry.site_name || null,
-              status: u.status || prevEntry.status || 'in_stock',
-              work_order_number: u.work_order_number || prevEntry.work_order_number || null,
-              usage_notes: u.usage_notes || prevEntry.usage_notes || null,
-              used_at: u.used_at || prevEntry.used_at || null,
-              outtake_at: u.outtake_at || prevEntry.outtake_at || null,
-              outtake_reason: u.outtake_reason || prevEntry.outtake_reason || null,
-              transferred_at: u.transferred_at || prevEntry.transferred_at || null,
-              transfer_slip_number: u.transfer_slip_number || prevEntry.transfer_slip_number || null,
-              transferred_to_site_code: u.transferred_to_site_code || prevEntry.transferred_to_site_code || null,
-              box_number: u.box_number || prevEntry.box_number || 1,
-              received_at: u.received_at || prevEntry.received_at || new Date().toISOString(),
-              received_by: u.received_by || prevEntry.received_by || currentUser?.fullName || 'Warehouse Staff',
-              received_by_id: u.received_by_id || prevEntry.received_by_id || currentUser?.id || null,
-              added_by_user_id: u.added_by_user_id || prevEntry.added_by_user_id || currentUser?.id || null,
-              shipped_at: u.shipped_at || prevEntry.shipped_at || null,
-              stocking_price: u.stocking_price || prevEntry.stocking_price || 99,
-              updated_at: u.updated_at || prevEntry.updated_at || new Date().toISOString()
-            });
-          }
-        });
-        const allPoolUnits = Array.from(mergedMap.values());
-        const nowIso = new Date().toISOString();
-
-        saveInventoryToLocalStorage(allPoolUnits);
-        dbStorage.setItem('mdc_inventory', allPoolUnits);
-
-        if (options.immediate) {
-          await supabase.from('saved_records').upsert({
-            id: 'live_master_dc_inventory',
-            record_type: 'inventory_master',
-            period_label: 'Live Master DC Inventory',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            period_week: 1,
-            notes: 'Master In-Stock inventory pool across all accounts',
-            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-            snapshot_data: { units: allPoolUnits },
-            updated_at: nowIso
-          }, { onConflict: 'id' });
-        } else {
-          await queuedSavedRecordsUpsert({
-            id: 'live_master_dc_inventory',
-            record_type: 'inventory_master',
-            period_label: 'Live Master DC Inventory',
-            period_year: new Date().getFullYear(),
-            period_month: new Date().getMonth() + 1,
-            period_week: 1,
-            notes: 'Master In-Stock inventory pool across all accounts',
-            saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-            snapshot_data: {
-              units: allPoolUnits
-            },
-            updated_at: nowIso
-          }, { debounceMs: 1200, immediate: false });
-        }
-
-        // Synchronize dedicated retail branch inventory registry for PMG Users & multi-site tracking
-        const isDcUnit = (item) => {
-          const sId = String(item.current_site_id || item.site_id || item.siteId || '').toLowerCase();
-          const sCode = String(item.site_code || item.siteCode || '').toUpperCase();
-          return sId === 'site-dc' || sCode === 'DC-MDC' || sCode === 'DC' || (!sId && !sCode && item.is_dc);
-        };
-        const branchUnitsList = allPoolUnits.filter(item => !isDcUnit(item));
-        if (branchUnitsList.length > 0) {
-          dbStorage.setItem('mdc_branch_inventory_units', branchUnitsList);
-          try { localStorage.setItem('mdc_branch_inventory_updated_at', nowIso); } catch (e) {}
-          dbStorage.setItem('mdc_branch_inventory_updated_at', nowIso);
-
-          if (options.immediate) {
-            await supabase.from('saved_records').upsert({
-              id: 'master_branch_inventory_registry',
-              record_type: 'branch_inventory',
-              period_label: 'Master Retail Branch Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              period_week: 1,
-              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
-              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-              snapshot_data: { units: branchUnitsList },
-              updated_at: nowIso
-            }, { onConflict: 'id' });
-          } else {
-            await queuedSavedRecordsUpsert({
-              id: 'master_branch_inventory_registry',
-              record_type: 'branch_inventory',
-              period_label: 'Master Retail Branch Inventory',
-              period_year: new Date().getFullYear(),
-              period_month: new Date().getMonth() + 1,
-              period_week: 1,
-              notes: 'Master In-Stock multi-site inventory across all MobileCare ASP service points',
-              saved_by_name: currentUser?.fullName || 'Warehouse Staff',
-              snapshot_data: {
-                units: branchUnitsList
-              },
-              updated_at: nowIso
-            }, { debounceMs: 1200, immediate: false });
-          }
-        }
-      } catch (poolErr) {
-        console.warn('live_master_dc_inventory sync note:', poolErr.message);
       }
 
       if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -869,6 +892,7 @@ export function useInventory({
 
     const existingUnit = inventoryUnits.find(u => {
       if (String(u.serial_number || '').toUpperCase() !== cleanSerial) return false;
+      if (u.is_deleted || u.status === 'deleted') return false;
       if (u.status !== 'in_stock' && u.status) return false;
       if (isDcDest) {
         return u.current_site_id === 'site-dc' ||
@@ -888,9 +912,12 @@ export function useInventory({
       return { success: false, error: `Duplicate serial number: ${cleanSerial}` };
     }
 
-    const effectiveAssignment = intakeAssignment === 'SVNR - Service Non-Repair' || String(intakeAssignment).includes('SVNR')
+    const rawAssignUpper = String(intakeAssignment || '').trim().toUpperCase();
+    const effectiveAssignment = rawAssignUpper.includes('TRANSFER PARTS') || rawAssignUpper === 'TRANSFER'
+      ? 'Transfer Parts'
+      : intakeAssignment === 'SVNR - Service Non-Repair' || rawAssignUpper.includes('SVNR')
       ? 'SVNR - Service Non-Repair'
-      : intakeAssignment === 'DC - CRBR' || String(intakeAssignment).includes('CRBR')
+      : intakeAssignment === 'DC - CRBR' || rawAssignUpper.includes('CRBR')
       ? 'DC - CRBR'
       : 'MDC - Forecasting';
     const effectiveNotes = notes || effectiveAssignment;
@@ -936,6 +963,7 @@ export function useInventory({
     }
 
     const targetPoId = matchedPo ? matchedPo.id : null;
+    const nowIso = new Date().toISOString();
 
     const newUnit = {
       id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
@@ -952,8 +980,11 @@ export function useInventory({
       po_id: targetPoId || null,
       po_number: matchedPo?.po_number || null,
       status: 'in_stock',
+      is_deleted: false,
       box_number: 1,
-      received_at: new Date().toISOString(),
+      received_at: nowIso,
+      created_at: nowIso,
+      updated_at: nowIso,
       received_by: currentUser?.fullName || 'Warehouse Staff',
       received_by_id: currentUser?.id || null,
       added_by_user_id: currentUser?.id || null,
@@ -961,24 +992,61 @@ export function useInventory({
       stocking_price: part.stocking_price || 99
     };
 
-    unmarkDeletedSerials([cleanSerial]);
+    // Clean any stale local packing drafts that might contain this serial from a previous session
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('mdc_pack_draft_') || key === 'mdc_active_pack_draft')) {
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            const d = JSON.parse(saved);
+            if (d && Array.isArray(d.items) && d.items.some(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase() === cleanSerial)) {
+              const filteredItems = d.items.filter(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase() !== cleanSerial);
+              localStorage.setItem(key, JSON.stringify({ ...d, items: filteredItems }));
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    unmarkDeletedSerials([cleanSerial], { immediate: true });
+
+    try {
+      const localExisting = readInventoryFromLocalStorage();
+      const baseList = Array.isArray(inventoryUnits) && inventoryUnits.length >= (localExisting?.length || 0)
+        ? inventoryUnits
+        : (localExisting || []);
+      const syncUpdated = [newUnit, ...baseList.filter(u => String(u.serial_number || '').trim().toUpperCase() !== cleanSerial)];
+      const syncNormalized = normalizeInventoryUnits(syncUpdated, parts);
+      localStorage.removeItem('mdc_is_cleared');
+      saveInventoryToLocalStorage(syncNormalized);
+      localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+      localStorage.setItem('mdc_last_inventory_write_time', String(Date.now()));
+      localStorage.setItem('mdc_parts', JSON.stringify(parts));
+      localStorage.removeItem('mdc_recent_scans');
+      dbStorage.setItem('mdc_inventory', syncNormalized);
+      dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+    } catch (e) {}
 
     setInventoryUnits(prev => {
-      const updated = [newUnit, ...(prev || []).filter(u => u.serial_number !== newUnit.serial_number)];
+      const updated = [newUnit, ...(prev || []).filter(u => String(u.serial_number || '').trim().toUpperCase() !== cleanSerial)];
       const normalized = normalizeInventoryUnits(updated, parts);
       try {
         localStorage.removeItem('mdc_is_cleared');
         saveInventoryToLocalStorage(normalized);
+        localStorage.setItem('mdc_live_inventory_updated_at', nowIso);
+        localStorage.setItem('mdc_last_inventory_write_time', String(Date.now()));
         localStorage.setItem('mdc_parts', JSON.stringify(parts));
         localStorage.removeItem('mdc_recent_scans');
       } catch (e) {
         console.warn('LocalStorage save error:', e);
       }
       dbStorage.setItem('mdc_inventory', normalized);
+      dbStorage.setItem('mdc_live_inventory_updated_at', nowIso);
       return normalized;
     });
 
-    saveUnitsToSupabase([newUnit]);
+    saveUnitsToSupabase([newUnit], { immediate: true });
 
     let matchedPoNumber = matchedPo?.po_number || null;
     let matchedPoSupplier = matchedPo?.supplier || null;
@@ -1136,9 +1204,12 @@ export function useInventory({
   const updateUnitAssignment = async (serialNumber, newAssignment) => {
     if (!serialNumber) return;
     const cleanSerial = String(serialNumber).trim().toUpperCase();
-    const effectiveAssignment = String(newAssignment).includes('SVNR')
+    const rawAssignUpper = String(newAssignment || '').trim().toUpperCase();
+    const effectiveAssignment = rawAssignUpper.includes('TRANSFER PARTS') || rawAssignUpper === 'TRANSFER'
+      ? 'Transfer Parts'
+      : rawAssignUpper.includes('SVNR')
       ? 'SVNR - Service Non-Repair'
-      : String(newAssignment).includes('CRBR')
+      : rawAssignUpper.includes('CRBR')
       ? 'DC - CRBR'
       : 'MDC - Forecasting';
 
@@ -1507,10 +1578,13 @@ export function useInventory({
       const itemSiteName = resolvedItemSite?.name || item.site_name || item.siteName || (isMultiSite ? (resolvedItemSite?.name || `${itemSiteCode} Branch`) : (targetSiteName || (isDcDest ? 'Distribution Center (DC)' : null)));
 
       const assignedType = item.intake_assignment || item.intakeAssignment || item.notes || defaultAssignment || (isDcDest ? 'MDC - Forecasting' : 'Branch Stock');
+      const assignedUpper = String(assignedType || '').trim().toUpperCase();
       const effectiveAssignment = isDcDest
-        ? (String(assignedType).includes('SVNR')
+        ? (assignedUpper.includes('TRANSFER PARTS') || assignedUpper === 'TRANSFER'
+            ? 'Transfer Parts'
+            : assignedUpper.includes('SVNR')
             ? 'SVNR - Service Non-Repair'
-            : String(assignedType).includes('CRBR')
+            : assignedUpper.includes('CRBR')
             ? 'DC - CRBR'
             : 'MDC - Forecasting')
         : (item.intake_assignment || `${itemSiteCode || resolvedSiteCode} Stock`);
