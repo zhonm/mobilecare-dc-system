@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { validateFixablyFile, reconcileFixablyMultiFile, parseFixablyExportCsv } from '../utils/fixablyInventoryEngine.js';
+import { validateFixablyFile, reconcileFixablyMultiFile } from '../utils/fixablyInventoryEngine.js';
 
 console.log('========================================================================');
 console.log('TEST SUITE: Fixably Slot 1 3,280 Exact Inventory Parity & Discrepancy Fix');

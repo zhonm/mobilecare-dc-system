@@ -34,6 +34,7 @@ import {
   Clock,
   Truck,
   Plane,
+  Ship,
   Loader2
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
@@ -52,20 +53,26 @@ import {
 } from '../utils/shipmentHelpers';
 
 // Pure category & assignment classification helpers
+function isUnitTransferParts(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
+  return a.includes('TRANSFER PARTS') || a === 'TRANSFER' || Boolean(u.isTransferParts);
+}
+
 function isUnitSvnr(u) {
   if (!u) return false;
   const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
-  return a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr);
+  return (a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr)) && !isUnitTransferParts(u);
 }
 
 function isUnitCrbr(u) {
   if (!u) return false;
   const a = String(u.intake_assignment || u.part_assignment || u.assignment || '').trim().toUpperCase();
-  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u);
+  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u) && !isUnitTransferParts(u);
 }
 
 function isUnitForecasting(u) {
-  return !isUnitSvnr(u) && !isUnitCrbr(u);
+  return !isUnitSvnr(u) && !isUnitCrbr(u) && !isUnitTransferParts(u);
 }
 
 export default function ScanOutPacking() {
@@ -781,7 +788,7 @@ export default function ScanOutPacking() {
         const hasBatt = hasBatteryItem(nextItems);
         let nextMode = prev.shipping_mode;
         if (isLite) {
-          if (hasBatt && prev.shipping_mode !== 'Land') {
+          if (hasBatt && prev.shipping_mode !== 'Land' && prev.shipping_mode !== 'Sea') {
             nextMode = 'Land';
             showToast('Battery detected: Freight mode automatically switched to Land Cargo for compliance.', 'info');
           } else if (!nextMode) {
@@ -1009,9 +1016,11 @@ export default function ScanOutPacking() {
     let forecasting = 0;
     let crbr = 0;
     let svnr = 0;
+    let transferParts = 0;
 
     (availableStockUnits || []).forEach(u => {
-      if (isUnitSvnr(u)) svnr++;
+      if (isUnitTransferParts(u)) transferParts++;
+      else if (isUnitSvnr(u)) svnr++;
       else if (isUnitCrbr(u)) crbr++;
       else forecasting++;
     });
@@ -1020,7 +1029,8 @@ export default function ScanOutPacking() {
       all: availableStockUnits.length,
       forecasting,
       crbr,
-      svnr
+      svnr,
+      transferParts
     };
   }, [availableStockUnits]);
 
@@ -1089,6 +1099,7 @@ export default function ScanOutPacking() {
       if (stockAssignmentTab === 'MDC_FORECASTING' && !isUnitForecasting(u)) return false;
       if (stockAssignmentTab === 'DC_CRBR' && !isUnitCrbr(u)) return false;
       if (stockAssignmentTab === 'SVNR' && !isUnitSvnr(u)) return false;
+      if (stockAssignmentTab === 'TRANSFER_PARTS' && !isUnitTransferParts(u)) return false;
 
       // 2. Sub-Category filter
       if (stockCategoryTab !== 'ALL') {
@@ -1994,6 +2005,31 @@ export default function ScanOutPacking() {
                   >
                     <Truck size={11} /> Land
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleShippingModeChange('Sea')}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: currentShipment.shipping_mode === 'Sea'
+                        ? '1px solid #14b8a6'
+                        : '1px solid #334155',
+                      background: currentShipment.shipping_mode === 'Sea'
+                        ? '#0d9488'
+                        : '#1e293b',
+                      color: '#ffffff',
+                      transition: 'all 0.15s'
+                    }}
+                    title="Sea Cargo (Maritime freight & provincial vessel transport)"
+                  >
+                    <Ship size={11} /> Sea
+                  </button>
                 </div>
               </div>
             )}
@@ -2517,6 +2553,41 @@ export default function ScanOutPacking() {
               {assignmentCounts.svnr}
             </span>
           </button>
+
+          {/* Transfer Parts Tab */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setStockAssignmentTab('TRANSFER_PARTS')}
+            style={{
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: '6px',
+              border: stockAssignmentTab === 'TRANSFER_PARTS' ? '1px solid #059669' : '1px solid #cbd5e1',
+              background: stockAssignmentTab === 'TRANSFER_PARTS' ? '#059669' : '#ffffff',
+              color: stockAssignmentTab === 'TRANSFER_PARTS' ? '#ffffff' : '#047857',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              boxShadow: stockAssignmentTab === 'TRANSFER_PARTS' ? '0 1px 3px rgba(5,150,105,0.2)' : 'none'
+            }}
+          >
+            <span>Transfer Parts</span>
+            <span
+              style={{
+                background: stockAssignmentTab === 'TRANSFER_PARTS' ? 'rgba(255,255,255,0.25)' : '#ecfdf5',
+                color: stockAssignmentTab === 'TRANSFER_PARTS' ? '#ffffff' : '#047857',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '11px',
+                fontWeight: 800
+              }}
+            >
+              {assignmentCounts.transferParts}
+            </span>
+          </button>
         </div>
 
         {/* 2. Sub-Category Filter Pills */}
@@ -2535,6 +2606,7 @@ export default function ScanOutPacking() {
               if (stockAssignmentTab === 'MDC_FORECASTING' && !isUnitForecasting(u)) return false;
               if (stockAssignmentTab === 'DC_CRBR' && !isUnitCrbr(u)) return false;
               if (stockAssignmentTab === 'SVNR' && !isUnitSvnr(u)) return false;
+              if (stockAssignmentTab === 'TRANSFER_PARTS' && !isUnitTransferParts(u)) return false;
               return u.category_code === code || u.category_name?.toUpperCase().includes(code);
             }).length;
             if (countForCat === 0 && stockCategoryTab !== code) return null;
@@ -2569,7 +2641,7 @@ export default function ScanOutPacking() {
             <Search size={22} color="#94a3b8" style={{ margin: '0 auto 4px' }} />
             <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
               {stockAssignmentTab !== 'ALL'
-                ? `No available units found under "${stockAssignmentTab === 'MDC_FORECASTING' ? 'MDC – Forecasting' : stockAssignmentTab === 'DC_CRBR' ? 'DC – CRBR' : 'SVNR'}".`
+                ? `No available units found under "${stockAssignmentTab === 'MDC_FORECASTING' ? 'MDC – Forecasting' : stockAssignmentTab === 'DC_CRBR' ? 'DC – CRBR' : stockAssignmentTab === 'TRANSFER_PARTS' ? 'Transfer Parts' : 'SVNR'}".`
                 : 'No available units match the selected category filter.'}
             </p>
             {assignmentCounts.all > 0 && (
@@ -2600,6 +2672,7 @@ export default function ScanOutPacking() {
               <tbody>
                 {filteredStockUnits.map((unit, idx) => {
                   const catBadge = getCategoryBadgeStyle(unit.category_code);
+                  const isTransferParts = isUnitTransferParts(unit);
                   const isSvnr = isUnitSvnr(unit);
                   const isCrbr = isUnitCrbr(unit);
                   return (
@@ -2641,16 +2714,16 @@ export default function ScanOutPacking() {
                         <span
                           className="badge"
                           style={{
-                            background: isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe',
-                            color: isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1',
-                            border: isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                            background: isTransferParts ? '#ecfdf5' : isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe',
+                            color: isTransferParts ? '#047857' : isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1',
+                            border: isTransferParts ? '1px solid #a7f3d0' : isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
                             fontSize: '10.5px',
                             fontWeight: 700,
                             padding: '2px 6px',
                             borderRadius: '4px'
                           }}
                         >
-                          {isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting'}
+                          {isTransferParts ? 'Transfer Parts' : isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting'}
                         </span>
                       </td>
                       <td style={{ textAlign: 'right' }}>
@@ -4171,6 +4244,31 @@ export default function ScanOutPacking() {
                             }}
                           >
                             <Truck size={11} /> Land
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTrackingModalState(prev => ({ ...prev, shippingModeInput: 'Sea', carrierInput: 'Lite Express (Sea)' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: trackingModalState.shippingModeInput === 'Sea'
+                                ? '1px solid #14b8a6'
+                                : '1px solid #cbd5e1',
+                              background: trackingModalState.shippingModeInput === 'Sea'
+                                ? '#0d9488'
+                                : '#f8fafc',
+                              color: trackingModalState.shippingModeInput === 'Sea'
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Ship size={11} /> Sea
                           </button>
                         </div>
                       </div>

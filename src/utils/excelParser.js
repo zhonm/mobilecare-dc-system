@@ -13,7 +13,7 @@ import {
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
-import { getShipmentRiderName } from './shipmentHelpers.js';
+import { getShipmentRiderName, getShipmentCourierDisplay } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
 
@@ -6549,7 +6549,7 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
 
   const siteName = (site.name || shipment.site_name || 'SERVICE HUB').toUpperCase();
   const siteCode = site.code || (site.name ? site.name.replace(/^MOBILECARE\s*-\s*/i, '') : 'SERVICE HUB');
-  const carrierName = shipment.carrier || shipment.courier || 'Lite Express';
+  const carrierName = getShipmentCourierDisplay(shipment, items);
   const trackingNum = shipment.tracking_number || shipment.booking_id || '';
   const shipmentDate = shipment.shipment_date || '';
   const createdDate = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));

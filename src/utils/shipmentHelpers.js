@@ -692,8 +692,8 @@ export const detectRecommendedShippingMode = (items = []) => {
 };
 
 /**
- * Formats the courier name with shipping mode (Land or Air) for display on Packing List & Declaration Form.
- * E.g., 'Lite Express (Air)' or 'Lite Express (Land)'
+ * Formats the courier name with shipping mode (Air, Land, or Sea) for display on Packing List & Declaration Form.
+ * E.g., 'Lite Express (Air)', 'Lite Express (Land)', or 'Lite Express (Sea)'
  */
 export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
   const rawCarrier = String(carrier || '').trim();
@@ -702,23 +702,29 @@ export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
   const isLite = rawCarrier.toLowerCase().includes('lite express');
   if (!isLite) return rawCarrier;
 
+  const normalizeMode = (m) => {
+    const lower = String(m || '').trim().toLowerCase();
+    if (lower === 'land') return 'Land';
+    if (lower === 'sea') return 'Sea';
+    if (lower === 'air') return 'Air';
+    return '';
+  };
+
   // Extract explicit mode if already in carrier string
-  if (/\((Air|Land)\)/i.test(rawCarrier)) {
-    const match = rawCarrier.match(/\((Air|Land)\)/i);
-    const resolvedMode = shippingMode ? (shippingMode.toLowerCase() === 'land' ? 'Land' : 'Air') : (match[1].toLowerCase() === 'land' ? 'Land' : 'Air');
+  if (/\((Air|Land|Sea)\)/i.test(rawCarrier)) {
+    const match = rawCarrier.match(/\((Air|Land|Sea)\)/i);
+    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(match[1]) || 'Air';
     return `Lite Express (${resolvedMode})`;
   }
-  if (/- (Air|Land)/i.test(rawCarrier)) {
-    const match = rawCarrier.match(/- (Air|Land)/i);
-    const resolvedMode = shippingMode ? (shippingMode.toLowerCase() === 'land' ? 'Land' : 'Air') : (match[1].toLowerCase() === 'land' ? 'Land' : 'Air');
+  if (/- (Air|Land|Sea)/i.test(rawCarrier)) {
+    const match = rawCarrier.match(/- (Air|Land|Sea)/i);
+    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(match[1]) || 'Air';
     return `Lite Express (${resolvedMode})`;
   }
 
-  const mode = String(shippingMode || '').trim().toLowerCase();
-  if (mode === 'land') {
-    return 'Lite Express (Land)';
-  } else if (mode === 'air') {
-    return 'Lite Express (Air)';
+  const mode = normalizeMode(shippingMode);
+  if (mode) {
+    return `Lite Express (${mode})`;
   }
 
   return 'Lite Express';

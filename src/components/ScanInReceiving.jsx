@@ -47,20 +47,26 @@ import IntakeRecords from './IntakeRecords';
 import RequestParts from './RequestParts';
 
 // Pure category & assignment classification helpers
+function isUnitTransferParts(u) {
+  if (!u) return false;
+  const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
+  return a.includes('TRANSFER PARTS') || a === 'TRANSFER' || Boolean(u.isTransferParts);
+}
+
 function isUnitSvnr(u) {
   if (!u) return false;
   const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
-  return a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr);
+  return (a.includes('SVNR') || a.includes('NON-REPAIR') || a.includes('NON REPAIR') || Boolean(u.isSvnr)) && !isUnitTransferParts(u);
 }
 
 function isUnitCrbr(u) {
   if (!u) return false;
   const a = String(u.intake_assignment || u.part_assignment || u.assignment || u.notes || '').trim().toUpperCase();
-  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u);
+  return (a.includes('CRBR') || Boolean(u.isCrbr)) && !isUnitSvnr(u) && !isUnitTransferParts(u);
 }
 
 function isUnitForecasting(u) {
-  return !isUnitSvnr(u) && !isUnitCrbr(u);
+  return !isUnitSvnr(u) && !isUnitCrbr(u) && !isUnitTransferParts(u);
 }
 
 export default function ScanInReceiving({ initialTab = 'station' }) {
@@ -1272,8 +1278,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         category_name = unit.category_name || catMap.get(unit.category_id)?.name || 'Service Parts';
       }
 
-      const rawAssign = unit.intake_assignment || unit.part_assignment || unit.assignment || (unit.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : unit.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-      const intakeAssignment = String(rawAssign).includes('SVNR')
+      const rawAssign = unit.intake_assignment || unit.part_assignment || unit.assignment || (unit.notes?.toUpperCase().includes('TRANSFER PARTS') ? 'Transfer Parts' : unit.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : unit.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const intakeAssignment = String(rawAssign).toUpperCase().includes('TRANSFER PARTS') || String(rawAssign).toUpperCase() === 'TRANSFER'
+        ? 'Transfer Parts'
+        : String(rawAssign).includes('SVNR')
         ? 'SVNR - Service Non-Repair'
         : String(rawAssign).includes('CRBR')
         ? 'DC - CRBR'
@@ -1295,9 +1303,11 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     let forecasting = 0;
     let crbr = 0;
     let svnr = 0;
+    let transferParts = 0;
 
     (availableInStockUnits || []).forEach(u => {
-      if (isUnitSvnr(u)) svnr++;
+      if (isUnitTransferParts(u)) transferParts++;
+      else if (isUnitSvnr(u)) svnr++;
       else if (isUnitCrbr(u)) crbr++;
       else forecasting++;
     });
@@ -1306,7 +1316,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
       all: (availableInStockUnits || []).length,
       forecasting,
       crbr,
-      svnr
+      svnr,
+      transferParts
     };
   }, [availableInStockUnits]);
 
@@ -1340,6 +1351,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
         if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
         if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
         if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+        if (assignmentFilter === 'Transfer Parts' && !isUnitTransferParts(u)) return false;
       }
 
       // 2. Sub-Category Filter
@@ -1737,7 +1749,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                   </div>
                 )}
 
-                {/* Control 2: Part Assignment Classification - Forecasting, CRBR, SVNR */}
+                {/* Control 2: Part Assignment Classification - Forecasting, CRBR, SVNR, Transfer Parts */}
                 {!isPmgUser && (
                   <div className="workstation-tool-col">
                     <div className="workstation-col-header">
@@ -1745,58 +1757,45 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                         <Layers size={13} color="#38bdf8" />
                         <span>Part Assignment Tag</span>
                       </label>
-                      <span className="workstation-active-tag-label">
-                        {intakeAssignment === 'SVNR - Service Non-Repair'
+                      <span
+                        className="workstation-active-tag-label"
+                        style={{
+                          color: intakeAssignment === 'Transfer Parts'
+                            ? '#34d399'
+                            : intakeAssignment === 'SVNR - Service Non-Repair'
+                            ? '#c084fc'
+                            : intakeAssignment === 'DC - CRBR'
+                            ? '#fbbf24'
+                            : '#38bdf8'
+                        }}
+                      >
+                        {intakeAssignment === 'Transfer Parts'
+                          ? 'Transfer Parts'
+                          : intakeAssignment === 'SVNR - Service Non-Repair'
                           ? 'SVNR'
                           : intakeAssignment === 'DC - CRBR'
                           ? 'DC - CRBR'
                           : 'Forecasting'}
                       </span>
                     </div>
-                    <div className="assignment-segmented-control">
-                      <button
-                        type="button"
-                        className={`assignment-seg-btn ${intakeAssignment === 'MDC - Forecasting' ? 'active-forecasting' : ''}`}
-                        onClick={() => {
-                          const next = 'MDC - Forecasting';
-                          setIntakeAssignment(next);
-                          intakeAssignmentRef.current = next;
-                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                          showToast('Part assignment set to "MDC - Forecasting"', 'info');
-                        }}
-                        title="Designated for Monthly Forecasting & Branch Stock Allocation"
-                      >
-                        <span>MDC - Forecasting</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`assignment-seg-btn ${intakeAssignment === 'DC - CRBR' ? 'active-crbr' : ''}`}
-                        onClick={() => {
-                          const next = 'DC - CRBR';
-                          setIntakeAssignment(next);
-                          intakeAssignmentRef.current = next;
-                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                          showToast('Part assignment set to "DC - CRBR"', 'info');
-                        }}
-                        title="Designated for Customer Return / Repair Buffer Returns (CRBR)"
-                      >
-                        <span>DC - CRBR</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`assignment-seg-btn ${intakeAssignment === 'SVNR - Service Non-Repair' ? 'active-svnr' : ''}`}
-                        onClick={() => {
-                          const next = 'SVNR - Service Non-Repair';
-                          setIntakeAssignment(next);
-                          intakeAssignmentRef.current = next;
-                          try { localStorage.setItem('mdc_intake_assignment', next); } catch (e) {}
-                          showToast('Part assignment set to "SVNR - Service Non-Repair"', 'info');
-                        }}
-                        title="Designated for Service Non-Repair (SVNR) — Provincial Sites"
-                      >
-                        <span>SVNR</span>
-                      </button>
-                    </div>
+                    <select
+                      className="workstation-select"
+                      value={intakeAssignment}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setIntakeAssignment(next);
+                        intakeAssignmentRef.current = next;
+                        try { localStorage.setItem('mdc_intake_assignment', next); } catch (err) {}
+                        const displayLabel = next === 'SVNR - Service Non-Repair' ? 'SVNR' : next;
+                        showToast(`Part assignment set to "${displayLabel}"`, 'info');
+                      }}
+                      title="Select Part Assignment Tag for incoming scanned parts"
+                    >
+                      <option value="MDC - Forecasting">MDC - Forecasting</option>
+                      <option value="DC - CRBR">DC - CRBR</option>
+                      <option value="SVNR - Service Non-Repair">SVNR</option>
+                      <option value="Transfer Parts">Transfer Parts</option>
+                    </select>
                   </div>
                 )}
 
@@ -2734,6 +2733,41 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 {assignmentCounts.svnr}
               </span>
             </button>
+
+            {/* Transfer Parts Tab */}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAssignmentFilter('Transfer Parts')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                border: assignmentFilter === 'Transfer Parts' ? '1px solid #059669' : '1px solid #cbd5e1',
+                background: assignmentFilter === 'Transfer Parts' ? '#059669' : '#ffffff',
+                color: assignmentFilter === 'Transfer Parts' ? '#ffffff' : '#047857',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: assignmentFilter === 'Transfer Parts' ? '0 1px 3px rgba(5,150,105,0.2)' : 'none'
+              }}
+            >
+              <span>Transfer Parts</span>
+              <span
+                style={{
+                  background: assignmentFilter === 'Transfer Parts' ? 'rgba(255,255,255,0.25)' : '#ecfdf5',
+                  color: assignmentFilter === 'Transfer Parts' ? '#ffffff' : '#047857',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 800
+                }}
+              >
+                {assignmentCounts.transferParts}
+              </span>
+            </button>
           </div>
         )}
 
@@ -2754,6 +2788,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                 if (assignmentFilter === 'MDC - Forecasting' && !isUnitForecasting(u)) return false;
                 if (assignmentFilter === 'DC - CRBR' && !isUnitCrbr(u)) return false;
                 if ((assignmentFilter === 'SVNR - Service Non-Repair' || assignmentFilter === 'SVNR') && !isUnitSvnr(u)) return false;
+                if (assignmentFilter === 'Transfer Parts' && !isUnitTransferParts(u)) return false;
               }
               return u.category_code === code || u.category_name?.toUpperCase().includes(code);
             }).length;
@@ -2922,7 +2957,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               {isPmgUser && pmgViewMode === 'my_added'
                 ? `You have not added any active in-stock parts at ${activeReceivingSite?.code || 'this branch'} yet.`
                 : assignmentFilter !== 'ALL'
-                ? `No available units found under "${assignmentFilter === 'MDC - Forecasting' ? 'MDC – Forecasting' : assignmentFilter === 'DC - CRBR' ? 'DC – CRBR' : 'SVNR'}".`
+                ? `No available units found under "${assignmentFilter === 'MDC - Forecasting' ? 'MDC – Forecasting' : assignmentFilter === 'DC - CRBR' ? 'DC – CRBR' : assignmentFilter === 'Transfer Parts' ? 'Transfer Parts' : 'SVNR'}".`
                 : `No available parts match "${tableSearch}".`}
             </p>
             {((!isPmgUser && assignmentFilter !== 'ALL') || categoryFilter !== 'ALL' || tableSearch || (isPmgUser && pmgViewMode !== 'site_available')) && availableInStockUnits.length > 0 && (
@@ -2961,12 +2996,13 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
               <tbody>
                 {displayedUnits.map((unit, idx) => {
                   const catBadge = getCategoryBadgeStyle(unit.category_code);
+                  const isTransferParts = isUnitTransferParts(unit);
                   const isSvnr = isUnitSvnr(unit);
                   const isCrbr = isUnitCrbr(unit);
-                  const badgeBg = isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe';
-                  const badgeColor = isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1';
-                  const badgeBorder = isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
-                  const badgeLabel = isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting';
+                  const badgeBg = isTransferParts ? '#ecfdf5' : isSvnr ? '#f3e8ff' : isCrbr ? '#fef3c7' : '#e0f2fe';
+                  const badgeColor = isTransferParts ? '#047857' : isSvnr ? '#7e22ce' : isCrbr ? '#92400e' : '#0369a1';
+                  const badgeBorder = isTransferParts ? '1px solid #a7f3d0' : isSvnr ? '1px solid #e9d5ff' : isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd';
+                  const badgeLabel = isTransferParts ? 'Transfer Parts' : isSvnr ? 'SVNR' : isCrbr ? 'DC – CRBR' : 'MDC – Forecasting';
                   const isAddedBySelf = isUnitAddedByCurrentUser(unit);
                   const canSeeSerial = canViewUnitSerial(unit);
 
@@ -3055,8 +3091,10 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             type="button"
                             onClick={async () => {
                               let newDest = 'MDC - Forecasting';
-                              if (isSvnr) {
+                              if (isTransferParts) {
                                 newDest = 'MDC - Forecasting';
+                              } else if (isSvnr) {
+                                newDest = 'Transfer Parts';
                               } else if (isCrbr) {
                                 newDest = 'SVNR - Service Non-Repair';
                               } else {
@@ -3084,7 +3122,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                             }}
                             title={`Click to switch assignment (${badgeLabel})`}
                           >
-                            {isSvnr ? <Layers size={11} color="#7e22ce" /> : isCrbr ? <Tag size={11} /> : <Layers size={11} />}
+                            {isTransferParts ? <ArrowLeftRight size={11} color="#047857" /> : isSvnr ? <Layers size={11} color="#7e22ce" /> : isCrbr ? <Tag size={11} /> : <Layers size={11} />}
                             <span>{badgeLabel}</span>
                             <ArrowLeftRight size={10} style={{ opacity: 0.6, marginLeft: '2px' }} />
                           </button>
@@ -3259,6 +3297,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                       <option value="MDC - Forecasting">MDC - Forecasting (Stock Allocation)</option>
                       <option value="DC - CRBR">DC - CRBR (Customer Return & Buffer)</option>
                       <option value="SVNR - Service Non-Repair">SVNR - Service Non-Repair</option>
+                      <option value="Transfer Parts">Transfer Parts</option>
                     </select>
                   </div>
                 </div>

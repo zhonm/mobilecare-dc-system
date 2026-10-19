@@ -201,10 +201,11 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
 
       const price = u.stocking_price || partPriceMap.get(pn) || (isDisplay ? 329 : isBattery ? 99 : 50);
 
-      const rawAssignment = u.intake_assignment || (u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-      const isSvnr = rawAssignment.includes('SVNR');
-      const isCrbr = !isSvnr && rawAssignment.includes('CRBR');
-      const assignment = isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
+      const rawAssignment = u.intake_assignment || (u.notes?.toUpperCase().includes('TRANSFER PARTS') ? 'Transfer Parts' : u.notes?.includes('SVNR') ? 'SVNR - Service Non-Repair' : u.notes?.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const isTransferParts = rawAssignment.toUpperCase().includes('TRANSFER PARTS') || rawAssignment.toUpperCase() === 'TRANSFER';
+      const isSvnr = !isTransferParts && rawAssignment.includes('SVNR');
+      const isCrbr = !isTransferParts && !isSvnr && rawAssignment.includes('CRBR');
+      const assignment = isTransferParts ? 'Transfer Parts' : isSvnr ? 'SVNR - Service Non-Repair' : isCrbr ? 'DC - CRBR' : 'MDC - Forecasting';
 
       // Parse date key (YYYY-MM-DD)
       let dateKey = todayDateStr;
@@ -227,9 +228,10 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
         category,
         price,
         intake_assignment: assignment,
-        notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('SVNR') && !u.notes.includes('Forecasting') ? `${assignment} | ${u.notes}` : assignment,
+        notes: u.notes && !u.notes.includes('CRBR') && !u.notes.includes('SVNR') && !u.notes.toUpperCase().includes('TRANSFER PARTS') && !u.notes.includes('Forecasting') ? `${assignment} | ${u.notes}` : assignment,
         isCrbr,
         isSvnr,
+        isTransferParts,
         dateKey,
         timeStr,
         received_at: u.received_at || new Date().toISOString()
@@ -294,13 +296,16 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
         return false;
       }
       // Assignment filter
-      if (assignmentFilter === 'MDC - Forecasting' && (u.isCrbr || u.isSvnr)) {
+      if (assignmentFilter === 'MDC - Forecasting' && (u.isCrbr || u.isSvnr || u.isTransferParts)) {
         return false;
       }
       if (assignmentFilter === 'DC - CRBR' && !u.isCrbr) {
         return false;
       }
       if (assignmentFilter === 'SVNR - Service Non-Repair' && !u.isSvnr) {
+        return false;
+      }
+      if (assignmentFilter === 'Transfer Parts' && !u.isTransferParts) {
         return false;
       }
       // Search query
@@ -1036,6 +1041,7 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                   <option value="MDC - Forecasting">MDC - Forecasting Only</option>
                   <option value="DC - CRBR">DC - CRBR Only</option>
                   <option value="SVNR - Service Non-Repair">SVNR - Service Non-Repair Only</option>
+                  <option value="Transfer Parts">Transfer Parts Only</option>
                 </select>
               </div>
             )}
@@ -1475,8 +1481,10 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                                       type="button"
                                       onClick={() => {
                                         let nextDest;
-                                        if (u.isSvnr) {
+                                        if (u.isTransferParts) {
                                           nextDest = 'MDC - Forecasting';
+                                        } else if (u.isSvnr) {
+                                          nextDest = 'Transfer Parts';
                                         } else if (u.isCrbr) {
                                           nextDest = 'SVNR - Service Non-Repair';
                                         } else {
@@ -1486,9 +1494,9 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                                       }}
                                       className="badge"
                                       style={{
-                                        background: u.isSvnr ? '#f3e8ff' : u.isCrbr ? '#fef3c7' : '#e0f2fe',
-                                        color: u.isSvnr ? '#7e22ce' : u.isCrbr ? '#92400e' : '#0369a1',
-                                        border: u.isSvnr ? '1px solid #e9d5ff' : u.isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
+                                        background: u.isTransferParts ? '#ecfdf5' : u.isSvnr ? '#f3e8ff' : u.isCrbr ? '#fef3c7' : '#e0f2fe',
+                                        color: u.isTransferParts ? '#047857' : u.isSvnr ? '#7e22ce' : u.isCrbr ? '#92400e' : '#0369a1',
+                                        border: u.isTransferParts ? '1px solid #a7f3d0' : u.isSvnr ? '1px solid #e9d5ff' : u.isCrbr ? '1px solid #fde68a' : '1px solid #bae6fd',
                                         fontWeight: 700,
                                         fontSize: '11px',
                                         display: 'inline-flex',
@@ -1498,10 +1506,10 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                                         padding: '3px 8px',
                                         borderRadius: '4px'
                                       }}
-                                      title={`Click to switch assignment to ${u.isSvnr ? 'MDC - Forecasting' : u.isCrbr ? 'SVNR - Service Non-Repair' : 'DC - CRBR'}`}
+                                      title={`Click to switch assignment to ${u.isTransferParts ? 'MDC - Forecasting' : u.isSvnr ? 'Transfer Parts' : u.isCrbr ? 'SVNR - Service Non-Repair' : 'DC - CRBR'}`}
                                     >
-                                      {u.isSvnr ? <Layers size={10} color="#7e22ce" /> : u.isCrbr ? <Tag size={10} /> : <Layers size={10} />}
-                                      <span>{u.isSvnr ? 'SVNR - Service Non-Repair' : u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
+                                      {u.isTransferParts ? <Layers size={10} color="#047857" /> : u.isSvnr ? <Layers size={10} color="#7e22ce" /> : u.isCrbr ? <Tag size={10} /> : <Layers size={10} />}
+                                      <span>{u.isTransferParts ? 'Transfer Parts' : u.isSvnr ? 'SVNR - Service Non-Repair' : u.isCrbr ? 'DC - CRBR' : 'MDC - Forecasting'}</span>
                                     </button>
                                   </td>
                                   <td style={{ fontWeight: 600, color: '#047857' }}>
@@ -1956,8 +1964,9 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                     </thead>
                     <tbody>
                       {filteredInspectItems.map((it, idx) => {
-                        const isSvnr = it.intake_assignment?.includes('SVNR') || it.notes?.includes('SVNR');
-                        const isCrbr = !isSvnr && (it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR'));
+                        const isTransferParts = it.intake_assignment?.toUpperCase().includes('TRANSFER PARTS') || it.notes?.toUpperCase().includes('TRANSFER PARTS');
+                        const isSvnr = !isTransferParts && (it.intake_assignment?.includes('SVNR') || it.notes?.includes('SVNR'));
+                        const isCrbr = !isTransferParts && !isSvnr && (it.intake_assignment?.includes('CRBR') || it.notes?.includes('CRBR'));
                         const resolvedDesc = it.description || partDescMap.get(it.part_number?.toUpperCase()) || 'Apple Genuine Service Part';
                         return (
                           <tr key={it.id || idx}>
@@ -1976,7 +1985,11 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                               </div>
                             </td>
                             <td>
-                              {isSvnr ? (
+                              {isTransferParts ? (
+                                <span className="badge" style={{ background: '#ecfdf5', color: '#047857', fontSize: '10.5px' }}>
+                                  Transfer Parts
+                                </span>
+                              ) : isSvnr ? (
                                 <span className="badge" style={{ background: '#f3e8ff', color: '#7e22ce', fontSize: '10.5px' }}>
                                   SVNR - Service Non-Repair
                                 </span>

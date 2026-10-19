@@ -15,6 +15,7 @@ import {
   Trash2,
   Truck,
   Plane,
+  Ship,
   Clock,
   PackageCheck,
   Hash,
@@ -2592,6 +2593,31 @@ export default function Shipments() {
                           >
                             <Truck size={11} /> Land
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setTrackingModalState(prev => ({ ...prev, shippingModeInput: 'Sea', carrierInput: 'Lite Express (Sea)' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: trackingModalState.shippingModeInput === 'Sea'
+                                ? '1px solid #14b8a6'
+                                : '1px solid #cbd5e1',
+                              background: trackingModalState.shippingModeInput === 'Sea'
+                                ? '#0d9488'
+                                : '#f8fafc',
+                              color: trackingModalState.shippingModeInput === 'Sea'
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Ship size={11} /> Sea
+                          </button>
                         </div>
                       </div>
                     )}
@@ -2815,6 +2841,31 @@ export default function Shipments() {
                             }}
                           >
                             <Truck size={11} /> Land Cargo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPickupModalState(prev => ({ ...prev, shippingMode: 'Sea' }))}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              border: pickupModalState.shippingMode === 'Sea'
+                                ? '1px solid #14b8a6'
+                                : '1px solid #cbd5e1',
+                              background: pickupModalState.shippingMode === 'Sea'
+                                ? '#0d9488'
+                                : '#f8fafc',
+                              color: pickupModalState.shippingMode === 'Sea'
+                                ? '#ffffff'
+                                : '#334155'
+                            }}
+                          >
+                            <Ship size={11} /> Sea Cargo
                           </button>
                         </div>
                       </div>

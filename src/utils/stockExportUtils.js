@@ -267,7 +267,10 @@ export async function generateStyledStockExcel({
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.font = { name: 'Arial', size: 8.5, bold: true };
         const assignStr = String(assignmentVal).toUpperCase();
-        if (assignStr.includes('CRBR')) {
+        if (assignStr.includes('TRANSFER')) {
+          cell.font.color = { argb: 'FF047857' };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFECFDF5' } };
+        } else if (assignStr.includes('CRBR')) {
           cell.font.color = { argb: 'FF92400E' };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
         } else if (assignStr.includes('SVNR')) {

@@ -150,7 +150,9 @@ export const executeUpdateUnitAssignment = async ({
 
   if (!targetSerial) return;
 
-  const validAssignment = newAssignment === 'SVNR - Service Non-Repair' || String(newAssignment).includes('SVNR')
+  const validAssignment = newAssignment === 'Transfer Parts' || String(newAssignment).toUpperCase().includes('TRANSFER PARTS') || String(newAssignment).toUpperCase() === 'TRANSFER'
+    ? 'Transfer Parts'
+    : newAssignment === 'SVNR - Service Non-Repair' || String(newAssignment).includes('SVNR')
     ? 'SVNR - Service Non-Repair'
     : newAssignment === 'DC - CRBR' || String(newAssignment).includes('CRBR')
     ? 'DC - CRBR'

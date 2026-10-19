@@ -306,14 +306,16 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       const rawPn = u.part_number || '';
       const rawDesc = u.description || '';
       const rawNotes = u.notes || '';
-      const rawAssignment = u.intake_assignment || (rawNotes.includes('SVNR') ? 'SVNR - Service Non-Repair' : rawNotes.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
-      const intakeAssignment = String(rawAssignment).includes('SVNR')
+      const rawAssignment = u.intake_assignment || (rawNotes.toUpperCase().includes('TRANSFER PARTS') ? 'Transfer Parts' : rawNotes.includes('SVNR') ? 'SVNR - Service Non-Repair' : rawNotes.includes('CRBR') ? 'DC - CRBR' : 'MDC - Forecasting');
+      const intakeAssignment = String(rawAssignment).toUpperCase().includes('TRANSFER PARTS') || String(rawAssignment).toUpperCase() === 'TRANSFER'
+        ? 'Transfer Parts'
+        : String(rawAssignment).includes('SVNR')
         ? 'SVNR - Service Non-Repair'
         : String(rawAssignment).includes('CRBR')
         ? 'DC - CRBR'
         : 'MDC - Forecasting';
       const notes = u.intake_assignment
-        ? (rawNotes && !rawNotes.includes('CRBR') && !rawNotes.includes('SVNR') && !rawNotes.includes('Forecasting') ? `${intakeAssignment} | ${rawNotes}` : intakeAssignment)
+        ? (rawNotes && !rawNotes.includes('CRBR') && !rawNotes.includes('SVNR') && !rawNotes.toUpperCase().includes('TRANSFER PARTS') && !rawNotes.includes('Forecasting') ? `${intakeAssignment} | ${rawNotes}` : intakeAssignment)
         : (rawNotes || intakeAssignment);
 
       // 0. Primary Resolution: Match by part_id in catalog (e.g., from relational Supabase inventory_units)

@@ -32,11 +32,14 @@ console.log('  ✓ PASS: detectRecommendedShippingMode accurately flags Land for
 // --- 3. Format Courier With Mode Tests ---
 assert.strictEqual(formatCourierWithMode('Lite Express', 'Air'), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lite Express', 'Land'), 'Lite Express (Land)');
+assert.strictEqual(formatCourierWithMode('Lite Express', 'Sea'), 'Lite Express (Sea)');
 assert.strictEqual(formatCourierWithMode('Lite Express (Land)', 'Air'), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lite Express (Air)', 'Land'), 'Lite Express (Land)');
+assert.strictEqual(formatCourierWithMode('Lite Express (Air)', 'Sea'), 'Lite Express (Sea)');
+assert.strictEqual(formatCourierWithMode('Lite Express (Sea)', ''), 'Lite Express (Sea)');
 assert.strictEqual(formatCourierWithMode('Lalamove', 'Air'), 'Lalamove');
 assert.strictEqual(formatCourierWithMode('Utility', 'Land'), 'Utility');
-console.log('  ✓ PASS: formatCourierWithMode handles Lite Express variants and preserves other couriers');
+console.log('  ✓ PASS: formatCourierWithMode handles Lite Express variants (Air, Land, Sea) and preserves other couriers');
 
 // --- 4. Shipment Courier Display Tests ---
 const airShipment = {
@@ -52,6 +55,13 @@ const landShipment = {
   items: [batteryItem, displayItem]
 };
 assert.strictEqual(getShipmentCourierDisplay(landShipment), 'Lite Express (Land)');
+
+const seaShipment = {
+  carrier: 'Lite Express',
+  shipping_mode: 'Sea',
+  items: [batteryItem, displayItem]
+};
+assert.strictEqual(getShipmentCourierDisplay(seaShipment), 'Lite Express (Sea)');
 
 const autoDetectedBatteryShipment = {
   carrier: 'Lite Express',
