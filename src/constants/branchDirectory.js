@@ -28,6 +28,32 @@ export const OFFICIAL_BRANCH_DIRECTORY = {
     region: 'Metro Manila',
     is_dc: false
   },
+  'APP-AUR': {
+    name: 'MOBILECARE - APP SM AURA',
+    address: 'SM AURA PREMIER, 26TH STREET CORNER MCKINLEY PARKWAY, BONIFACIO GLOBAL CITY, TAGUIG 46 1634 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-AUR, SM AURA PREMIER, 26TH STREET CORNER MCKINLEY PARKWAY, BONIFACIO GLOBAL CITY, TAGUIG 46 1634 Philippines',
+    contact_person: 'Branch Supervisor',
+    contact_phone: '+63 (2) 8808-1234',
+    contact_email: 'aura@mobilecareph.com',
+    invoice_prefix: 'AURSSR#',
+    ship_to: '0001836102',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
+  'APP AUR': {
+    name: 'MOBILECARE - APP SM AURA',
+    address: 'SM AURA PREMIER, 26TH STREET CORNER MCKINLEY PARKWAY, BONIFACIO GLOBAL CITY, TAGUIG 46 1634 Philippines',
+    full_address: 'MOBILECARE SERVICES PHILS. INC.-AUR, SM AURA PREMIER, 26TH STREET CORNER MCKINLEY PARKWAY, BONIFACIO GLOBAL CITY, TAGUIG 46 1634 Philippines',
+    contact_person: 'Branch Supervisor',
+    contact_phone: '+63 (2) 8808-1234',
+    contact_email: 'aura@mobilecareph.com',
+    invoice_prefix: 'AURSSR#',
+    ship_to: '0001836102',
+    sold_to: '0001597912',
+    region: 'Metro Manila',
+    is_dc: false
+  },
   'APP GB3': {
     name: 'MOBILECARE - APP GREENBELT 3',
     address: 'GREENBELT 3, AYALA CENTER MAKATI 46 1224 Philippines',

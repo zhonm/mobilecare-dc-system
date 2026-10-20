@@ -64,24 +64,29 @@ await it('ClearDataConfirmationModal imports Drive backup services and UI compon
   assert.ok(modalContent.includes('CheckCircle2'), 'Must import CheckCircle2 icon');
 });
 
-await it('ClearDataConfirmationModal implements live Drive status check & pre-deletion auto backup', () => {
+await it('ClearDataConfirmationModal implements automated Drive backup & progress indicator', () => {
   const modalPath = path.join(projectRoot, 'src/components/ClearDataConfirmationModal.jsx');
   const modalContent = fs.readFileSync(modalPath, 'utf-8');
 
   // Drive state and handlers
   assert.ok(modalContent.includes('fetchDriveStatus'), 'Must define fetchDriveStatus callback');
-  assert.ok(modalContent.includes('handleBackupToDrive'), 'Must define handleBackupToDrive handler');
   assert.ok(modalContent.includes('isCheckingDrive'), 'Must maintain isCheckingDrive state');
-  assert.ok(modalContent.includes('isBackingUpToDrive'), 'Must maintain isBackingUpToDrive state');
 
   // Pre-deletion safety backup call inside handleConfirm
   assert.ok(modalContent.includes('autoArchiveDatasetToDrive('), 'Must invoke autoArchiveDatasetToDrive in handleConfirm');
 
-  // UI verification: Drive backup card
+  // UI verification: Drive backup card & status
   assert.ok(modalContent.includes('Google Drive Cloud Backup & Safety Check'), 'Must display Drive backup card header');
   assert.ok(modalContent.includes('Forecasting ('), 'Must display monthly forecasting status row');
   assert.ok(modalContent.includes('Allocation ('), 'Must display monthly allocation status row');
-  assert.ok(modalContent.includes('Backup to Google Drive Now'), 'Must provide Drive backup action button');
+
+  // Manual upload button removed to avoid confusion
+  assert.ok(!modalContent.includes('Backup to Google Drive Now'), 'Manual Backup to Google Drive button must be removed');
+  assert.ok(!modalContent.includes('Re-Upload Backup to Google Drive'), 'Re-Upload Backup button must be removed');
+
+  // Automated progress indicator when confirming deletion
+  assert.ok(modalContent.includes('Automated Google Drive Cloud Backup in Progress'), 'Must render automated backup progress banner');
+  assert.ok(modalContent.includes('backupProgressPercent'), 'Must track and display backup progress percentage');
 });
 
 console.log(`\n========================================================================`);

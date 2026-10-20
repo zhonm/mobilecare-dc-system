@@ -338,6 +338,7 @@ export function resolvePmgSiteFolderName(siteOrCode) {
 
   if (clean.includes('LIMA') || clean.includes('ASP LIM')) return 'LIMA';
   if (clean.includes('BONIFACIO') || clean.includes('APP BHS')) return 'BHS';
+  if (clean.includes('AURA') || clean.includes('APP-AUR') || clean.includes('APP AUR') || clean.includes('AUR')) return 'AURA';
   if (clean.includes('GREENBELT') || clean.includes('APP GB3')) return 'GB3';
   if (clean.includes('POWER PLANT') || clean.includes('ROCKWELL') || clean.includes('APP PPM')) return 'PPM';
   if (clean.includes('GLORIETTA') || clean.includes('ASP GL5')) return 'GL5';

@@ -27,7 +27,6 @@ import {
   Copy,
   Boxes,
   User,
-  Ban,
   Lock,
   Shield,
   Package
@@ -640,9 +639,6 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const duplicateSerialMatch = useMemo(() => {
     const clean = String(serialInput || '').trim().toUpperCase();
     if (!clean || clean.length < 4) return null;
-    if (lastSuccessScanRef.current.serial === clean && (Date.now() - lastSuccessScanRef.current.timestamp) < 1500) {
-      return null;
-    }
     const localMatch = systemSerialsMap.get(clean);
     const shippedMatch = shippedSerialsLookupMap.get(clean);
     if (localMatch && shippedMatch) {

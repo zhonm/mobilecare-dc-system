@@ -5,7 +5,6 @@ import {
   Trash2,
   X,
   ShieldAlert,
-  RotateCcw,
   TrendingUp,
   Split,
   Calendar,
@@ -51,8 +50,9 @@ export default function ClearDataConfirmationModal({
   // Google Drive Automated Cloud Backup States
   const [driveStatus, setDriveStatus] = useState(null);
   const [isCheckingDrive, setIsCheckingDrive] = useState(false);
-  const [isBackingUpToDrive, setIsBackingUpToDrive] = useState(false);
   const [backupStepMessage, setBackupStepMessage] = useState('');
+  const [backupStage, setBackupStage] = useState('idle'); // 'idle' | 'starting' | 'forecasting' | 'allocation' | 'clearing' | 'complete'
+  const [backupProgressPercent, setBackupProgressPercent] = useState(0);
 
   const totalForecastCount = forecastItems?.length || 0;
   const totalAllocCount = allocations?.length || 0;
@@ -82,42 +82,12 @@ export default function ClearDataConfirmationModal({
       setInputError('');
       setIsExportingForecast(false);
       setIsExportingAllocation(false);
-      setIsBackingUpToDrive(false);
+      setBackupStage('idle');
+      setBackupProgressPercent(0);
       setBackupStepMessage('');
       fetchDriveStatus();
     }
   }, [isOpen, customReason, fetchDriveStatus]);
-
-  // Manual one-click backup to Google Drive
-  const handleBackupToDrive = async () => {
-    if (totalForecastCount === 0 && totalAllocCount === 0) {
-      showToast('No active forecasting or allocation records to back up', 'warning');
-      return;
-    }
-    setIsBackingUpToDrive(true);
-    setBackupStepMessage('Uploading workbooks to Google Drive...');
-    try {
-      const res = await autoArchiveDatasetToDrive({
-        forecastItems: forecastItems || [],
-        allocations: allocations || [],
-        sites: sites || [],
-        periodLabel: currentPeriodLabel,
-        onProgress: ({ message }) => setBackupStepMessage(message)
-      });
-      if (res.success) {
-        showToast(`Successfully backed up ${currentPeriodLabel} datasets to Google Drive!`, 'success');
-        await fetchDriveStatus();
-      } else {
-        showToast(res.error || 'Failed to complete Google Drive backup', 'error');
-      }
-    } catch (err) {
-      console.error('Error backing up to Google Drive:', err);
-      showToast('Google Drive backup error: ' + (err.message || 'Unknown error'), 'error');
-    } finally {
-      setIsBackingUpToDrive(false);
-      setBackupStepMessage('');
-    }
-  };
 
   const handleExportForecast = async () => {
     if (!forecastItems || forecastItems.length === 0) {
@@ -164,20 +134,39 @@ export default function ClearDataConfirmationModal({
 
     setIsDeleting(true);
     setInputError('');
+    setBackupStage('starting');
+    setBackupProgressPercent(10);
+    setBackupStepMessage('Initializing automated Google Drive cloud backup...');
 
     try {
       // Automatic safety backup to Google Drive before purge
       if (totalForecastCount > 0 || totalAllocCount > 0) {
-        setBackupStepMessage('Auto-uploading safety backup to Google Drive...');
+        setBackupStage('forecasting');
+        setBackupProgressPercent(25);
+        setBackupStepMessage('Generating & uploading Demand Forecasting (.xlsx) to Drive...');
+
         try {
           const autoRes = await autoArchiveDatasetToDrive({
             forecastItems: forecastItems || [],
             allocations: allocations || [],
             sites: sites || [],
             periodLabel: currentPeriodLabel,
-            onProgress: ({ message }) => setBackupStepMessage(message)
+            onProgress: ({ stage, message }) => {
+              setBackupStepMessage(message);
+              if (stage === 'forecasting') {
+                setBackupStage('forecasting');
+                setBackupProgressPercent(40);
+              } else if (stage === 'allocation') {
+                setBackupStage('allocation');
+                setBackupProgressPercent(70);
+              } else if (stage === 'completed') {
+                setBackupStage('completed');
+                setBackupProgressPercent(85);
+              }
+            }
           });
           if (autoRes?.success) {
+            setBackupProgressPercent(90);
             showToast(`Safely archived ${currentPeriodLabel} data to Google Drive before purge.`, 'info');
           }
         } catch (backupErr) {
@@ -185,21 +174,34 @@ export default function ClearDataConfirmationModal({
         }
       }
 
+      setBackupStage('clearing');
+      setBackupProgressPercent(95);
+      setBackupStepMessage('Purging operational records & resetting local workspace...');
+
       if (clearAllData) {
         await clearAllData({
           reason: reason.trim() || 'User confirmed data purge via security phrase ("Delete Data")',
           securityPhraseVerified: true
         });
       }
+
+      setBackupStage('complete');
+      setBackupProgressPercent(100);
+      setBackupStepMessage('Cloud backup & system reset complete!');
       showToast('Operational data backed up to Google Drive and cleared successfully.', 'success');
-      onClose();
+
+      // Brief delay to allow the user to see the 100% completion checkmark
+      setTimeout(() => {
+        onClose();
+      }, 700);
     } catch (err) {
       console.error('Error clearing data:', err);
       setInputError(err.message || 'Failed to clear system data. Please try again.');
       showToast('Failed to clear operational data', 'error');
-    } finally {
       setIsDeleting(false);
+      setBackupStage('idle');
       setBackupStepMessage('');
+      setBackupProgressPercent(0);
     }
   };
 
@@ -394,7 +396,7 @@ export default function ClearDataConfirmationModal({
             </div>
 
             <p style={{ fontSize: '11.5px', color: '#475569', margin: '0 0 10px 0', lineHeight: 1.4 }}>
-              Active data is automatically uploaded and safely archived to Google Drive folders upon deletion. You can also trigger an immediate cloud backup or verify if <strong>{currentPeriodLabel}</strong> data has already been saved to Drive below.
+              Active data is automatically uploaded and safely archived to Google Drive when you click <strong>Confirm &amp; Clear All Data</strong> below. You can verify existing <strong>{currentPeriodLabel}</strong> cloud archives below.
             </p>
 
             {/* Live Monthly Status Grid */}
@@ -488,36 +490,6 @@ export default function ClearDataConfirmationModal({
               </div>
             </div>
 
-            {/* Cloud Action Button */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-              <button
-                type="button"
-                onClick={handleBackupToDrive}
-                disabled={isDeleting || isBackingUpToDrive || (totalForecastCount === 0 && totalAllocCount === 0)}
-                className="btn btn-primary btn-sm"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '11.5px',
-                  padding: '6px 12px',
-                  background: '#2563eb',
-                  borderColor: '#1d4ed8',
-                  color: '#ffffff',
-                  cursor: (isDeleting || isBackingUpToDrive || (totalForecastCount === 0 && totalAllocCount === 0)) ? 'not-allowed' : 'pointer'
-                }}
-              >
-                <CloudUpload size={14} className={isBackingUpToDrive ? 'animate-spin' : ''} />
-                <span>
-                  {isBackingUpToDrive
-                    ? (backupStepMessage || 'Uploading to Drive...')
-                    : driveStatus?.allUploaded
-                    ? 'Re-Upload Backup to Google Drive'
-                    : 'Backup to Google Drive Now'}
-                </span>
-              </button>
-            </div>
-
             {/* Optional Pre-Deletion Backup Notice and Local XLSX Export Fallback */}
             <div style={{ borderTop: '1px dashed #cbd5e1', paddingTop: '10px', marginTop: '6px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
@@ -576,6 +548,143 @@ export default function ClearDataConfirmationModal({
               </div>
             </div>
           </div>
+
+          {/* Automated Google Drive Cloud Backup Progress Indicator */}
+          {isDeleting && (
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%)',
+                border: '1.5px solid #86efac',
+                borderRadius: '10px',
+                padding: '14px 16px',
+                marginBottom: '18px',
+                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.12)',
+                animation: 'fadeIn 0.25s ease-out'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    background: backupStage === 'complete' ? '#16a34a' : '#0284c7',
+                    color: '#ffffff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
+                  }}
+                >
+                  {backupStage === 'complete' ? (
+                    <CheckCircle2 size={20} />
+                  ) : (
+                    <CloudUpload size={20} className="animate-spin" />
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: backupStage === 'complete' ? '#166534' : '#0369a1' }}>
+                    {backupStage === 'complete' ? 'Cloud Backup & System Reset Complete' : 'Automated Google Drive Cloud Backup in Progress'}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#047857', marginTop: '2px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {backupStepMessage || 'Uploading workbooks to Google Drive...'}
+                  </div>
+                </div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: '#047857', fontFamily: 'var(--font-mono, monospace)' }}>
+                  {backupProgressPercent}%
+                </div>
+              </div>
+
+              {/* Animated Progress Bar */}
+              <div style={{ width: '100%', height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden', marginBottom: '10px' }}>
+                <div
+                  style={{
+                    width: `${backupProgressPercent}%`,
+                    height: '100%',
+                    background: backupStage === 'complete' ? '#16a34a' : 'linear-gradient(90deg, #0284c7 0%, #10b981 100%)',
+                    borderRadius: '4px',
+                    transition: 'width 0.35s ease-in-out'
+                  }}
+                />
+              </div>
+
+              {/* Stepped Checklist */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                {/* Step 1: Forecasting */}
+                <div
+                  style={{
+                    background: backupStage === 'forecasting' ? '#dcfce7' : ['allocation', 'completed', 'clearing', 'complete'].includes(backupStage) ? '#f0fdf4' : '#ffffff',
+                    border: `1px solid ${['allocation', 'completed', 'clearing', 'complete'].includes(backupStage) ? '#86efac' : backupStage === 'forecasting' ? '#10b981' : '#cbd5e1'}`,
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    fontSize: '10.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: ['allocation', 'completed', 'clearing', 'complete'].includes(backupStage) ? '#166534' : backupStage === 'forecasting' ? '#047857' : '#64748b'
+                  }}
+                >
+                  {['allocation', 'completed', 'clearing', 'complete'].includes(backupStage) ? (
+                    <CheckCircle2 size={12} color="#16a34a" />
+                  ) : backupStage === 'forecasting' ? (
+                    <RefreshCw size={11} className="animate-spin" color="#10b981" />
+                  ) : (
+                    <Clock size={11} />
+                  )}
+                  <span style={{ fontWeight: 600 }}>1. Forecasting</span>
+                </div>
+
+                {/* Step 2: Allocation */}
+                <div
+                  style={{
+                    background: backupStage === 'allocation' ? '#dcfce7' : ['completed', 'clearing', 'complete'].includes(backupStage) ? '#f0fdf4' : '#ffffff',
+                    border: `1px solid ${['completed', 'clearing', 'complete'].includes(backupStage) ? '#86efac' : backupStage === 'allocation' ? '#10b981' : '#cbd5e1'}`,
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    fontSize: '10.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: ['completed', 'clearing', 'complete'].includes(backupStage) ? '#166534' : backupStage === 'allocation' ? '#047857' : '#64748b'
+                  }}
+                >
+                  {['completed', 'clearing', 'complete'].includes(backupStage) ? (
+                    <CheckCircle2 size={12} color="#16a34a" />
+                  ) : backupStage === 'allocation' ? (
+                    <RefreshCw size={11} className="animate-spin" color="#10b981" />
+                  ) : (
+                    <Clock size={11} />
+                  )}
+                  <span style={{ fontWeight: 600 }}>2. Allocation</span>
+                </div>
+
+                {/* Step 3: Clean Slate */}
+                <div
+                  style={{
+                    background: backupStage === 'clearing' ? '#dcfce7' : backupStage === 'complete' ? '#f0fdf4' : '#ffffff',
+                    border: `1px solid ${backupStage === 'complete' ? '#86efac' : backupStage === 'clearing' ? '#10b981' : '#cbd5e1'}`,
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    fontSize: '10.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: backupStage === 'complete' ? '#166534' : backupStage === 'clearing' ? '#047857' : '#64748b'
+                  }}
+                >
+                  {backupStage === 'complete' ? (
+                    <CheckCircle2 size={12} color="#16a34a" />
+                  ) : backupStage === 'clearing' ? (
+                    <RefreshCw size={11} className="animate-spin" color="#10b981" />
+                  ) : (
+                    <Clock size={11} />
+                  )}
+                  <span style={{ fontWeight: 600 }}>3. Clean Slate</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Deletion Reason Field */}
           <div style={{ marginBottom: '16px' }}>
@@ -701,13 +810,13 @@ export default function ClearDataConfirmationModal({
             >
               {isDeleting ? (
                 <>
-                  <RotateCcw size={14} className="spin" />
-                  <span>{backupStepMessage || 'Clearing Data...'}</span>
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>{backupStepMessage || 'Backing up & clearing...'}</span>
                 </>
               ) : (
                 <>
                   <Trash2 size={14} />
-                  <span>Confirm & Clear All Data</span>
+                  <span>Confirm &amp; Clear All Data</span>
                 </>
               )}
             </button>

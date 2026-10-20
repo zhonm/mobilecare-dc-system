@@ -4,7 +4,8 @@ import {
   CANONICAL_DISPLAY_DESCS,
   CANONICAL_BATTERY_DESCS,
   CANONICAL_BATTERY_SHARE_DESCS,
-  resolveSafeRegion
+  resolveSafeRegion,
+  getCanonicalSiteSortIndex
 } from '../constants/config.js';
 
 // Number of Display rows in the canonical Excel block.
@@ -469,14 +470,13 @@ export function calculateWeeklySiteAllocations(item, activeSites = [], rowIndex 
       )
     : CANONICAL_SITE_LIST;
 
-  // Canonical ordering: 15 Metro Manila sites first, then Provincial sites (matching reference workbook)
+  // Canonical ordering: Metro Manila sites first, then Provincial sites (matching reference workbook)
   const serviceSites = [...rawServiceSites].sort((a, b) => {
-    const codeA = a.code || a.id;
-    const codeB = b.code || b.id;
-    const idxA = CANONICAL_SITE_CODES.indexOf(codeA);
-    const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
-    const posA = idxA !== -1 ? idxA : 999;
-    const posB = idxB !== -1 ? idxB : 999;
+    const isMMA = resolveSafeRegion(a.code || a.id, a.region) === 'Metro Manila';
+    const isMMB = resolveSafeRegion(b.code || b.id, b.region) === 'Metro Manila';
+    if (isMMA !== isMMB) return isMMA ? -1 : 1;
+    const posA = getCanonicalSiteSortIndex(a);
+    const posB = getCanonicalSiteSortIndex(b);
     if (posA !== posB) return posA - posB;
     return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''));
   });
@@ -639,12 +639,11 @@ export function balanceCatalogWeeklyAllocations(allocRows = [], activeSites = []
     : CANONICAL_SITE_LIST;
 
   const serviceSites = [...rawServiceSites].sort((a, b) => {
-    const codeA = a.code || a.id;
-    const codeB = b.code || b.id;
-    const idxA = CANONICAL_SITE_CODES.indexOf(codeA);
-    const idxB = CANONICAL_SITE_CODES.indexOf(codeB);
-    const posA = idxA !== -1 ? idxA : 999;
-    const posB = idxB !== -1 ? idxB : 999;
+    const isMMA = resolveSafeRegion(a.code || a.id, a.region) === 'Metro Manila';
+    const isMMB = resolveSafeRegion(b.code || b.id, b.region) === 'Metro Manila';
+    if (isMMA !== isMMB) return isMMA ? -1 : 1;
+    const posA = getCanonicalSiteSortIndex(a);
+    const posB = getCanonicalSiteSortIndex(b);
     if (posA !== posB) return posA - posB;
     return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''));
   });

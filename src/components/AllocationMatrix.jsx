@@ -4,7 +4,7 @@ import { exportAllocationToExcel } from '../utils/excelParser';
 import { exportAllocationToPDF } from '../utils/pdfGenerator';
 import { calculateWeeklySplit, calculateWeeklySiteAllocations, generateAllocationsFromForecasts } from '../utils/allocationEngine';
 import { getPartCategory, getCategoryBadgeStyle } from '../utils/categoryFilter';
-import { CANONICAL_SITE_CODES } from '../constants/config';
+import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import ClearDataConfirmationModal from './ClearDataConfirmationModal';
 import {
@@ -137,21 +137,22 @@ export default function AllocationMatrix() {
     return (sites || []).filter(s =>
       !s.is_dc &&
       s.is_active !== false &&
-      !s.code.toUpperCase().includes('DC') &&
-      !s.code.toUpperCase().includes('MOBILEC') &&
-      !s.name.toLowerCase().includes('distribution') &&
+      !s.code?.toUpperCase().includes('DC') &&
+      !s.code?.toUpperCase().includes('MOBILEC') &&
+      !s.name?.toLowerCase().includes('distribution') &&
       s.code !== 'DC-MDC'
     );
   }, [sites]);
 
   const orderedServiceSites = useMemo(() => {
     return [...nonDcSites].sort((a, b) => {
-      const idxA = CANONICAL_SITE_CODES.findIndex(c => c === a.code || c.includes(a.code) || a.code.includes(c) || a.name.includes(c));
-      const idxB = CANONICAL_SITE_CODES.findIndex(c => c === b.code || c.includes(b.code) || b.code.includes(c) || b.name.includes(c));
-      if (idxA >= 0 && idxB >= 0) return idxA - idxB;
-      if (idxA >= 0) return -1;
-      if (idxB >= 0) return 1;
-      return a.code.localeCompare(b.code);
+      const isMMA = resolveSafeRegion(a.code, a.region) === 'Metro Manila';
+      const isMMB = resolveSafeRegion(b.code, b.region) === 'Metro Manila';
+      if (isMMA !== isMMB) return isMMA ? -1 : 1;
+      const posA = getCanonicalSiteSortIndex(a);
+      const posB = getCanonicalSiteSortIndex(b);
+      if (posA !== posB) return posA - posB;
+      return String(a.code || a.name || '').localeCompare(String(b.code || b.name || ''));
     }).filter((s, idx, arr) => arr.findIndex(x => x.code === s.code) === idx);
   }, [nonDcSites]);
 
@@ -1198,7 +1199,7 @@ export default function AllocationMatrix() {
             No Allocations Generated Yet
           </h3>
           <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', maxWidth: '480px', margin: '0 auto 20px', lineHeight: 1.5 }}>
-            Upload your masterlist / allocation file in Fixably / GSX Data Import to populate the 26-site allocation grid and 4-week splits.
+            Upload your masterlist / allocation file in Fixably / GSX Data Import to populate the multi-site allocation grid and 4-week splits.
           </p>
           <button className="btn btn-primary" onClick={() => setActiveTab('import')}>
             <UploadCloud size={16} />

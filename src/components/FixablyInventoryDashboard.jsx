@@ -2723,7 +2723,7 @@ export default function FixablyInventoryDashboard({
                   </h3>
                 </div>
                 <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#64748b' }}>
-                  Lookup any active Apple part number to view immediate on-hand quantities across all 26 authorized service sites.
+                  Lookup any active Apple part number to view immediate on-hand quantities across all authorized service branch sites.
                 </p>
               </div>
 

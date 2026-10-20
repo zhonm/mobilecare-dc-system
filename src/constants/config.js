@@ -47,7 +47,10 @@ export const CANONICAL_SITE_REGIONS = {
   'ASP ILO': 'Iloilo',
   'ASP CEB': 'Cebu',
   'ASP LIM': 'Batangas',
-  'ASP NPM': 'Pampanga'
+  'ASP NPM': 'Pampanga',
+  'APP-AUR': 'Metro Manila',
+  'APP AUR': 'Metro Manila',
+  'AUR': 'Metro Manila'
 };
 
 export function resolveSafeRegion(code, region) {
@@ -60,6 +63,30 @@ export function resolveSafeRegion(code, region) {
     return CANONICAL_SITE_REGIONS[cleanCode];
   }
   return 'Metro Manila';
+}
+
+/**
+ * Resolves the display sort position for a site code or site object.
+ * Places SM Aura (APP-AUR / APP AUR) right beside BHS and GB3 (position 0.5, directly between APP BHS at 0 and APP GB3 at 1).
+ */
+export function getCanonicalSiteSortIndex(siteOrCode) {
+  const code = (typeof siteOrCode === 'string' ? siteOrCode : (siteOrCode?.code || siteOrCode?.id || '')).trim().toUpperCase();
+  const name = (typeof siteOrCode === 'object' && siteOrCode !== null ? (siteOrCode.name || '') : '').trim().toUpperCase();
+
+  // SM Aura is in BGC Taguig right beside Bonifacio High Street (BHS) and Greenbelt 3 (GB3)
+  if (code === 'APP-AUR' || code === 'APP AUR' || code === 'AUR' || code.includes('AUR') || name.includes('AURA') || name.includes('SM AURA')) {
+    return 0.5; // Directly between APP BHS (index 0) and APP GB3 (index 1)
+  }
+
+  const idx = CANONICAL_SITE_CODES.findIndex(c => c === code || c.replace(/[^A-Z0-9]/g, '') === code.replace(/[^A-Z0-9]/g, ''));
+  if (idx !== -1) return idx;
+
+  if (name) {
+    const nameIdx = CANONICAL_SITE_LIST.findIndex(cs => cs.name && (cs.name.includes(name) || name.includes(cs.name)));
+    if (nameIdx !== -1) return nameIdx;
+  }
+
+  return 999;
 }
 
 export const CANONICAL_DISPLAY_DESCS = [

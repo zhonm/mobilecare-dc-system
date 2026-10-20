@@ -52,6 +52,7 @@ import {
   getShipmentRiderName,
   resolveSiteBranchCode
 } from '../utils/shipmentHelpers';
+import { resolveSafeRegion } from '../constants/config';
 
 // Pure category & assignment classification helpers
 function isUnitTransferParts(u) {
@@ -493,8 +494,8 @@ export default function ScanOutPacking() {
   // Update shipment when site changes (auto-select Courier: Lalamove for MM, Lite Express for provincial)
   const handleSiteChange = (newSiteId) => {
     setSelectedSiteId(newSiteId);
-    const siteObj = sites.find(s => s.id === newSiteId);
-    const isMM = siteObj?.region === 'Metro Manila';
+    const siteObj = sites.find(s => s.id === newSiteId || s.code === newSiteId);
+    const isMM = resolveSafeRegion(siteObj?.code, siteObj?.region) === 'Metro Manila';
     const autoCourier = isMM ? 'Lalamove' : 'Lite Express';
 
     setCurrentShipment(prev => {
@@ -506,7 +507,9 @@ export default function ScanOutPacking() {
 
       return {
         ...prev,
-        site_id: newSiteId,
+        site_id: siteObj?.id || newSiteId,
+        site_code: siteObj?.code || prev.site_code,
+        site_name: siteObj?.name || prev.site_name,
         carrier: finalCourier,
         courier: finalCourier,
         shipping_mode: resolvedMode,

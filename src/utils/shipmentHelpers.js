@@ -88,7 +88,7 @@ export const calculateActiveQueuePartsCount = (activePackDraft = null, activeShi
  */
 export const isShipmentMetroManila = (sh, sitesList = []) => {
   if (!sh) return false;
-  const site = resolveSite(sh.site_id || sh.site_name, sitesList);
+  const site = resolveSite(sh.site_id || sh.site_code || sh.destination_site_code || sh.site_name || sh.destination_site_name, sitesList);
   if (!site) return false;
   if (site.is_dc || site.code === 'DC-MDC' || site.code === 'DC') return false;
   const reg = (site.region || '').trim().toLowerCase();
@@ -103,7 +103,7 @@ export const isShipmentMetroManila = (sh, sitesList = []) => {
  */
 export const isShipmentProvince = (sh, sitesList = []) => {
   if (!sh) return false;
-  const site = resolveSite(sh.site_id || sh.site_name, sitesList);
+  const site = resolveSite(sh.site_id || sh.site_code || sh.destination_site_code || sh.site_name || sh.destination_site_name, sitesList);
   if (!site) return false;
   if (site.is_dc || site.code === 'DC-MDC' || site.code === 'DC') return false;
   return !isShipmentMetroManila(sh, sitesList);
@@ -899,6 +899,7 @@ export const resolveSiteBranchCode = (site, shipment = null) => {
   if (siteName.includes('LANANG') || rawCode.includes('LAN')) return 'APP LAN';
   if (isActuallyMagnolia) return 'APP RM';
   if (siteName.includes('BONIFACIO') || rawCode.includes('BHS')) return 'APP BHS';
+  if (siteName.includes('AURA') || rawCode === 'APP-AUR' || rawCode === 'APP AUR' || rawCode === 'AUR') return 'APP AUR';
   if (siteName.includes('MALL OF ASIA') || rawCode.includes('MOA')) return 'APP MOA';
   if (siteName.includes('TRINOMA') || rawCode.includes('TRI')) return 'APP TRI';
   if (siteName.includes('GREENBELT') || rawCode.includes('GB3')) return 'APP GB3';

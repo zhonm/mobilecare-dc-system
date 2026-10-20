@@ -16,6 +16,7 @@ import { getPartCategory } from './categoryFilter.js';
 import { getShipmentRiderName, getShipmentCourierDisplay } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
+import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -96,7 +97,7 @@ export const CANONICAL_SITE_LIST = [
  * masterlists, and allocation operations without being static.
  */
 export function resolveMergedActiveServiceSites(liveSites = []) {
-  const canonicalCodes = new Set(CANONICAL_SITE_LIST.map(cs => cs.code));
+  const canonicalCodes = new Set(CANONICAL_SITE_LIST.map(cs => String(cs.code || '').trim().toUpperCase()));
 
   const liveNonDc = (Array.isArray(liveSites) ? liveSites : []).filter(s =>
     !s.is_dc &&
@@ -109,7 +110,7 @@ export function resolveMergedActiveServiceSites(liveSites = []) {
 
   const canonicalSitesWithLive = CANONICAL_SITE_LIST.map((cs) => {
     const existing = liveNonDc.find(s =>
-      s.code === cs.code ||
+      String(s.code || '').trim().toUpperCase() === cs.code ||
       (s.name && cs.name.includes(s.name)) ||
       (s.name && s.name.includes(cs.name))
     );
@@ -125,15 +126,31 @@ export function resolveMergedActiveServiceSites(liveSites = []) {
     };
   });
 
-  const newCustomSites = liveNonDc.filter(s =>
-    !canonicalCodes.has(s.code) &&
-    !CANONICAL_SITE_LIST.some(cs => cs.name === s.name)
-  ).map(s => ({
+  const newCustomSites = liveNonDc.filter(s => {
+    const cleanCode = String(s.code || '').trim().toUpperCase();
+    return !canonicalCodes.has(cleanCode) &&
+      !CANONICAL_SITE_LIST.some(cs => cs.name === s.name || (s.name && cs.name.includes(s.name)));
+  }).map(s => ({
     ...s,
-    id: s.id || `site-${(s.code || s.name || 'custom').toLowerCase().replace(/[^a-z0-9]/g, '')}`
+    id: s.id || `site-${(s.code || s.name || 'custom').toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+    code: String(s.code || '').trim().toUpperCase(),
+    name: String(s.name || s.code || '').trim(),
+    region: resolveSafeRegion(s.code, s.region),
+    address: s.address || s.full_address || `${s.name || s.code} Service Branch, Philippines`,
+    is_dc: false,
+    is_active: s.is_active !== undefined ? s.is_active : true
   }));
 
-  return [...canonicalSitesWithLive, ...newCustomSites];
+  const allMerged = [...canonicalSitesWithLive, ...newCustomSites];
+  return allMerged.sort((a, b) => {
+    const isMMA = resolveSafeRegion(a.code, a.region) === 'Metro Manila';
+    const isMMB = resolveSafeRegion(b.code, b.region) === 'Metro Manila';
+    if (isMMA !== isMMB) return isMMA ? -1 : 1;
+    const posA = getCanonicalSiteSortIndex(a);
+    const posB = getCanonicalSiteSortIndex(b);
+    if (posA !== posB) return posA - posB;
+    return String(a.name || a.code || '').localeCompare(String(b.name || b.code || ''));
+  });
 }
 
 export const MASTER_PART_PRICING = {
