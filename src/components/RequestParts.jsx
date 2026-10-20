@@ -11,8 +11,10 @@ import StatusChangeLoadingModal from './StatusChangeLoadingModal';
 import ConfirmReceiveModal from './ConfirmReceiveModal';
 import AllStocksImportModal from './AllStocksImportModal';
 import SerialDossierModal from './SerialDossierModal';
+import MovementHistoryModal from './MovementHistoryModal';
 import FixablyInventoryDashboard from './FixablyInventoryDashboard';
 import { searchSerialsWithFullDetails } from '../utils/serialTracker';
+import { formatSiteOwner, normalizeSiteCode, resolvePartOwnershipDetails } from '../services/transferHistoryService';
 import {
   Inbox,
   Send,
@@ -309,6 +311,10 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const [searchQuery, setSearchQuery] = useState('');
   const [stockSearchQuery, setStockSearchQuery] = useState('');
   const [stockCategoryFilter, setStockCategoryFilter] = useState('ALL');
+  const [stockTransferHistoryFilter, setStockTransferHistoryFilter] = useState('ALL'); // 'ALL' | 'TRANSFERRED_ONLY' | 'NO_TRANSFERS'
+  const [stockSourceSiteFilter, setStockSourceSiteFilter] = useState('ALL');
+  const [stockDestSiteFilter, setStockDestSiteFilter] = useState('ALL');
+  const [movementModalPart, setMovementModalPart] = useState(null);
   const [stockViewMode, setStockViewMode] = useState('grouped'); // 'grouped' | 'flat'
   const [stockDeviceFilter, setStockDeviceFilter] = useState('ALL');
   const [collapsedDevices, setCollapsedDevices] = useState({});
@@ -1128,9 +1134,21 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         it.model || catalogPart?.iphone_model,
         it.description || catalogPart?.description
       );
+      const partOwnership = resolvePartOwnershipDetails({
+        part_number: pnClean,
+        site_code: activeSiteObj?.code || 'DC'
+      });
+
       return {
         ...it,
-        model: cleanModel
+        model: cleanModel,
+        currentOwner: partOwnership.currentOwner,
+        movementTrail: partOwnership.movementTrail,
+        movementHistory: partOwnership.movementHistory,
+        transferCount: partOwnership.transferCount,
+        latestTransferDate: partOwnership.latestTransferDate,
+        latestTransferFormatted: partOwnership.latestTransferFormatted,
+        transfers: partOwnership.transfers
       };
     }).filter(it => {
       const pnClean = String(it.partNumber || '').trim().toUpperCase();
@@ -1155,7 +1173,26 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         if (it.model !== stockDeviceFilter) return false;
       }
 
-      // 5. Search Query Filter
+      // 5. Transfer History Filter
+      if (stockTransferHistoryFilter !== 'ALL') {
+        const xferCount = it.transferCount || (it.transfers?.length || 0);
+        if (stockTransferHistoryFilter === 'TRANSFERRED_ONLY' && xferCount === 0) return false;
+        if (stockTransferHistoryFilter === 'NO_TRANSFERS' && xferCount > 0) return false;
+      }
+
+      // 6. Source Site Filter
+      if (stockSourceSiteFilter !== 'ALL') {
+        const matchesSource = (it.transfers || []).some(t => normalizeSiteCode(t.from_site_code) === normalizeSiteCode(stockSourceSiteFilter));
+        if (!matchesSource) return false;
+      }
+
+      // 7. Destination Site Filter
+      if (stockDestSiteFilter !== 'ALL') {
+        const matchesDest = (it.transfers || []).some(t => normalizeSiteCode(t.to_site_code) === normalizeSiteCode(stockDestSiteFilter));
+        if (!matchesDest) return false;
+      }
+
+      // 8. Search Query Filter
       if (stockSearchQuery.trim()) {
         const q = stockSearchQuery.toLowerCase().trim();
         const qClean = q.replace(/[^a-z0-9]/gi, '');
@@ -3225,6 +3262,88 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     </select>
                   </div>
 
+                  {/* Transfer History Filter */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>Transfer:</span>
+                    <select
+                      className="form-select"
+                      style={{
+                        fontSize: '12px',
+                        padding: '4px 10px',
+                        height: '34px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontWeight: 600,
+                        color: '#1e293b',
+                        background: '#ffffff',
+                        cursor: 'pointer',
+                        maxWidth: '165px'
+                      }}
+                      value={stockTransferHistoryFilter}
+                      onChange={(e) => setStockTransferHistoryFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Movement</option>
+                      <option value="TRANSFERRED_ONLY">Transferred Parts Only</option>
+                      <option value="NO_TRANSFERS">Never Transferred</option>
+                    </select>
+                  </div>
+
+                  {/* Source Site Filter */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>Source:</span>
+                    <select
+                      className="form-select"
+                      style={{
+                        fontSize: '12px',
+                        padding: '4px 10px',
+                        height: '34px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontWeight: 600,
+                        color: '#1e293b',
+                        background: '#ffffff',
+                        cursor: 'pointer',
+                        maxWidth: '120px'
+                      }}
+                      value={stockSourceSiteFilter}
+                      onChange={(e) => setStockSourceSiteFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Source</option>
+                      <option value="DC">DC</option>
+                      {(sites || []).filter(s => !s.is_dc).map(s => (
+                        <option key={s.id || s.code} value={s.code}>{s.code}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Destination Site Filter */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, whiteSpace: 'nowrap' }}>Dest:</span>
+                    <select
+                      className="form-select"
+                      style={{
+                        fontSize: '12px',
+                        padding: '4px 10px',
+                        height: '34px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontWeight: 600,
+                        color: '#1e293b',
+                        background: '#ffffff',
+                        cursor: 'pointer',
+                        maxWidth: '120px'
+                      }}
+                      value={stockDestSiteFilter}
+                      onChange={(e) => setStockDestSiteFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Dest</option>
+                      <option value="DC">DC</option>
+                      {(sites || []).filter(s => !s.is_dc).map(s => (
+                        <option key={s.id || s.code} value={s.code}>{s.code}</option>
+                      ))}
+                    </select>
+                  </div>
+
                   {/* Active In-Stock Indicator */}
                   <div style={{
                     display: 'inline-flex',
@@ -3401,13 +3520,16 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     </div>
                   )}
 
-                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockDeviceFilter !== 'ALL') && (
+                  {(stockSearchQuery || stockCategoryFilter !== 'ALL' || stockDeviceFilter !== 'ALL' || stockTransferHistoryFilter !== 'ALL' || stockSourceSiteFilter !== 'ALL' || stockDestSiteFilter !== 'ALL') && (
                     <button
                       type="button"
                       onClick={() => {
                         setStockSearchQuery('');
                         setStockCategoryFilter('ALL');
                         setStockDeviceFilter('ALL');
+                        setStockTransferHistoryFilter('ALL');
+                        setStockSourceSiteFilter('ALL');
+                        setStockDestSiteFilter('ALL');
                       }}
                       style={{
                         background: 'none',
@@ -3516,7 +3638,24 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             </div>
                           </td>
                           <td style={{ padding: '12px 16px', fontSize: '12.5px', color: '#1e293b', fontWeight: 500 }}>
-                            {row.description}
+                            <div style={{ fontWeight: 600 }}>{row.description}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span>Model: <strong>{row.model}</strong></span>
+                              <span style={{ color: '#cbd5e1' }}>&bull;</span>
+                              <span>Owner: <code style={{ fontSize: '10.5px', background: '#ecfdf5', padding: '1px 5px', borderRadius: '4px', color: '#047857', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{(row.currentOwner ? String(row.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code></span>
+                              {row.movementTrail && (
+                                <>
+                                  <span style={{ color: '#cbd5e1' }}>&bull;</span>
+                                  <span>Movement: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{row.movementTrail}</strong></span>
+                                </>
+                              )}
+                              {row.latestTransferFormatted && row.latestTransferFormatted !== '—' && (
+                                <>
+                                  <span style={{ color: '#cbd5e1' }}>&bull;</span>
+                                  <span title="Latest Transfer Date">Last: <strong>{row.latestTransferFormatted}</strong></span>
+                                </>
+                              )}
+                            </div>
                           </td>
                           <td style={{ padding: '12px 16px', textAlign: 'center' }}>
                             {row.inStock > 0 ? (
@@ -3627,6 +3766,35 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                       <Wrench size={11} />
                                       <span>Mark Used</span>
                                     </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{
+                                        fontSize: '11px',
+                                        padding: '4px 8px',
+                                        color: '#0284c7',
+                                        borderColor: '#bae6fd',
+                                        background: '#f0f9ff',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontWeight: 600,
+                                        borderRadius: '6px'
+                                      }}
+                                      onClick={() => setMovementModalPart({
+                                        part_number: row.partNumber,
+                                        description: row.description,
+                                        iphone_model: row.model,
+                                        site_code: activeSiteObj?.code || 'DC',
+                                        site_name: activeSiteObj?.name || 'Distribution Center',
+                                        current_owner: row.currentOwner,
+                                        movement_history: row.movementHistory
+                                      })}
+                                      title="View stock ownership & transfer movement timeline (DC → POD → DC)"
+                                    >
+                                      <History size={11} />
+                                      <span>Trail ({row.transferCount || 0})</span>
+                                    </button>
                                   </>
                                 ) : (
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -3679,20 +3847,58 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                       <Plus size={11} />
                                       <span>Request</span>
                                     </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ fontSize: '11px', padding: '4px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                      onClick={() => setMovementModalPart({
+                                        part_number: row.partNumber,
+                                        description: row.description,
+                                        iphone_model: row.model,
+                                        site_code: activeSiteObj?.code || 'DC',
+                                        site_name: activeSiteObj?.name || 'Distribution Center',
+                                        current_owner: row.currentOwner,
+                                        movement_history: row.movementHistory
+                                      })}
+                                      title="View stock ownership & transfer movement timeline (DC → POD → DC)"
+                                    >
+                                      <History size={11} />
+                                      <span>Trail ({row.transferCount || 0})</span>
+                                    </button>
                                   </div>
                                 )}
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                style={{ fontSize: '11.5px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                onClick={() => handleQuickRequestPart(row.partNumber)}
-                                title="Create replenishment request for this part"
-                              >
-                                <Plus size={12} />
-                                <span>Request</span>
-                              </button>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '11.5px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                  onClick={() => handleQuickRequestPart(row.partNumber)}
+                                  title="Create replenishment request for this part"
+                                >
+                                  <Plus size={12} />
+                                  <span>Request</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '11px', padding: '4px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '6px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                  onClick={() => setMovementModalPart({
+                                    part_number: row.partNumber,
+                                    description: row.description,
+                                    iphone_model: row.model,
+                                    site_code: activeSiteObj?.code || 'DC',
+                                    site_name: activeSiteObj?.name || 'Distribution Center',
+                                    current_owner: row.currentOwner,
+                                    movement_history: row.movementHistory
+                                  })}
+                                  title="View stock ownership & transfer movement timeline (DC → POD → DC)"
+                                >
+                                  <History size={11} />
+                                  <span>Trail ({row.transferCount || 0})</span>
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -4834,36 +5040,51 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               </td>
 
                               <td style={{ verticalAlign: 'top', textAlign: 'center', padding: '12px 16px' }}>
-                                {!isSuperadmin ? (
-                                  isOwnSite ? (
-                                    <button
-                                      className="btn btn-secondary btn-sm"
-                                      style={{ fontSize: '11px', padding: '4px 10px', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
-                                      onClick={() => {
-                                        setMarkUsedPartPn(row.partNumber);
-                                        setIsMarkUsedModalOpen(true);
-                                      }}
-                                      title="Mark this part as consumed in a repair work order"
-                                    >
-                                      <Wrench size={11} />
-                                      <span>Mark Used</span>
-                                    </button>
-                                  ) : (
-                                    <button
-                                      className="btn btn-secondary btn-sm"
-                                      style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                                      onClick={() => handleQuickRequestPart(row.partNumber, currentActiveMultiSite.name)}
-                                      title={`Request replenishment/transfer for ${row.partNumber} from ${currentActiveMultiSite.name}`}
-                                    >
-                                      <Send size={11} />
-                                      <span>Request Transfer</span>
-                                    </button>
-                                  )
-                                ) : (
-                                  <span style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
-                                    Master DC View
-                                  </span>
-                                )}
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                                  {!isSuperadmin ? (
+                                    isOwnSite ? (
+                                      <button
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ fontSize: '11px', padding: '4px 10px', color: '#059669', borderColor: '#a7f3d0', background: '#ecfdf5' }}
+                                        onClick={() => {
+                                          setMarkUsedPartPn(row.partNumber);
+                                          setIsMarkUsedModalOpen(true);
+                                        }}
+                                        title="Mark this part as consumed in a repair work order"
+                                      >
+                                        <Wrench size={11} />
+                                        <span>Mark Used</span>
+                                      </button>
+                                    ) : (
+                                      <button
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ fontSize: '11px', padding: '4px 10px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                                        onClick={() => handleQuickRequestPart(row.partNumber, currentActiveMultiSite.name)}
+                                        title={`Request replenishment/transfer for ${row.partNumber} from ${currentActiveMultiSite.name}`}
+                                      >
+                                        <Send size={11} />
+                                        <span>Request Transfer</span>
+                                      </button>
+                                    )
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ fontSize: '11px', padding: '4px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                    onClick={() => setMovementModalPart({
+                                      part_number: row.partNumber,
+                                      description: row.description,
+                                      iphone_model: row.model,
+                                      site_code: currentActiveMultiSite.code,
+                                      site_name: currentActiveMultiSite.name,
+                                      current_owner: formatSiteOwner(currentActiveMultiSite.code)
+                                    })}
+                                    title="View stock ownership & transfer movement timeline (DC → POD → DC)"
+                                  >
+                                    <History size={11} />
+                                    <span>Trail</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
 
@@ -6342,6 +6563,15 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               setAllStocksSelectedSiteId(inspectedSerialDetails.siteId);
             }
           }}
+        />
+      )}
+
+      {/* 13. Part Stock Ownership & Movement History Modal */}
+      {movementModalPart && (
+        <MovementHistoryModal
+          targetPart={movementModalPart}
+          onClose={() => setMovementModalPart(null)}
+          onNavigateTab={handleTabChange}
         />
       )}
     </div>

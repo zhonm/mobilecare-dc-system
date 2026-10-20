@@ -430,6 +430,33 @@ CREATE INDEX IF NOT EXISTS idx_parts_requests_requested_by ON public.parts_reque
 CREATE INDEX IF NOT EXISTS idx_parts_requests_number ON public.parts_requests(request_number);
 CREATE INDEX IF NOT EXISTS idx_parts_requests_open ON public.parts_requests(site_id, created_at DESC) WHERE status IN ('pending', 'approved', 'partially_fulfilled');
 
+-- 4.12 Stock Ownership & Part Transfer History Table
+CREATE TABLE IF NOT EXISTS public.part_transfer_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    part_number TEXT NOT NULL,
+    serial_number TEXT,
+    from_site_id UUID REFERENCES public.sites(id) ON DELETE SET NULL,
+    from_site_code TEXT NOT NULL DEFAULT 'DC',
+    from_site_name TEXT,
+    to_site_id UUID REFERENCES public.sites(id) ON DELETE SET NULL,
+    to_site_code TEXT NOT NULL DEFAULT 'DC',
+    to_site_name TEXT,
+    from_owner TEXT NOT NULL DEFAULT 'DC_MSPI-OWNED',
+    to_owner TEXT NOT NULL DEFAULT 'DC_MSPI-OWNED',
+    transfer_type TEXT NOT NULL DEFAULT 'Transfer',
+    transfer_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    user_name TEXT NOT NULL DEFAULT 'Warehouse Staff',
+    manifest_ref TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_part_transfer_history_serial ON public.part_transfer_history(serial_number);
+CREATE INDEX IF NOT EXISTS idx_part_transfer_history_part ON public.part_transfer_history(part_number);
+CREATE INDEX IF NOT EXISTS idx_part_transfer_history_date ON public.part_transfer_history(transfer_date DESC);
+CREATE INDEX IF NOT EXISTS idx_part_transfer_history_from_to ON public.part_transfer_history(from_site_code, to_site_code);
+CREATE INDEX IF NOT EXISTS idx_part_transfer_history_type ON public.part_transfer_history(transfer_type);
+
 -- ============================================================================
 -- 5. FUNCTIONS & ATOMIC TRANSACTION RPCS
 -- ============================================================================

@@ -2,6 +2,7 @@
  * Intelligent Apple Part Number, Serial Number Validator & Barcode Security System
  */
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
+import { formatSiteOwner, normalizeSiteCode } from '../services/transferHistoryService.js';
 
 /**
  * Validates if a given string is a legitimate Apple Serial Number
@@ -293,6 +294,49 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
   if (!Array.isArray(units)) return [];
   const fullCatalog = [...(partsCatalog || []), ...(defaultPartsCatalog || [])];
 
+  const enrichUnitWithOwnership = (resolvedUnit, rawUnit) => {
+    const rawNotes = rawUnit?.notes || '';
+    const rawCurrentOwner = rawUnit?.current_owner || (typeof rawNotes === 'string' && rawNotes.includes('__META__') ? (() => {
+      try {
+        const match = rawNotes.match(/__META__:(.+)$/);
+        if (match) {
+          const p = JSON.parse(match[1]);
+          return p.current_owner || null;
+        }
+      } catch {}
+      return null;
+    })() : null);
+
+    const normSite = normalizeSiteCode(rawUnit?.site_code || rawUnit?.current_site_id || 'DC');
+    const resolvedOwner = (rawCurrentOwner ? String(rawCurrentOwner).toUpperCase() : null) || formatSiteOwner(normSite);
+    const rawMovement = rawUnit?.movement_history || (typeof rawNotes === 'string' && rawNotes.includes('__META__') ? (() => {
+      try {
+        const match = rawNotes.match(/__META__:(.+)$/);
+        if (match) {
+          const p = JSON.parse(match[1]);
+          return p.movement_history || null;
+        }
+      } catch {}
+      return null;
+    })() : null);
+
+    const resolvedMovement = Array.isArray(rawMovement) && rawMovement.length > 0
+      ? rawMovement
+      : [normSite];
+
+    const transferCount = typeof rawUnit?.transfer_count === 'number'
+      ? rawUnit.transfer_count
+      : (resolvedMovement.length > 1 ? resolvedMovement.length - 1 : 0);
+
+    return {
+      ...resolvedUnit,
+      current_owner: resolvedOwner,
+      movement_history: resolvedMovement,
+      transfer_count: transferCount,
+      latest_transfer_date: rawUnit?.latest_transfer_date || null
+    };
+  };
+
   return units
     .filter(u => {
       if (!u || typeof u !== 'object') return false;
@@ -322,7 +366,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       if (u.part_id) {
         const foundById = fullCatalog.find(p => p.id === u.part_id);
         if (foundById) {
-          return {
+          return enrichUnitWithOwnership({
             ...u,
             part_id: foundById.id,
             part_number: foundById.part_number,
@@ -331,14 +375,14 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
             intake_assignment: intakeAssignment,
             notes: notes,
             stocking_price: foundById.stocking_price || u.stocking_price || 99
-          };
+          }, u);
         }
         // Handle part_id containing embedded PN (e.g. "part-661-56125" or "part-661-30373")
         const embeddedInId = String(u.part_id).match(/66[0-9]-?[0-9]{4,6}/i);
         if (embeddedInId) {
           const resolvedFromId = resolvePartInfo(embeddedInId[0], fullCatalog);
           if (resolvedFromId) {
-            return {
+            return enrichUnitWithOwnership({
               ...u,
               part_id: resolvedFromId.id,
               part_number: resolvedFromId.part_number,
@@ -347,7 +391,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
               intake_assignment: intakeAssignment,
               notes: notes,
               stocking_price: resolvedFromId.stocking_price || u.stocking_price || 99
-            };
+            }, u);
           }
         }
       }
@@ -356,7 +400,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       if (rawPn && rawPn.toUpperCase() !== 'PART' && rawPn.toUpperCase() !== 'PART-UNKNOWN') {
         const resolved = resolvePartInfo(rawPn, fullCatalog);
         if (resolved) {
-          return {
+          return enrichUnitWithOwnership({
             ...u,
             part_id: resolved.id || u.part_id,
             part_number: resolved.part_number,
@@ -365,7 +409,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
             intake_assignment: intakeAssignment,
             notes: notes,
             stocking_price: resolved.stocking_price || u.stocking_price || 99
-          };
+          }, u);
         }
       }
 
@@ -373,7 +417,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       if (rawPn && rawPn.toUpperCase() !== 'PART' && rawPn.toUpperCase() !== 'PART-UNKNOWN') {
         const exactPart = fullCatalog.find(p => p.part_number && p.part_number.toUpperCase() === rawPn.toUpperCase());
         if (exactPart) {
-          return {
+          return enrichUnitWithOwnership({
             ...u,
             part_id: exactPart.id || u.part_id,
             part_number: exactPart.part_number,
@@ -382,7 +426,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
             intake_assignment: intakeAssignment,
             notes: notes,
             stocking_price: exactPart.stocking_price || u.stocking_price || 99
-          };
+          }, u);
         }
       }
 
@@ -390,7 +434,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
       if (rawDesc && rawDesc.toLowerCase() !== 'service replacement part' && !rawDesc.toLowerCase().includes('replacement part (')) {
         const resolvedDesc = resolvePartInfo(rawDesc, fullCatalog);
         if (resolvedDesc) {
-          return {
+          return enrichUnitWithOwnership({
             ...u,
             part_id: resolvedDesc.id || u.part_id,
             part_number: resolvedDesc.part_number,
@@ -399,7 +443,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
             intake_assignment: intakeAssignment,
             notes: notes,
             stocking_price: resolvedDesc.stocking_price || u.stocking_price || 99
-          };
+          }, u);
         }
       }
 
@@ -409,7 +453,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
         const suffix = numMatch[1];
         const matchBySuffix = fullCatalog.find(p => p.part_number && p.part_number.endsWith(suffix));
         if (matchBySuffix) {
-          return {
+          return enrichUnitWithOwnership({
             ...u,
             part_id: matchBySuffix.id || u.part_id,
             part_number: matchBySuffix.part_number,
@@ -418,7 +462,7 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
             intake_assignment: intakeAssignment,
             notes: notes,
             stocking_price: matchBySuffix.stocking_price || u.stocking_price || 99
-          };
+          }, u);
         }
       }
 
@@ -431,14 +475,14 @@ export function normalizeInventoryUnits(units = [], partsCatalog = []) {
         ? rawDesc
         : (fallbackPart?.description || 'Apple Genuine Service Part');
 
-      return {
+      return enrichUnitWithOwnership({
         ...u,
         part_id: fallbackPart?.id || u.part_id,
         part_number: safePn,
         description: safeDesc,
         intake_assignment: intakeAssignment,
         notes: notes
-      };
+      }, u);
     });
 }
 

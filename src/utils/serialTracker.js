@@ -4,6 +4,7 @@
  */
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { isShipmentActive, isShipmentReceived } from './shipmentHelpers.js';
+import { resolvePartOwnershipDetails } from '../services/transferHistoryService.js';
 
 /**
  * Normalizes and cleans raw barcode / serial input
@@ -271,6 +272,13 @@ export function resolveSerialFullDetails(serialInput, {
     }
   }
 
+  const ownership = resolvePartOwnershipDetails(unit || {
+    serial_number: cleanSerial,
+    part_number: partNumber,
+    site_code: siteCode,
+    current_site_id: siteObj?.id
+  });
+
   return {
     found: true,
     serialNumber: cleanSerial,
@@ -284,6 +292,20 @@ export function resolveSerialFullDetails(serialInput, {
     category_id: categoryId,
     stockingPrice,
     stocking_price: stockingPrice,
+    // Stock Ownership & Movement History
+    currentOwner: unit?.current_owner || ownership.currentOwner,
+    current_owner: unit?.current_owner || ownership.currentOwner,
+    movementHistory: unit?.movement_history || ownership.movementHistory,
+    movement_history: unit?.movement_history || ownership.movementHistory,
+    movementTrail: ownership.movementTrail,
+    movement_trail: ownership.movementTrail,
+    transferCount: ownership.transferCount,
+    transfer_count: ownership.transferCount,
+    latestTransferDate: ownership.latestTransferDate,
+    latest_transfer_date: ownership.latestTransferDate,
+    latestTransferFormatted: ownership.latestTransferFormatted,
+    transfers: ownership.transfers,
+    transfer_history: ownership.transfers,
     // Location & Stock State
     status: unit?.status || (isUsed ? 'used' : isShippedInTransit ? 'shipped' : 'in_stock'),
     statusKey,

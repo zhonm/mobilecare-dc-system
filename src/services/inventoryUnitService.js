@@ -62,7 +62,11 @@ export const executeSaveUnitsToSupabase = async ({
         transfer_slip_number: u.transfer_slip_number || null,
         transferred_to_site_code: u.transferred_to_site_code || null,
         site_code: u.site_code || null,
-        site_name: u.site_name || null
+        site_name: u.site_name || null,
+        current_owner: u.current_owner || null,
+        movement_history: u.movement_history || null,
+        transfer_count: u.transfer_count || 0,
+        latest_transfer_date: u.latest_transfer_date || null
       };
       const encodedNotes = `${assign} | __META__:${JSON.stringify(metaPayload)}`;
 

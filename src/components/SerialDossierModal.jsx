@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useApp } from '../context/AppContext';
 import {
   X,
   Copy,
@@ -10,15 +11,20 @@ import {
   CheckCircle2,
   Clock,
   ShieldCheck,
-  Barcode
+  Barcode,
+  History
 } from 'lucide-react';
+import MovementHistoryModal from './MovementHistoryModal.jsx';
 
 export default function SerialDossierModal({
   serialDetails,
   onClose,
-  onNavigateTab
+  onNavigateTab: propNavigateTab
 }) {
+  const { setActiveTab } = useApp?.() || {};
+  const onNavigateTab = propNavigateTab || setActiveTab;
   const [copied, setCopied] = useState(false);
+  const [showMovementHistoryModal, setShowMovementHistoryModal] = useState(false);
 
   if (!serialDetails) return null;
 
@@ -127,6 +133,50 @@ export default function SerialDossierModal({
             }}
           >
             <X size={18} />
+          </button>
+        </div>
+
+        {/* Stock Ownership & Movement History Card */}
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '14px', marginBottom: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 800, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              <History size={13} color="#15803d" />
+              <span>Stock Ownership &amp; Transfer History</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '13px', color: '#14532d', fontWeight: 700 }}>
+                Current Owner: <code style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: '4px', color: '#15803d', fontFamily: 'var(--font-mono)' }}>{(serialDetails.currentOwner ? String(serialDetails.currentOwner).toUpperCase() : 'DC_MSPI-OWNED')}</code>
+              </span>
+              <span style={{ color: '#86efac' }}>&bull;</span>
+              <span style={{ fontSize: '13px', color: '#14532d', fontWeight: 700 }}>
+                Movement History: <strong style={{ color: '#0f172a', fontFamily: 'var(--font-mono)' }}>{serialDetails.movementTrail || (serialDetails.isDcSite ? 'DC' : `${serialDetails.siteCode || 'SITE'}`)}</strong>
+              </span>
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#15803d', marginTop: '3px' }}>
+              Transfers: <strong>{serialDetails.transferCount || 0}</strong> &bull; Latest: <strong>{serialDetails.latestTransferFormatted || 'Recorded'}</strong>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setShowMovementHistoryModal(true)}
+            style={{
+              background: '#ffffff',
+              border: '1px solid #86efac',
+              color: '#15803d',
+              fontWeight: 700,
+              fontSize: '11.5px',
+              padding: '6px 12px',
+              borderRadius: '6px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              cursor: 'pointer'
+            }}
+          >
+            <History size={13} />
+            <span>View Transfer Timeline</span>
           </button>
         </div>
 
@@ -366,6 +416,14 @@ export default function SerialDossierModal({
           </button>
         </div>
       </div>
+
+      {showMovementHistoryModal && (
+        <MovementHistoryModal
+          targetPart={serialDetails}
+          onClose={() => setShowMovementHistoryModal(false)}
+          onNavigateTab={onNavigateTab}
+        />
+      )}
     </div>
   );
 }

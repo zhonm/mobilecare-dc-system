@@ -21,6 +21,7 @@ import { getPartCategory, resolvePartCategoryUUID } from '../utils/categoryFilte
 import { queuedSavedRecordsUpsert, flushSavedRecordsQueue } from '../utils/savedRecordsQueue';
 import { cleanSerialNumberInput } from '../utils/serialTracker';
 import { resolveSiteFromSheetOrCode } from '../utils/excelParser';
+import { formatSiteOwner, normalizeSiteCode, recordPartTransfer } from '../services/transferHistoryService';
 
 export { getBasePoNumber, consolidatePurchaseOrdersList, consolidateDcIntakeRecordsList };
 
@@ -1002,6 +1003,53 @@ export function useInventory({
     const targetPoId = matchedPo ? matchedPo.id : null;
     const nowIso = new Date().toISOString();
 
+    const normDest = normalizeSiteCode(resolvedSiteCode);
+    let newMovementHistory;
+    if (allowOverride) {
+      const prevNorm = normalizeSiteCode(previousSiteCode || existingUnit?.site_code || 'POD');
+      const baseHistory = Array.isArray(existingUnit?.movement_history) && existingUnit.movement_history.length > 0
+        ? [...existingUnit.movement_history]
+        : (prevNorm !== normDest ? [prevNorm] : ['DC']);
+
+      if (baseHistory[baseHistory.length - 1] !== normDest) {
+        baseHistory.push(normDest);
+      }
+      newMovementHistory = baseHistory;
+
+      // Record transfer audit trail entry immutably (e.g. POD -> DC)
+      recordPartTransfer({
+        partNumber: cleanPN,
+        serialNumber: cleanSerial,
+        fromSiteCode: prevNorm,
+        toSiteCode: normDest,
+        fromOwner: formatSiteOwner(prevNorm),
+        toOwner: formatSiteOwner(normDest),
+        transferType: 'Return',
+        userName: currentUser?.fullName || 'Warehouse Staff',
+        userId: currentUser?.id || null,
+        manifestRef: previousManifestRef || null,
+        notes: overrideReason || 'Returned to DC — Authorized Stock Reassignment',
+        transferDate: nowIso
+      });
+    } else {
+      newMovementHistory = [normDest];
+      // Record initial inbound intake
+      recordPartTransfer({
+        partNumber: cleanPN,
+        serialNumber: cleanSerial,
+        fromSiteCode: 'Supplier',
+        toSiteCode: normDest,
+        fromOwner: 'supplier',
+        toOwner: formatSiteOwner(normDest),
+        transferType: 'Inbound Intake',
+        userName: currentUser?.fullName || 'Warehouse Staff',
+        userId: currentUser?.id || null,
+        manifestRef: matchedPo?.po_number || null,
+        notes: effectiveAssignment,
+        transferDate: nowIso
+      });
+    }
+
     const newUnit = {
       id: existingUnit?.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       part_id: part.id || `part-${part.part_number}`,
@@ -1032,7 +1080,11 @@ export function useInventory({
       overridden_by: allowOverride ? (currentUser?.fullName || 'Warehouse Staff') : null,
       overridden_at: allowOverride ? nowIso : null,
       previous_manifest_ref: previousManifestRef || null,
-      previous_site_code: previousSiteCode || null
+      previous_site_code: previousSiteCode || null,
+      current_owner: formatSiteOwner(normDest),
+      movement_history: newMovementHistory,
+      transfer_count: newMovementHistory.length > 1 ? newMovementHistory.length - 1 : 0,
+      latest_transfer_date: nowIso
     };
 
     // Clean any stale local packing drafts that might contain this serial from a previous session

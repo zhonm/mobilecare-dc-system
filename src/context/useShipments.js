@@ -6,6 +6,7 @@ import { unmarkDeletedShipmentIds, unmarkDeletedSerials } from '../services/dele
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
 import { getTodayDateString, isShipmentReceived } from '../utils/shipmentHelpers';
+import { formatSiteOwner, normalizeSiteCode, recordBatchTransfers } from '../services/transferHistoryService';
 
 export function useShipments({
   currentUser,
@@ -752,12 +753,43 @@ export function useShipments({
         ? 'in_stock' 
         : (isShipped ? 'shipped' : 'packed');
       
+      const destCode = normalizeSiteCode(newShipment.site_code);
+      const destOwner = formatSiteOwner(destCode);
+
+      if (!isDraft && newShipment.items && newShipment.items.length > 0) {
+        const xferBatch = newShipment.items.map(it => {
+          const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
+          const p = String(it.part_number || it.partNumber || '').trim().toUpperCase();
+          return {
+            partNumber: p,
+            serialNumber: s || null,
+            fromSiteCode: 'DC',
+            toSiteCode: destCode,
+            fromOwner: 'DC_MSPI-OWNED',
+            toOwner: destOwner,
+            transferType: 'Transfer',
+            manifestRef: newShipment.invoice_ref || newShipment.shipment_number,
+            userName: resolvedPreparedBy,
+            userId: currentUser?.id || null,
+            transferDate: newShipment.shipment_date || new Date().toISOString()
+          };
+        });
+        recordBatchTransfers(xferBatch);
+      }
+
       setInventoryUnits(prev => {
         const existingMatched = new Set();
         updatedInv = (prev || []).map(u => {
           const s = String(u.serial_number || '').trim().toUpperCase();
           if (serialsInShipment.has(s)) {
             existingMatched.add(s);
+            const baseHistory = Array.isArray(u.movement_history) && u.movement_history.length > 0
+              ? [...u.movement_history]
+              : ['DC'];
+            if (!isDraft && destCode && baseHistory[baseHistory.length - 1] !== destCode) {
+              baseHistory.push(destCode);
+            }
+
             return {
               ...u,
               status: targetUnitStatus,
@@ -769,7 +801,11 @@ export function useShipments({
               shipped_at: isDraft ? null : (newShipment.shipment_date || u.shipped_at || new Date().toISOString()),
               shipped_by: resolvedPreparedBy,
               received_at: isConfirmed ? (newShipment.received_at || new Date().toISOString()) : (u.received_at || new Date().toISOString()),
-              received_by: isConfirmed ? (newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff') : u.received_by
+              received_by: isConfirmed ? (newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff') : u.received_by,
+              current_owner: isDraft ? (u.current_owner ? String(u.current_owner).toUpperCase() : 'DC_MSPI-OWNED') : destOwner,
+              movement_history: baseHistory,
+              transfer_count: baseHistory.length > 1 ? baseHistory.length - 1 : 0,
+              latest_transfer_date: isDraft ? u.latest_transfer_date : (newShipment.shipment_date || new Date().toISOString())
             };
           }
           return u;
@@ -780,6 +816,8 @@ export function useShipments({
           newShipment.items.forEach(it => {
             const s = String(it.serial_number || it.serialNumber || '').trim().toUpperCase();
             if (s && !existingMatched.has(s)) {
+              const newMovement = ['DC'];
+              if (destCode && destCode !== 'DC') newMovement.push(destCode);
               updatedInv.push({
                 id: it.id || `unit-${s}`,
                 part_id: it.part_id || null,
@@ -795,7 +833,11 @@ export function useShipments({
                 received_at: newShipment.received_at || new Date().toISOString(),
                 received_by: newShipment.received_by_name || (currentUser?.role === 'superadmin' ? 'Branch Staff' : currentUser?.fullName) || 'Branch Staff',
                 created_at: newShipment.created_at || new Date().toISOString(),
-                updated_at: new Date().toISOString()
+                updated_at: new Date().toISOString(),
+                current_owner: destOwner,
+                movement_history: newMovement,
+                transfer_count: newMovement.length > 1 ? newMovement.length - 1 : 0,
+                latest_transfer_date: newShipment.shipment_date || new Date().toISOString()
               });
               existingMatched.add(s);
             }

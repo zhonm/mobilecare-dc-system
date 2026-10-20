@@ -36,7 +36,8 @@ import {
   Plane,
   Ship,
   Loader2,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Save
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate, exportPackingListXLSX } from '../utils/excelParser';
 import { generateNextInvoiceRef, generateNextShipmentNumber, filterAvailableDcInStockUnits, isDraftSupersededOrFulfilled } from '../utils/appContextHelpers';
@@ -100,6 +101,7 @@ export default function ScanOutPacking() {
     canUserDeleteRecord,
     activePackingStations,
     broadcastPackingPresence,
+    syncActivePackDraftToCloud,
     supervisorSettings
   } = useApp();
 
@@ -1397,6 +1399,14 @@ export default function ScanOutPacking() {
       if (!isAlreadySaved) {
         await clearShipmentDraftItems(currentShipment.id, currentShipment.items);
       }
+      const isDraftInShipments = shipments.some(s => s.id === currentShipment.id && s.status === 'draft');
+      if (isDraftInShipments) {
+        if (typeof safeArchiveDraft === 'function') {
+          await safeArchiveDraft(currentShipment.id);
+        } else if (typeof deleteShipment === 'function') {
+          await deleteShipment(currentShipment.id);
+        }
+      }
     }
 
     try {
@@ -1438,6 +1448,122 @@ export default function ScanOutPacking() {
     setScanResult(null);
     sendPresence(true, []);
     showToast('Active packing list cleared. Ready to create a new packing list for another site.', 'info');
+  };
+
+  // --- Save Draft Action: Persist PL as Draft without Finalizing ---
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+
+  const handleSaveDraft = async () => {
+    if (!selectedSiteId || !selectedSite) {
+      showToast('Please select a destination site before saving the draft.', 'warning');
+      setIsSiteModalOpen(true);
+      return;
+    }
+
+    if (!currentShipment.items || currentShipment.items.length === 0) {
+      showToast('Cannot save an empty draft. Please add parts first.', 'warning');
+      return;
+    }
+
+    setIsSavingDraft(true);
+    markLocalDraftEdit();
+
+    try {
+      const cleanTracking = String(currentShipment.tracking_number || '').trim();
+      const isMM = selectedSite?.region === 'Metro Manila';
+      const isLite = String(currentShipment.carrier || '').toLowerCase().includes('lite express');
+      const resolvedMode = currentShipment.shipping_mode || (isLite ? detectRecommendedShippingMode(currentShipment.items) : '');
+      const autoCourier = isLite
+        ? formatCourierWithMode('Lite Express', resolvedMode)
+        : (currentShipment.carrier || (isMM ? 'Lalamove' : (selectedSite ? 'Lite Express' : 'Lalamove')));
+
+      const activeUserName = currentShipment.prepared_by_name?.trim() && currentShipment.prepared_by_name !== 'Warehouse Staff'
+        ? currentShipment.prepared_by_name.trim()
+        : (currentUser?.fullName || currentUser?.name || 'Zhon Manaois');
+
+      const draftShipment = {
+        ...currentShipment,
+        id: currentShipment.id || `ship-${Date.now()}`,
+        carrier: autoCourier,
+        courier: autoCourier,
+        shipping_mode: isLite ? resolvedMode : (currentShipment.shipping_mode || ''),
+        total_boxes: totalBoxes,
+        box_number: boxNumber,
+        box_number_label: `${boxNumber}/${totalBoxes}`,
+        tracking_number: cleanTracking,
+        status: 'draft', // Strictly keep status as 'draft'
+        prepared_by_name: activeUserName,
+        saved_by_name: activeUserName,
+        shipment_date: currentShipment.shipment_date || '',
+        created_at: currentShipment.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      // 1. Permanently save to Shipments database state and cloud DB with status: 'draft'
+      await saveShipment(draftShipment);
+
+      // 2. Persist locally to active draft storage
+      try {
+        localStorage.setItem(userDraftStorageKey, JSON.stringify(draftShipment));
+        localStorage.setItem('mdc_active_pack_draft', JSON.stringify(draftShipment));
+      } catch (e) {}
+
+      // 3. Sync to peer presence
+      if (typeof syncActivePackDraftToCloud === 'function') {
+        syncActivePackDraftToCloud(draftShipment);
+      }
+
+      // 4. Update current shipment in station state so continued edits use this saved draft ID & ref
+      setCurrentShipment(draftShipment);
+      sendPresence(true, draftShipment.items || []);
+
+      showToast(`Pick List ${draftShipment.invoice_ref} saved as Draft! Status remains Draft until finalized.`, 'success');
+    } catch (err) {
+      console.error('Save draft error:', err);
+      showToast('Error saving Pick List draft', 'error');
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  // --- Start Fresh Pick List (Leaves saved drafts safely stored in database) ---
+  const handleStartNewShipment = () => {
+    try {
+      localStorage.removeItem(userDraftStorageKey);
+      localStorage.removeItem('mdc_active_pack_draft');
+    } catch (e) {}
+
+    const newDraftId = `ship-${Date.now()}`;
+    const nextInvoiceRef = generateNextInvoiceRef(shipments);
+    const nextShipmentNumber = generateNextShipmentNumber(shipments);
+    const activeUserName = currentUser?.fullName || currentUser?.name || 'Zhon Manaois';
+
+    setSelectedSiteId('');
+    setCurrentShipment({
+      id: newDraftId,
+      shipment_number: nextShipmentNumber,
+      invoice_ref: nextInvoiceRef,
+      site_id: '',
+      carrier: 'Lalamove',
+      courier: 'Lalamove',
+      shipping_mode: '',
+      shipment_date: '',
+      box_number: 1,
+      total_boxes: 1,
+      tracking_number: '',
+      status: 'draft',
+      prepared_by_name: activeUserName,
+      verified_by_name: 'Anjo Alcazar',
+      pickup_by_name: '',
+      receiving_signature: '',
+      remarks: 'KGB PARTS',
+      items: []
+    });
+    setTotalBoxes(1);
+    setBoxNumber(1);
+    sessionPackedSerialsRef.current.clear();
+    sendPresence(true, []);
+    showToast(`Started fresh Pick List (${nextInvoiceRef}). Any saved drafts remain stored in the table below.`, 'info');
   };
 
   // --- Combined Action: Save to Database & Finalize Packing List ---
@@ -2971,6 +3097,49 @@ export default function ScanOutPacking() {
                 </button>
               </>
             )}
+
+            {shipments.some(s => s.id === currentShipment?.id && s.status === 'draft') && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={handleStartNewShipment}
+                style={{
+                  height: '34px',
+                  background: '#f8fafc',
+                  color: '#475569',
+                  borderColor: '#cbd5e1',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: 'pointer'
+                }}
+                title="Start a new blank Pick List for another site while keeping this saved draft stored"
+              >
+                <Plus size={14} />
+                <span>New Pick List</span>
+              </button>
+            )}
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleSaveDraft}
+              disabled={isSavingDraft}
+              style={{
+                height: '34px',
+                background: '#f0f9ff',
+                color: '#0284c7',
+                borderColor: '#bae6fd',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: isSavingDraft ? 'not-allowed' : 'pointer'
+              }}
+              title="Save current Pick List progress as draft without marking as Ready for Pickup"
+            >
+              {isSavingDraft ? <Loader2 size={15} className="spin" /> : <Save size={15} color="#0284c7" />}
+              <span>{isSavingDraft ? 'Saving Draft...' : 'Save Draft'}</span>
+            </button>
 
             <button
               className="btn btn-primary btn-sm"

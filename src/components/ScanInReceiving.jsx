@@ -29,8 +29,10 @@ import {
   User,
   Lock,
   Shield,
-  Package
+  Package,
+  History
 } from 'lucide-react';
+import MovementHistoryModal from './MovementHistoryModal';
 import {
   parseScanInPartsFile,
   parseMultiBranchInventoryWorkbook,
@@ -68,7 +70,7 @@ function isUnitForecasting(u) {
   return !isUnitSvnr(u) && !isUnitCrbr(u) && !isUnitTransferParts(u);
 }
 
-export default function ScanInReceiving({ initialTab = 'station' }) {
+export default function ScanInReceiving({ initialTab = 'station', onNavigateTab: propNavigateTab }) {
   const {
     addScanInUnit,
     deleteScanInUnit,
@@ -92,6 +94,8 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
     sites = [],
     getStockOnHandForSite,
   } = useApp();
+
+  const onNavigateTab = propNavigateTab || setActiveTab;
 
   const isPmgUser = currentUser?.role === 'parts_management';
   const isSuperadmin = currentUser?.role === 'SUPERADMIN' || currentUser?.role === 'superadmin';
@@ -600,6 +604,7 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
   const [overrideModalState, setOverrideModalState] = useState(null);
   const [overrideReason, setOverrideReason] = useState('Returned to DC — Valid Site Return / Reassignment');
   const [overrideAssignmentTag, setOverrideAssignmentTag] = useState('Transfer Parts');
+  const [movementModalPart, setMovementModalPart] = useState(null);
 
   const openReceiveOverrideModal = useCallback((info, pnCandidate = '', snCandidate = '') => {
     if (!info) return;
@@ -3398,44 +3403,66 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
                       <td>
                         <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
-                        {isPmgUser && !isAddedBySelf ? (
-                          <span
-                            style={{
-                              fontSize: '11px',
-                              color: '#94a3b8',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '3px',
-                              fontStyle: 'italic'
-                            }}
-                            title="Only the user who added this unit can modify or delete it."
-                          >
-                            <Lock size={11} />
-                            <span>Restricted</span>
-                          </span>
-                        ) : (
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                           <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            onClick={() => setUnitToDelete(unit)}
+                            onClick={() => setMovementModalPart(unit)}
                             style={{
                               padding: '3px 7px',
                               fontSize: '11px',
-                              color: '#ef4444',
-                              borderColor: '#fca5a5',
-                              background: '#fff',
+                              color: '#0284c7',
+                              borderColor: '#bae6fd',
+                              background: '#f0f9ff',
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '3px',
                               borderRadius: '4px'
                             }}
-                            title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
+                            title="View stock ownership & transfer movement history (DC → POD → DC)"
                           >
-                            <Trash2 size={12} />
-                            <span>Delete</span>
+                            <History size={11} />
+                            <span>Trail</span>
                           </button>
-                        )}
+                          {isPmgUser && !isAddedBySelf ? (
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                color: '#94a3b8',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                fontStyle: 'italic'
+                              }}
+                              title="Only the user who added this unit can modify or delete it."
+                            >
+                              <Lock size={11} />
+                              <span>Restricted</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setUnitToDelete(unit)}
+                              style={{
+                                padding: '3px 7px',
+                                fontSize: '11px',
+                                color: '#ef4444',
+                                borderColor: '#fca5a5',
+                                background: '#fff',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                borderRadius: '4px'
+                              }}
+                              title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
+                            >
+                              <Trash2 size={12} />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -4446,6 +4473,14 @@ export default function ScanInReceiving({ initialTab = 'station' }) {
             </div>
           </div>
         </div>
+      )}
+
+      {movementModalPart && (
+        <MovementHistoryModal
+          targetPart={movementModalPart}
+          onClose={() => setMovementModalPart(null)}
+          onNavigateTab={onNavigateTab}
+        />
       )}
 
         </>
