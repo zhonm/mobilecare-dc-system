@@ -1459,7 +1459,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       shipments,
       repairUsageRecords,
       sites,
-      parts
+      parts,
+      fixablyItems: fixablySnapshot?.items || []
     }, 12);
 
     return resolvedSerials.filter(sd => {
@@ -1471,7 +1472,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         sd.linkedShipment?.site_code === userSiteObj?.code
       );
     });
-  }, [allStocksSearchQuery, inventoryUnits, shipments, repairUsageRecords, sites, parts, isSuperadmin, isAdmin, currentUser, userSiteObj]);
+  }, [allStocksSearchQuery, inventoryUnits, shipments, repairUsageRecords, sites, parts, isSuperadmin, isAdmin, currentUser, userSiteObj, fixablySnapshot]);
 
   // Network-wide availability search results across ALL branches
   const networkPartSearchResults = useMemo(() => {
@@ -4222,7 +4223,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {allStocksSerialSearchResults.length > 0 && (
                     <span className="badge" style={{ background: '#dcfce7', color: '#15803d', fontWeight: 800, fontSize: '11.5px', padding: '4px 10px' }}>
-                      🎯 {allStocksSerialSearchResults.length} Serial Located
+                      {allStocksSerialSearchResults.length} Serial Located
                     </span>
                   )}
                   {networkPartSearchResults && networkPartSearchResults.length > 0 && (

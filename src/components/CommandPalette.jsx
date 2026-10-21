@@ -56,7 +56,8 @@ export default function CommandPalette({ isOpen, onClose }) {
     autoRefreshData,
     showToast,
     setPmgSubTab,
-    sites = []
+    sites = [],
+    fixablySnapshot
   } = useApp();
 
   const [query, setQuery] = useState('');
@@ -308,8 +309,9 @@ export default function CommandPalette({ isOpen, onClose }) {
           shipments,
           repairUsageRecords,
           sites,
-          parts
-        }, 5);
+          parts,
+          fixablyItems: fixablySnapshot?.items || []
+        }, 8);
 
         // Site-restricted staff only search units belonging to or shipped to their branch
         const permittedSerials = resolvedSerials.filter(sd => {
@@ -339,7 +341,7 @@ export default function CommandPalette({ isOpen, onClose }) {
     }
 
     return list;
-  }, [query, accessiblePages, parts, inventoryUnits, shipments, repairUsageRecords, sites, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose, currentUser, userSiteObj, setPmgSubTab]);
+  }, [query, accessiblePages, parts, inventoryUnits, shipments, repairUsageRecords, sites, canAccess, setActiveTab, setSelectedCategory, autoRefreshData, showToast, handleClose, currentUser, userSiteObj, setPmgSubTab, fixablySnapshot]);
 
   const handleInputKeyDown = (e) => {
     if (e.key === 'ArrowDown') {

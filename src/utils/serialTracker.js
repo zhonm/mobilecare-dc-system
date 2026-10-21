@@ -87,11 +87,13 @@ export function extractSerialNumber(rawInput) {
  *
  * @param {string} serialInput - The serial number or partial string to query
  * @param {Object} options
+ * @param {Object} options
  * @param {Array} options.inventoryUnits - Current active inventory units
  * @param {Array} options.shipments - Outbound and confirmed shipment manifests
  * @param {Array} options.repairUsageRecords - Consumed repair records
  * @param {Array} options.sites - Master list of site objects
  * @param {Array} options.parts - Master parts catalog
+ * @param {Array} options.fixablyItems - Active branch site stock snapshot items
  * @returns {Object|null} Comprehensive serial dossier object
  */
 export function resolveSerialFullDetails(serialInput, {
@@ -99,7 +101,8 @@ export function resolveSerialFullDetails(serialInput, {
   shipments = [],
   repairUsageRecords = [],
   sites = [],
-  parts = []
+  parts = [],
+  fixablyItems = []
 } = {}) {
   const cleanSerial = cleanSerialNumberInput(serialInput);
   if (!cleanSerial) return null;
@@ -129,13 +132,21 @@ export function resolveSerialFullDetails(serialInput, {
     cleanSerialNumberInput(r.serial_number) === cleanSerial
   );
 
+  // 4. Check Fixably Branch Inventory Items
+  let fixablyUnit = null;
+  if (Array.isArray(fixablyItems)) {
+    fixablyUnit = fixablyItems.find(it =>
+      cleanSerialNumberInput(it.serialNumber || it.serial_number) === cleanSerial
+    );
+  }
+
   // If serial is not found in any dataset, return null
-  if (!unit && !linkedShipment && !usageRecord) {
+  if (!unit && !linkedShipment && !usageRecord && !fixablyUnit) {
     return null;
   }
 
-  // 4. Resolve Part Metadata
-  const rawPn = unit?.part_number || shipmentItem?.part_number || shipmentItem?.partNumber || usageRecord?.part_number || '';
+  // 5. Resolve Part Metadata
+  const rawPn = unit?.part_number || shipmentItem?.part_number || shipmentItem?.partNumber || usageRecord?.part_number || fixablyUnit?.partNumber || fixablyUnit?.part_number || '';
   const cleanPn = String(rawPn).trim().toUpperCase();
 
   const fullCatalog = [...(parts || []), ...(defaultPartsCatalog || [])];
@@ -144,18 +155,18 @@ export function resolveSerialFullDetails(serialInput, {
     || null;
 
   const partNumber = matchedPart?.part_number || cleanPn || 'Apple Service Part';
-  const partDescription = matchedPart?.description || unit?.description || shipmentItem?.description || usageRecord?.description || 'Apple Genuine Component';
+  const partDescription = matchedPart?.description || fixablyUnit?.description || unit?.description || shipmentItem?.description || usageRecord?.description || 'Apple Genuine Component';
   const iphoneModel = matchedPart?.iphone_model || unit?.iphone_model || 'iPhone';
   const categoryId = matchedPart?.category_id || unit?.category_id || '';
   const stockingPrice = matchedPart?.stocking_price || unit?.stocking_price || 0;
 
-  // 5. Determine Destination Site / Current Site
-  const currentSiteId = unit?.current_site_id || unit?.site_id || linkedShipment?.site_id;
-  const currentSiteCode = unit?.site_code || linkedShipment?.site_code;
+  // 6. Determine Destination Site / Current Site
+  const currentSiteId = unit?.current_site_id || unit?.site_id || linkedShipment?.site_id || fixablyUnit?.siteId;
+  const currentSiteCode = unit?.site_code || linkedShipment?.site_code || fixablyUnit?.siteCode;
 
   let siteObj = (sites || []).find(s =>
     (currentSiteId && s.id === currentSiteId) ||
-    (currentSiteCode && s.code?.toUpperCase() === currentSiteCode.toUpperCase())
+    (currentSiteCode && s.code?.toUpperCase().replace(/^(ASP|APP)\s+/, '') === String(currentSiteCode).toUpperCase().replace(/^(ASP|APP)\s+/, ''))
   );
 
   // If still not resolved, check usageRecord site
@@ -164,21 +175,22 @@ export function resolveSerialFullDetails(serialInput, {
   }
 
   const isDcSite = (
-    !siteObj ||
-    siteObj.id === 'site-dc' ||
-    siteObj.code === 'DC-MDC' ||
-    siteObj.code === 'DC' ||
-    siteObj.is_dc === true
+    (!fixablyUnit && !siteObj) ||
+    siteObj?.id === 'site-dc' ||
+    siteObj?.code === 'DC-MDC' ||
+    siteObj?.code === 'DC' ||
+    siteObj?.is_dc === true ||
+    (fixablyUnit && (fixablyUnit.stockType === 'DC Stock' || fixablyUnit.stockType === 'DC_STOCK'))
   );
 
-  const siteName = isDcSite ? 'DC Stocks' : (siteObj ? siteObj.name : 'Branch Site');
-  const siteCode = siteObj ? siteObj.code : (isDcSite ? 'DC-MDC' : 'BRANCH');
+  const siteName = fixablyUnit?.siteName || (isDcSite ? 'DC Stocks' : (siteObj ? siteObj.name : 'Branch Site'));
+  const siteCode = fixablyUnit?.siteCode || (siteObj ? siteObj.code : (isDcSite ? 'DC-MDC' : 'BRANCH'));
 
-  // 6. Determine Lifecycle Status
+  // 7. Determine Lifecycle Status
   // Priority order:
   // A. Used (in repair usage records or unit status is 'used')
   // B. In Transit (in an active shipment that is not received_confirmed)
-  // C. In Stock at Branch (confirmed received at site)
+  // C. In Stock at Branch (confirmed received at site or in Fixably site stock)
   // D. In Stock at DC (at central distribution center)
   const isUsed = Boolean(
     unit?.status === 'used' ||
@@ -214,8 +226,8 @@ export function resolveSerialFullDetails(serialInput, {
     statusBadgeType = 'dc';
   }
 
-  // 7. Recorded Site Arrival Date
-  // Resolved from confirmed shipment received date or unit received timestamp at the site
+  // 8. Recorded Site Arrival Date
+  // Resolved from confirmed shipment received date or unit received timestamp at the site or Fixably dateReceived
   let siteArrivalDate = null;
   let siteArrivalFormatted = null;
 
@@ -223,6 +235,8 @@ export function resolveSerialFullDetails(serialInput, {
     siteArrivalDate = linkedShipment.received_date || linkedShipment.received_at;
   } else if (!isDcSite && (unit?.received_at || unit?.received_date)) {
     siteArrivalDate = unit.received_date || unit.received_at;
+  } else if (fixablyUnit?.lastReceivedDate || fixablyUnit?.dateReceived) {
+    siteArrivalDate = fixablyUnit.lastReceivedDate || fixablyUnit.dateReceived;
   }
 
   if (siteArrivalDate) {
@@ -236,7 +250,7 @@ export function resolveSerialFullDetails(serialInput, {
     }
   }
 
-  // 8. Recorded Date Used
+  // 9. Recorded Date Used
   let dateUsed = null;
   let dateUsedFormatted = null;
   let usedByName = null;
@@ -260,7 +274,7 @@ export function resolveSerialFullDetails(serialInput, {
     usageNotes = usageRecord?.usage_notes || unit?.usage_notes || unit?.notes || '';
   }
 
-  // 9. DC Scan-In / Intake Date
+  // 10. DC Scan-In / Intake Date
   const dcScanInDate = unit?.created_at || unit?.received_at || null;
   let dcScanInFormatted = null;
   if (dcScanInDate) {
@@ -293,8 +307,8 @@ export function resolveSerialFullDetails(serialInput, {
     stockingPrice,
     stocking_price: stockingPrice,
     // Stock Ownership & Movement History
-    currentOwner: unit?.current_owner || ownership.currentOwner,
-    current_owner: unit?.current_owner || ownership.currentOwner,
+    currentOwner: unit?.current_owner || fixablyUnit?.stockType || ownership.currentOwner,
+    current_owner: unit?.current_owner || fixablyUnit?.stockType || ownership.currentOwner,
     movementHistory: unit?.movement_history || ownership.movementHistory,
     movement_history: unit?.movement_history || ownership.movementHistory,
     movementTrail: ownership.movementTrail,
@@ -306,6 +320,11 @@ export function resolveSerialFullDetails(serialInput, {
     latestTransferFormatted: ownership.latestTransferFormatted,
     transfers: ownership.transfers,
     transfer_history: ownership.transfers,
+    // Fixably specifics
+    agingDays: fixablyUnit?.agingDays ?? null,
+    agingBracket: fixablyUnit?.agingBracket ?? null,
+    stockType: fixablyUnit?.stockType || unit?.stock_type || (isDcSite ? 'DC Stock' : 'MSPI-Owned'),
+    isInvestigation: Boolean(fixablyUnit?.isInvestigation),
     // Location & Stock State
     status: unit?.status || (isUsed ? 'used' : isShippedInTransit ? 'shipped' : 'in_stock'),
     statusKey,
@@ -318,7 +337,7 @@ export function resolveSerialFullDetails(serialInput, {
     site_code: siteCode,
     siteName,
     site_name: siteName,
-    siteRegion: siteObj?.region || (siteObj?.province ? 'Provincial' : 'Metro Manila'),
+    siteRegion: fixablyUnit?.region || siteObj?.region || (siteObj?.province ? 'Provincial' : 'Metro Manila'),
     // Usage Details
     isUsed,
     is_used: isUsed,
@@ -369,12 +388,12 @@ export function resolveSerialFullDetails(serialInput, {
       riderName: linkedShipment.rider_name
     } : null,
     // Raw source reference
-    rawUnit: unit || null
+    rawUnit: unit || fixablyUnit || null
   };
 }
 
 /**
- * Searches across all inventory units, shipments, and usage records for serials matching a query
+ * Searches across all inventory units, shipments, usage records, and branch site stock for serials matching a query
  *
  * @param {string} query
  * @param {Object} datasets
@@ -386,7 +405,8 @@ export function searchSerialsWithFullDetails(query, {
   shipments = [],
   repairUsageRecords = [],
   sites = [],
-  parts = []
+  parts = [],
+  fixablyItems = []
 } = {}, maxResults = 5) {
   if (!query || !query.trim()) return [];
 
@@ -421,6 +441,14 @@ export function searchSerialsWithFullDetails(query, {
     }
   });
 
+  // 4. Match from fixablyItems (Branch stock snapshot)
+  (fixablyItems || []).forEach(f => {
+    const s = cleanSerialNumberInput(f.serialNumber || f.serial_number);
+    if (s && s.includes(cleanQuery)) {
+      matchedSerialsSet.add(s);
+    }
+  });
+
   const serialsList = Array.from(matchedSerialsSet);
 
   // Sort exact matches first, then prefix matches, then substring matches
@@ -438,7 +466,8 @@ export function searchSerialsWithFullDetails(query, {
       shipments,
       repairUsageRecords,
       sites,
-      parts
+      parts,
+      fixablyItems
     })
   ).filter(Boolean);
 }

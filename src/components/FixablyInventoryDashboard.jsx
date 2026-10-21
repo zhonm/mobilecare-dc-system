@@ -26,12 +26,15 @@ import {
   ShieldAlert,
   Zap,
   Lock,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Barcode
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
 import { supabase } from '../supabase/client.js';
 import { resolveSite } from '../utils/appContextHelpers.js';
 import { isProvincialSite } from '../utils/partResolver.js';
+import { resolveSerialFullDetails } from '../utils/serialTracker.js';
+import SerialDossierModal from './SerialDossierModal.jsx';
 import {
   validateFixablyFile,
   reconcileFixablyMultiFile,
@@ -177,11 +180,15 @@ export default function FixablyInventoryDashboard({
   const [segmentedTab, setSegmentedTab] = useState('dead_stock'); // 'dead_stock' | 'non_moving' | 'slow_moving' | 'active_stock' | 'investigation' | 'part_aggregations' | 'all_stock'
   const [expandedPartPn, setExpandedPartPn] = useState(null);
 
-  // 5. Cross-Site Part Number Search & Autocomplete State
+  // 5. Cross-Site Part Number & Serial Number Search & Autocomplete State
   const [partSearchInput, setPartSearchInput] = useState('');
   const [partSearchQuery, setPartSearchQuery] = useState('');
+  const [selectedSerialUnit, setSelectedSerialUnit] = useState(null);
+  const [highlightedSerial, setHighlightedSerial] = useState(null);
+  const [inspectedSerialDetails, setInspectedSerialDetails] = useState(null);
   const [isPartDropdownOpen, setIsPartDropdownOpen] = useState(false);
   const [highlightedPartIndex, setHighlightedPartIndex] = useState(-1);
+  const [branchFilterQuery, setBranchFilterQuery] = useState('');
   const partSearchContainerRef = useRef(null);
 
   // Close autocomplete dropdown on click outside
@@ -878,6 +885,20 @@ export default function FixablyInventoryDashboard({
     }) || snapshot.sites[0] || null;
   }, [snapshot, selectedSiteCode]);
 
+  // Filtered part aggregations for the currently viewed site based on branchFilterQuery
+  const displayedPartAggregations = useMemo(() => {
+    if (!currentSiteData?.metrics?.partAggregations) return [];
+    const q = String(branchFilterQuery || '').trim().toLowerCase();
+    if (!q) return currentSiteData.metrics.partAggregations;
+
+    return currentSiteData.metrics.partAggregations.filter(partRow => {
+      const pn = String(partRow.partNumber || '').toLowerCase();
+      const desc = String(partRow.partDescription || '').toLowerCase();
+      const hasSerial = (partRow.serials || []).some(s => String(s).toLowerCase().includes(q));
+      return pn.includes(q) || desc.includes(q) || hasSerial;
+    });
+  }, [currentSiteData?.metrics?.partAggregations, branchFilterQuery]);
+
   // Check if current viewed site is assigned to the active user
   const isCurrentSiteAssignedToUser = useMemo(() => {
     if (!currentSiteData) return false;
@@ -1072,6 +1093,52 @@ export default function FixablyInventoryDashboard({
       });
   }, [snapshot?.items, parts, _parts]);
 
+  // Total serialized units in the snapshot
+  const totalSerializedUnits = useMemo(() => {
+    if (!Array.isArray(snapshot?.items)) return 0;
+    return snapshot.items.filter(it => it.serialNumber && !it.serialNumber.startsWith('Non-serialized')).length;
+  }, [snapshot?.items]);
+
+  // Autocomplete matching serial numbers based on user search input
+  const matchingSerials = useMemo(() => {
+    const raw = String(partSearchInput || '').trim();
+    if (!raw || raw.length < 2) return [];
+    const q = raw.toUpperCase();
+    const qClean = q.replace(/[^A-Z0-9]/g, '');
+
+    if (!Array.isArray(snapshot?.items)) return [];
+
+    const matches = [];
+    const seen = new Set();
+
+    for (const it of snapshot.items) {
+      const sn = String(it.serialNumber || it.serial_number || '').trim();
+      if (!sn || sn.startsWith('Non-serialized')) continue;
+      const snClean = sn.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+      if (sn.toUpperCase().includes(q) || (qClean && snClean.includes(qClean))) {
+        const key = `${sn}-${it.siteCode}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          matches.push(it);
+          if (matches.length >= 25) break;
+        }
+      }
+    }
+
+    matches.sort((a, b) => {
+      const snA = String(a.serialNumber || '').toUpperCase();
+      const snB = String(b.serialNumber || '').toUpperCase();
+      if (snA === q) return -1;
+      if (snB === q) return 1;
+      if (snA.startsWith(q) && !snB.startsWith(q)) return -1;
+      if (!snA.startsWith(q) && snB.startsWith(q)) return 1;
+      return snA.localeCompare(snB);
+    });
+
+    return matches;
+  }, [snapshot?.items, partSearchInput]);
+
   // Autocomplete filtered list based on user search input
   const filteredPartCatalog = useMemo(() => {
     const raw = String(partSearchInput || '').trim();
@@ -1087,11 +1154,41 @@ export default function FixablyInventoryDashboard({
     }).slice(0, 40);
   }, [activePartCatalog, partSearchInput]);
 
-  // Available stock per site for the currently searched part number
+  // Serial unit located by exact serial search query or user selection
+  const locatedSerialUnit = useMemo(() => {
+    if (selectedSerialUnit) return selectedSerialUnit;
+    const query = String(partSearchQuery || partSearchInput || '').trim().toUpperCase();
+    if (!query || query.length < 3) return null;
+    const queryClean = query.replace(/[^A-Z0-9]/g, '');
+
+    if (!Array.isArray(snapshot?.items)) return null;
+
+    const exact = snapshot.items.find(it => {
+      const sn = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
+      const snClean = sn.replace(/[^A-Z0-9]/g, '');
+      return sn === query || (queryClean && snClean === queryClean);
+    });
+
+    return exact || null;
+  }, [selectedSerialUnit, partSearchQuery, partSearchInput, snapshot?.items]);
+
+  // Available stock per site for the currently searched part number or located serial
   const partStockBySite = useMemo(() => {
     const query = String(partSearchQuery || '').trim().toUpperCase();
     if (!query) return null;
-    const queryClean = query.replace(/[^A-Z0-9]/g, '');
+
+    // If query matches a serial or if serial was located, resolve to its part number
+    const matchedSerial = locatedSerialUnit || (Array.isArray(snapshot?.items)
+      ? snapshot.items.find(it => {
+          const sn = String(it.serialNumber || it.serial_number || '').trim().toUpperCase();
+          const clean = sn.replace(/[^A-Z0-9]/g, '');
+          const qClean = query.replace(/[^A-Z0-9]/g, '');
+          return sn === query || (qClean && clean === qClean);
+        })
+      : null);
+
+    const targetPartQuery = matchedSerial ? String(matchedSerial.partNumber || '').trim().toUpperCase() : query;
+    const queryClean = targetPartQuery.replace(/[^A-Z0-9]/g, '');
 
     const provCodes = new Set(['ABR', 'CDO', 'CEB', 'COT', 'CBO', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM']);
 
@@ -1099,16 +1196,16 @@ export default function FixablyInventoryDashboard({
     const matchingItems = (snapshot?.items || []).filter(it => {
       const itPn = String(it.partNumber || '').trim().toUpperCase();
       const itPnClean = itPn.replace(/[^A-Z0-9]/g, '');
-      return itPn === query || (queryClean && itPnClean === queryClean);
+      return itPn === targetPartQuery || (queryClean && itPnClean === queryClean);
     });
 
     const catalogEntry = activePartCatalog.find(p => {
       const pPn = p.partNumber.toUpperCase();
-      return pPn === query || (queryClean && pPn.replace(/[^A-Z0-9]/g, '') === queryClean);
+      return pPn === targetPartQuery || (queryClean && pPn.replace(/[^A-Z0-9]/g, '') === queryClean);
     });
 
-    const partDescription = matchingItems[0]?.description || catalogEntry?.description || '';
-    const canonicalPartNumber = catalogEntry?.partNumber || matchingItems[0]?.partNumber || query;
+    const partDescription = matchedSerial?.description || matchingItems[0]?.description || catalogEntry?.description || '';
+    const canonicalPartNumber = matchedSerial?.partNumber || catalogEntry?.partNumber || matchingItems[0]?.partNumber || targetPartQuery;
 
     // Group items by site
     const siteStockMap = new Map();
@@ -1147,7 +1244,7 @@ export default function FixablyInventoryDashboard({
 
       const sEntry = siteStockMap.get(cleanSiteCode);
       sEntry.totalUnits += 1;
-      if (it.stockType === 'DC_STOCK') {
+      if (it.stockType === 'DC_STOCK' || it.stockType === 'DC Stock') {
         sEntry.dcStockUnits += 1;
       } else {
         sEntry.mspiOwnedUnits += 1;
@@ -1166,9 +1263,44 @@ export default function FixablyInventoryDashboard({
       partDescription,
       totalNetworkUnits: matchingItems.length,
       sitesCount: sitesWithStock.length,
-      sitesWithStock
+      sitesWithStock,
+      locatedSerial: matchedSerial
     };
-  }, [partSearchQuery, snapshot?.items, snapshot?.sites, sites, activePartCatalog]);
+  }, [partSearchQuery, snapshot?.items, snapshot?.sites, sites, activePartCatalog, locatedSerialUnit]);
+
+  const handleSelectSerial = useCallback((unit) => {
+    if (!unit) return;
+    setSelectedSerialUnit(unit);
+    setPartSearchInput(unit.serialNumber);
+    setPartSearchQuery(unit.serialNumber);
+    setIsPartDropdownOpen(false);
+
+    // Auto-navigate to the branch site
+    const cleanSiteCode = String(unit.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    const siteObj = (snapshot?.sites || []).find(s => {
+      const sc = String(s.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+      return sc === cleanSiteCode;
+    }) || (sites || []).find(s => {
+      const sc = String(s.code || s.site_code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+      return sc === cleanSiteCode;
+    });
+
+    const provCodes = new Set(['ABR', 'CDO', 'CEB', 'COT', 'CBO', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM']);
+    const isProv = provCodes.has(cleanSiteCode) || isProvincialSite(siteObj || { code: cleanSiteCode, name: unit.siteName });
+
+    setSelectedRegion(isProv ? 'provincial' : 'metro_manila');
+    setSelectedSiteCode(cleanSiteCode);
+    setSegmentedTab('part_aggregations');
+    setExpandedPartPn(unit.partNumber);
+    setHighlightedSerial(unit.serialNumber);
+
+    showToast?.(`Located serial ${unit.serialNumber} at ${unit.siteName || unit.siteCode}`, 'success');
+
+    setTimeout(() => {
+      const el = document.getElementById(`serial-chip-${unit.serialNumber}`) || document.getElementById('branch-stock-section');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+  }, [snapshot?.sites, sites, showToast]);
 
   const handleSelectSiteFromSearch = useCallback((site) => {
     setSelectedRegion(site.region);
@@ -2319,8 +2451,8 @@ export default function FixablyInventoryDashboard({
                     onChange={(e) => setInvestigationFilter(e.target.value)}
                   >
                     <option value="ALL">All Statuses</option>
-                    <option value="INVESTIGATION_ONLY">⚠️ Flagged in Closed Repairs ({snapshot?.investigationItems?.length || snapshot?.globalMetrics?.investigationCount || 0})</option>
-                    <option value="CLEAN_ONLY">✓ Verified Clean Stock</option>
+                    <option value="INVESTIGATION_ONLY">Flagged in Closed Repairs ({snapshot?.investigationItems?.length || snapshot?.globalMetrics?.investigationCount || 0})</option>
+                    <option value="CLEAN_ONLY">Verified Clean Stock</option>
                   </select>
                 </div>
 
@@ -2379,7 +2511,7 @@ export default function FixablyInventoryDashboard({
                 </span>
                 {filteredMasterItems.filter(i => i.isInvestigation).length > 0 && (
                   <span className="badge" style={{ background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontSize: '11px', fontWeight: 800 }}>
-                    ⚠️ Flagged: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
+                    Flagged: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
                   </span>
                 )}
               </div>
@@ -2719,11 +2851,11 @@ export default function FixablyInventoryDashboard({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Search size={18} color="#0284c7" />
                   <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.01em' }}>
-                    Search Stock Availability by Part Number
+                    Search Stock Availability by Part Number or Serial #
                   </h3>
                 </div>
                 <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#64748b' }}>
-                  Lookup any active Apple part number to view immediate on-hand quantities across all authorized service branch sites.
+                  Lookup any active Apple part number or search a serial number to view immediate branch location and on-hand quantities across all authorized service branch sites.
                 </p>
               </div>
 
@@ -2739,7 +2871,7 @@ export default function FixablyInventoryDashboard({
                     border: '1px solid #bae6fd'
                   }}
                 >
-                  {activePartCatalog.length.toLocaleString()} Active Part Numbers
+                  {activePartCatalog.length.toLocaleString()} Active Parts • {totalSerializedUnits.toLocaleString()} Serials
                 </span>
               </div>
             </div>
@@ -2768,25 +2900,55 @@ export default function FixablyInventoryDashboard({
                     setIsPartDropdownOpen(true);
                     setHighlightedPartIndex(-1);
                     if (!val.trim()) {
+                      setSelectedSerialUnit(null);
                       setPartSearchQuery('');
                     }
                   }}
                   onFocus={() => setIsPartDropdownOpen(true)}
                   onKeyDown={(e) => {
+                    const totalItems = matchingSerials.length + filteredPartCatalog.length;
                     if (e.key === 'ArrowDown') {
                       e.preventDefault();
-                      setHighlightedPartIndex(prev => Math.min(prev + 1, filteredPartCatalog.length - 1));
+                      setHighlightedPartIndex(prev => Math.min(prev + 1, totalItems - 1));
                     } else if (e.key === 'ArrowUp') {
                       e.preventDefault();
                       setHighlightedPartIndex(prev => Math.max(prev - 1, 0));
                     } else if (e.key === 'Enter') {
                       e.preventDefault();
-                      if (highlightedPartIndex >= 0 && filteredPartCatalog[highlightedPartIndex]) {
-                        const sel = filteredPartCatalog[highlightedPartIndex];
+                      if (highlightedPartIndex >= 0) {
+                        if (highlightedPartIndex < matchingSerials.length) {
+                          handleSelectSerial(matchingSerials[highlightedPartIndex]);
+                          return;
+                        } else {
+                          const pIdx = highlightedPartIndex - matchingSerials.length;
+                          if (filteredPartCatalog[pIdx]) {
+                            const sel = filteredPartCatalog[pIdx];
+                            setSelectedSerialUnit(null);
+                            setPartSearchInput(sel.partNumber);
+                            setPartSearchQuery(sel.partNumber);
+                            setIsPartDropdownOpen(false);
+                            return;
+                          }
+                        }
+                      }
+
+                      // If not explicitly highlighted, check if serial matches
+                      if (matchingSerials.length > 0) {
+                        handleSelectSerial(matchingSerials[0]);
+                        return;
+                      }
+
+                      if (filteredPartCatalog.length > 0) {
+                        const sel = filteredPartCatalog[0];
+                        setSelectedSerialUnit(null);
                         setPartSearchInput(sel.partNumber);
                         setPartSearchQuery(sel.partNumber);
                         setIsPartDropdownOpen(false);
-                      } else if (partSearchInput.trim()) {
+                        return;
+                      }
+
+                      if (partSearchInput.trim()) {
+                        setSelectedSerialUnit(null);
                         setPartSearchQuery(partSearchInput.trim());
                         setIsPartDropdownOpen(false);
                       }
@@ -2794,7 +2956,7 @@ export default function FixablyInventoryDashboard({
                       setIsPartDropdownOpen(false);
                     }
                   }}
-                  placeholder="Type or select Part Number (e.g. 661-30401, 661-24546, or part description)..."
+                  placeholder="Type or scan Serial # (e.g. G9QHQ...), Part Number (e.g. 661-44797), or description..."
                   style={{
                     flex: 1,
                     border: 'none',
@@ -2810,6 +2972,8 @@ export default function FixablyInventoryDashboard({
                   <button
                     type="button"
                     onClick={() => {
+                      setSelectedSerialUnit(null);
+                      setHighlightedSerial(null);
                       setPartSearchInput('');
                       setPartSearchQuery('');
                       setIsPartDropdownOpen(false);
@@ -2848,98 +3012,172 @@ export default function FixablyInventoryDashboard({
                     border: '1.5px solid #cbd5e1',
                     borderRadius: '10px',
                     boxShadow: '0 12px 30px -4px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(226, 232, 240, 0.8)',
-                    maxHeight: '320px',
+                    maxHeight: '360px',
                     overflowY: 'auto'
                   }}
                   className="custom-scrollbar"
                 >
-                  <div style={{ padding: '8px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Active Part Number Catalog</span>
-                    <span>{filteredPartCatalog.length} Matching Results</span>
-                  </div>
+                  {/* SECTION A: Matching Serial Numbers */}
+                  {matchingSerials.length > 0 && (
+                    <div>
+                      <div style={{ padding: '8px 14px', background: '#f0fdf4', borderBottom: '1px solid #bbf7d0', fontSize: '11px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Barcode size={13} color="#15803d" />
+                          Matching Serial Numbers ({matchingSerials.length})
+                        </span>
+                        <span style={{ fontSize: '10px', color: '#166534', fontWeight: 700 }}>Direct Branch Location</span>
+                      </div>
+                      {matchingSerials.map((unit, idx) => {
+                        const isHighlighted = idx === highlightedPartIndex;
+                        const isSelected = selectedSerialUnit?.serialNumber === unit.serialNumber;
 
-                  {filteredPartCatalog.length === 0 ? (
-                    <div style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>
-                      No active part numbers matching <code style={{ color: '#0f172a', fontWeight: 700 }}>"{partSearchInput}"</code>
-                    </div>
-                  ) : (
-                    filteredPartCatalog.map((item, idx) => {
-                      const isHighlighted = idx === highlightedPartIndex;
-                      const isSelected = partSearchQuery.toUpperCase() === item.partNumber.toUpperCase();
-
-                      return (
-                        <div
-                          key={item.partNumber}
-                          onClick={() => {
-                            setPartSearchInput(item.partNumber);
-                            setPartSearchQuery(item.partNumber);
-                            setIsPartDropdownOpen(false);
-                          }}
-                          onMouseEnter={() => setHighlightedPartIndex(idx)}
-                          style={{
-                            padding: '10px 14px',
-                            borderBottom: '1px solid #f1f5f9',
-                            cursor: 'pointer',
-                            background: isSelected ? '#f0f9ff' : (isHighlighted ? '#f8fafc' : '#ffffff'),
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '12px',
-                            transition: 'background 0.1s ease'
-                          }}
-                        >
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0284c7', fontFamily: 'monospace' }}>
-                                {item.partNumber}
-                              </span>
-                              {isSelected && (
-                                <span style={{ fontSize: '10px', fontWeight: 800, background: '#0284c7', color: '#ffffff', padding: '1px 6px', borderRadius: '4px' }}>
-                                  Active Query
+                        return (
+                          <div
+                            key={`sn-${unit.serialNumber}-${unit.siteCode}-${idx}`}
+                            onClick={() => handleSelectSerial(unit)}
+                            onMouseEnter={() => setHighlightedPartIndex(idx)}
+                            style={{
+                              padding: '10px 14px',
+                              borderBottom: '1px solid #f1f5f9',
+                              cursor: 'pointer',
+                              background: isSelected ? '#f0f9ff' : (isHighlighted ? '#f0fdf4' : '#ffffff'),
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '12px',
+                              transition: 'background 0.1s ease'
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0f172a', fontFamily: 'monospace' }}>
+                                  {unit.serialNumber}
                                 </span>
-                              )}
+                                <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: unit.badgeBg || '#fee2e2', color: unit.badgeColor || '#dc2626' }}>
+                                  {unit.agingDays}d {unit.statusLabel || ''}
+                                </span>
+                                <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: '#f1f5f9', color: '#475569' }}>
+                                  {unit.stockType || 'Stock'}
+                                </span>
+                                {isSelected && (
+                                  <span style={{ fontSize: '10px', fontWeight: 800, background: '#16a34a', color: '#ffffff', padding: '1px 6px', borderRadius: '4px' }}>
+                                    Selected Serial
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <strong style={{ color: '#0284c7' }}>{unit.partNumber}</strong> — {unit.description || 'Apple Service Component'}
+                              </div>
                             </div>
-                            <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {item.description || 'Apple Service Component'}
-                            </div>
-                          </div>
 
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                fontWeight: 800,
-                                padding: '2px 8px',
-                                borderRadius: '999px',
-                                background: item.totalUnits > 0 ? '#ecfdf5' : '#fee2e2',
-                                color: item.totalUnits > 0 ? '#065f46' : '#991b1b',
-                                border: item.totalUnits > 0 ? '1px solid #a7f3d0' : '1px solid #fecdd3'
-                              }}
-                            >
-                              {item.totalUnits} on-hand
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                padding: '2px 8px',
-                                borderRadius: '999px',
-                                background: '#f1f5f9',
-                                color: '#334155'
-                              }}
-                            >
-                              {item.siteCount} {item.siteCount === 1 ? 'site' : 'sites'}
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                              <span style={{ fontSize: '11px', fontWeight: 800, padding: '3px 8px', borderRadius: '6px', background: '#0f172a', color: '#ffffff' }}>
+                                {unit.siteCode}
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#64748b' }}>
+                                {unit.siteName || ''}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* SECTION B: Matching Part Number Catalog */}
+                  {filteredPartCatalog.length > 0 && (
+                    <div>
+                      <div style={{ padding: '8px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Active Part Number Catalog</span>
+                        <span>{filteredPartCatalog.length} Matching Results</span>
+                      </div>
+                      {filteredPartCatalog.map((item, idx) => {
+                        const globalIdx = matchingSerials.length + idx;
+                        const isHighlighted = globalIdx === highlightedPartIndex;
+                        const isSelected = !selectedSerialUnit && partSearchQuery.toUpperCase() === item.partNumber.toUpperCase();
+
+                        return (
+                          <div
+                            key={item.partNumber}
+                            onClick={() => {
+                              setSelectedSerialUnit(null);
+                              setPartSearchInput(item.partNumber);
+                              setPartSearchQuery(item.partNumber);
+                              setIsPartDropdownOpen(false);
+                            }}
+                            onMouseEnter={() => setHighlightedPartIndex(globalIdx)}
+                            style={{
+                              padding: '10px 14px',
+                              borderBottom: '1px solid #f1f5f9',
+                              cursor: 'pointer',
+                              background: isSelected ? '#f0f9ff' : (isHighlighted ? '#f8fafc' : '#ffffff'),
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '12px',
+                              transition: 'background 0.1s ease'
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontWeight: 800, fontSize: '13.5px', color: '#0284c7', fontFamily: 'monospace' }}>
+                                  {item.partNumber}
+                                </span>
+                                {isSelected && (
+                                  <span style={{ fontSize: '10px', fontWeight: 800, background: '#0284c7', color: '#ffffff', padding: '1px 6px', borderRadius: '4px' }}>
+                                    Active Query
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {item.description || 'Apple Service Component'}
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: item.totalUnits > 0 ? '#ecfdf5' : '#fee2e2',
+                                  color: item.totalUnits > 0 ? '#065f46' : '#991b1b',
+                                  border: item.totalUnits > 0 ? '1px solid #a7f3d0' : '1px solid #fecdd3'
+                                }}
+                              >
+                                {item.totalUnits} on-hand
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: '#f1f5f9',
+                                  color: '#334155'
+                                }}
+                              >
+                                {item.siteCount} {item.siteCount === 1 ? 'site' : 'sites'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Empty State */}
+                  {matchingSerials.length === 0 && filteredPartCatalog.length === 0 && (
+                    <div style={{ padding: '24px 16px', textAlign: 'center', color: '#64748b', fontSize: '13px' }}>
+                      No active part numbers or serials matching <code style={{ color: '#0f172a', fontWeight: 700 }}>"{partSearchInput}"</code>
+                    </div>
                   )}
                 </div>
               )}
             </div>
 
-            {/* RESULTS PANEL: When a part number is searched */}
+            {/* RESULTS PANEL: When a part number or serial is searched */}
             {partStockBySite && (
               <div
                 style={{
@@ -2950,6 +3188,116 @@ export default function FixablyInventoryDashboard({
                   borderRadius: '10px'
                 }}
               >
+                {/* Dedicated Serial Located Card */}
+                {partStockBySite.locatedSerial && (
+                  <div
+                    style={{
+                      marginBottom: '16px',
+                      padding: '14px 18px',
+                      background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)',
+                      border: '2px solid #86efac',
+                      borderRadius: '10px',
+                      boxShadow: '0 4px 12px rgba(22, 163, 74, 0.08)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                        <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#16a34a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 6px rgba(22, 163, 74, 0.3)' }}>
+                          <Barcode size={22} />
+                        </div>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                              Serial Number Located
+                            </span>
+                            <span style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', fontFamily: 'monospace' }}>
+                              {partStockBySite.locatedSerial.serialNumber}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(partStockBySite.locatedSerial.serialNumber, 'Serial')}
+                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#16a34a', padding: '2px' }}
+                              title="Copy serial"
+                            >
+                              <Copy size={13} />
+                            </button>
+                            <span style={{ fontSize: '11px', fontWeight: 800, padding: '2px 8px', borderRadius: '4px', background: partStockBySite.locatedSerial.badgeBg || '#fee2e2', color: partStockBySite.locatedSerial.badgeColor || '#dc2626' }}>
+                              {partStockBySite.locatedSerial.agingDays}d {partStockBySite.locatedSerial.statusLabel || ''}
+                            </span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1' }}>
+                              {partStockBySite.locatedSerial.stockType || 'Stock'}
+                            </span>
+                          </div>
+
+                          <div style={{ fontSize: '13px', color: '#334155', marginTop: '4px' }}>
+                            Part: <strong style={{ color: '#0284c7', fontFamily: 'monospace' }}>{partStockBySite.locatedSerial.partNumber}</strong> — {partStockBySite.locatedSerial.description || partStockBySite.partDescription || 'Apple Genuine Component'}
+                          </div>
+
+                          <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <MapPin size={13} color="#0284c7" />
+                            <span>Currently on-hand at: <strong style={{ color: '#0f172a' }}>{partStockBySite.locatedSerial.siteCode}</strong> — {partStockBySite.locatedSerial.siteName || `Branch ${partStockBySite.locatedSerial.siteCode}`}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectSerial(partStockBySite.locatedSerial)}
+                          style={{
+                            padding: '8px 14px',
+                            background: '#16a34a',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            boxShadow: '0 2px 6px rgba(22, 163, 74, 0.25)'
+                          }}
+                        >
+                          <Building2 size={13} />
+                          <span>Jump to {partStockBySite.locatedSerial.siteCode} Stock &amp; Highlight</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const sd = resolveSerialFullDetails(partStockBySite.locatedSerial.serialNumber, {
+                              inventoryUnits: snapshot?.items || [],
+                              shipments: [],
+                              repairUsageRecords: [],
+                              sites,
+                              parts,
+                              fixablyItems: snapshot?.items || []
+                            });
+                            if (sd) setInspectedSerialDetails(sd);
+                          }}
+                          style={{
+                            padding: '8px 14px',
+                            background: '#ffffff',
+                            color: '#0369a1',
+                            border: '1.5px solid #0284c7',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}
+                        >
+                          <Zap size={13} />
+                          <span>Serial Dossier</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Result Summary Bar */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px', paddingBottom: '12px', borderBottom: '1px solid #cbd5e1' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2977,6 +3325,8 @@ export default function FixablyInventoryDashboard({
                   <button
                     type="button"
                     onClick={() => {
+                      setSelectedSerialUnit(null);
+                      setHighlightedSerial(null);
                       setPartSearchInput('');
                       setPartSearchQuery('');
                       setIsPartDropdownOpen(false);
@@ -3257,7 +3607,7 @@ export default function FixablyInventoryDashboard({
                           }}
                           title={`${invCount} serials flagged in closed repairs`}
                         >
-                          {invCount} ⚠️
+                          {invCount}
                         </span>
                       )}
                     </button>
@@ -3270,7 +3620,7 @@ export default function FixablyInventoryDashboard({
 
           {/* Selected Site Detail Banner */}
           {currentSiteData && (
-            <div className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1.5px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)' }}>
+            <div id="branch-stock-section" className="card" style={{ padding: '18px 22px', background: '#ffffff', border: '1.5px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
                 
                 <div style={{ flex: 1, minWidth: '280px' }}>
@@ -3289,7 +3639,7 @@ export default function FixablyInventoryDashboard({
                     )}
                     {currentSiteData.investigationCount > 0 && (isSuperadmin || isCurrentSiteAssignedToUser) && (
                       <span className="badge" style={{ fontSize: '11.5px', background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontWeight: 800 }}>
-                        ⚠️ {currentSiteData.investigationCount} Closed Repair Matches
+                        {currentSiteData.investigationCount} Closed Repair Matches
                       </span>
                     )}
                     {isPmgUser && (
@@ -3662,205 +4012,247 @@ export default function FixablyInventoryDashboard({
           {currentSiteData?.metrics && (
             <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1.5px solid #cbd5e1', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 16px rgba(15, 23, 42, 0.05)' }}>
               
-              {/* Segmented Sub-Tab Header */}
-              <div style={{ padding: '8px 16px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                
-                {/* Aging & Investigation Sub-Tabs strictly for Superadmin or Assigned Site */}
-                {(isSuperadmin || isCurrentSiteAssignedToUser) && (
-                  <>
-                    {/* Tab 1: Dead Stock */}
-                    <button
-                      type="button"
-                      onClick={() => setSegmentedTab('dead_stock')}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        fontSize: '12px',
-                        fontWeight: segmentedTab === 'dead_stock' ? 800 : 600,
-                        background: segmentedTab === 'dead_stock' ? '#fff1f2' : 'transparent',
-                        color: segmentedTab === 'dead_stock' ? '#dc2626' : '#64748b',
-                        borderBottom: segmentedTab === 'dead_stock' ? '2px solid #dc2626' : '2px solid transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <AlertTriangle size={13} color={segmentedTab === 'dead_stock' ? '#dc2626' : '#94a3b8'} />
-                      <span>Dead Stock (≥ 180d)</span>
-                      <span style={{ background: '#fecdd3', color: '#be123c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.segmentedLists.deadStock.length}
-                      </span>
-                    </button>
-
-                    {/* Tab 2: Non-Moving */}
-                    <button
-                      type="button"
-                      onClick={() => setSegmentedTab('non_moving')}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        fontSize: '12px',
-                        fontWeight: segmentedTab === 'non_moving' ? 800 : 600,
-                        background: segmentedTab === 'non_moving' ? '#fff7ed' : 'transparent',
-                        color: segmentedTab === 'non_moving' ? '#ea580c' : '#64748b',
-                        borderBottom: segmentedTab === 'non_moving' ? '2px solid #ea580c' : '2px solid transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <Clock size={13} color={segmentedTab === 'non_moving' ? '#ea580c' : '#94a3b8'} />
-                      <span>Non-Moving (90–179d)</span>
-                      <span style={{ background: '#fed7aa', color: '#c2410c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.segmentedLists.nonMoving.length}
-                      </span>
-                    </button>
-
-                    {/* Tab 3: Slow-Moving */}
-                    <button
-                      type="button"
-                      onClick={() => setSegmentedTab('slow_moving')}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        fontSize: '12px',
-                        fontWeight: segmentedTab === 'slow_moving' ? 800 : 600,
-                        background: segmentedTab === 'slow_moving' ? '#fffbeb' : 'transparent',
-                        color: segmentedTab === 'slow_moving' ? '#d97706' : '#64748b',
-                        borderBottom: segmentedTab === 'slow_moving' ? '2px solid #d97706' : '2px solid transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <TrendingDown size={13} color={segmentedTab === 'slow_moving' ? '#d97706' : '#94a3b8'} />
-                      <span>Slow-Moving (60–89d)</span>
-                      <span style={{ background: '#fde68a', color: '#b45309', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.segmentedLists.slowMoving.length}
-                      </span>
-                    </button>
-
-                    {/* Tab 4: Active Stock */}
-                    <button
-                      type="button"
-                      onClick={() => setSegmentedTab('active_stock')}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        fontSize: '12px',
-                        fontWeight: segmentedTab === 'active_stock' ? 800 : 600,
-                        background: segmentedTab === 'active_stock' ? '#f0fdf4' : 'transparent',
-                        color: segmentedTab === 'active_stock' ? '#16a34a' : '#64748b',
-                        borderBottom: segmentedTab === 'active_stock' ? '2px solid #16a34a' : '2px solid transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <CheckCircle2 size={13} color={segmentedTab === 'active_stock' ? '#16a34a' : '#94a3b8'} />
-                      <span>Active Stock (&lt; 60d)</span>
-                      <span style={{ background: '#bbf7d0', color: '#15803d', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                        {currentSiteData.metrics.segmentedLists.activeStock.length}
-                      </span>
-                    </button>
-
-                    {/* Tab 5: Dispatch / For Investigation */}
-                    <button
-                      type="button"
-                      onClick={() => setSegmentedTab('investigation')}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        fontSize: '12px',
-                        fontWeight: segmentedTab === 'investigation' ? 800 : 600,
-                        background: segmentedTab === 'investigation' ? '#fff1f2' : 'transparent',
-                        color: segmentedTab === 'investigation' ? '#be123c' : '#64748b',
-                        borderBottom: segmentedTab === 'investigation' ? '2px solid #be123c' : '2px solid transparent',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <ShieldAlert size={13} color={segmentedTab === 'investigation' ? '#be123c' : '#94a3b8'} />
-                      <span>Investigation / Cross-Used Serials</span>
-                      <span
+              {/* Segmented Sub-Tab Header with Branch Filter */}
+              <div style={{ padding: '10px 16px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', flex: 1, minWidth: '280px' }}>
+                  {/* Aging & Investigation Sub-Tabs strictly for Superadmin or Assigned Site */}
+                  {(isSuperadmin || isCurrentSiteAssignedToUser) && (
+                    <>
+                      {/* Tab 1: Dead Stock */}
+                      <button
+                        type="button"
+                        onClick={() => setSegmentedTab('dead_stock')}
                         style={{
-                          background: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#fecdd3' : '#e2e8f0',
-                          color: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#be123c' : '#475569',
-                          padding: '1px 6px',
-                          borderRadius: '999px',
-                          fontSize: '10px',
-                          fontWeight: 800
+                          padding: '8px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          fontSize: '12px',
+                          fontWeight: segmentedTab === 'dead_stock' ? 800 : 600,
+                          background: segmentedTab === 'dead_stock' ? '#fff1f2' : 'transparent',
+                          color: segmentedTab === 'dead_stock' ? '#dc2626' : '#64748b',
+                          borderBottom: segmentedTab === 'dead_stock' ? '2px solid #dc2626' : '2px solid transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
                         }}
                       >
-                        {currentSiteData.metrics.segmentedLists.investigation.length}
-                      </span>
+                        <AlertTriangle size={13} color={segmentedTab === 'dead_stock' ? '#dc2626' : '#94a3b8'} />
+                        <span>Dead Stock (≥ 180d)</span>
+                        <span style={{ background: '#fecdd3', color: '#be123c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.segmentedLists.deadStock.length}
+                        </span>
+                      </button>
+
+                      {/* Tab 2: Non-Moving */}
+                      <button
+                        type="button"
+                        onClick={() => setSegmentedTab('non_moving')}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          fontSize: '12px',
+                          fontWeight: segmentedTab === 'non_moving' ? 800 : 600,
+                          background: segmentedTab === 'non_moving' ? '#fff7ed' : 'transparent',
+                          color: segmentedTab === 'non_moving' ? '#ea580c' : '#64748b',
+                          borderBottom: segmentedTab === 'non_moving' ? '2px solid #ea580c' : '2px solid transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <Clock size={13} color={segmentedTab === 'non_moving' ? '#ea580c' : '#94a3b8'} />
+                        <span>Non-Moving (90–179d)</span>
+                        <span style={{ background: '#fed7aa', color: '#c2410c', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.segmentedLists.nonMoving.length}
+                        </span>
+                      </button>
+
+                      {/* Tab 3: Slow-Moving */}
+                      <button
+                        type="button"
+                        onClick={() => setSegmentedTab('slow_moving')}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          fontSize: '12px',
+                          fontWeight: segmentedTab === 'slow_moving' ? 800 : 600,
+                          background: segmentedTab === 'slow_moving' ? '#fffbeb' : 'transparent',
+                          color: segmentedTab === 'slow_moving' ? '#d97706' : '#64748b',
+                          borderBottom: segmentedTab === 'slow_moving' ? '2px solid #d97706' : '2px solid transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <TrendingDown size={13} color={segmentedTab === 'slow_moving' ? '#d97706' : '#94a3b8'} />
+                        <span>Slow-Moving (60–89d)</span>
+                        <span style={{ background: '#fde68a', color: '#b45309', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.segmentedLists.slowMoving.length}
+                        </span>
+                      </button>
+
+                      {/* Tab 4: Active Stock */}
+                      <button
+                        type="button"
+                        onClick={() => setSegmentedTab('active_stock')}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          fontSize: '12px',
+                          fontWeight: segmentedTab === 'active_stock' ? 800 : 600,
+                          background: segmentedTab === 'active_stock' ? '#f0fdf4' : 'transparent',
+                          color: segmentedTab === 'active_stock' ? '#16a34a' : '#64748b',
+                          borderBottom: segmentedTab === 'active_stock' ? '2px solid #16a34a' : '2px solid transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <CheckCircle2 size={13} color={segmentedTab === 'active_stock' ? '#16a34a' : '#94a3b8'} />
+                        <span>Active Stock (&lt; 60d)</span>
+                        <span style={{ background: '#bbf7d0', color: '#15803d', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                          {currentSiteData.metrics.segmentedLists.activeStock.length}
+                        </span>
+                      </button>
+
+                      {/* Tab 5: Dispatch / For Investigation */}
+                      <button
+                        type="button"
+                        onClick={() => setSegmentedTab('investigation')}
+                        style={{
+                          padding: '8px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          fontSize: '12px',
+                          fontWeight: segmentedTab === 'investigation' ? 800 : 600,
+                          background: segmentedTab === 'investigation' ? '#fff1f2' : 'transparent',
+                          color: segmentedTab === 'investigation' ? '#be123c' : '#64748b',
+                          borderBottom: segmentedTab === 'investigation' ? '2px solid #be123c' : '2px solid transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <ShieldAlert size={13} color={segmentedTab === 'investigation' ? '#be123c' : '#94a3b8'} />
+                        <span>Investigation / Cross-Used Serials</span>
+                        <span
+                          style={{
+                            background: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#fecdd3' : '#e2e8f0',
+                            color: currentSiteData.metrics.segmentedLists.investigation.length > 0 ? '#be123c' : '#475569',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            fontSize: '10px',
+                            fontWeight: 800
+                          }}
+                        >
+                          {currentSiteData.metrics.segmentedLists.investigation.length}
+                        </span>
+                      </button>
+                    </>
+                  )}
+
+                  {/* Tab 6: Part Aggregations */}
+                  <button
+                    type="button"
+                    onClick={() => setSegmentedTab('part_aggregations')}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: segmentedTab === 'part_aggregations' ? 800 : 600,
+                      background: segmentedTab === 'part_aggregations' ? '#eff6ff' : 'transparent',
+                      color: segmentedTab === 'part_aggregations' ? '#0284c7' : '#64748b',
+                      borderBottom: segmentedTab === 'part_aggregations' ? '2px solid #0284c7' : '2px solid transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Boxes size={13} color={segmentedTab === 'part_aggregations' ? '#0284c7' : '#94a3b8'} />
+                    <span>Part Aggregations (On-Hand Summary)</span>
+                    <span style={{ background: '#bae6fd', color: '#0369a1', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                      {currentSiteData.metrics.partAggregations.length} parts
+                    </span>
+                  </button>
+
+                  {/* Tab 7: All Site Stock */}
+                  <button
+                    type="button"
+                    onClick={() => setSegmentedTab('all_stock')}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: segmentedTab === 'all_stock' ? 800 : 600,
+                      background: segmentedTab === 'all_stock' ? '#f1f5f9' : 'transparent',
+                      color: segmentedTab === 'all_stock' ? '#0f172a' : '#64748b',
+                      borderBottom: segmentedTab === 'all_stock' ? '2px solid #0f172a' : '2px solid transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Layers size={13} color={segmentedTab === 'all_stock' ? '#0f172a' : '#94a3b8'} />
+                    <span>All Site Stock</span>
+                    <span style={{ background: '#e2e8f0', color: '#0f172a', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
+                      {currentSiteData.items.length} units
+                    </span>
+                  </button>
+                </div>
+
+                {/* Quick Branch Stock Search / Filter Input */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    background: '#ffffff',
+                    border: '1.5px solid #cbd5e1',
+                    borderRadius: '8px',
+                    padding: '4px 10px',
+                    minWidth: '220px',
+                    maxWidth: '340px',
+                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+                  }}
+                >
+                  <Search size={14} color="#0284c7" style={{ marginRight: '6px', flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    value={branchFilterQuery}
+                    onChange={(e) => setBranchFilterQuery(e.target.value)}
+                    placeholder="Filter branch parts or serials..."
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      outline: 'none',
+                      fontSize: '12px',
+                      width: '100%',
+                      color: '#0f172a',
+                      fontWeight: 600
+                    }}
+                  />
+                  {branchFilterQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setBranchFilterQuery('')}
+                      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'flex', alignItems: 'center' }}
+                      title="Clear filter"
+                    >
+                      <X size={13} />
                     </button>
-                  </>
-                )}
-
-                {/* Tab 6: Part Aggregations */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('part_aggregations')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'part_aggregations' ? 800 : 600,
-                    background: segmentedTab === 'part_aggregations' ? '#eff6ff' : 'transparent',
-                    color: segmentedTab === 'part_aggregations' ? '#0284c7' : '#64748b',
-                    borderBottom: segmentedTab === 'part_aggregations' ? '2px solid #0284c7' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Boxes size={13} color={segmentedTab === 'part_aggregations' ? '#0284c7' : '#94a3b8'} />
-                  <span>Part Aggregations (On-Hand Summary)</span>
-                  <span style={{ background: '#bae6fd', color: '#0369a1', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.metrics.partAggregations.length} parts
-                  </span>
-                </button>
-
-                {/* Tab 7: All Site Stock */}
-                <button
-                  type="button"
-                  onClick={() => setSegmentedTab('all_stock')}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    fontSize: '12px',
-                    fontWeight: segmentedTab === 'all_stock' ? 800 : 600,
-                    background: segmentedTab === 'all_stock' ? '#f1f5f9' : 'transparent',
-                    color: segmentedTab === 'all_stock' ? '#0f172a' : '#64748b',
-                    borderBottom: segmentedTab === 'all_stock' ? '2px solid #0f172a' : '2px solid transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                >
-                  <Layers size={13} color={segmentedTab === 'all_stock' ? '#0f172a' : '#94a3b8'} />
-                  <span>All Site Stock</span>
-                  <span style={{ background: '#e2e8f0', color: '#0f172a', padding: '1px 6px', borderRadius: '999px', fontSize: '10px', fontWeight: 800 }}>
-                    {currentSiteData.items.length} units
-                  </span>
-                </button>
-
+                  )}
+                </div>
               </div>
 
               {/* Tab Content Display */}
@@ -3883,8 +4275,9 @@ export default function FixablyInventoryDashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {currentSiteData.metrics.partAggregations.map((partRow, pIdx) => {
-                        const isExpanded = expandedPartPn === partRow.partNumber;
+                      {displayedPartAggregations.map((partRow, pIdx) => {
+                        const hasMatchingSerialInBranchFilter = branchFilterQuery && (partRow.serials || []).some(s => String(s).toLowerCase().includes(branchFilterQuery.toLowerCase().trim()));
+                        const isExpanded = expandedPartPn === partRow.partNumber || Boolean(hasMatchingSerialInBranchFilter);
                         const isEven = pIdx % 2 === 1;
 
                         return (
@@ -3995,51 +4388,83 @@ export default function FixablyInventoryDashboard({
                                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                     {currentSiteData.items
                                       .filter(it => it.partNumber === partRow.partNumber)
-                                      .map((unit, sIdx) => (
-                                        <div
-                                          key={`${unit.serialNumber || 'noserial'}-${sIdx}`}
-                                          style={{
-                                            background: '#ffffff',
-                                            border: (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser)) ? '1.5px solid #f87171' : '1.5px solid #cbd5e1',
-                                            borderRadius: '6px',
-                                            padding: '4px 8px',
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '6px',
-                                            fontSize: '12px'
-                                          }}
-                                        >
-                                          <code style={{ color: (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser)) ? '#be123c' : '#0f172a', fontWeight: 800 }}>
-                                            {!canViewCurrentSiteSerials ? (
-                                              <span style={{ color: '#64748b', fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                                <Lock size={10} color="#94a3b8" /> ••••••••••••
+                                      .map((unit, sIdx) => {
+                                        const isHighlighted = (highlightedSerial && String(unit.serialNumber || '').toUpperCase() === String(highlightedSerial).toUpperCase()) ||
+                                          (branchFilterQuery && String(unit.serialNumber || '').toLowerCase().includes(branchFilterQuery.toLowerCase().trim()));
+
+                                        return (
+                                          <div
+                                            key={`${unit.serialNumber || 'noserial'}-${sIdx}`}
+                                            id={`serial-chip-${unit.serialNumber}`}
+                                            style={{
+                                              background: isHighlighted ? '#fef08a' : '#ffffff',
+                                              border: isHighlighted
+                                                ? '2px solid #ca8a04'
+                                                : (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser))
+                                                ? '1.5px solid #f87171'
+                                                : '1.5px solid #cbd5e1',
+                                              borderRadius: '6px',
+                                              padding: '4px 8px',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '6px',
+                                              fontSize: '12px',
+                                              boxShadow: isHighlighted ? '0 0 0 3px rgba(234, 179, 8, 0.4)' : 'none',
+                                              transition: 'all 0.2s ease'
+                                            }}
+                                          >
+                                            <code style={{ color: isHighlighted ? '#854d0e' : (unit.isInvestigation && (isSuperadmin || isCurrentSiteAssignedToUser)) ? '#be123c' : '#0f172a', fontWeight: 800 }}>
+                                              {!canViewCurrentSiteSerials ? (
+                                                <span style={{ color: '#64748b', fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                  <Lock size={10} color="#94a3b8" /> ••••••••••••
+                                                </span>
+                                              ) : (
+                                                unit.serialNumber || 'NON-SERIALIZED'
+                                              )}
+                                            </code>
+                                            {(isSuperadmin || isCurrentSiteAssignedToUser) && (
+                                              <span style={{ fontSize: '10.5px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 800 }}>
+                                                {unit.agingDays}d
                                               </span>
-                                            ) : (
-                                              unit.serialNumber || 'NON-SERIALIZED'
                                             )}
-                                          </code>
-                                          {(isSuperadmin || isCurrentSiteAssignedToUser) && (
-                                            <span style={{ fontSize: '10.5px', padding: '1px 5px', borderRadius: '4px', background: unit.badgeBg, color: unit.badgeColor, fontWeight: 800 }}>
-                                              {unit.agingDays}d
-                                            </span>
-                                          )}
-                                          {(isSuperadmin || isCurrentSiteAssignedToUser) && unit.isInvestigation && (
-                                            <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: '#ffe4e6', color: '#9f1239', fontWeight: 800 }}>
-                                              KGB Used
-                                            </span>
-                                          )}
-                                          {canViewCurrentSiteSerials && unit.serialNumber && (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleCopy(unit.serialNumber, 'Serial')}
-                                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
-                                              title="Copy serial"
-                                            >
-                                              <Copy size={11} />
-                                            </button>
-                                          )}
-                                        </div>
-                                      ))}
+                                            {(isSuperadmin || isCurrentSiteAssignedToUser) && unit.isInvestigation && (
+                                              <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: '#ffe4e6', color: '#9f1239', fontWeight: 800 }}>
+                                                KGB Used
+                                              </span>
+                                            )}
+                                            {canViewCurrentSiteSerials && unit.serialNumber && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleCopy(unit.serialNumber, 'Serial')}
+                                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8', padding: '1px' }}
+                                                title="Copy serial"
+                                              >
+                                                <Copy size={11} />
+                                              </button>
+                                            )}
+                                            {canViewCurrentSiteSerials && unit.serialNumber && (
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const sd = resolveSerialFullDetails(unit.serialNumber, {
+                                                    inventoryUnits: snapshot?.items || [],
+                                                    shipments: [],
+                                                    repairUsageRecords: [],
+                                                    sites,
+                                                    parts,
+                                                    fixablyItems: snapshot?.items || []
+                                                  });
+                                                  if (sd) setInspectedSerialDetails(sd);
+                                                }}
+                                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#0284c7', padding: '1px' }}
+                                                title="View serial dossier"
+                                              >
+                                                <Zap size={11} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
                                   </div>
                                 </td>
                               </tr>
@@ -4507,6 +4932,14 @@ export default function FixablyInventoryDashboard({
           )}
 
         </div>
+      )}
+
+      {/* Serial Dossier Intelligence Modal */}
+      {inspectedSerialDetails && (
+        <SerialDossierModal
+          serialDetails={inspectedSerialDetails}
+          onClose={() => setInspectedSerialDetails(null)}
+        />
       )}
 
     </div>
