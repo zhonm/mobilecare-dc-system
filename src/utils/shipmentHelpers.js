@@ -1,5 +1,18 @@
 import { resolveSite, isLockedConfirmedShipment } from './appContextHelpers.js';
 import { isProvincialSite } from './partResolver.js';
+import appleStockingPrices from '../data/appleStockingPrices.json' with { type: 'json' };
+import { defaultPartsCatalog } from '../data/defaultCatalog.js';
+
+// Pre-indexed fast lookup map for universal default catalog parts
+const defaultCatalogMap = new Map();
+(defaultPartsCatalog || []).forEach(p => {
+  if (p.part_number && Number(p.stocking_price) > 0) {
+    const pn = String(p.part_number).trim().toUpperCase();
+    if (!defaultCatalogMap.has(pn)) {
+      defaultCatalogMap.set(pn, Number(p.stocking_price));
+    }
+  }
+});
 
 /**
  * Detects whether a shipment is marked as received or delivered by destination branch.
@@ -392,14 +405,124 @@ export const healShipmentItem = (item, serialDict, partsMapByPn) => {
   }
 
   const finalNorm = normalizeDcPartDetails(healedPn, healedDesc);
+  const healedStockingPrice = (Number(item.stocking_price) > 0)
+    ? Number(item.stocking_price)
+    : ((Number(item.price) > 0)
+        ? Number(item.price)
+        : resolveItemStockingPrice({ ...item, part_number: finalNorm.part_number, description: finalNorm.description }, partsMapByPn));
 
   return {
     ...item,
     part_number: finalNorm.part_number,
     description: finalNorm.description,
-    cost: healedCost
+    cost: healedCost,
+    stocking_price: healedStockingPrice
   };
 };
+
+export const DECLARED_VALUE_EXCHANGE_RATE = 85;
+
+/**
+ * Resolves the official stocking price in USD for a single item in a packing list or shipment.
+ * Priority:
+ * 1. Explicit positive stocking_price or price on item
+ * 2. Lookup in parts catalog (Map, Array, or Object)
+ * 3. Lookup in Apple official stocking prices dictionary (5,532 SKUs in appleStockingPrices.json)
+ * 4. Keyword heuristic based on description
+ * 5. Fallback $50
+ */
+export function resolveItemStockingPrice(item, partsCatalog = null) {
+  if (!item) return 50;
+
+  // 1. Direct positive price on item
+  const rawStockPrice = Number(item.stocking_price);
+  if (!isNaN(rawStockPrice) && rawStockPrice > 0) {
+    return rawStockPrice;
+  }
+  const rawPrice = Number(item.price);
+  if (!isNaN(rawPrice) && rawPrice > 0) {
+    return rawPrice;
+  }
+  const rawPriceUsd = Number(item.priceUSD || item.price_usd);
+  if (!isNaN(rawPriceUsd) && rawPriceUsd > 0) {
+    return rawPriceUsd;
+  }
+
+  const rawPn = String(item.part_number || item.partNumber || '').trim().toUpperCase();
+  const cleanPn = rawPn.replace(/^(ZM|TA|PP|S)/i, '');
+
+  // 2. Lookup in passed parts catalog if provided
+  if (rawPn && partsCatalog) {
+    if (partsCatalog instanceof Map) {
+      const match = partsCatalog.get(rawPn) || partsCatalog.get(cleanPn);
+      if (match) {
+        const val = typeof match === 'number' ? match : Number(match.stocking_price ?? match.price ?? match.priceUSD);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    } else if (Array.isArray(partsCatalog) && partsCatalog.length > 0) {
+      const match = partsCatalog.find(p => {
+        const pPn = String(p.part_number || p.partNumber || '').trim().toUpperCase();
+        return pPn === rawPn || pPn === cleanPn || pPn.replace(/^(ZM|TA|PP|S)/i, '') === cleanPn;
+      });
+      if (match) {
+        const val = Number(match.stocking_price ?? match.price ?? match.priceUSD);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    } else if (typeof partsCatalog === 'object') {
+      const match = partsCatalog[rawPn] || partsCatalog[cleanPn];
+      if (match) {
+        const val = typeof match === 'number' ? match : Number(match.stocking_price ?? match.price ?? match.priceUSD);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    }
+  }
+
+  // 3. Lookup in universal default parts catalog (covers iPhone 13-16 Displays, Batteries, Top Assemblies, Rear Systems)
+  if (rawPn && defaultCatalogMap) {
+    if (defaultCatalogMap.has(rawPn)) {
+      return defaultCatalogMap.get(rawPn);
+    }
+    if (defaultCatalogMap.has(cleanPn)) {
+      return defaultCatalogMap.get(cleanPn);
+    }
+  }
+
+  // 4. Lookup in official Apple Stocking Prices dictionary (5,532 SKUs in appleStockingPrices.json)
+  if (rawPn && appleStockingPrices) {
+    if (rawPn in appleStockingPrices && Number(appleStockingPrices[rawPn]) > 0) {
+      return Number(appleStockingPrices[rawPn]);
+    }
+    if (cleanPn in appleStockingPrices && Number(appleStockingPrices[cleanPn]) > 0) {
+      return Number(appleStockingPrices[cleanPn]);
+    }
+    const withZm = 'ZM' + cleanPn;
+    if (withZm in appleStockingPrices && Number(appleStockingPrices[withZm]) > 0) {
+      return Number(appleStockingPrices[withZm]);
+    }
+  }
+
+  // 5. Keyword heuristic based on description
+  const desc = String(item.description || item.partDescription || '').toLowerCase();
+  if (desc.includes('display')) return 379; // Baseline modern Apple display
+  if (desc.includes('battery')) return 99;  // Baseline Apple battery
+  if (desc.includes('rear system')) return 489; // Baseline modern Rear System
+  if (desc.includes('logic board') || desc.includes('mlb') || desc.includes('top assembly')) return 535;
+  if (desc.includes('camera')) return 120;
+
+  return 50;
+}
+
+/**
+ * Calculates the total declared value in PHP for a list of shipment items.
+ * Standard formula: sum(part stocking price in USD * 85 PHP).
+ */
+export function calculateDeclaredValuePHP(items = [], partsCatalog = null, rate = DECLARED_VALUE_EXCHANGE_RATE) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  return items.reduce((sum, it) => {
+    const priceUSD = resolveItemStockingPrice(it, partsCatalog);
+    return sum + (priceUSD * rate);
+  }, 0);
+}
 
 /**
  * Extracts clean, trimmed, uppercased serial numbers from a shipment's items array.

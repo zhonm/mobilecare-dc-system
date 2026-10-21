@@ -51,7 +51,8 @@ import {
   formatCourierWithMode,
   getShipmentCourierDisplay,
   getShipmentRiderName,
-  resolveSiteBranchCode
+  resolveSiteBranchCode,
+  calculateDeclaredValuePHP
 } from '../utils/shipmentHelpers';
 import { resolveSafeRegion } from '../constants/config';
 
@@ -340,6 +341,50 @@ export default function ScanOutPacking() {
     }
   }, [shipments, sites, currentShipment, userDraftStorageKey, currentUser]);
 
+  // Synchronize active workstation draft with the authoritative shipment draft in shipments
+  useEffect(() => {
+    if (!currentShipment) return;
+    const matchingDraft = (shipments || []).find(s => {
+      if (!s || !Array.isArray(s.items) || s.items.length === 0) return false;
+      const st = String(s.status || '').toLowerCase().trim();
+      if (st === 'shipped' || st === 'received_confirmed' || st === 'delivered' || s.is_superseded) return false;
+      return (
+        (s.id && currentShipment.id && s.id === currentShipment.id) ||
+        (s.invoice_ref && currentShipment.invoice_ref && s.invoice_ref.trim().toUpperCase() === currentShipment.invoice_ref.trim().toUpperCase())
+      );
+    });
+
+    if (matchingDraft && Array.isArray(matchingDraft.items) && matchingDraft.items.length > 0) {
+      const curCount = currentShipment.items?.length || 0;
+      const matchCount = matchingDraft.items.length;
+      // If matching shipment in database has more items than current workstation state, synchronize workstation state
+      if (matchCount > curCount) {
+        setCurrentShipment(prev => {
+          const merged = {
+            ...matchingDraft,
+            ...prev,
+            items: matchingDraft.items,
+            total_boxes: matchingDraft.total_boxes || prev.total_boxes || 1,
+            declared_value: matchingDraft.declared_value || prev.declared_value,
+            carrier: matchingDraft.carrier || prev.carrier,
+            shipping_mode: matchingDraft.shipping_mode || prev.shipping_mode,
+            courier: matchingDraft.courier || prev.courier,
+            transfer_slip_number: matchingDraft.transfer_slip_number || prev.transfer_slip_number,
+            updated_at: matchingDraft.updated_at || new Date().toISOString()
+          };
+          try {
+            localStorage.setItem(userDraftStorageKey, JSON.stringify(merged));
+            localStorage.setItem('mdc_active_pack_draft', JSON.stringify(merged));
+          } catch (e) {}
+          return merged;
+        });
+        if (matchingDraft.site_id) {
+          setSelectedSiteId(matchingDraft.site_id);
+        }
+      }
+    }
+  }, [shipments, currentShipment?.id, currentShipment?.invoice_ref, userDraftStorageKey]);
+
   // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
   const currentItems = useMemo(() => currentShipment?.items || [], [currentShipment]);
   const currentItemsRef = useRef(currentItems);
@@ -482,11 +527,8 @@ export default function ScanOutPacking() {
   const totalDeclaredValuePHP = useMemo(() => {
     const items = currentShipment?.items;
     if (!items || items.length === 0) return 0;
-    return items.reduce((sum, it) => {
-      const priceUSD = it.stocking_price ?? it.price ?? (partPriceMap.get(it.part_number?.toUpperCase()) || (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50)));
-      return sum + (priceUSD * 85);
-    }, 0);
-  }, [currentShipment, partPriceMap]);
+    return calculateDeclaredValuePHP(items, parts);
+  }, [currentShipment?.items, parts]);
 
   // Auto-focus Serial Number input on mount
   useEffect(() => {
@@ -749,7 +791,7 @@ export default function ScanOutPacking() {
     // 1.8 Conflict check against other saved/finalized shipments
     const conflictingShipment = (shipments || []).find(sh => {
       if (!sh || sh.status === 'cancelled' || !Array.isArray(sh.items)) return false;
-      if (sh.id === currentShipment?.id) return false;
+      if (sh.id === currentShipment?.id || (sh.invoice_ref && currentShipment?.invoice_ref && sh.invoice_ref.trim().toUpperCase() === currentShipment.invoice_ref.trim().toUpperCase())) return false;
       return sh.items.some(it => cleanSerialNumberInput(it.serial_number || it.serialNumber) === cleanSerial);
     });
 
@@ -1491,6 +1533,7 @@ export default function ScanOutPacking() {
         box_number: boxNumber,
         box_number_label: `${boxNumber}/${totalBoxes}`,
         tracking_number: cleanTracking,
+        declared_value: totalDeclaredValuePHP,
         status: 'draft', // Strictly keep status as 'draft'
         prepared_by_name: activeUserName,
         saved_by_name: activeUserName,
@@ -1604,6 +1647,7 @@ export default function ScanOutPacking() {
         box_number: boxNumber,
         box_number_label: `${boxNumber}/${totalBoxes}`,
         tracking_number: cleanTracking,
+        declared_value: totalDeclaredValuePHP,
         status: 'pending_pickup',
         prepared_by_name: activeUserName,
         saved_by_name: activeUserName,
@@ -1624,7 +1668,8 @@ export default function ScanOutPacking() {
           guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
           pickupDate: finalized.pickup_date || finalized.shipment_date,
           pickupByName: resolvedFinalizedRider,
-          allShipments: shipments
+          allShipments: shipments,
+          parts: parts
         });
         showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database with PDF downloaded!`, 'success');
       } catch (pdfErr) {
@@ -1640,7 +1685,8 @@ export default function ScanOutPacking() {
           guardOnDuty: finalized.guard_on_duty || supervisorSettings?.guard_on_duty,
           pickupDate: finalized.pickup_date || finalized.shipment_date,
           pickupByName: resolvedFinalizedRider,
-          allShipments: shipments
+          allShipments: shipments,
+          parts: parts
         }).then(async (driveRes) => {
           if (driveRes?.success && driveRes?.webViewLink) {
             await saveShipment({
@@ -1705,7 +1751,8 @@ export default function ScanOutPacking() {
       guardOnDuty: targetShipment.guard_on_duty || shipmentObj.guard_on_duty || supervisorSettings?.guard_on_duty,
       pickupDate: targetShipment.pickup_date || targetShipment.shipment_date || shipmentObj.pickup_date || shipmentObj.shipment_date,
       pickupByName: resolvedRider,
-      allShipments: shipments
+      allShipments: shipments,
+      parts: parts
     };
 
     generatePackingListPDF(targetShipment, items || targetShipment.items || [], siteObj || {}, pdfOptions);
@@ -1718,7 +1765,8 @@ export default function ScanOutPacking() {
       const exportOptions = {
         supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
         supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois'
+        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois',
+        parts: parts
       };
       await exportPackingListXLSX(shipmentObj, items || [], siteObj || {}, exportOptions);
       showToast(`Downloaded Excel Packing List (.xlsx) for ${shipmentObj.invoice_ref || shipmentObj.shipment_number || 'manifest'}`, 'success');
@@ -1814,7 +1862,8 @@ export default function ScanOutPacking() {
         guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
         pickupDate: updatedShipment.pickup_date,
         pickupByName: resolvedRider,
-        allShipments: shipments
+        allShipments: shipments,
+        parts: parts
       };
 
       generatePackingListPDF(updatedShipment, trackingModalState.items, trackingModalState.site, pdfOptions);
@@ -3837,7 +3886,17 @@ export default function ScanOutPacking() {
                           onClick={() => {
                             setCurrentShipment(s);
                             if (s.site_id) setSelectedSiteId(s.site_id);
-                            showToast(`Loaded draft ${s.invoice_ref || s.shipment_number} into packing station`, 'info');
+                            if (s.total_boxes) setTotalBoxes(s.total_boxes);
+                            if (s.box_number) setBoxNumber(s.box_number);
+                            try {
+                              localStorage.setItem(userDraftStorageKey, JSON.stringify(s));
+                              localStorage.setItem('mdc_active_pack_draft', JSON.stringify(s));
+                            } catch (e) {}
+                            sendPresence(true, s.items || []);
+                            showToast(`Loaded draft ${s.invoice_ref || s.shipment_number} (${s.items?.length || 0} parts) into packing station`, 'info');
+                            if (typeof window !== 'undefined') {
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }
                           }}
                           title="Load this draft to continue packing"
                           style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}

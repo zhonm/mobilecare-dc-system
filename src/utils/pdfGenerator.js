@@ -4,7 +4,7 @@ import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/
 import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
-import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode } from './shipmentHelpers.js';
+import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode, calculateDeclaredValuePHP } from './shipmentHelpers.js';
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -39,10 +39,9 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   const logoHeight = 10.65; // exact 1442:698 aspect ratio (balanced, high-res & transparent)
 
   // Calculate Total Declared Value in PHP (part price × 85 PHP)
-  const totalDeclaredValuePHP = items.reduce((sum, it) => {
-    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
-    return sum + (priceUSD * 85);
-  }, 0);
+  const totalDeclaredValuePHP = (typeof shipment.declared_value === 'number' && shipment.declared_value > 0)
+    ? shipment.declared_value
+    : calculateDeclaredValuePHP(items, options.parts || options.partsCatalog);
 
   const boxDisplay = shipment.box_number_label || (shipment.box_number ? `${shipment.box_number}/${shipment.total_boxes || 1}` : `1/${shipment.total_boxes || 1}`);
   const createdDateStr = shipment.created_date || (shipment.created_at ? new Date(shipment.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US'));

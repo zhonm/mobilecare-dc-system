@@ -121,6 +121,7 @@ export default function Dashboard() {
       pickupDate: targetShipment?.pickup_date || targetShipment?.shipment_date || shipmentObj?.pickup_date || shipmentObj?.shipment_date,
       pickupByName: resolvedRider,
       allShipments: shipments,
+      parts: parts,
       ...customOptions,
       includeDeclarationForm: includeDeclaration
     };

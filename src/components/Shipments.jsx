@@ -345,6 +345,7 @@ export default function Shipments() {
       pickupDate: targetShipment.pickup_date || targetShipment.shipment_date || shipmentObj.pickup_date || shipmentObj.shipment_date,
       pickupByName: resolvedRider,
       allShipments: shipments,
+      parts: parts,
       ...customOptions,
       includeDeclarationForm: includeDeclaration
     };
@@ -368,7 +369,8 @@ export default function Shipments() {
       const exportOptions = {
         supervisorName: supervisorSettings?.supervisor_name || shipmentObj.verified_by_name || 'Anjo Alcazar',
         supervisorTitle: supervisorSettings?.supervisor_title || 'MDC Supervisor of DC',
-        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois'
+        userName: currentUser?.fullName || currentUser?.name || shipmentObj.prepared_by_name || 'Zhon Manaois',
+        parts: parts
       };
       await exportPackingListXLSX(shipmentObj, resolvedItems, siteObj || {}, exportOptions);
       showToast(`Downloaded Excel Packing List (.xlsx) for ${shipmentObj.invoice_ref || shipmentObj.shipment_number || 'manifest'}`, 'success');
@@ -931,7 +933,8 @@ export default function Shipments() {
         guardOnDuty: updatedShipment.guard_on_duty || supervisorSettings?.guard_on_duty,
         pickupDate: updatedShipment.pickup_date,
         pickupByName: resolvedRider,
-        allShipments: shipments
+        allShipments: shipments,
+        parts: parts
       };
 
       const resolvedItems = sourceItems.map(it => healShipmentItem(it, serialDict, partsMapByPn));

@@ -174,7 +174,7 @@ export function resolveSerialFullDetails(serialInput, {
     siteObj = (sites || []).find(s => s.id === usageRecord.site_id || s.code === usageRecord.site_code);
   }
 
-  const isDcSite = (
+  const isDcSite = Boolean(
     (!fixablyUnit && !siteObj) ||
     siteObj?.id === 'site-dc' ||
     siteObj?.code === 'DC-MDC' ||

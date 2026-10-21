@@ -13,7 +13,7 @@ import {
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
-import { getShipmentRiderName, getShipmentCourierDisplay } from './shipmentHelpers.js';
+import { getShipmentRiderName, getShipmentCourierDisplay, calculateDeclaredValuePHP, resolveItemStockingPrice } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
 import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config.js';
@@ -6573,10 +6573,9 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
   const totalBoxes = shipment.total_boxes || 1;
   const remarks = shipment.remarks || 'KGB PARTS';
 
-  const totalDeclaredValuePHP = (items || []).reduce((sum, it) => {
-    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
-    return sum + (priceUSD * 85);
-  }, 0);
+  const totalDeclaredValuePHP = (typeof shipment.declared_value === 'number' && shipment.declared_value > 0)
+    ? shipment.declared_value
+    : calculateDeclaredValuePHP(items, options.parts || options.partsCatalog);
 
   // 1. Company Branding Banner
   ws.mergeCells('A1:I1');
@@ -6682,7 +6681,7 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
   items.forEach((it, idx) => {
     const rowNum = 10 + idx;
     const row = ws.getRow(rowNum);
-    const priceUSD = it.stocking_price ?? it.price ?? (it.description?.toLowerCase().includes('display') ? 279 : (it.description?.toLowerCase().includes('battery') ? 99 : 50));
+    const priceUSD = resolveItemStockingPrice(it, options.parts || options.partsCatalog);
     const pricePHP = priceUSD * 85;
     const boxNum = it.box_number ? (typeof it.box_number === 'number' ? it.box_number : parseInt(String(it.box_number).split('/')[0], 10) || 1) : 1;
 

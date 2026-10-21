@@ -165,7 +165,7 @@ async function runTests() {
     renderedTexts = [];
     addedImages = [];
     const items15 = createMockItems(15);
-    generatePackingListPDF(mockShipment, items15, mockSite);
+    generatePackingListPDF(mockShipment, items15, mockSite, { saveFile: true });
 
     assert.strictEqual(interceptedPages, 2, 'PL with 15 parts must produce exactly 2 pages (Manifest + Declaration Form)');
     
@@ -202,7 +202,7 @@ async function runTests() {
     // Subtest 3B: 61 parts -> Exactly 3 Pages (Manifest Page 1 of 2, Page 2 of 2, and Declaration Form with NO page number)
     renderedTexts = [];
     addedImages = [];
-    generatePackingListPDF(mockShipment, items61, mockSite);
+    generatePackingListPDF(mockShipment, items61, mockSite, { saveFile: true });
 
     assert.strictEqual(interceptedPages, 3, 'PL with 61 parts must produce exactly 3 pages (2 Manifest + 1 Declaration Form)');
     
@@ -228,7 +228,7 @@ async function runTests() {
     renderedTexts = [];
     addedImages = [];
     const items105 = createMockItems(105);
-    generatePackingListPDF(mockShipment, items105, mockSite);
+    generatePackingListPDF(mockShipment, items105, mockSite, { saveFile: true });
     assert.strictEqual(interceptedPages, 4, 'PL with 105 parts must produce exactly 4 pages (3 Manifest + 1 Declaration Form)');
     
     const p1of3 = renderedTexts.find(t => t.page === 1 && t.text === 'Page 1 of 3');
