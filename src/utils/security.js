@@ -280,10 +280,16 @@ export function getStoredUserSession() {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       const raw = window.localStorage.getItem('mdc_current_user');
+      const sig = window.localStorage.getItem('mdc_session_sig');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.email) {
           if (isUserDeleted(parsed)) {
+            clearStoredUserSession();
+            return null;
+          }
+          if (sig && !verifySessionIntegrity(parsed, sig)) {
+            console.warn('[Security] Session signature mismatch detected in LocalStorage. Terminating untrusted session.');
             clearStoredUserSession();
             return null;
           }
@@ -297,10 +303,16 @@ export function getStoredUserSession() {
   try {
     if (typeof window !== 'undefined' && window.sessionStorage) {
       const raw = window.sessionStorage.getItem('mdc_current_user');
+      const sig = window.sessionStorage.getItem('mdc_session_sig');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && parsed.email) {
           if (isUserDeleted(parsed)) {
+            clearStoredUserSession();
+            return null;
+          }
+          if (sig && !verifySessionIntegrity(parsed, sig)) {
+            console.warn('[Security] Session signature mismatch detected in SessionStorage. Terminating untrusted session.');
             clearStoredUserSession();
             return null;
           }
@@ -313,8 +325,14 @@ export function getStoredUserSession() {
   // 3. Try Session Cookie (Preserved across localhost HTTP and production HTTPS)
   try {
     const cookieUser = getSessionCookie('mdc_current_user');
+    const cookieSig = getSessionCookie('mdc_session_sig');
     if (cookieUser && typeof cookieUser === 'object' && cookieUser.email) {
       if (isUserDeleted(cookieUser)) {
+        clearStoredUserSession();
+        return null;
+      }
+      if (cookieSig && !verifySessionIntegrity(cookieUser, cookieSig)) {
+        console.warn('[Security] Session signature mismatch detected in Cookie. Terminating untrusted session.');
         clearStoredUserSession();
         return null;
       }

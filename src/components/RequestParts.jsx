@@ -195,13 +195,13 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
   const [copiedWaybill, setCopiedWaybill] = useState(null);
 
-  const handleCopyWaybill = (rawTracking) => {
+  const handleCopyWaybill = async (rawTracking) => {
     if (!rawTracking) return;
     const clean = String(rawTracking).replace(/^#\s*/, '').trim();
     if (!clean) return;
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(clean);
+        await navigator.clipboard.writeText(clean);
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = clean;

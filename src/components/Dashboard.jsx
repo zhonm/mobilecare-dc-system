@@ -277,12 +277,15 @@ export default function Dashboard() {
 
   // Top 8 Sites for Bar Chart
   const topSitesChartData = useMemo(() => {
-    return masterSitesReport.all.slice(0, 8).map(s => ({
-      name: s.shortName.length > 12 ? s.shortName.substring(0, 12) + '...' : s.shortName,
-      fullName: s.shortName,
-      'iPhone Units': s.totalUnits,
-      'Valuation ($k)': Math.round(s.totalValUSD / 1000)
-    }));
+    return (masterSitesReport?.all || []).slice(0, 8).map(s => {
+      const label = s.shortName || s.siteName || 'Branch';
+      return {
+        name: label.length > 12 ? label.substring(0, 12) + '...' : label,
+        fullName: label,
+        'iPhone Units': s.totalUnits || 0,
+        'Valuation ($k)': Math.round((s.totalValUSD || 0) / 1000)
+      };
+    });
   }, [masterSitesReport]);
 
   // DC Stock Grouped Snapshot Table

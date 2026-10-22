@@ -18,7 +18,13 @@ export default function MobileNoticeModal({
   isLoginScreen = true
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [isDismissed, setIsDismissed] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && window.sessionStorage?.getItem('mdc_mobile_notice_dismissed') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     // If forced open via button
@@ -52,6 +58,11 @@ export default function MobileNoticeModal({
   const handleDismiss = () => {
     setIsDismissed(true);
     setIsOpen(false);
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem('mdc_mobile_notice_dismissed', 'true');
+      }
+    } catch {}
     if (onClose) onClose();
   };
 

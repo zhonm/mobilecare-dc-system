@@ -28,11 +28,15 @@ export default function SerialDossierModal({
 
   if (!serialDetails) return null;
 
-  const handleCopy = () => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(serialDetails.serialNumber);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    if (navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(serialDetails.serialNumber);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.warn('Clipboard write error:', err);
+      }
     }
   };
 

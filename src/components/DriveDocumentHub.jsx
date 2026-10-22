@@ -64,6 +64,15 @@ export default function DriveDocumentHub() {
     setDriveAvailable(isGoogleDriveConfigured());
   }, []);
 
+  // Cleanup object URL when preview is changed or component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewBlobUrl) {
+        URL.revokeObjectURL(previewBlobUrl);
+      }
+    };
+  }, [previewBlobUrl]);
+
   // Fetch pending offline queue items
   const loadOfflineQueue = useCallback(async () => {
     try {

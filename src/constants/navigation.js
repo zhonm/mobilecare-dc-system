@@ -14,8 +14,10 @@ export const ALL_PAGES = [
   { id: 'request-parts', label: 'Parts Requests', section: 'Warehouse Operations' },
   { id: 'all-stocks', label: 'All Stocks & Inventory', section: 'Warehouse Operations' },
   { id: 'multi-site', label: 'Multi-Site Inventory Dashboard', section: 'Warehouse Operations' },
+  { id: 'drive-hub', label: 'Drive Document Hub', section: 'Reports & Analytics' },
   { id: 'settings', label: 'Settings', section: 'Admin' },
-  { id: 'user-access', label: 'User Access Management', section: 'Admin' }
+  { id: 'user-access', label: 'User Access Management', section: 'Admin' },
+  { id: 'feedback', label: 'Developer Support & Feedback', section: 'Admin' }
 ];
 
 export const PAGE_TITLES = {
@@ -34,6 +36,8 @@ export const PAGE_TITLES = {
   'site-transfers-fifo': 'Multi-Site Stock Transfers & FIFO Compliance Audit',
   'forecast-reports': 'Fixably Forecasting Reports & Analytics',
   audit: 'Serialized Lifecycle & Traceability Audit',
+  'drive-hub': 'Google Drive Document Hub & Archive',
   settings: 'Settings',
-  'user-access': 'User Access & Permissions Management'
+  'user-access': 'User Access & Permissions Management',
+  feedback: 'Developer Direct Support & Feedback'
 };

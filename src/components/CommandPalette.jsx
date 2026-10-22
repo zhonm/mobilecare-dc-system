@@ -22,7 +22,13 @@ import {
   X,
   Package,
   Layers,
-  HardDrive
+  HardDrive,
+  MessageSquare,
+  Inbox,
+  Globe,
+  Building2,
+  GitCompare,
+  BarChart3
 } from 'lucide-react';
 
 const PAGE_ICONS = {
@@ -36,11 +42,17 @@ const PAGE_ICONS = {
   allocation: Split,
   'scan-out': PackageCheck,
   shipments: Truck,
+  'request-parts': Inbox,
+  'all-stocks': Globe,
+  'multi-site': Building2,
   reports: FileSpreadsheet,
+  'site-transfers-fifo': GitCompare,
+  'forecast-reports': BarChart3,
   audit: History,
   settings: Settings,
   'user-access': Users,
-  'drive-hub': HardDrive
+  'drive-hub': HardDrive,
+  feedback: MessageSquare
 };
 
 export default function CommandPalette({ isOpen, onClose }) {

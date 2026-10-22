@@ -83,13 +83,13 @@ export default function ConfirmReceiveModal({
     ? (cleanBranch && !cleanReceiver.toLowerCase().includes(cleanBranch.toLowerCase()) ? `${cleanReceiver} (${cleanBranch})` : cleanReceiver)
     : cleanBranch;
 
-  const handleCopyWaybill = (rawTracking) => {
+  const handleCopyWaybill = async (rawTracking) => {
     if (!rawTracking) return;
     const clean = String(rawTracking).replace(/^#\s*/, '').trim();
     if (!clean) return;
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(clean);
+        await navigator.clipboard.writeText(clean);
       }
     } catch (_) {}
     setCopiedWaybill(clean);

@@ -320,7 +320,7 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
       message: `Valid ${detectedType === 'site_stock' ? 'Site Stocks' : detectedType === 'kgb_used' ? 'KGB Used' : 'Stock Transfers'} file (${calculatedRowCount.toLocaleString()} rows)`
     };
   } catch (err) {
-    return { valid: false, error: `Validation error: ${err.message}` };
+    return { valid: false, error: `Validation error: ${err?.message || err}` };
   }
 }
 
@@ -409,7 +409,7 @@ export async function parseKgbUsedCsv(fileOrContent) {
     };
   } catch (err) {
     console.error('parseKgbUsedCsv error:', err);
-    return { success: false, error: `Failed to parse KGB Used file: ${err.message}` };
+    return { success: false, error: `Failed to parse KGB Used file: ${err?.message || err}` };
   }
 }
 
@@ -493,7 +493,7 @@ export async function parseStockTransferCsv(fileOrContent) {
     };
   } catch (err) {
     console.error('parseStockTransferCsv error:', err);
-    return { success: false, error: `Failed to parse Stock Transfer file: ${err.message}` };
+    return { success: false, error: `Failed to parse Stock Transfer file: ${err?.message || err}` };
   }
 }
 
@@ -760,7 +760,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
     };
   } catch (err) {
     console.error('parseFixablyExportCsv error:', err);
-    return { success: false, error: `Failed to parse Fixably CSV: ${err.message}` };
+    return { success: false, error: `Failed to parse Fixably CSV: ${err?.message || err}` };
   }
 }
 
@@ -834,7 +834,7 @@ export async function reconcileFixablyMultiFile({
     };
   } catch (err) {
     console.error('reconcileFixablyMultiFile error:', err);
-    return { success: false, error: `Multi-file reconciliation failed: ${err.message}` };
+    return { success: false, error: `Multi-file reconciliation failed: ${err?.message || err}` };
   }
 }
 

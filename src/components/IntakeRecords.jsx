@@ -459,14 +459,22 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
       return;
     }
 
+    const escapeHtml = (val) => String(val ?? '').replace(/[&<>'"]/g, c => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+    }[c] || c));
+
     const itemsHtml = dateGroup.items.map((it, idx) => `
       <tr>
         <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${idx + 1}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold;">${it.part_number}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.description}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${it.serial_number}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${it.intake_assignment || 'MDC - Forecasting'}</td>
-        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${formatTo12HourTime(it.timeStr)}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold;">${escapeHtml(it.part_number)}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${escapeHtml(it.description)}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace;">${escapeHtml(it.serial_number)}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0;">${escapeHtml(it.intake_assignment || 'MDC - Forecasting')}</td>
+        <td style="padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${escapeHtml(formatTo12HourTime(it.timeStr))}</td>
       </tr>
     `).join('');
 
@@ -474,7 +482,7 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
       <!DOCTYPE html>
       <html>
         <head>
-          <title>DC Stock Receipts - ${dateGroup.dateKey}</title>
+          <title>DC Stock Receipts - ${escapeHtml(dateGroup.dateKey)}</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; color: #0f172a; }
             .header { border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; }

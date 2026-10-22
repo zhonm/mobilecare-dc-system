@@ -25,7 +25,8 @@ import {
   ChevronRight,
   Package,
   Building2,
-  HardDrive
+  HardDrive,
+  MessageSquare
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -189,7 +190,8 @@ export default function Sidebar() {
 
     // 4. Administration
     { id: 'settings', label: 'Settings', icon: Settings, section: 'Administration' },
-    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' }
+    { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Administration' },
+    { id: 'feedback', label: 'Developer Feedback', icon: MessageSquare, section: 'Administration' }
   ];
 
   // Filter items by permitted access

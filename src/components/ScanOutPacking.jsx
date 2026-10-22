@@ -1089,13 +1089,13 @@ export default function ScanOutPacking() {
 
   const [copiedWaybill, setCopiedWaybill] = useState(null);
 
-  const handleCopyWaybill = (rawTracking) => {
+  const handleCopyWaybill = async (rawTracking) => {
     if (!rawTracking) return;
     const clean = String(rawTracking).replace(/^#\s*/, '').trim();
     if (!clean) return;
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(clean);
+        await navigator.clipboard.writeText(clean);
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = clean;
@@ -1115,13 +1115,13 @@ export default function ScanOutPacking() {
 
   const [copiedTS, setCopiedTS] = useState(null);
 
-  const handleCopyTS = (rawTS) => {
+  const handleCopyTS = async (rawTS) => {
     if (!rawTS) return;
     const clean = String(rawTS).replace(/^TS[:#\s-]*/i, '').trim();
     if (!clean) return;
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(clean);
+        await navigator.clipboard.writeText(clean);
       } else {
         const textarea = document.createElement('textarea');
         textarea.value = clean;

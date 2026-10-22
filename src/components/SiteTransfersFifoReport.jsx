@@ -156,7 +156,7 @@ export default function SiteTransfersFifoReport() {
         bc.close();
       } catch (_) {}
     } catch (err) {
-      console.warn('[FIFO Audit Sync] Error syncing transfers to Supabase:', err.message);
+      console.warn('[FIFO Audit Sync] Error syncing transfers to Supabase:', err?.message || err);
     }
   }, [broadcastCloudEvent, sanitizeTransfersForCloud]);
 
@@ -196,7 +196,7 @@ export default function SiteTransfersFifoReport() {
         bc.close();
       } catch (_) {}
     } catch (err) {
-      console.warn('[FIFO Audit Sync] Error syncing GSX to Supabase:', err.message);
+      console.warn('[FIFO Audit Sync] Error syncing GSX to Supabase:', err?.message || err);
     }
   }, [broadcastCloudEvent, sanitizeGsxForCloud]);
 
@@ -246,7 +246,7 @@ export default function SiteTransfersFifoReport() {
         bc.close();
       } catch (_) {}
     } catch (err) {
-      console.warn('[FIFO Audit Sync] Error clearing cloud audit:', err.message);
+      console.warn('[FIFO Audit Sync] Error clearing cloud audit:', err?.message || err);
     }
   }, [broadcastCloudEvent]);
 
@@ -263,7 +263,7 @@ export default function SiteTransfersFifoReport() {
         .in('id', [FIFO_TRANSFERS_DOC_ID, FIFO_GSX_DOC_ID]);
 
       if (headErr) {
-        console.warn('[FIFO Audit Sync] Header query notice:', headErr.message);
+        console.warn('[FIFO Audit Sync] Header query notice:', headErr?.message || headErr);
         return;
       }
 
@@ -371,7 +371,7 @@ export default function SiteTransfersFifoReport() {
 
       setLastCloudSyncTime(new Date());
     } catch (err) {
-      console.warn('[FIFO Audit Sync] Sync error:', err.message);
+      console.warn('[FIFO Audit Sync] Sync error:', err?.message || err);
     } finally {
       isSyncingRef.current = false;
       setIsCloudSyncing(false);

@@ -3697,7 +3697,7 @@ export async function parseFixablyInventoryValueCsv(
     };
   } catch (err) {
     console.error('parseFixablyInventoryValueCsv error:', err);
-    return { success: false, error: 'Error parsing Fixably CSV: ' + err.message };
+    return { success: false, error: 'Error parsing Fixably CSV: ' + (err?.message || err) };
   }
 }
 
@@ -4016,7 +4016,7 @@ export async function parseScanInPartsFile(
     };
   } catch (err) {
     console.error('Error parsing scan-in file:', err);
-    return { success: false, error: `Failed to parse file: ${err.message}` };
+    return { success: false, error: `Failed to parse file: ${err?.message || err}` };
   }
 }
 
@@ -4349,7 +4349,7 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
     };
   } catch (err) {
     console.error('Error parsing scan-out file:', err);
-    return { success: false, error: `Failed to parse file: ${err.message}` };
+    return { success: false, error: `Failed to parse file: ${err?.message || err}` };
   }
 }
 
@@ -4524,7 +4524,7 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
     };
   } catch (err) {
     console.error('Error parsing shipment manifest file:', err);
-    return { success: false, error: `Failed to parse file: ${err.message}` };
+    return { success: false, error: `Failed to parse file: ${err?.message || err}` };
   }
 }
 
@@ -4707,7 +4707,7 @@ export async function parseStockTransfersReportFile(file) {
     };
   } catch (err) {
     console.error('Error parsing Fixably stock transfers file:', err);
-    return { success: false, error: `Failed to parse file: ${err.message}` };
+    return { success: false, error: `Failed to parse file: ${err?.message || err}` };
   }
 }
 
