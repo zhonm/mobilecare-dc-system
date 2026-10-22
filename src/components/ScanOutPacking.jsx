@@ -383,7 +383,7 @@ export default function ScanOutPacking() {
         }
       }
     }
-  }, [shipments, currentShipment?.id, currentShipment?.invoice_ref, userDraftStorageKey]);
+  }, [shipments, currentShipment, userDraftStorageKey]);
 
   // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
   const currentItems = useMemo(() => currentShipment?.items || [], [currentShipment]);
@@ -512,23 +512,13 @@ export default function ScanOutPacking() {
     };
   }, []);
 
-  // Part price map for Declared Value calculations
-  const partPriceMap = useMemo(() => {
-    const map = new Map();
-    (parts || []).forEach(p => {
-      if (p.part_number) {
-        map.set(p.part_number.toUpperCase(), p.stocking_price ?? p.price ?? 50);
-      }
-    });
-    return map;
-  }, [parts]);
-
   // Total Declared Value = sum of (part price × 85 PHP)
+  const shipmentItems = currentShipment?.items;
   const totalDeclaredValuePHP = useMemo(() => {
-    const items = currentShipment?.items;
+    const items = shipmentItems;
     if (!items || items.length === 0) return 0;
     return calculateDeclaredValuePHP(items, parts);
-  }, [currentShipment?.items, parts]);
+  }, [shipmentItems, parts]);
 
   // Auto-focus Serial Number input on mount
   useEffect(() => {
