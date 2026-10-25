@@ -14,14 +14,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@marsidev/react-turnstile": "^1.6.0",
-    "@supabase/supabase-js": "^2.112.3",
+    "@marsidev/react-turnstile": "^1.6.3",
+    "@supabase/supabase-js": "^2.118.0",
     "exceljs": "^4.4.0",
     "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.8",
-    "lucide-react": "^1.31.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "jspdf-autotable": "^5.0.9",
+    "lucide-react": "^1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "recharts": "^3.10.1",
     "xlsx": "^0.18.5"
   },
