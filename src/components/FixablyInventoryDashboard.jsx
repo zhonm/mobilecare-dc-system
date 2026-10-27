@@ -1441,11 +1441,29 @@ export default function FixablyInventoryDashboard({
   }, [snapshot?.sites, sites, showToast]);
 
   const handleSelectSiteFromSearch = useCallback((site) => {
-    setSelectedRegion(site.region);
-    setSelectedSiteCode(site.cleanCode);
+    if (!site) return;
+    if (site.region) {
+      setSelectedRegion(site.region);
+    }
+    const cleanCode = site.cleanCode || String(site.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    setSelectedSiteCode(cleanCode);
     setSegmentedTab('part_aggregations');
-    showToast?.(`Selected ${site.siteCode} (${site.totalUnits} on-hand for Part #${partStockBySite?.searchedPartNumber})`, 'info');
-  }, [showToast, partStockBySite?.searchedPartNumber]);
+
+    const searchedPn = partStockBySite?.searchedPartNumber || String(partSearchQuery || partSearchInput || '').trim();
+    if (searchedPn) {
+      setExpandedPartPn(searchedPn);
+      setBranchFilterQuery(searchedPn);
+    }
+
+    showToast?.(`Selected ${site.siteCode || cleanCode} (${site.totalUnits} on-hand for Part #${searchedPn || site.cleanCode})`, 'info');
+
+    setTimeout(() => {
+      const el = document.getElementById('branch-stock-section');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 50);
+  }, [showToast, partStockBySite?.searchedPartNumber, partSearchQuery, partSearchInput]);
   useEffect(() => {
     setCurrentPage(1);
   }, [masterSearch, siteFilter, agingFilter, classificationFilter, investigationFilter, rowsPerPage]);
@@ -3681,7 +3699,15 @@ export default function FixablyInventoryDashboard({
                     <button
                       key={site.siteCode}
                       type="button"
-                      onClick={() => setSelectedSiteCode(cleanCode)}
+                      onClick={() => {
+                        setSelectedSiteCode(cleanCode);
+                        setTimeout(() => {
+                          const el = document.getElementById('branch-stock-section');
+                          if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }
+                        }, 50);
+                      }}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'center',
