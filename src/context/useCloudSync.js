@@ -913,6 +913,9 @@ export function useCloudSync({
                       try { await dbStorage.setItem('mdc_fixably_updated_at', effectiveUpdated); } catch (e) {}
                       if (fullFixablyDoc?.snapshot_data?.items) {
                         const hydrated = hydrateFixablySnapshot(fullFixablyDoc.snapshot_data, sites);
+                        if (effectiveUpdated && !hydrated.timestamp) {
+                          hydrated.timestamp = effectiveUpdated;
+                        }
                         await dbStorage.setItem('mdc_fixably_snapshot', hydrated);
                         try {
                           localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(hydrated));
@@ -3278,13 +3281,22 @@ export function useCloudSync({
             }
 
             const effectiveLocalTimestamp = localTimestamp || localSnap?.timestamp || '';
+            const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
+            const localMs = effectiveLocalTimestamp ? new Date(effectiveLocalTimestamp).getTime() : 0;
+            const isLocalStrictlyNewer = Boolean(localSnap?.items?.length > 0 && localMs > 0 && cloudMs > 0 && localMs > cloudMs);
             const shouldUpdateLocal = (!localSnap || !localSnap.items || localSnap.items.length === 0) 
               ? true 
-              : Boolean(cloudTimestamp && effectiveLocalTimestamp && new Date(cloudTimestamp).getTime() > new Date(effectiveLocalTimestamp).getTime());
+              : Boolean(cloudMs > 0 && (localMs === 0 || cloudMs > localMs));
             if (shouldUpdateLocal) {
+              if (cloudTimestamp && !cloudSnap.timestamp) {
+                cloudSnap.timestamp = cloudTimestamp;
+              }
               try {
                 localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cloudSnap));
-                if (cloudTimestamp) localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp);
+                if (cloudTimestamp) {
+                  localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp);
+                  localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp);
+                }
               } catch (e) {}
               await dbStorage.setItem('mdc_fixably_snapshot', cloudSnap);
               await dbStorage.putSavedRecord({
@@ -3300,7 +3312,7 @@ export function useCloudSync({
                 bus.close();
               }
               if (setFixablySnapshot) setFixablySnapshot(cloudSnap);
-            } else if (supabase && localSnap?.items?.length > 0) {
+            } else if (isLocalStrictlyNewer && supabase && localSnap?.items?.length > 0) {
               // Local is strictly newer than cloud doc: push local snapshot to cloud to auto-heal
               try {
                 const compact = compactFixablySnapshot(localSnap);

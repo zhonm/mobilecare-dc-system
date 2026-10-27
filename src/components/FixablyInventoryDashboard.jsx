@@ -317,15 +317,20 @@ export default function FixablyInventoryDashboard({
           } catch (e) {}
         }
 
-        // Auto-heal discrepancy if cached snapshot item count differs from valid saved site stock units
+        // Auto-heal discrepancy ONLY if user locally uploaded a newer slot file after the snapshot
+        const slotUpdatedAt = savedSiteStock?.updatedAt ? new Date(savedSiteStock.updatedAt).getTime() : 0;
+        const cachedUpdatedAt = cached?.timestamp ? new Date(cached.timestamp).getTime() : 0;
+        const isSlotStrictlyNewer = Boolean(slotUpdatedAt && cachedUpdatedAt && slotUpdatedAt > cachedUpdatedAt);
+
         const needsDiscrepancyHeal = Boolean(
           savedSiteStock?.content &&
           cached?.items &&
           savedSiteStock.rowCount &&
-          cached.items.length !== savedSiteStock.rowCount
+          cached.items.length !== savedSiteStock.rowCount &&
+          isSlotStrictlyNewer
         );
 
-        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored or has discrepancy
+        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored or slot is strictly newer
         if ((needsDiscrepancyHeal || !cached || !cached.items || cached.items.length === 0) && savedSiteStock?.content) {
           try {
             const autoReconciled = await reconcileFixablyMultiFile({
@@ -355,31 +360,68 @@ export default function FixablyInventoryDashboard({
           }
         }
 
-        // Quaternary fallback to Supabase cloud master_fixably_inventory_snapshot
-        if ((!cached || !cached.items || cached.items.length === 0) && supabase) {
+        // Render available local/cached snapshot immediately for instant UI feedback without blank screen
+        if (cached && cached.items && cached.items.length > 0) {
+          cached = hydrateFixablySnapshot(cached, sites);
+          if (isMounted) {
+            setSnapshot(cached);
+            setIsLoading(false);
+            setIsDropzoneOpen(false);
+          }
+        }
+
+        // Supabase Cloud Multi-User Synchronization: Ensure latest cloud snapshot overrides stale local cache
+        if (supabase) {
           try {
             const { data: cloudRec, error: cloudErr } = await supabase
               .from('saved_records')
               .select('*')
               .eq('id', 'master_fixably_inventory_snapshot')
               .maybeSingle();
+
             if (!cloudErr && cloudRec?.snapshot_data && Array.isArray(cloudRec.snapshot_data.items) && cloudRec.snapshot_data.items.length > 0) {
-              cached = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
-              await dbStorage.setItem('mdc_fixably_snapshot', cached);
-              try {
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
-                localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudRec.updated_at || cached.timestamp || '');
-              } catch (e) {}
-              await dbStorage.putSavedRecord({
-                id: 'master_fixably_inventory_snapshot',
-                record_type: 'fixably_snapshot',
-                snapshot: cached,
-                created_at: cloudRec.updated_at || cached.timestamp || new Date().toISOString()
-              });
+              const cloudTimestamp = cloudRec.updated_at || cloudRec.snapshot_data?.timestamp || '';
+              const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
+              const localTimestamp = cached?.timestamp || snapshotTimestampRef.current || localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
+              const localMs = localTimestamp ? new Date(localTimestamp).getTime() : 0;
+
+              // If cloud is strictly newer OR local cache had no valid items, synchronize to cloud snapshot!
+              if (!cached || !cached.items || cached.items.length === 0 || (cloudMs > 0 && cloudMs > localMs)) {
+                console.info('[FixablyDashboard] Synchronizing with newer cloud snapshot:', cloudTimestamp, 'vs local:', localTimestamp);
+                const cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+                if (cloudTimestamp && !cloudHydrated.timestamp) {
+                  cloudHydrated.timestamp = cloudTimestamp;
+                }
+                cached = cloudHydrated;
+                await dbStorage.setItem('mdc_fixably_snapshot', cloudHydrated);
+                try {
+                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cloudHydrated));
+                  localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp || cloudHydrated.timestamp || '');
+                  localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
+                  await dbStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
+                } catch (e) {}
+                await dbStorage.putSavedRecord({
+                  id: 'master_fixably_inventory_snapshot',
+                  record_type: 'fixably_snapshot',
+                  snapshot: cloudHydrated,
+                  created_at: cloudTimestamp || cloudHydrated.timestamp || new Date().toISOString()
+                });
+                if (isMounted) {
+                  setSnapshot(cloudHydrated);
+                  setIsLoading(false);
+                  setIsDropzoneOpen(false);
+                }
+                return;
+              }
             }
           } catch (cloudFetchErr) {
-            console.warn('Fixably initial cloud fallback note:', cloudFetchErr);
+            console.warn('Fixably cloud synchronization check note:', cloudFetchErr);
           }
+        }
+
+        // Quaternary fallback: if local cache was already populated and cloud was not newer, we are done
+        if (cached && cached.items && cached.items.length > 0) {
+          return;
         }
 
         // Quinary auto-seed fallback: ONLY if no local, cloud, or user-uploaded file exists
@@ -524,15 +566,34 @@ export default function FixablyInventoryDashboard({
               setIsDropzoneOpen(true);
               return;
             }
-            if (payload.new && payload.new.snapshot_data && Array.isArray(payload.new.snapshot_data.items)) {
-              const remoteTimestamp = payload.new.updated_at || payload.new.snapshot_data?.timestamp || '';
+            let snapData = payload.new?.snapshot_data;
+            let remoteTimestamp = payload.new?.updated_at || snapData?.timestamp || '';
+
+            // If snapshot_data is missing or omitted by Supabase Realtime (due to TOAST / message size limits)
+            if (!snapData || !Array.isArray(snapData.items) || snapData.items.length === 0) {
+              try {
+                const { data: fullCloudRec, error: cloudErr } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'master_fixably_inventory_snapshot')
+                  .maybeSingle();
+                if (!cloudErr && fullCloudRec?.snapshot_data && Array.isArray(fullCloudRec.snapshot_data.items)) {
+                  snapData = fullCloudRec.snapshot_data;
+                  remoteTimestamp = fullCloudRec.updated_at || snapData.timestamp || remoteTimestamp;
+                }
+              } catch (fetchErr) {
+                console.warn('Realtime fetch full snapshot error:', fetchErr);
+              }
+            }
+
+            if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
               const remoteMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
               const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
               if (currentMs > 0 && remoteMs > 0 && remoteMs < currentMs) {
                 console.log('[FixablyDashboard Realtime] Ignoring older cloud payload:', remoteTimestamp, 'vs active:', snapshotTimestampRef.current);
                 return;
               }
-              const newSnapshot = hydrateFixablySnapshot(payload.new.snapshot_data, sites);
+              const newSnapshot = hydrateFixablySnapshot(snapData, sites);
               if (remoteTimestamp && !newSnapshot.timestamp) {
                 newSnapshot.timestamp = remoteTimestamp;
               }
@@ -553,19 +614,96 @@ export default function FixablyInventoryDashboard({
             }
           }
         )
+        .on(
+          'broadcast',
+          { event: 'mdc_sync' },
+          async (msg) => {
+            const evType = msg?.payload?.type;
+            if (evType === 'FIXABLY_SNAPSHOT_UPDATED') {
+              const sender = msg?.payload?.senderId;
+              const curId = String(currentUser?.id || '').trim();
+              if (curId && (sender === curId || sender === currentUser?.email)) return;
+              try {
+                const { data: cloudRec } = await supabase
+                  .from('saved_records')
+                  .select('*')
+                  .eq('id', 'master_fixably_inventory_snapshot')
+                  .maybeSingle();
+                if (cloudRec?.snapshot_data && Array.isArray(cloudRec.snapshot_data.items)) {
+                  const remoteTimestamp = cloudRec.updated_at || cloudRec.snapshot_data.timestamp || '';
+                  const remoteMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
+                  const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+                  if (currentMs > 0 && remoteMs > 0 && remoteMs < currentMs) return;
+                  const newSnapshot = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+                  if (remoteTimestamp && !newSnapshot.timestamp) newSnapshot.timestamp = remoteTimestamp;
+                  await dbStorage.setItem('mdc_fixably_snapshot', newSnapshot);
+                  try {
+                    localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(newSnapshot));
+                    localStorage.setItem('mdc_fixably_snapshot_timestamp', remoteTimestamp || newSnapshot.timestamp || '');
+                    localStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
+                    await dbStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
+                  } catch (e) {}
+                  handleApplySyncedSnapshot(newSnapshot);
+                }
+              } catch (e) {}
+            }
+          }
+        )
         .subscribe();
+    }
+
+    // 4. Tab visibility and focus listener: auto-sync if dashboard was in background while another user uploaded
+    const handleVisibilityOrFocus = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible' && supabase) {
+        try {
+          const { data: cloudRec } = await supabase
+            .from('saved_records')
+            .select('id, updated_at')
+            .eq('id', 'master_fixably_inventory_snapshot')
+            .maybeSingle();
+          if (cloudRec?.updated_at) {
+            const cloudMs = new Date(cloudRec.updated_at).getTime();
+            const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
+            if (cloudMs > 0 && cloudMs > currentMs) {
+              const { data: fullDoc } = await supabase
+                .from('saved_records')
+                .select('*')
+                .eq('id', 'master_fixably_inventory_snapshot')
+                .maybeSingle();
+              if (fullDoc?.snapshot_data?.items) {
+                const refreshed = hydrateFixablySnapshot(fullDoc.snapshot_data, sites);
+                if (fullDoc.updated_at && !refreshed.timestamp) refreshed.timestamp = fullDoc.updated_at;
+                await dbStorage.setItem('mdc_fixably_snapshot', refreshed);
+                try {
+                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(refreshed));
+                  localStorage.setItem('mdc_fixably_snapshot_timestamp', fullDoc.updated_at);
+                  localStorage.setItem('mdc_fixably_updated_at', fullDoc.updated_at);
+                } catch (e) {}
+                handleApplySyncedSnapshot(refreshed);
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleVisibilityOrFocus);
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     }
 
     return () => {
       if (bus) bus.close();
       if (typeof window !== 'undefined') {
         window.removeEventListener('storage', handleStorageEvent);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       }
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel).catch(() => {});
       }
     };
-  }, [sites, setSnapshot]);
+  }, [sites, setSnapshot, currentUser?.email, currentUser?.id]);
 
   // Handle slot file assignment, validation, and persistent storage
   const handleSlotFileChange = async (slotKey, file) => {

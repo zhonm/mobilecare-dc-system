@@ -313,14 +313,28 @@ export function AppProvider({ children }) {
     let bc = null;
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       bc = new BroadcastChannel('mdc_sync_bus');
-      bc.onmessage = (msg) => {
-        if (msg.data?.type === 'FIXABLY_SNAPSHOT_UPDATED' && msg.data?.payload?.snapshot) {
-          setFixablySnapshot(prev => {
-            const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
-            const incomingMs = msg.data.payload.snapshot?.timestamp ? new Date(msg.data.payload.snapshot.timestamp).getTime() : 0;
-            if (prevMs > incomingMs) return prev;
-            return msg.data.payload.snapshot;
-          });
+      bc.onmessage = async (msg) => {
+        if (msg.data?.type === 'FIXABLY_SNAPSHOT_UPDATED') {
+          if (msg.data?.payload?.snapshot) {
+            setFixablySnapshot(prev => {
+              const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+              const incomingMs = msg.data.payload.snapshot?.timestamp ? new Date(msg.data.payload.snapshot.timestamp).getTime() : 0;
+              if (prevMs > incomingMs) return prev;
+              return msg.data.payload.snapshot;
+            });
+          } else {
+            try {
+              const idb = await dbStorage.getItem('mdc_fixably_snapshot');
+              if (idb?.items?.length) {
+                setFixablySnapshot(prev => {
+                  const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+                  const incomingMs = idb?.timestamp ? new Date(idb.timestamp).getTime() : 0;
+                  if (prevMs > incomingMs) return prev;
+                  return idb;
+                });
+              }
+            } catch (e) {}
+          }
         }
       };
     }
