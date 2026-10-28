@@ -1711,12 +1711,16 @@ export function useInventory({
         transfer_slip_number: item.transferSlipNumber || item.transfer_slip_number || null,
         transferred_to_site_code: item.targetSiteCode || item.transferred_to_site_code || null,
         box_number: item.boxNumber || item.box_number || existingUnit?.box_number || 1,
-        received_at: item.dateReceived || existingUnit?.received_at || nowIso,
+        received_at: item.dateReceived || item.lastReceivedDate || item.received_at || existingUnit?.received_at || nowIso,
         received_by: currentUser?.fullName || (isDcDest ? 'Warehouse Staff (Import)' : 'Branch Staff'),
         received_by_id: currentUser?.id || null,
         added_by_user_id: currentUser?.id || null,
         created_by_site_id: itemSiteId,
         stocking_price: part.stocking_price || 99,
+        current_owner: item.current_owner || item.currentOwner || existingUnit?.current_owner || null,
+        movement_history: item.movement_history || item.movementHistory || existingUnit?.movement_history || null,
+        transfer_count: item.transfer_count ?? item.transferCount ?? existingUnit?.transfer_count ?? 0,
+        latest_transfer_date: item.latest_transfer_date || item.latestTransfer?.receivedDate || existingUnit?.latest_transfer_date || null,
         is_summary_only: Boolean(item.summary_only),
         updated_at: item.updated_at || nowIso
       };

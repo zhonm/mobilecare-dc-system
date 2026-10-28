@@ -51,7 +51,8 @@ export default function AuditTrail() {
     currentUser,
     showToast,
     autoRefreshData,
-    isAutoRefreshing
+    isAutoRefreshing,
+    fixablySnapshot
   } = useApp();
 
   const isSuperadmin = currentUser?.role === 'superadmin';
@@ -204,9 +205,11 @@ export default function AuditTrail() {
       shipments,
       repairUsageRecords,
       sites,
-      parts
+      parts,
+      fixablyItems: fixablySnapshot?.items || [],
+      fixablyTransfers: fixablySnapshot?.transfers || []
     });
-  }, [selectedSerial, inventoryUnits, shipments, repairUsageRecords, sites, parts]);
+  }, [selectedSerial, inventoryUnits, shipments, repairUsageRecords, sites, parts, fixablySnapshot]);
 
   // Paginated data for uploads
   const paginatedUploads = useMemo(() => {

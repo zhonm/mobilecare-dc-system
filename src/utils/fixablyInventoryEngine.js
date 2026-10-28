@@ -177,12 +177,38 @@ export function parseDelimitedLine(line, delim = ';') {
 /**
  * Helper to extract plain text string from File, Blob, ArrayBuffer, or string.
  */
-export async function extractTextContent(fileOrContent) {
+export async function extractTextContent(fileOrContent, expectedType = null) {
   if (typeof fileOrContent === 'string') return fileOrContent;
+
+  const convertWorkbookBufferToCsv = (buf) => {
+    const wb = XLSX.read(buf, { type: 'array' });
+    if (!wb.SheetNames || wb.SheetNames.length === 0) return '';
+    let targetSheet = wb.SheetNames[0];
+    if (expectedType === 'stock_transfer') {
+      const match = wb.SheetNames.find(n => /transfer/i.test(n));
+      if (match) targetSheet = match;
+    } else if (expectedType === 'kgb_used') {
+      const match = wb.SheetNames.find(n => /kgb|used/i.test(n));
+      if (match) targetSheet = match;
+    } else if (expectedType === 'site_stock') {
+      const match = wb.SheetNames.find(n => /site\s*stock|inventory|master/i.test(n));
+      if (match) targetSheet = match;
+    }
+    return XLSX.utils.sheet_to_csv(wb.Sheets[targetSheet]);
+  };
+
+  if (fileOrContent && typeof fileOrContent.arrayBuffer === 'function' && /\.(xlsx|xls)$/i.test(fileOrContent.name || '')) {
+    const buf = await fileOrContent.arrayBuffer();
+    return convertWorkbookBufferToCsv(buf);
+  }
   if (fileOrContent && typeof fileOrContent.text === 'function') {
     return await fileOrContent.text();
   }
   if (fileOrContent instanceof ArrayBuffer) {
+    const u8 = new Uint8Array(fileOrContent);
+    if (u8.length > 4 && u8[0] === 0x50 && u8[1] === 0x4b) {
+      return convertWorkbookBufferToCsv(fileOrContent);
+    }
     return new TextDecoder().decode(fileOrContent);
   }
   if (fileOrContent && fileOrContent.data) {
@@ -193,12 +219,12 @@ export async function extractTextContent(fileOrContent) {
 
 /**
  * Auto-detects and validates an uploaded Fixably file.
- * Returns { valid, detectedType, rowCount, delimiter, message, error }
+ * Returns { valid, detectedType, rowCount, delimiter, message, error, validationDetails }
  * Types: 'site_stock' | 'kgb_used' | 'stock_transfer'
  */
 export async function validateFixablyFile(fileOrContent, expectedType = null) {
   try {
-    const text = await extractTextContent(fileOrContent);
+    const text = await extractTextContent(fileOrContent, expectedType);
     if (!text || text.trim().length === 0) {
       return { valid: false, error: 'The file is empty.' };
     }
@@ -297,9 +323,17 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
     }
 
     let calculatedRowCount = 0;
+    let validationDetails = null;
+
     if (detectedType === 'site_stock') {
       const rawHeaderRow = parseDelimitedLine(lines[headerIdx], delimiter).map(h => h.trim().toLowerCase().replace(/^"|"$/g, '').replace(/^\ufeff/, ''));
       const idxQty = rawHeaderRow.findIndex(h => h.includes('quantity') || h.includes('qty'));
+      const idxSerial = rawHeaderRow.findIndex(h => h.includes('serial') || h.includes('s/n'));
+      const idxPart = rawHeaderRow.findIndex(h => h.includes('part number') || h.includes('product code'));
+      const seenSerials = new Set();
+      let duplicateSerialsCount = 0;
+      let missingFieldsCount = 0;
+
       for (let i = headerIdx + 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
@@ -307,6 +341,39 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
         if (!cols || cols.length <= 1) continue;
         const qty = idxQty !== -1 ? (parseInt((cols[idxQty] || '1').replace(/[^0-9]/g, ''), 10) || 1) : 1;
         calculatedRowCount += qty;
+        const sn = idxSerial !== -1 ? String(cols[idxSerial] || '').replace(/^"|"$/g, '').trim().toUpperCase() : '';
+        const pn = idxPart !== -1 ? String(cols[idxPart] || '').replace(/^"|"$/g, '').trim() : '';
+        if (!pn) missingFieldsCount++;
+        if (sn && !['NOT VISIBLE', 'N/A', 'NONE', 'UNKNOWN'].includes(sn)) {
+          if (seenSerials.has(sn)) duplicateSerialsCount++;
+          else seenSerials.add(sn);
+        }
+      }
+      validationDetails = {
+        totalRows: calculatedRowCount,
+        uniqueSerials: seenSerials.size,
+        duplicateCount: duplicateSerialsCount,
+        missingFieldsCount,
+        warnings: [
+          ...(duplicateSerialsCount > 0 ? [`${duplicateSerialsCount} duplicate serial(s) detected in Site Stock.`] : []),
+          ...(missingFieldsCount > 0 ? [`${missingFieldsCount} row(s) missing part numbers.`] : [])
+        ]
+      };
+    } else if (detectedType === 'stock_transfer') {
+      calculatedRowCount = Math.max(0, lines.length - headerIdx - 1);
+      const parsedTransfer = await parseStockTransferCsv(text);
+      if (parsedTransfer.success) {
+        validationDetails = {
+          totalRows: calculatedRowCount,
+          validRows: parsedTransfer.validRows,
+          siteToSiteCount: parsedTransfer.siteToSiteCount,
+          dcToSiteCount: parsedTransfer.dcToSiteTransfers?.length || 0,
+          returnToDcCount: parsedTransfer.returnToDcCount || 0,
+          adjustmentsCount: parsedTransfer.adjustmentsCount || 0,
+          duplicateCount: parsedTransfer.validation?.duplicateCount || 0,
+          missingFieldsCount: parsedTransfer.validation?.missingFieldsCount || 0,
+          warnings: parsedTransfer.validation?.warnings || []
+        };
       }
     } else {
       calculatedRowCount = Math.max(0, lines.length - headerIdx - 1);
@@ -317,6 +384,7 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
       detectedType,
       rowCount: calculatedRowCount,
       delimiter,
+      validationDetails,
       message: `Valid ${detectedType === 'site_stock' ? 'Site Stocks' : detectedType === 'kgb_used' ? 'KGB Used' : 'Stock Transfers'} file (${calculatedRowCount.toLocaleString()} rows)`
     };
   } catch (err) {
@@ -330,7 +398,7 @@ export async function validateFixablyFile(fileOrContent, expectedType = null) {
  */
 export async function parseKgbUsedCsv(fileOrContent) {
   try {
-    const text = await extractTextContent(fileOrContent);
+    const text = await extractTextContent(fileOrContent, 'kgb_used');
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length < 2) {
       return { success: false, error: 'KGB Used file is empty.' };
@@ -414,12 +482,14 @@ export async function parseKgbUsedCsv(fileOrContent) {
 }
 
 /**
- * Parses Stock Transfer report CSV/text.
- * Skips report title row if present, extracts all DC transfer serials.
+ * Parses Stock Transfer report CSV/XLSX/text.
+ * Skips report title row if present, extracts all DC transfer serials,
+ * classifies Site-to-Site / DC-to-Site / Return / Adjustment transfers,
+ * validates missing or duplicate rows, and builds chronological serial transfer chains.
  */
 export async function parseStockTransferCsv(fileOrContent) {
   try {
-    const text = await extractTextContent(fileOrContent);
+    const text = await extractTextContent(fileOrContent, 'stock_transfer');
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
     if (lines.length < 2) {
       return { success: false, error: 'Stock Transfer file is empty.' };
@@ -436,17 +506,19 @@ export async function parseStockTransferCsv(fileOrContent) {
     }
 
     const delim = lines[headerIdx].includes(';') ? ';' : ',';
-    const headers = parseDelimitedLine(lines[headerIdx], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''));
+    const headers = parseDelimitedLine(lines[headerIdx], delim).map(h => h.trim().toLowerCase().replace(/^"|"$/g, '').replace(/^\ufeff/, ''));
 
     const getIdx = (patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
 
     const idxDate = getIdx(['transfer received date', 'received date', 'date']);
-    const idxFrom = getIdx(['from stock', 'from']);
-    const idxTo = getIdx(['to stock', 'to']);
+    const idxFrom = headers.findIndex(h => h === 'from stock' || h.startsWith('from ') || h === 'from' || h.includes('source stock'));
+    // Note: Do NOT use h.includes('to') naively because "from stock" contains "to" in "s-to-ck"!
+    const idxTo = headers.findIndex((h, idx) => idx !== idxFrom && (h === 'to stock' || h.startsWith('to ') || h === 'to' || h.includes('destination stock') || h.includes('target stock')));
     const idxCode = getIdx(['product code', 'part number', 'code']);
     const idxName = getIdx(['product name', 'description', 'name']);
     const idxQty = getIdx(['transfer quantity', 'quantity', 'qty']);
     const idxSerial = getIdx(['serial number', 'serial', 's/n']);
+    const idxImei = getIdx(['imei number', 'imei']);
     const idxVal = getIdx(['transfer value', 'value', 'price']);
 
     if (idxSerial === -1) {
@@ -455,41 +527,213 @@ export async function parseStockTransferCsv(fileOrContent) {
 
     const dcSerials = new Set();
     const transfers = [];
+    const siteToSiteTransfers = [];
+    const dcToSiteTransfers = [];
+    const returnToDcTransfers = [];
+    const adjustmentTransfers = [];
+    const duplicateRows = [];
+    const missingFieldsRows = [];
+    const seenTransferKeys = new Set();
+    const serialTransferMap = new Map();
 
     for (let i = headerIdx + 1; i < lines.length; i++) {
       const cols = parseDelimitedLine(lines[i], delim);
-      if (!cols || cols.length <= idxSerial) continue;
+      if (!cols || cols.length <= 1) continue;
 
       const serial = String(cols[idxSerial] || '').replace(/^"|"$/g, '').trim().toUpperCase();
-      const fromStock = String(cols[idxFrom] || '').replace(/^"|"$/g, '').trim().toUpperCase();
-      const toStock = String(cols[idxTo] || '').replace(/^"|"$/g, '').trim();
+      const rawFromStock = idxFrom !== -1 ? String(cols[idxFrom] || '').replace(/^"|"$/g, '').trim() : '';
+      const rawToStock = idxTo !== -1 ? String(cols[idxTo] || '').replace(/^"|"$/g, '').trim() : '';
+      const fromStockUpper = rawFromStock.toUpperCase();
+      const toStockUpper = rawToStock.toUpperCase();
+      const productCode = idxCode !== -1 ? String(cols[idxCode] || '').replace(/^"|"$/g, '').trim().toUpperCase() : '';
+      const productName = idxName !== -1 ? String(cols[idxName] || '').replace(/^"|"$/g, '').trim() : '';
+      const receivedDate = idxDate !== -1 ? normalizeDate(cols[idxDate]) : '';
+      const quantity = idxQty !== -1 ? (parseInt(String(cols[idxQty] || '1').replace(/[^0-9-]/g, ''), 10) || 1) : 1;
+      const rawValStr = idxVal !== -1 ? String(cols[idxVal] || '').replace(/^"|"$/g, '').trim() : '0';
+      const transferValue = parseFloat(rawValStr.replace(/[^0-9.-]/g, '')) || 0;
+      const imei = idxImei !== -1 ? String(cols[idxImei] || '').replace(/^"|"$/g, '').trim() : '';
 
-      if (!serial) continue;
+      if (!serial || ['NONE', 'N/A', 'UNKNOWN'].includes(serial)) {
+        missingFieldsRows.push({
+          rowNumber: i + 1,
+          reason: 'Missing Serial Number',
+          fromStock: rawFromStock,
+          toStock: rawToStock,
+          productCode
+        });
+        continue;
+      }
 
-      const isFromDc = fromStock.includes('DC');
+      if (!rawFromStock || !rawToStock) {
+        missingFieldsRows.push({
+          rowNumber: i + 1,
+          serialNumber: serial,
+          reason: !rawFromStock ? 'Missing From Stock' : 'Missing To Stock',
+          fromStock: rawFromStock,
+          toStock: rawToStock,
+          productCode
+        });
+        continue;
+      }
+
+      // Check for exact duplicate row in the same file
+      const dedupeKey = `${serial}|${receivedDate}|${fromStockUpper}|${toStockUpper}|${productCode}`;
+      if (seenTransferKeys.has(dedupeKey)) {
+        duplicateRows.push({
+          rowNumber: i + 1,
+          serialNumber: serial,
+          receivedDate,
+          fromStock: rawFromStock,
+          toStock: rawToStock,
+          productCode
+        });
+        continue;
+      }
+      seenTransferKeys.add(dedupeKey);
+
+      const fromSite = normalizeSite(rawFromStock);
+      const toSite = normalizeSite(rawToStock);
+      const isFromDc = fromStockUpper.includes('DC') || fromSite.code === 'DC';
+      const isReturnToDc = (toStockUpper.includes('DC') || toSite.code === 'DC') && !isFromDc;
+      const isAdjustment =
+        fromStockUpper.includes('REPAIR') ||
+        toStockUpper.includes('REPAIR') ||
+        fromStockUpper.includes('FINISHED') ||
+        toStockUpper.includes('FINISHED') ||
+        fromStockUpper.includes('ADJUST') ||
+        toStockUpper.includes('ADJUST');
+      const isSiteToSite =
+        !isFromDc &&
+        !isReturnToDc &&
+        !isAdjustment &&
+        fromSite.code !== toSite.code &&
+        fromSite.code !== 'UNKNOWN' &&
+        toSite.code !== 'UNKNOWN';
+
+      let transferType = 'DC-to-Site Transfer';
+      if (isAdjustment) {
+        transferType = 'Inventory Adjustment / Repair';
+      } else if (isSiteToSite) {
+        transferType = 'Site-to-Site Transfer';
+      } else if (isReturnToDc) {
+        transferType = 'Return to DC';
+      } else if (!isFromDc && fromSite.code === toSite.code) {
+        transferType = 'Internal Reclassification';
+      }
+
       if (isFromDc) {
         dcSerials.add(serial);
       }
 
-      transfers.push({
-        receivedDate: normalizeDate(cols[idxDate]),
-        fromStock,
-        toStock,
-        productCode: String(cols[idxCode] || '').replace(/^"|"$/g, '').trim(),
-        productName: String(cols[idxName] || '').replace(/^"|"$/g, '').trim(),
-        quantity: parseInt(cols[idxQty], 10) || 1,
+      const transferRecord = {
+        id: `tr-${i + 1}-${serial}`,
+        rowIndex: i + 1,
+        receivedDate,
+        fromStock: rawFromStock,
+        toStock: rawToStock,
+        fromSiteCode: fromSite.code,
+        fromSiteName: fromSite.name,
+        toSiteCode: toSite.code,
+        toSiteName: toSite.name,
+        productCode,
+        productName,
+        quantity,
         serialNumber: serial,
-        transferValue: parseFloat(cols[idxVal]) || 0,
-        isFromDc
+        imei,
+        transferValue,
+        isFromDc,
+        isSiteToSite,
+        isReturnToDc,
+        isAdjustment,
+        transferType,
+        currentOwner: `${toSite.code}_MSPI-OWNED`
+      };
+
+      transfers.push(transferRecord);
+      if (isSiteToSite) siteToSiteTransfers.push(transferRecord);
+      else if (isAdjustment) adjustmentTransfers.push(transferRecord);
+      else if (isReturnToDc) returnToDcTransfers.push(transferRecord);
+      else if (isFromDc) dcToSiteTransfers.push(transferRecord);
+
+      if (!serialTransferMap.has(serial)) {
+        serialTransferMap.set(serial, []);
+      }
+      serialTransferMap.get(serial).push(transferRecord);
+    }
+
+    // Build chronological transfer chain per serial
+    const enrichedSerialTransferMap = new Map();
+    for (const [serial, rawChain] of serialTransferMap.entries()) {
+      const sorted = [...rawChain].sort((a, b) => {
+        if (a.receivedDate && b.receivedDate && a.receivedDate !== b.receivedDate) {
+          return a.receivedDate.localeCompare(b.receivedDate);
+        }
+        return a.rowIndex - b.rowIndex;
       });
+
+      const movementHistory = [];
+      sorted.forEach((tr, idx) => {
+        const fromCode = tr.fromSiteCode || 'DC';
+        const toCode = tr.toSiteCode || 'UNKNOWN';
+        if (idx === 0 && fromCode) {
+          movementHistory.push(fromCode);
+        }
+        if (toCode && movementHistory[movementHistory.length - 1] !== toCode) {
+          movementHistory.push(toCode);
+        }
+      });
+
+      const latestTransfer = sorted[sorted.length - 1];
+      const firstTransfer = sorted[0];
+      const siteToSiteCount = sorted.filter(t => t.isSiteToSite).length;
+      const latestOwnerCode = latestTransfer?.toSiteCode || 'DC';
+      const currentOwner = `${latestOwnerCode}_MSPI-OWNED`;
+
+      enrichedSerialTransferMap.set(serial, {
+        serialNumber: serial,
+        transfers: sorted,
+        movementHistory,
+        movementTrail: movementHistory.join(' → '),
+        currentOwner,
+        transferCount: sorted.length,
+        siteToSiteCount,
+        latestTransfer,
+        firstTransfer
+      });
+    }
+
+    const warnings = [];
+    if (duplicateRows.length > 0) {
+      warnings.push(`${duplicateRows.length} duplicate transfer record(s) automatically deduplicated.`);
+    }
+    if (missingFieldsRows.length > 0) {
+      warnings.push(`${missingFieldsRows.length} row(s) skipped due to missing serial or stock fields.`);
     }
 
     return {
       success: true,
       totalRows: lines.length - headerIdx - 1,
+      validRows: transfers.length,
       transfers,
+      siteToSiteTransfers,
+      dcToSiteTransfers,
+      returnToDcTransfers,
+      adjustmentTransfers,
       dcSerials,
-      dcTransfersCount: dcSerials.size
+      dcTransfersCount: dcSerials.size,
+      siteToSiteCount: siteToSiteTransfers.length,
+      returnToDcCount: returnToDcTransfers.length,
+      adjustmentsCount: adjustmentTransfers.length,
+      serialTransferMap: enrichedSerialTransferMap,
+      validation: {
+        totalRawRows: lines.length - headerIdx - 1,
+        validRows: transfers.length,
+        duplicateCount: duplicateRows.length,
+        duplicateRows: duplicateRows.slice(0, 50),
+        missingFieldsCount: missingFieldsRows.length,
+        missingFieldsRows: missingFieldsRows.slice(0, 50),
+        warnings
+      }
     };
   } catch (err) {
     console.error('parseStockTransferCsv error:', err);
@@ -507,11 +751,11 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
 
     if (typeof fileOrContent === 'string') {
       text = fileOrContent;
-    } else if (fileOrContent && typeof fileOrContent.text === 'function') {
+    } else if (fileOrContent && (typeof fileOrContent.text === 'function' || typeof fileOrContent.arrayBuffer === 'function')) {
       fileName = fileOrContent.name || fileName;
-      text = await fileOrContent.text();
+      text = await extractTextContent(fileOrContent, 'site_stock');
     } else if (fileOrContent instanceof ArrayBuffer) {
-      text = new TextDecoder().decode(fileOrContent);
+      text = await extractTextContent(fileOrContent, 'site_stock');
     } else if (fileOrContent && fileOrContent.data) {
       text = String(fileOrContent.data);
     } else {
@@ -564,12 +808,33 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
     const currentDate = options.currentDate || new Date('2026-10-09T00:00:00Z');
     const dynamicDcSerials = options.dynamicDcSerials instanceof Set ? options.dynamicDcSerials : null;
     const kgbUsedMap = options.kgbUsedMap instanceof Map ? options.kgbUsedMap : null;
+    const serialTransferMap = options.serialTransferMap instanceof Map ? options.serialTransferMap : null;
     const siteCatalog = options.sites || [];
+
+    const resolveMatchedSite = (normSite) => {
+      const matchedSite = siteCatalog.find(s => {
+        if (!s) return false;
+        const code = String(s.code || '').toUpperCase();
+        const clean = code.replace(/^(ASP|APP)\s+/, '');
+        return code === normSite.code || clean === normSite.code ||
+          (normSite.code === 'VER' && (clean === 'VN' || code === 'ASP VN')) ||
+          (normSite.code === 'MAG' && (clean === 'RM' || code === 'APP RM')) ||
+          (normSite.code === 'ILO' && (clean === 'ILO' || code === 'ASP ILO')) ||
+          (normSite.code === 'COT' && (clean === 'COT' || code === 'ASP COT'));
+      });
+      const siteCode = matchedSite?.code || normSite.code;
+      const siteName = matchedSite?.name || normSite.name;
+      const siteId = matchedSite?.id || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+      return { matchedSite, siteCode, siteName, siteId };
+    };
 
     const items = [];
     const investigationItems = [];
     const siteMap = new Map();
     const partsCatalogMap = new Map();
+    const seenSerials = new Set();
+    const siteMaxDateMap = new Map();
+    const allSiteStockDates = [];
     let totalNetworkUnits = 0;
     let totalNetworkValue = 0;
     const globalAgingCounts = {
@@ -603,29 +868,57 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       const cleanPn = rawPartNumber.split(/[;,]/)[0].trim().toUpperCase();
       const cleanSerial = rawSerial.trim().toUpperCase();
       const isBlankSerial = !cleanSerial || ['NOT VISIBLE', 'N/A', 'N//A', 'NONE', 'UNKNOWN', 'FOR DELETE'].includes(cleanSerial);
+      if (!isBlankSerial) {
+        seenSerials.add(cleanSerial);
+      }
 
       // Site normalization
       const normSite = normalizeSite(rawStockName);
-      let matchedSite = siteCatalog.find(s => {
-        if (!s) return false;
-        const code = String(s.code || '').toUpperCase();
-        const clean = code.replace(/^(ASP|APP)\s+/, '');
-        return code === normSite.code || clean === normSite.code ||
-          (normSite.code === 'VER' && (clean === 'VN' || code === 'ASP VN')) ||
-          (normSite.code === 'MAG' && (clean === 'RM' || code === 'APP RM')) ||
-          (normSite.code === 'ILO' && (clean === 'ILO' || code === 'ASP ILO')) ||
-          (normSite.code === 'COT' && (clean === 'COT' || code === 'ASP COT'));
-      });
+      let { matchedSite, siteCode, siteName, siteId } = resolveMatchedSite(normSite);
+      const originalNormCode = normSite.code;
+      const originalReceivedDate = normalizeDate(rawLastReceived);
+      if (originalReceivedDate) {
+        allSiteStockDates.push(originalReceivedDate);
+        const prevMax = siteMaxDateMap.get(originalNormCode) || '';
+        if (originalReceivedDate > prevMax) {
+          siteMaxDateMap.set(originalNormCode, originalReceivedDate);
+        }
+      }
 
-      const siteCode = matchedSite?.code || normSite.code;
-      const siteName = matchedSite?.name || normSite.name;
-      const siteId = matchedSite?.id || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+      let effectiveStockName = rawStockName;
+      let effectiveLastReceived = rawLastReceived;
+      let wasRelocatedByTransfer = false;
+
+      // Cross-File Reconciliation with Stock Transfers
+      const transferChain = (!isBlankSerial && serialTransferMap) ? serialTransferMap.get(cleanSerial) : null;
+      const latestTr = transferChain?.latestTransfer || null;
+      if (
+        latestTr &&
+        latestTr.toSiteCode &&
+        latestTr.toSiteCode !== 'DC' &&
+        latestTr.toSiteCode !== 'UNKNOWN' &&
+        !latestTr.isReturnToDc &&
+        !latestTr.isAdjustment &&
+        latestTr.toSiteCode !== originalNormCode &&
+        latestTr.receivedDate &&
+        (!originalReceivedDate || latestTr.receivedDate >= originalReceivedDate)
+      ) {
+        const destNormSite = normalizeSite(latestTr.toStock || latestTr.toSiteCode);
+        const destResolved = resolveMatchedSite(destNormSite);
+        matchedSite = destResolved.matchedSite;
+        siteCode = destResolved.siteCode;
+        siteName = destResolved.siteName;
+        siteId = destResolved.siteId;
+        effectiveStockName = latestTr.toStock || `${destNormSite.code}_MSPI-Owned`;
+        effectiveLastReceived = latestTr.receivedDate;
+        wasRelocatedByTransfer = true;
+      }
 
       // Stock Classification
-      const stockClassification = classifyStockType(cleanSerial, rawStockName, rawStockType, dynamicDcSerials);
+      const stockClassification = classifyStockType(cleanSerial, effectiveStockName, rawStockType, dynamicDcSerials);
 
       // Aging
-      const aging = calculateAging(rawLastReceived, currentDate);
+      const aging = calculateAging(effectiveLastReceived, currentDate);
 
       // Cross-File Reconciliation with KGB Used
       const kgbMatch = !isBlankSerial && kgbUsedMap ? kgbUsedMap.get(cleanSerial) : null;
@@ -633,15 +926,28 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
 
       const shouldExpandQty = Boolean(options.expandQuantity);
       const qtyUnits = (shouldExpandQty && rawQty > 1) ? rawQty : 1;
-      const effectivePartVal = rawPartVal;
-      const effectiveUnitVal = shouldExpandQty ? rawPartVal : rawTotalVal;
+      const effectivePartVal = rawPartVal > 0 ? rawPartVal : (latestTr?.transferValue || 0);
+      const effectiveUnitVal = shouldExpandQty ? effectivePartVal : (rawTotalVal > 0 ? rawTotalVal : effectivePartVal * rawQty);
       const effectiveUnitQty = shouldExpandQty ? 1 : rawQty;
+
+      const resolvedNormCode = normalizeSite(effectiveStockName).code || siteCode;
+      const defaultMovement = stockClassification === 'DC Stock' && resolvedNormCode !== 'DC'
+        ? ['DC', resolvedNormCode]
+        : [resolvedNormCode];
+      const itemMovementHistory = transferChain?.movementHistory?.length
+        ? transferChain.movementHistory
+        : defaultMovement;
+      const itemMovementTrail = transferChain?.movementTrail || itemMovementHistory.join(' → ');
+      const itemCurrentOwner = transferChain?.currentOwner || `${resolvedNormCode}_MSPI-OWNED`;
+      const itemTransferCount = transferChain
+        ? transferChain.transferCount
+        : (stockClassification === 'DC Stock' ? 1 : 0);
 
       for (let q = 1; q <= qtyUnits; q++) {
         const itemRecord = {
           id: `fixably-${i}-${cleanPn}-${cleanSerial || 'noserial'}${qtyUnits > 1 ? `-${q}` : ''}`,
           rowIndex: i,
-          stockName: rawStockName,
+          stockName: effectiveStockName,
           stockType: stockClassification,
           rawStockType,
           partNumber: cleanPn,
@@ -650,7 +956,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           serialNumber: cleanSerial ? (q > 1 ? `${cleanSerial}-DUP${q}` : cleanSerial) : '',
           serial_number: cleanSerial ? (q > 1 ? `${cleanSerial}-DUP${q}` : cleanSerial) : '',
           raw_serial: cleanSerial,
-          imei: rawImei,
+          imei: rawImei || latestTr?.imei || '',
           lastReceivedDate: aging.receivedDate,
           dateReceived: aging.receivedDate,
           received_at: aging.receivedDate,
@@ -659,6 +965,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           totalValue: effectiveUnitVal,
           stocking_price: effectivePartVal,
           siteCode,
+          cleanSiteCode: resolvedNormCode,
           site_code: siteCode,
           siteName,
           site_name: siteName,
@@ -673,7 +980,22 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           status: 'VALID',
           isInvestigation: isFlaggedInvestigation,
           isFlaggedInvestigation,
-          investigationDetails: kgbMatch || null
+          investigationDetails: kgbMatch || null,
+          currentOwner: itemCurrentOwner,
+          current_owner: itemCurrentOwner,
+          movementHistory: itemMovementHistory,
+          movement_history: itemMovementHistory,
+          movementTrail: itemMovementTrail,
+          transferCount: itemTransferCount,
+          transfer_count: itemTransferCount,
+          siteToSiteCount: transferChain?.siteToSiteCount || 0,
+          latestTransfer: latestTr,
+          isTransferred: Boolean(transferChain && (transferChain.siteToSiteCount > 0 || wasRelocatedByTransfer)),
+          wasRelocatedByTransfer,
+          relocatedByTransfer: wasRelocatedByTransfer,
+          synthesizedFromTransfer: false,
+          previousSiteCode: wasRelocatedByTransfer ? originalNormCode : (latestTr?.isSiteToSite ? latestTr.fromSiteCode : null),
+          previousReceivedDate: wasRelocatedByTransfer ? originalReceivedDate : null
         };
 
         items.push(itemRecord);
@@ -681,11 +1003,11 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           investigationItems.push(itemRecord);
         }
 
-        totalNetworkUnits += effectiveUnitQty;
+        totalNetworkUnits += shouldExpandQty ? effectiveUnitQty : 1;
         totalNetworkValue += effectiveUnitVal;
 
-        globalAgingCounts[aging.bracket] = (globalAgingCounts[aging.bracket] || 0) + effectiveUnitQty;
-        globalClassificationCounts[stockClassification] = (globalClassificationCounts[stockClassification] || 0) + effectiveUnitQty;
+        globalAgingCounts[aging.bracket] = (globalAgingCounts[aging.bracket] || 0) + (shouldExpandQty ? effectiveUnitQty : 1);
+        globalClassificationCounts[stockClassification] = (globalClassificationCounts[stockClassification] || 0) + (shouldExpandQty ? effectiveUnitQty : 1);
 
         // Group per Site
         if (!siteMap.has(siteCode)) {
@@ -720,6 +1042,155 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       }
     }
 
+    // Reconcile active transferred units that were removed from the origin site in Site Stock
+    // and transferred to a destination branch in Stock Transfer after the Site Stock baseline date
+    let synthesizedTransfersCount = 0;
+    let relocatedTransfersCount = items.filter(it => it.wasRelocatedByTransfer).length;
+
+    if (serialTransferMap && options.reconcileMissingTransfers !== false) {
+      const sortedStockDates = allSiteStockDates.slice().sort();
+      const p99StockDate = sortedStockDates.length > 0
+        ? sortedStockDates[Math.min(sortedStockDates.length - 1, Math.floor(sortedStockDates.length * 0.995))]
+        : '';
+
+      for (const [serial, chain] of serialTransferMap.entries()) {
+        if (seenSerials.has(serial)) continue;
+        const latestTr = chain.latestTransfer;
+        if (!latestTr || !latestTr.receivedDate) continue;
+        const originSiteMaxDate = siteMaxDateMap.get(latestTr.fromSiteCode) || '';
+        const effectiveCutoff = (originSiteMaxDate && p99StockDate)
+          ? (originSiteMaxDate > p99StockDate ? originSiteMaxDate : p99StockDate)
+          : (originSiteMaxDate || p99StockDate);
+        if (effectiveCutoff && latestTr.receivedDate <= effectiveCutoff) continue;
+        if (
+          !latestTr.toSiteCode ||
+          latestTr.toSiteCode === 'DC' ||
+          latestTr.toSiteCode === 'UNKNOWN' ||
+          latestTr.isReturnToDc ||
+          latestTr.isAdjustment
+        ) {
+          continue;
+        }
+
+        // Skip if consumed in GSX KGB Used on or after the transfer date
+        const kgbMatch = kgbUsedMap ? kgbUsedMap.get(serial) : null;
+        if (kgbMatch && kgbMatch.repairClosedDate && kgbMatch.repairClosedDate >= latestTr.receivedDate) {
+          continue;
+        }
+
+        const destNormSite = normalizeSite(latestTr.toStock || latestTr.toSiteCode);
+        const { matchedSite, siteCode, siteName, siteId } = resolveMatchedSite(destNormSite);
+        const cleanPn = (latestTr.productCode || '').trim().toUpperCase();
+        const rawDescription = latestTr.productName || partsCatalogMap.get(cleanPn)?.description || 'Apple Genuine Component';
+        const effectivePartVal = latestTr.transferValue > 0
+          ? latestTr.transferValue
+          : (partsCatalogMap.get(cleanPn)?.stocking_price || 99);
+        const effectiveUnitQty = Math.max(1, latestTr.quantity || 1);
+        const effectiveUnitVal = effectivePartVal * effectiveUnitQty;
+        const stockClassification = classifyStockType(serial, latestTr.toStock, 'Regular', dynamicDcSerials);
+        const aging = calculateAging(latestTr.receivedDate, currentDate);
+        const isFlaggedInvestigation = Boolean(kgbMatch);
+
+        const synthItem = {
+          id: `fixably-transfer-${latestTr.rowIndex}-${cleanPn}-${serial}`,
+          rowIndex: latestTr.rowIndex,
+          stockName: latestTr.toStock || `${destNormSite.code}_MSPI-Owned`,
+          stockType: stockClassification,
+          rawStockType: 'Transferred',
+          partNumber: cleanPn,
+          part_number: cleanPn,
+          description: rawDescription,
+          serialNumber: serial,
+          serial_number: serial,
+          raw_serial: serial,
+          imei: latestTr.imei || '',
+          lastReceivedDate: aging.receivedDate,
+          dateReceived: aging.receivedDate,
+          received_at: aging.receivedDate,
+          quantity: effectiveUnitQty,
+          partValue: effectivePartVal,
+          totalValue: effectiveUnitVal,
+          stocking_price: effectivePartVal,
+          siteCode,
+          cleanSiteCode: destNormSite.code,
+          site_code: siteCode,
+          siteName,
+          site_name: siteName,
+          siteId,
+          current_site_id: siteId,
+          agingDays: aging.days,
+          agingBracket: aging.bracket,
+          statusLabel: aging.statusLabel,
+          badgeColor: aging.badgeColor,
+          badgeBg: aging.badgeBg,
+          isSerialized: true,
+          status: 'VALID',
+          isInvestigation: isFlaggedInvestigation,
+          isFlaggedInvestigation,
+          investigationDetails: kgbMatch || null,
+          currentOwner: chain.currentOwner || `${destNormSite.code}_MSPI-OWNED`,
+          current_owner: chain.currentOwner || `${destNormSite.code}_MSPI-OWNED`,
+          movementHistory: chain.movementHistory,
+          movement_history: chain.movementHistory,
+          movementTrail: chain.movementTrail,
+          transferCount: chain.transferCount,
+          transfer_count: chain.transferCount,
+          siteToSiteCount: chain.siteToSiteCount,
+          latestTransfer: latestTr,
+          isTransferred: true,
+          wasRelocatedByTransfer: true,
+          relocatedByTransfer: true,
+          wasSynthesizedFromTransfer: true,
+          synthesizedFromTransfer: true,
+          previousSiteCode: latestTr.fromSiteCode || null,
+          previousReceivedDate: chain.transfers.length > 1 ? chain.transfers[chain.transfers.length - 2].receivedDate : null
+        };
+
+        items.push(synthItem);
+        seenSerials.add(serial);
+        synthesizedTransfersCount++;
+        relocatedTransfersCount++;
+
+        if (isFlaggedInvestigation) {
+          investigationItems.push(synthItem);
+        }
+
+        totalNetworkUnits += effectiveUnitQty;
+        totalNetworkValue += effectiveUnitVal;
+        globalAgingCounts[aging.bracket] = (globalAgingCounts[aging.bracket] || 0) + effectiveUnitQty;
+        globalClassificationCounts[stockClassification] = (globalClassificationCounts[stockClassification] || 0) + effectiveUnitQty;
+
+        if (!siteMap.has(siteCode)) {
+          siteMap.set(siteCode, {
+            siteCode,
+            siteName,
+            siteId,
+            shipTo: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.ship_to || matchedSite?.ship_to || '',
+            supervisor: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_person || matchedSite?.contact_person || 'Branch Supervisor',
+            phone: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_phone || matchedSite?.contact_phone || '',
+            email: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.contact_email || matchedSite?.contact_email || '',
+            address: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.full_address || matchedSite?.full_address || matchedSite?.address || '',
+            region: OFFICIAL_BRANCH_DIRECTORY[siteCode]?.region || (['ABR', 'CDO', 'CEB', 'COT', 'ILO', 'LAN', 'LAU', 'LIM', 'NAG', 'ZAM'].includes(siteCode) ? 'Provincial' : 'Metro Manila'),
+            items: []
+          });
+        }
+        siteMap.get(siteCode).items.push(synthItem);
+
+        if (cleanPn && !partsCatalogMap.has(cleanPn)) {
+          const catCode = getPartCategory({ part_number: cleanPn, description: rawDescription });
+          const canonicalModel = resolveCanonicalIPhoneModel ? resolveCanonicalIPhoneModel(rawDescription) : null;
+          partsCatalogMap.set(cleanPn, {
+            part_number: cleanPn,
+            description: rawDescription,
+            category_id: catCode === 'DISPLAY' ? 'cat-display' : 'cat-battery',
+            stocking_price: effectivePartVal > 0 ? effectivePartVal : 99,
+            iphone_model: canonicalModel || 'iPhone Model',
+            is_active: true
+          });
+        }
+      }
+    }
+
     // Build Site KPI Summaries
     const siteSummaries = [];
     siteMap.forEach((siteData) => {
@@ -744,12 +1215,19 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
       sites: siteSummaries,
       investigationItems,
       extractedParts: Array.from(partsCatalogMap.values()),
+      reconciledTransferMetrics: {
+        relocatedUnitsCount: relocatedTransfersCount,
+        synthesizedUnitsCount: synthesizedTransfersCount,
+        transferredActiveUnitsCount: items.filter(it => it.isTransferred).length
+      },
       globalMetrics: {
         totalUnits: totalNetworkUnits,
         totalValue: totalNetworkValue,
         uniqueParts: partsCatalogMap.size,
         sitesCount: siteSummaries.length,
         investigationCount: investigationItems.length,
+        transferredUnitsCount: items.filter(it => it.isTransferred).length,
+        relocatedUnitsCount: relocatedTransfersCount,
         agingCounts: globalAgingCounts,
         classificationCounts: globalClassificationCounts,
         deadStockPercent: totalNetworkUnits > 0 ? ((globalAgingCounts[AGING_BRACKETS.DEAD_STOCK] / totalNetworkUnits) * 100).toFixed(1) : '0.0',
@@ -779,14 +1257,36 @@ export async function reconcileFixablyMultiFile({
   try {
     // 1. Parse Stock Transfers (if provided)
     let dynamicDcSerials = new Set();
+    let serialTransferMap = null;
     let transferStats = null;
+    let transfers = [];
+    let siteToSiteTransfers = [];
+    let dcToSiteTransfers = [];
+    let returnToDcTransfers = [];
+    let adjustmentTransfers = [];
+    let transferValidation = null;
+
     if (stockTransferContent) {
       const transferRes = await parseStockTransferCsv(stockTransferContent);
       if (transferRes.success) {
         dynamicDcSerials = transferRes.dcSerials;
+        serialTransferMap = transferRes.serialTransferMap;
+        transfers = transferRes.transfers || [];
+        siteToSiteTransfers = transferRes.siteToSiteTransfers || [];
+        dcToSiteTransfers = transferRes.dcToSiteTransfers || [];
+        returnToDcTransfers = transferRes.returnToDcTransfers || [];
+        adjustmentTransfers = transferRes.adjustmentTransfers || [];
+        transferValidation = transferRes.validation || null;
         transferStats = {
           totalRows: transferRes.totalRows,
-          dcTransfersCount: transferRes.dcTransfersCount
+          validRows: transferRes.validRows,
+          dcTransfersCount: transferRes.dcTransfersCount,
+          dcToSiteCount: transferRes.dcTransfersCount,
+          siteToSiteCount: transferRes.siteToSiteCount,
+          returnToDcCount: transferRes.returnToDcCount,
+          adjustmentsCount: transferRes.adjustmentsCount,
+          duplicateCount: transferRes.validation?.duplicateCount || 0,
+          missingFieldsCount: transferRes.validation?.missingFieldsCount || 0
         };
       }
     }
@@ -809,27 +1309,50 @@ export async function reconcileFixablyMultiFile({
     // 3. Parse Site Stocks with joined cross-file sets
     const stockRes = await parseFixablyExportCsv(siteStockContent, {
       ...options,
-      expandQuantity: options.expandQuantity !== undefined ? options.expandQuantity : true,
+      expandQuantity: options.expandQuantity !== undefined ? options.expandQuantity : false,
       dynamicDcSerials,
-      kgbUsedMap
+      kgbUsedMap,
+      serialTransferMap
     });
 
     if (!stockRes.success) {
       return stockRes;
     }
 
+    const enrichedTransferStats = transferStats
+      ? {
+          ...transferStats,
+          relocatedUnitsCount: stockRes.reconciledTransferMetrics?.relocatedUnitsCount || 0,
+          synthesizedUnitsCount: stockRes.reconciledTransferMetrics?.synthesizedUnitsCount || 0,
+          transferredActiveUnitsCount: stockRes.reconciledTransferMetrics?.transferredActiveUnitsCount || 0
+        }
+      : {
+          dcTransfersCount: KNOWN_DC_SERIALS_SET.size,
+          siteToSiteCount: 0,
+          adjustmentsCount: 0,
+          returnToDcCount: 0
+        };
+
     const batchSummary = {
       batchId: `sync-batch-${Date.now()}`,
       syncedAt: new Date().toISOString(),
       siteStocksCount: stockRes.items.length,
-      transferStats: transferStats || { dcTransfersCount: KNOWN_DC_SERIALS_SET.size },
+      transferStats: enrichedTransferStats,
       kgbStats: kgbStats || { uniqueSerials: 0 },
       flaggedInvestigationCount: stockRes.investigationItems.length,
-      globalMetrics: stockRes.globalMetrics
+      globalMetrics: stockRes.globalMetrics,
+      validation: transferValidation
     };
 
     return {
       ...stockRes,
+      transfers,
+      siteToSiteTransfers,
+      dcToSiteTransfers,
+      returnToDcTransfers,
+      adjustmentTransfers,
+      transferStats: enrichedTransferStats,
+      validationSummary: transferValidation,
       batchSummary
     };
   } catch (err) {
@@ -1243,6 +1766,23 @@ export function compactFixablySnapshot(snapshot) {
     if (it.siteName) item.siteName = it.siteName;
     if (it.siteId) item.siteId = it.siteId;
     if (it.imei) item.imei = it.imei;
+    if (it.currentOwner || it.current_owner) item.currentOwner = it.currentOwner || it.current_owner;
+    if (Array.isArray(it.movementHistory) && it.movementHistory.length > 0) {
+      item.movementHistory = it.movementHistory;
+      item.movementTrail = it.movementTrail || it.movementHistory.join(' → ');
+    }
+    if (typeof it.transferCount === 'number' && it.transferCount > 0) {
+      item.transferCount = it.transferCount;
+    }
+    if (typeof it.siteToSiteCount === 'number' && it.siteToSiteCount > 0) {
+      item.siteToSiteCount = it.siteToSiteCount;
+    }
+    if (it.isTransferred) item.isTransferred = true;
+    if (it.wasRelocatedByTransfer) item.wasRelocatedByTransfer = true;
+    if (it.wasSynthesizedFromTransfer) item.wasSynthesizedFromTransfer = true;
+    if (it.previousSiteCode) item.previousSiteCode = it.previousSiteCode;
+    if (it.previousReceivedDate) item.previousReceivedDate = it.previousReceivedDate;
+    if (it.latestTransfer) item.latestTransfer = it.latestTransfer;
     if (it.isInvestigation || it.isFlaggedInvestigation) {
       item.isInvestigation = true;
       if (it.investigationDetails) item.investigationDetails = it.investigationDetails;
@@ -1254,6 +1794,13 @@ export function compactFixablySnapshot(snapshot) {
     fileName: snapshot.fileName || 'output.csv',
     timestamp: snapshot.timestamp || new Date().toISOString(),
     items: compactItems,
+    transfers: Array.isArray(snapshot.transfers) ? snapshot.transfers : [],
+    siteToSiteTransfers: Array.isArray(snapshot.siteToSiteTransfers) ? snapshot.siteToSiteTransfers : [],
+    dcToSiteTransfers: Array.isArray(snapshot.dcToSiteTransfers) ? snapshot.dcToSiteTransfers : [],
+    returnToDcTransfers: Array.isArray(snapshot.returnToDcTransfers) ? snapshot.returnToDcTransfers : [],
+    adjustmentTransfers: Array.isArray(snapshot.adjustmentTransfers) ? snapshot.adjustmentTransfers : [],
+    transferStats: snapshot.transferStats || snapshot.batchSummary?.transferStats || null,
+    validationSummary: snapshot.validationSummary || snapshot.batchSummary?.validation || null,
     globalMetrics: snapshot.globalMetrics || null,
     batchSummary: snapshot.batchSummary || null
   };
@@ -1266,6 +1813,24 @@ export function compactFixablySnapshot(snapshot) {
 export function hydrateFixablySnapshot(snapshot, sitesList = []) {
   if (!snapshot || !Array.isArray(snapshot.items) || snapshot.items.length === 0) {
     return snapshot;
+  }
+
+  if (Array.isArray(snapshot.transfers) && snapshot.transfers.length > 0) {
+    if (!Array.isArray(snapshot.siteToSiteTransfers) || snapshot.siteToSiteTransfers.length === 0) {
+      snapshot.siteToSiteTransfers = snapshot.transfers.filter(t => t.isSiteToSite);
+    }
+    if (!Array.isArray(snapshot.dcToSiteTransfers) || snapshot.dcToSiteTransfers.length === 0) {
+      snapshot.dcToSiteTransfers = snapshot.transfers.filter(t => t.isDcToSite);
+    }
+    if (!Array.isArray(snapshot.returnToDcTransfers) || snapshot.returnToDcTransfers.length === 0) {
+      snapshot.returnToDcTransfers = snapshot.transfers.filter(t => t.isReturnToDc);
+    }
+    if (!Array.isArray(snapshot.adjustmentTransfers) || snapshot.adjustmentTransfers.length === 0) {
+      snapshot.adjustmentTransfers = snapshot.transfers.filter(t => t.isAdjustment);
+    }
+    if (snapshot.transferStats && snapshot.transferStats.dcToSiteCount === undefined) {
+      snapshot.transferStats.dcToSiteCount = snapshot.transferStats.dcTransfersCount ?? snapshot.dcToSiteTransfers.length;
+    }
   }
 
   // If sites are already present and have complete segmented lists, return as-is
@@ -1299,6 +1864,25 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
     }
 
     const siteCode = (it.siteCode || it.site_code || 'UNKNOWN').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    it.cleanSiteCode = siteCode;
+    if (it.wasRelocatedByTransfer || it.relocatedByTransfer) {
+      it.relocatedByTransfer = true;
+      it.wasRelocatedByTransfer = true;
+    }
+    if (it.wasSynthesizedFromTransfer || it.synthesizedFromTransfer) {
+      it.synthesizedFromTransfer = true;
+      it.wasSynthesizedFromTransfer = true;
+    }
+    if (!it.currentOwner) {
+      it.currentOwner = it.current_owner || `${siteCode}_MSPI-OWNED`;
+    }
+    if (!Array.isArray(it.movementHistory) || it.movementHistory.length === 0) {
+      it.movementHistory = it.stockType === 'DC Stock' && siteCode !== 'DC' ? ['DC', siteCode] : [siteCode];
+    }
+    if (!it.movementTrail) {
+      it.movementTrail = it.movementHistory.join(' → ');
+    }
+
     if (!siteMap.has(siteCode)) {
       const matchedSite = (sitesList || []).find(s => (s.code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '') === siteCode);
       const dirEntry = OFFICIAL_BRANCH_DIRECTORY[siteCode] || OFFICIAL_BRANCH_DIRECTORY[`APP ${siteCode}`] || OFFICIAL_BRANCH_DIRECTORY[`ASP ${siteCode}`] || {};
@@ -1345,4 +1929,3 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
     sites: siteSummaries
   };
 }
-

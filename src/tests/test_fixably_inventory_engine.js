@@ -61,7 +61,8 @@ console.log('\nTest 2: Stock Classification');
 
 // 3. Ingestion & Calculation on output.csv
 console.log('\nTest 3: Parse output.csv and verify exact totals');
-const csvContent = fs.readFileSync('output.csv', 'utf8');
+const resolveCsvPath = (name) => fs.existsSync(name) ? name : `xlsx files/${name}`;
+const csvContent = fs.readFileSync(resolveCsvPath('output.csv'), 'utf8');
 const result = await parseFixablyExportCsv(csvContent, {
   currentDate: new Date('2026-10-09T00:00:00Z')
 });
@@ -132,12 +133,12 @@ const siteStockValid = await validateFixablyFile(csvContent, 'site_stock');
 assert.strictEqual(siteStockValid.valid, true, 'output.csv must be valid site_stock');
 assert.strictEqual(siteStockValid.detectedType, 'site_stock');
 
-const kgbContent = fs.readFileSync('SIte Stocks (Fixably) - KGB Used.csv', 'utf8');
+const kgbContent = fs.readFileSync(resolveCsvPath('SIte Stocks (Fixably) - KGB Used.csv'), 'utf8');
 const kgbValid = await validateFixablyFile(kgbContent, 'kgb_used');
 assert.strictEqual(kgbValid.valid, true, 'KGB Used file must be valid kgb_used');
 assert.strictEqual(kgbValid.detectedType, 'kgb_used');
 
-const transferContent = fs.readFileSync('SIte Stocks (Fixably) - Stock Transfer.csv', 'utf8');
+const transferContent = fs.readFileSync(resolveCsvPath('SIte Stocks (Fixably) - Stock Transfer.csv'), 'utf8');
 const transferValid = await validateFixablyFile(transferContent, 'stock_transfer');
 assert.strictEqual(transferValid.valid, true, 'Stock Transfer file must be valid stock_transfer');
 assert.strictEqual(transferValid.detectedType, 'stock_transfer');

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  Globe,
   Building2,
   Package,
   AlertTriangle,
@@ -34,7 +33,9 @@ import { supabase } from '../supabase/client.js';
 import { resolveSite } from '../utils/appContextHelpers.js';
 import { isProvincialSite } from '../utils/partResolver.js';
 import { resolveSerialFullDetails } from '../utils/serialTracker.js';
+import { syncFixablyTransfersToHistory, loadLocalTransferHistory } from '../services/transferHistoryService.js';
 import SerialDossierModal from './SerialDossierModal.jsx';
+import MovementHistoryModal from './MovementHistoryModal.jsx';
 import {
   validateFixablyFile,
   reconcileFixablyMultiFile,
@@ -54,6 +55,7 @@ export default function FixablyInventoryDashboard({
   sites = [],
   parts = [],
   _parts = [],
+  inventoryUnits = [],
   _inventoryUnits = [],
   batchAddScanInUnits = null,
   clearSiteParts = null,
@@ -64,6 +66,7 @@ export default function FixablyInventoryDashboard({
   initialViewMode = 'all_stocks',
   initialSelectedSiteId = null
 }) {
+  const effectiveInventoryUnits = inventoryUnits?.length ? inventoryUnits : _inventoryUnits;
   const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN' || currentUser?.isSuperAdmin);
   const isPmgUser = currentUser?.role === 'parts_management';
 
@@ -77,15 +80,24 @@ export default function FixablyInventoryDashboard({
     return raw.toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
   }, [userAssignedSite?.code, currentUser?.siteCode]);
 
-  // 1. Core State: strictly lock viewMode to 'multi_site' for non-superadmins
+  // 1. Core State: strictly lock viewMode to 'multi_site' or 'site_transfers' for non-superadmins
   const [viewMode, setViewMode] = useState(() => {
     if (!isSuperadmin) return 'multi_site';
     return initialViewMode || 'all_stocks';
   });
 
+  // Synchronize viewMode when initialViewMode prop changes via Sidebar navigation
+  useEffect(() => {
+    if (!isSuperadmin) {
+      setViewMode('multi_site');
+    } else if (initialViewMode) {
+      setViewMode(initialViewMode);
+    }
+  }, [isSuperadmin, initialViewMode]);
+
   // Guard against illegal viewMode states for non-superadmins
   useEffect(() => {
-    if (!isSuperadmin && viewMode !== 'multi_site') {
+    if (!isSuperadmin && viewMode === 'all_stocks') {
       setViewMode('multi_site');
     }
   }, [isSuperadmin, viewMode]);
@@ -139,9 +151,9 @@ export default function FixablyInventoryDashboard({
 
   // 2. 3-Slot File Ingestion State (User Uploads Only)
   const [slots, setSlots] = useState({
-    site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
-    kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null },
-    stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null }
+    site_stock: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null },
+    kgb_used: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null },
+    stock_transfer: { file: null, name: '', size: 0, rowCount: 0, valid: false, error: null, content: null, validationDetails: null }
   });
   const [activeSlotDrag, setActiveSlotDrag] = useState(null);
 
@@ -156,9 +168,47 @@ export default function FixablyInventoryDashboard({
   const [agingFilter, setAgingFilter] = useState('ALL');
   const [classificationFilter, setClassificationFilter] = useState('ALL');
   const [investigationFilter, setInvestigationFilter] = useState('ALL'); // 'ALL' | 'INVESTIGATION_ONLY' | 'CLEAN_ONLY'
+  const [transferFilter, setTransferFilter] = useState('ALL'); // 'ALL' | 'TRANSFERRED_ONLY' | 'SITE_TO_SITE_ONLY' | 'DC_TRANSFERS_ONLY'
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [copiedSerial, setCopiedSerial] = useState(null);
+
+  // 3b. Site Transfers & Movement Ledger View State
+  const [transfersSubTab, setTransfersSubTab] = useState('site_to_site'); // 'site_to_site' | 'all_movements' | 'adjustments' | 'activity_logs'
+  const [transfersSearch, setTransfersSearch] = useState('');
+  const [transfersFromFilter, setTransfersFromFilter] = useState('ALL');
+  const [transfersToFilter, setTransfersToFilter] = useState('ALL');
+  const [transfersTypeFilter, setTransfersTypeFilter] = useState('ALL');
+  const [transfersPage, setTransfersPage] = useState(1);
+  const [inspectedMovementUnit, setInspectedMovementUnit] = useState(null);
+  const [activityLogs, setActivityLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_fixably_activity_logs');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const appendActivityLog = useCallback((entry) => {
+    const newLog = {
+      id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      userName: currentUser?.fullName || currentUser?.name || 'Zhon Manacis',
+      userEmail: currentUser?.email || 'admin@mobilecare.ph',
+      userRole: currentUser?.role || 'superadmin',
+      ...entry
+    };
+    setActivityLogs(prev => {
+      const updated = [newLog, ...(Array.isArray(prev) ? prev : [])].slice(0, 100);
+      try {
+        localStorage.setItem('mdc_fixably_activity_logs', JSON.stringify(updated));
+        dbStorage.setItem('mdc_fixably_activity_logs', updated);
+      } catch (e) {}
+      return updated;
+    });
+    return newLog;
+  }, [currentUser?.email, currentUser?.fullName, currentUser?.name, currentUser?.role]);
 
   // 4. Multi-Site View State
   const [selectedRegion, setSelectedRegion] = useState(() => {
@@ -262,13 +312,50 @@ export default function FixablyInventoryDashboard({
     }
   }, [broadcastCloudEvent, currentUser?.email, currentUser?.fullName]);
 
-  // Load initial data strictly from Storage (user uploads). NO default demo files.
+  // Helper to convert existing snapshot items into CSV text when Slot 1 raw text is unavailable
+  const serializeSnapshotItemsToCsv = useCallback((items) => {
+    if (!Array.isArray(items) || items.length === 0) return '';
+    const escapeCsv = (val) => {
+      const str = String(val ?? '');
+      return (str.includes(',') || str.includes('"') || str.includes('\n'))
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    };
+    const header = 'Stock Name,Part Number,Description,Quantity,Serial Number,IMEI,Part Value,Last Received Date';
+    const rows = items
+      .filter(it => !it.synthesizedFromTransfer)
+      .map(it => [
+        escapeCsv(it.originalStockName || it.stockName || `${it.cleanSiteCode || String(it.siteCode || '').replace(/^(ASP|APP)\s+/, '')}_MSPI-Owned`),
+        escapeCsv(it.partNumber),
+        escapeCsv(it.description),
+        escapeCsv(1),
+        escapeCsv(it.serialNumber),
+        escapeCsv(it.imei || ''),
+        escapeCsv(it.partValue || it.totalValue || 0),
+        escapeCsv(it.originalReceivedDate || it.lastReceivedDate || '')
+      ].join(','));
+    return [header, ...rows].join('\n');
+  }, []);
+
+  // Load initial data from Storage and automatically reconcile uploaded Stock Transfers
   useEffect(() => {
     let isMounted = true;
 
     async function loadInitialData() {
       setIsLoading(true);
       try {
+        // 0. Hydrate persistent activity logs
+        try {
+          let savedLogs = await dbStorage.getItem('mdc_fixably_activity_logs');
+          if (!Array.isArray(savedLogs) || savedLogs.length === 0) {
+            const rawLogs = localStorage.getItem('mdc_fixably_activity_logs');
+            if (rawLogs) savedLogs = JSON.parse(rawLogs);
+          }
+          if (Array.isArray(savedLogs) && isMounted) {
+            setActivityLogs(savedLogs);
+          }
+        } catch (e) {}
+
         // 1. Hydrate persistent uploaded slots from IndexedDB
         let [savedSiteStock, savedKgb, savedTransfer] = await Promise.all([
           dbStorage.getItem('mdc_uploaded_slot_site_stock'),
@@ -281,6 +368,17 @@ export default function FixablyInventoryDashboard({
             const v = await validateFixablyFile(savedSiteStock.content, 'site_stock');
             if (v.valid && v.rowCount) {
               savedSiteStock.rowCount = v.rowCount;
+              savedSiteStock.validationDetails = v.validationDetails;
+            }
+          } catch (e) {}
+        }
+
+        if (savedTransfer?.content) {
+          try {
+            const vt = await validateFixablyFile(savedTransfer.content, 'stock_transfer');
+            if (vt.valid) {
+              savedTransfer.rowCount = vt.rowCount;
+              savedTransfer.validationDetails = vt.validationDetails;
             }
           } catch (e) {}
         }
@@ -317,26 +415,46 @@ export default function FixablyInventoryDashboard({
           } catch (e) {}
         }
 
-        // Auto-heal discrepancy ONLY if user locally uploaded a newer slot file after the snapshot
-        const slotUpdatedAt = savedSiteStock?.updatedAt ? new Date(savedSiteStock.updatedAt).getTime() : 0;
+        // Check if any uploaded slot file (Site Stock, KGB, or Stock Transfer) is newer than the snapshot,
+        // or if the cached snapshot lacks stock transfer records
+        const siteSlotMs = savedSiteStock?.updatedAt ? new Date(savedSiteStock.updatedAt).getTime() : 0;
+        const kgbSlotMs = savedKgb?.updatedAt ? new Date(savedKgb.updatedAt).getTime() : 0;
+        const transferSlotMs = savedTransfer?.updatedAt ? new Date(savedTransfer.updatedAt).getTime() : 0;
+        const maxSlotMs = Math.max(siteSlotMs, kgbSlotMs, transferSlotMs);
         const cachedUpdatedAt = cached?.timestamp ? new Date(cached.timestamp).getTime() : 0;
-        const isSlotStrictlyNewer = Boolean(slotUpdatedAt && cachedUpdatedAt && slotUpdatedAt > cachedUpdatedAt);
+        const isAnySlotStrictlyNewer = Boolean(maxSlotMs && (!cachedUpdatedAt || maxSlotMs > cachedUpdatedAt));
+        const isMissingTransferRecords = Boolean(
+          cached?.items?.length > 0 &&
+          (!Array.isArray(cached.transfers) || cached.transfers.length === 0)
+        );
 
         const needsDiscrepancyHeal = Boolean(
           savedSiteStock?.content &&
           cached?.items &&
           savedSiteStock.rowCount &&
           cached.items.length !== savedSiteStock.rowCount &&
-          isSlotStrictlyNewer
+          isAnySlotStrictlyNewer
         );
 
-        // Auto-reconcile fallback from saved slot file if snapshot wasn't stored or slot is strictly newer
-        if ((needsDiscrepancyHeal || !cached || !cached.items || cached.items.length === 0) && savedSiteStock?.content) {
+        // Use strictly the Stock Transfer file uploaded by the user in Slot 3
+        const effectiveTransferContent = savedTransfer?.content || null;
+
+        const effectiveSiteStockContent = savedSiteStock?.content || (
+          (isAnySlotStrictlyNewer || isMissingTransferRecords) && cached?.items?.length > 0
+            ? serializeSnapshotItemsToCsv(cached.items)
+            : null
+        );
+
+        // Auto-reconcile from saved slots or cached items whenever a newer slot (including Stock Transfer) exists or transfers are missing
+        if (
+          (needsDiscrepancyHeal || isAnySlotStrictlyNewer || isMissingTransferRecords || !cached || !cached.items || cached.items.length === 0) &&
+          effectiveSiteStockContent
+        ) {
           try {
             const autoReconciled = await reconcileFixablyMultiFile({
-              siteStockContent: savedSiteStock.content,
+              siteStockContent: effectiveSiteStockContent,
               kgbUsedContent: savedKgb?.content || null,
-              stockTransferContent: savedTransfer?.content || null,
+              stockTransferContent: effectiveTransferContent,
               options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
             });
 
@@ -344,7 +462,7 @@ export default function FixablyInventoryDashboard({
               cached = autoReconciled;
               await dbStorage.setItem('mdc_fixably_snapshot', cached);
               try {
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cached)));
                 localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
               } catch (e) {}
               await dbStorage.putSavedRecord({
@@ -353,6 +471,9 @@ export default function FixablyInventoryDashboard({
                 snapshot: cached,
                 created_at: cached.timestamp || new Date().toISOString()
               });
+              if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
+                syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
+              }
               await syncSnapshotToCloud(cached);
             }
           } catch (autoRecErr) {
@@ -363,6 +484,9 @@ export default function FixablyInventoryDashboard({
         // Render available local/cached snapshot immediately for instant UI feedback without blank screen
         if (cached && cached.items && cached.items.length > 0) {
           cached = hydrateFixablySnapshot(cached, sites);
+          if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
+            syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
+          }
           if (isMounted) {
             setSnapshot(cached);
             setIsLoading(false);
@@ -385,17 +509,29 @@ export default function FixablyInventoryDashboard({
               const localTimestamp = cached?.timestamp || snapshotTimestampRef.current || localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
               const localMs = localTimestamp ? new Date(localTimestamp).getTime() : 0;
 
-              // If cloud is strictly newer OR local cache had no valid items, synchronize to cloud snapshot!
-              if (!cached || !cached.items || cached.items.length === 0 || (cloudMs > 0 && cloudMs > localMs)) {
+              // Only apply cloud snapshot if cloud is strictly newer AND local slot files weren't uploaded more recently
+              if ((!cached || !cached.items || cached.items.length === 0 || (cloudMs > 0 && cloudMs > localMs)) && cloudMs > maxSlotMs) {
                 console.info('[FixablyDashboard] Synchronizing with newer cloud snapshot:', cloudTimestamp, 'vs local:', localTimestamp);
-                const cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+                let cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
                 if (cloudTimestamp && !cloudHydrated.timestamp) {
                   cloudHydrated.timestamp = cloudTimestamp;
+                }
+                // If cloud snapshot is missing transfers, enrich it with available transfer content
+                if ((!Array.isArray(cloudHydrated.transfers) || cloudHydrated.transfers.length === 0) && (savedTransfer?.content || effectiveTransferContent)) {
+                  const enrichedCloud = await reconcileFixablyMultiFile({
+                    siteStockContent: savedSiteStock?.content || serializeSnapshotItemsToCsv(cloudHydrated.items),
+                    kgbUsedContent: savedKgb?.content || null,
+                    stockTransferContent: savedTransfer?.content || effectiveTransferContent,
+                    options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+                  });
+                  if (enrichedCloud.success && enrichedCloud.items?.length > 0) {
+                    cloudHydrated = enrichedCloud;
+                  }
                 }
                 cached = cloudHydrated;
                 await dbStorage.setItem('mdc_fixably_snapshot', cloudHydrated);
                 try {
-                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cloudHydrated));
+                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cloudHydrated)));
                   localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp || cloudHydrated.timestamp || '');
                   localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
                   await dbStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
@@ -406,6 +542,9 @@ export default function FixablyInventoryDashboard({
                   snapshot: cloudHydrated,
                   created_at: cloudTimestamp || cloudHydrated.timestamp || new Date().toISOString()
                 });
+                if (Array.isArray(cloudHydrated.transfers) && cloudHydrated.transfers.length > 0) {
+                  syncFixablyTransfersToHistory(cloudHydrated.transfers, currentUser?.email || 'Cloud-Sync').catch(() => {});
+                }
                 if (isMounted) {
                   setSnapshot(cloudHydrated);
                   setIsLoading(false);
@@ -456,6 +595,9 @@ export default function FixablyInventoryDashboard({
                     localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
                     localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
                   } catch (e) {}
+                  if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
+                    syncFixablyTransfersToHistory(cached.transfers, 'System Auto-Seed').catch(() => {});
+                  }
                   await syncSnapshotToCloud(cached);
                 }
               }
@@ -491,7 +633,7 @@ export default function FixablyInventoryDashboard({
     return () => {
       isMounted = false;
     };
-  }, [sites, syncSnapshotToCloud, setSnapshot]);
+  }, [sites, syncSnapshotToCloud, setSnapshot, serializeSnapshotItemsToCsv, currentUser?.email]);
 
   // Real-time multi-user & cross-device snapshot synchronization listener
   useEffect(() => {
@@ -705,11 +847,184 @@ export default function FixablyInventoryDashboard({
     };
   }, [sites, setSnapshot, currentUser?.email, currentUser?.id]);
 
-  // Handle slot file assignment, validation, and persistent storage
+  // Core reconciliation & synchronization runner (usable both from automatic upload trigger and manual button)
+  const executeReconciliationAndSync = useCallback(async ({
+    siteStockText,
+    kgbText,
+    transferText,
+    sourceLabel = 'Manual Multi-File Sync',
+    uploadedFileName = '',
+    closeDropzoneOnSuccess = true
+  }) => {
+    setIsParsing(true);
+    setParseProgress({ stage: 'Reading files and validating schemas...', percent: 15 });
+
+    try {
+      setParseProgress({ stage: 'Indexing KGB closed repairs, DC transfers & site-to-site movements...', percent: 45 });
+      await new Promise(r => setTimeout(r, 40));
+
+      const reconciled = await reconcileFixablyMultiFile({
+        siteStockContent: siteStockText,
+        kgbUsedContent: kgbText,
+        stockTransferContent: transferText,
+        options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+      });
+
+      if (!reconciled.success) {
+        await appendActivityLog({
+          actionType: 'RECONCILIATION_ERROR',
+          status: 'ERROR',
+          fileName: uploadedFileName || 'Multi-File Upload',
+          summary: reconciled.error || 'Reconciliation failed.',
+          affectedRecords: 0
+        });
+        showToast?.(reconciled.error || 'Reconciliation failed.', 'error');
+        setIsParsing(false);
+        setParseProgress(null);
+        return null;
+      }
+
+      setParseProgress({ stage: 'Calculating aging metrics, transfer chains & branch health...', percent: 75 });
+      await new Promise(r => setTimeout(r, 40));
+
+      const effectiveTs = reconciled.timestamp || new Date().toISOString();
+      if (!reconciled.timestamp) {
+        reconciled.timestamp = effectiveTs;
+      }
+      snapshotTimestampRef.current = effectiveTs;
+
+      // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
+      await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
+      try {
+        localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(reconciled)));
+        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTs);
+        localStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+        await dbStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+        const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
+        const updatedBatches = [
+          reconciled.batchSummary,
+          ...(Array.isArray(existingBatches) ? existingBatches.slice(0, 19) : [])
+        ];
+        await dbStorage.setItem('inventory_sync_batches', updatedBatches);
+
+        // Permanent archival backup in STORE_SAVED_RECORDS (immune to cache clearance)
+        await dbStorage.putSavedRecord({
+          id: 'master_fixably_inventory_snapshot',
+          record_type: 'fixably_snapshot',
+          snapshot: reconciled,
+          created_at: effectiveTs
+        });
+      } catch (e) {
+        console.warn('Fixably snapshot backup note:', e);
+      }
+
+      // Synchronize all parsed Fixably stock transfers into the global Part Transfer History Ledger
+      let historySyncResult = { addedCount: 0, totalHistoryCount: 0 };
+      if (Array.isArray(reconciled.transfers) && reconciled.transfers.length > 0) {
+        try {
+          historySyncResult = await syncFixablyTransfersToHistory(
+            reconciled.transfers,
+            currentUser?.fullName || currentUser?.name || currentUser?.email || 'System Administrator'
+          );
+        } catch (histErr) {
+          console.warn('Transfer history sync warning:', histErr);
+        }
+      }
+
+      // Immediately anchor UI state so it displays the newly processed inventory & transfers
+      setSnapshot(reconciled);
+      if (closeDropzoneOnSuccess) {
+        setIsDropzoneOpen(false);
+      }
+
+      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
+      await syncSnapshotToCloud(reconciled);
+
+      // Synchronize with application active stock (inventoryUnits)
+      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function') {
+        setParseProgress({ stage: 'Synchronizing transferred & active stock with application database...', percent: 90 });
+        try {
+          const validUnits = reconciled.items.map(it => ({
+            ...it,
+            part_number: it.partNumber,
+            serial_number: it.serialNumber,
+            site_code: it.siteCode,
+            current_site_id: it.siteId,
+            current_owner: it.currentOwner,
+            movement_history: it.movementHistory,
+            transfer_count: it.transferCount,
+            latest_transfer_date: it.latestTransfer?.receivedDate || it.lastReceivedDate || null,
+            lastReceivedDate: it.lastReceivedDate,
+            status: 'VALID',
+            lifecycle_status: 'in_stock'
+          }));
+          await batchAddScanInUnits(validUnits, null, 'Branch Stock', 'ALL', 'ALL', 'All Retail Branches', {
+            replaceExistingBranchStock: false
+          });
+        } catch (syncErr) {
+          console.warn('Batch add sync warning:', syncErr);
+        }
+      }
+
+      // Record detailed activity log entry
+      const trStats = reconciled.transferStats || {};
+      await appendActivityLog({
+        actionType: sourceLabel,
+        status: 'SUCCESS',
+        fileName: uploadedFileName || slots.stock_transfer?.name || slots.site_stock?.name || 'Multi-File Upload',
+        summary: `Synced ${reconciled.items.length.toLocaleString()} inventory units across ${reconciled.sites.length} branches. Processed ${(trStats.totalTransfers || 0).toLocaleString()} stock transfers (${(trStats.siteToSiteCount || 0).toLocaleString()} site-to-site, ${(trStats.relocatedCount || 0) + (trStats.synthesizedTransferUnitsCount || 0)} relocated/synthesized active units).`,
+        affectedRecords: reconciled.items.length,
+        transferRecordsCount: trStats.totalTransfers || 0,
+        siteToSiteCount: trStats.siteToSiteCount || 0,
+        relocatedUnitsCount: (trStats.relocatedCount || 0) + (trStats.synthesizedTransferUnitsCount || 0),
+        historyAddedCount: historySyncResult.addedCount || 0,
+        validationSummary: reconciled.validationSummary || null
+      });
+
+      const siteToSiteMsg = trStats.siteToSiteCount
+        ? `, ${trStats.siteToSiteCount.toLocaleString()} site-to-site transfers (${(trStats.relocatedCount || 0) + (trStats.synthesizedTransferUnitsCount || 0)} relocated units)`
+        : '';
+
+      showToast?.(
+        `Successfully synced ${reconciled.items.length.toLocaleString()} units across ${reconciled.sites.length} sites${siteToSiteMsg}!`,
+        'success'
+      );
+      return reconciled;
+    } catch (err) {
+      console.error('Multi-file intake error:', err);
+      await appendActivityLog({
+        actionType: sourceLabel,
+        status: 'ERROR',
+        fileName: uploadedFileName || 'Multi-File Upload',
+        summary: `Error processing files: ${err.message}`,
+        affectedRecords: 0
+      });
+      showToast?.(`Error processing files: ${err.message}`, 'error');
+      return null;
+    } finally {
+      setIsParsing(false);
+      setParseProgress(null);
+    }
+  }, [
+    sites,
+    appendActivityLog,
+    showToast,
+    currentUser?.fullName,
+    currentUser?.name,
+    currentUser?.email,
+    setSnapshot,
+    syncSnapshotToCloud,
+    syncWithAppInventory,
+    batchAddScanInUnits,
+    slots.stock_transfer?.name,
+    slots.site_stock?.name
+  ]);
+
+  // Handle slot file assignment, validation, persistent storage, and real-time auto-reconciliation
   const handleSlotFileChange = async (slotKey, file) => {
     if (!file) return;
     try {
-      const textContent = await extractTextContent(file);
+      const textContent = await extractTextContent(file, slotKey);
       const validation = await validateFixablyFile(textContent, slotKey);
       if (!validation.valid) {
         setSlots(prev => ({
@@ -721,36 +1036,78 @@ export default function FixablyInventoryDashboard({
             rowCount: 0,
             valid: false,
             error: validation.error,
+            validationDetails: null,
             content: null,
             updatedAt: null
           }
         }));
+        await appendActivityLog({
+          actionType: `FILE_VALIDATION_FAILED (${slotKey.toUpperCase()})`,
+          status: 'ERROR',
+          fileName: file.name,
+          fileSize: file.size,
+          summary: validation.error,
+          affectedRecords: 0
+        });
         showToast?.(validation.error, 'error');
         return;
       }
 
+      const nowIso = new Date().toISOString();
       const slotData = {
         name: file.name,
         size: file.size,
         rowCount: validation.rowCount,
         valid: true,
         error: null,
+        validationDetails: validation.validationDetails || null,
         content: textContent,
-        updatedAt: new Date().toISOString()
+        updatedAt: nowIso
       };
 
-      setSlots(prev => ({
-        ...prev,
+      const nextSlots = {
+        ...slots,
         [slotKey]: {
           ...slotData,
           file
         }
-      }));
+      };
+
+      setSlots(nextSlots);
 
       // Automatically persist to IndexedDB so uploaded files survive page refreshes, logouts, & restarts
       await dbStorage.setItem('mdc_uploaded_slot_' + slotKey, slotData);
 
-      showToast?.(`Verified & saved ${file.name} (${validation.rowCount.toLocaleString()} rows)`, 'success');
+      const vDetails = validation.validationDetails;
+      const warnSuffix = vDetails?.warnings?.length ? ` (${vDetails.warnings.join(' ')})` : '';
+      await appendActivityLog({
+        actionType: `FILE_UPLOADED (${slotKey.toUpperCase()})`,
+        status: vDetails?.warnings?.length ? 'WARNING' : 'SUCCESS',
+        fileName: file.name,
+        fileSize: file.size,
+        summary: `Uploaded & validated ${file.name}: ${validation.rowCount.toLocaleString()} valid records${vDetails?.siteToSiteCount ? `, ${vDetails.siteToSiteCount.toLocaleString()} site-to-site transfers` : ''}.${warnSuffix}`,
+        affectedRecords: validation.rowCount,
+        siteToSiteCount: vDetails?.siteToSiteCount || 0,
+        validationSummary: vDetails || null
+      });
+
+      showToast?.(`Verified & saved ${file.name} (${validation.rowCount.toLocaleString()} rows)${warnSuffix}`, 'success');
+
+      // Automatically process and sync in real time whenever Site Stock or Stock Transfer is uploaded!
+      const effectiveSiteStockText =
+        nextSlots.site_stock?.content ||
+        (snapshot?.items?.length > 0 ? serializeSnapshotItemsToCsv(snapshot.items) : null);
+
+      if (effectiveSiteStockText) {
+        await executeReconciliationAndSync({
+          siteStockText: effectiveSiteStockText,
+          kgbText: nextSlots.kgb_used?.content || null,
+          transferText: nextSlots.stock_transfer?.content || null,
+          sourceLabel: `Auto-Sync on ${slotKey === 'stock_transfer' ? 'Stock Transfer' : slotKey === 'site_stock' ? 'Site Stock' : 'KGB Used'} Upload`,
+          uploadedFileName: file.name,
+          closeDropzoneOnSuccess: false
+        });
+      }
     } catch (err) {
       setSlots(prev => ({
         ...prev,
@@ -761,10 +1118,19 @@ export default function FixablyInventoryDashboard({
           rowCount: 0,
           valid: false,
           error: err.message,
+          validationDetails: null,
           content: null,
           updatedAt: null
         }
       }));
+      await appendActivityLog({
+        actionType: `FILE_UPLOAD_EXCEPTION (${slotKey.toUpperCase()})`,
+        status: 'ERROR',
+        fileName: file.name,
+        fileSize: file.size,
+        summary: `File validation failed: ${err.message}`,
+        affectedRecords: 0
+      });
       showToast?.(`File validation failed: ${err.message}`, 'error');
     }
   };
@@ -807,7 +1173,12 @@ export default function FixablyInventoryDashboard({
 
   // Process & Reconcile Multi-File Sync
   const handleProcessMultiFile = async () => {
-    if (!slots.site_stock.content && !slots.site_stock.file) {
+    const effectiveSiteStock =
+      slots.site_stock.file ||
+      slots.site_stock.content ||
+      (snapshot?.items?.length > 0 ? serializeSnapshotItemsToCsv(snapshot.items) : null);
+
+    if (!effectiveSiteStock) {
       showToast?.('Site Stocks (output.csv) is required.', 'error');
       return;
     }
@@ -816,104 +1187,14 @@ export default function FixablyInventoryDashboard({
       return;
     }
 
-    setIsParsing(true);
-    setParseProgress({ stage: 'Reading files and validating schemas...', percent: 15 });
-
-    try {
-      const siteStockContent = slots.site_stock.file || slots.site_stock.content;
-      const kgbUsedContent = slots.kgb_used.file || slots.kgb_used.content || null;
-      const stockTransferContent = slots.stock_transfer.file || slots.stock_transfer.content || null;
-
-      setParseProgress({ stage: 'Indexing KGB closed repairs & DC transfers...', percent: 45 });
-      await new Promise(r => setTimeout(r, 60));
-
-      const reconciled = await reconcileFixablyMultiFile({
-        siteStockContent,
-        kgbUsedContent,
-        stockTransferContent,
-        options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
-      });
-
-      if (!reconciled.success) {
-        showToast?.(reconciled.error || 'Reconciliation failed.', 'error');
-        setIsParsing(false);
-        setParseProgress(null);
-        return;
-      }
-
-      setParseProgress({ stage: 'Calculating aging metrics and branch health...', percent: 75 });
-      await new Promise(r => setTimeout(r, 60));
-
-      const effectiveTs = reconciled.timestamp || new Date().toISOString();
-      if (!reconciled.timestamp) {
-        reconciled.timestamp = effectiveTs;
-      }
-      snapshotTimestampRef.current = effectiveTs;
-
-      // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
-      await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
-      try {
-        localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(reconciled));
-        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTs);
-        localStorage.setItem('mdc_fixably_updated_at', effectiveTs);
-        await dbStorage.setItem('mdc_fixably_updated_at', effectiveTs);
-        const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
-        const updatedBatches = [
-          reconciled.batchSummary,
-          ...(Array.isArray(existingBatches) ? existingBatches.slice(0, 19) : [])
-        ];
-        await dbStorage.setItem('inventory_sync_batches', updatedBatches);
-
-        // Permanent archival backup in STORE_SAVED_RECORDS (immune to cache clearance)
-        await dbStorage.putSavedRecord({
-          id: 'master_fixably_inventory_snapshot',
-          record_type: 'fixably_snapshot',
-          snapshot: reconciled,
-          created_at: effectiveTs
-        });
-      } catch (e) {
-        console.warn('Fixably snapshot backup note:', e);
-      }
-
-      // Immediately anchor UI state so it displays the newly processed inventory
-      setSnapshot(reconciled);
-      setIsDropzoneOpen(false);
-
-      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
-      await syncSnapshotToCloud(reconciled);
-
-      // Optional: synchronize with batchAddScanInUnits
-      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function') {
-        setParseProgress({ stage: 'Synchronizing with application stock...', percent: 90 });
-        try {
-          const validUnits = reconciled.items.map(it => ({
-            ...it,
-            part_number: it.partNumber,
-            serial_number: it.serialNumber,
-            site_code: it.siteCode,
-            current_site_id: it.siteId,
-            status: 'VALID',
-            lifecycle_status: 'in_stock'
-          }));
-          await batchAddScanInUnits(validUnits, null, 'Branch Stock', 'ALL', 'ALL', 'All Retail Branches', {
-            replaceExistingBranchStock: false
-          });
-        } catch (syncErr) {
-          console.warn('Batch add sync warning:', syncErr);
-        }
-      }
-
-      showToast?.(
-        `Successfully synced ${reconciled.items.length.toLocaleString()} units across ${reconciled.sites.length} sites (${reconciled.investigationItems?.length || 0} flagged in closed repairs)!`,
-        'success'
-      );
-    } catch (err) {
-      console.error('Multi-file intake error:', err);
-      showToast?.(`Error processing files: ${err.message}`, 'error');
-    } finally {
-      setIsParsing(false);
-      setParseProgress(null);
-    }
+    await executeReconciliationAndSync({
+      siteStockText: effectiveSiteStock,
+      kgbText: slots.kgb_used.file || slots.kgb_used.content || null,
+      transferText: slots.stock_transfer.file || slots.stock_transfer.content || null,
+      sourceLabel: 'Manual Multi-File Reconciliation',
+      uploadedFileName: slots.stock_transfer?.name || slots.site_stock?.name || 'Multi-File Upload',
+      closeDropzoneOnSuccess: true
+    });
   };
 
   // Drag and drop helper for individual slots
@@ -943,7 +1224,7 @@ export default function FixablyInventoryDashboard({
   const filteredMasterItems = useMemo(() => {
     if (!snapshot?.items) return [];
 
-    return snapshot.items.filter(item => {
+    const activeMatches = snapshot.items.filter(item => {
       // 1. Site Filter
       if (siteFilter !== 'ALL') {
         const itemSite = String(item.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '');
@@ -969,7 +1250,16 @@ export default function FixablyInventoryDashboard({
         return false;
       }
 
-      // 5. Search query
+      // 5. Stock Transfer / Movement Filter
+      if (transferFilter === 'SITE_TO_SITE_ONLY') {
+        if (!(item.siteToSiteCount > 0 || item.relocatedByTransfer || item.synthesizedFromTransfer)) return false;
+      } else if (transferFilter === 'TRANSFERRED_ONLY') {
+        if (!(item.transferCount > 0 || item.isDcTransfer || item.relocatedByTransfer || item.synthesizedFromTransfer)) return false;
+      } else if (transferFilter === 'RELOCATED_ONLY') {
+        if (!(item.relocatedByTransfer || item.synthesizedFromTransfer)) return false;
+      }
+
+      // 6. Search query (includes serial, part, branch, movement trail, owner, previous branch)
       if (masterSearch.trim()) {
         const q = masterSearch.toLowerCase().trim();
         const pn = String(item.partNumber || '').toLowerCase();
@@ -978,14 +1268,105 @@ export default function FixablyInventoryDashboard({
         const site = String(item.siteCode || '').toLowerCase();
         const siteNm = String(item.siteName || '').toLowerCase();
         const orderId = String(item.investigationDetails?.orderId || '').toLowerCase();
-        if (!pn.includes(q) && !desc.includes(q) && !sn.includes(q) && !site.includes(q) && !siteNm.includes(q) && !orderId.includes(q)) {
+        const trail = String(item.movementTrail || '').toLowerCase();
+        const owner = String(item.currentOwner || '').toLowerCase();
+        const prevSite = String(item.previousSiteCode || '').toLowerCase();
+        if (
+          !pn.includes(q) &&
+          !desc.includes(q) &&
+          !sn.includes(q) &&
+          !site.includes(q) &&
+          !siteNm.includes(q) &&
+          !orderId.includes(q) &&
+          !trail.includes(q) &&
+          !owner.includes(q) &&
+          !prevSite.includes(q)
+        ) {
           return false;
         }
       }
 
       return true;
     });
-  }, [snapshot, siteFilter, agingFilter, classificationFilter, investigationFilter, masterSearch]);
+
+    // When a search query is entered, also surface matching historical/consumed transfer records
+    // from snapshot.transfers that are not in active on-hand snapshot.items
+    if (masterSearch.trim().length >= 3 && Array.isArray(snapshot?.transfers) && snapshot.transfers.length > 0) {
+      const q = masterSearch.toLowerCase().trim();
+      const seenActiveSerials = new Set(
+        snapshot.items.map(it => String(it.serialNumber || '').trim().toUpperCase()).filter(Boolean)
+      );
+      const transferBySerial = new Map();
+      snapshot.transfers.forEach(tr => {
+        const sn = String(tr.serialNumber || tr.serial_number || '').trim().toUpperCase();
+        if (!sn || seenActiveSerials.has(sn)) return;
+        const pn = String(tr.productCode || tr.part_number || '').toLowerCase();
+        const desc = String(tr.productName || tr.description || '').toLowerCase();
+        const fromSite = String(tr.fromSiteCode || '').toLowerCase();
+        const toSite = String(tr.toSiteCode || '').toLowerCase();
+        if (
+          sn.toLowerCase().includes(q) ||
+          pn.includes(q) ||
+          desc.includes(q) ||
+          `${fromSite} -> ${toSite}`.includes(q) ||
+          `${fromSite} → ${toSite}`.includes(q)
+        ) {
+          if (!transferBySerial.has(sn)) transferBySerial.set(sn, []);
+          transferBySerial.get(sn).push(tr);
+        }
+      });
+
+      const historicalTransferItems = [];
+      for (const [sn, trList] of transferBySerial.entries()) {
+        const latestTr = trList[trList.length - 1];
+        const destCode = String(latestTr.toSiteCode || 'BRANCH').toUpperCase();
+        if (siteFilter !== 'ALL') {
+          const targetSite = siteFilter.toUpperCase().replace(/^(ASP|APP)\s+/, '');
+          if (destCode !== targetSite && String(latestTr.fromSiteCode || '').toUpperCase() !== targetSite) continue;
+        }
+        const movementSites = [];
+        trList.forEach((t, idx) => {
+          if (idx === 0 && t.fromSiteCode) movementSites.push(t.fromSiteCode);
+          if (t.toSiteCode && movementSites[movementSites.length - 1] !== t.toSiteCode) {
+            movementSites.push(t.toSiteCode);
+          }
+        });
+        historicalTransferItems.push({
+          id: `hist-xfer-${sn}`,
+          partNumber: latestTr.productCode || 'N/A',
+          description: latestTr.productName || 'Transferred Service Part',
+          siteCode: latestTr.toSiteName || destCode,
+          cleanSiteCode: destCode,
+          siteName: latestTr.toSiteName || `MOBILECARE - ${destCode}`,
+          stockType: latestTr.isDcToSite ? 'DC Stock' : 'MSPI-Owned / C/I REP',
+          serialNumber: sn,
+          quantity: 1,
+          lastReceivedDate: latestTr.receivedDate || '—',
+          agingDays: 0,
+          agingBracket: 'IN_STOCK',
+          statusLabel: 'Historical / Consumed',
+          badgeColor: '#6d28d9',
+          badgeBg: '#f5f3ff',
+          partValue: Number(latestTr.transferValue || 0),
+          totalValue: Number(latestTr.transferValue || 0),
+          isTransferred: true,
+          transferCount: trList.length,
+          siteToSiteCount: trList.filter(t => t.isSiteToSite).length,
+          relocatedByTransfer: Boolean(latestTr.isSiteToSite),
+          previousSiteCode: latestTr.fromSiteCode || null,
+          movementHistory: movementSites,
+          movementTrail: movementSites.join(' → '),
+          currentOwner: latestTr.currentOwner || `${destCode}_MSPI-OWNED`,
+          latestTransfer: latestTr,
+          isHistoricalTransferRecord: true
+        });
+      }
+
+      return [...activeMatches, ...historicalTransferItems];
+    }
+
+    return activeMatches;
+  }, [snapshot, siteFilter, agingFilter, classificationFilter, investigationFilter, transferFilter, masterSearch]);
 
   // Pagination for Master Table
   const paginatedMasterItems = useMemo(() => {
@@ -1255,11 +1636,40 @@ export default function FixablyInventoryDashboard({
       const snClean = sn.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
       if (sn.toUpperCase().includes(q) || (qClean && snClean.includes(qClean))) {
-        const key = `${sn}-${it.siteCode}`;
+        const key = `${sn.toUpperCase()}`;
         if (!seen.has(key)) {
           seen.add(key);
           matches.push(it);
           if (matches.length >= 25) break;
+        }
+      }
+    }
+
+    if (matches.length < 25 && Array.isArray(snapshot?.transfers)) {
+      for (const tr of snapshot.transfers) {
+        const sn = String(tr.serialNumber || tr.serial_number || '').trim();
+        if (!sn || sn.startsWith('Non-serialized')) continue;
+        const snClean = sn.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (sn.toUpperCase().includes(q) || (qClean && snClean.includes(qClean))) {
+          const key = `${sn.toUpperCase()}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            matches.push({
+              serialNumber: sn,
+              partNumber: tr.productCode || tr.part_number || 'N/A',
+              description: tr.productName || tr.description || 'Transferred Part',
+              siteCode: tr.toSiteName || tr.toSiteCode || 'BRANCH',
+              siteName: tr.toSiteName || `MOBILECARE - ${tr.toSiteCode || 'BRANCH'}`,
+              agingDays: 0,
+              statusLabel: 'Historical / Consumed',
+              badgeBg: '#f5f3ff',
+              badgeColor: '#6d28d9',
+              stockType: tr.isSiteToSite ? 'Site-to-Site Transfer' : 'Transfer Ledger',
+              lastReceivedDate: tr.receivedDate || '',
+              isHistoricalTransferRecord: true
+            });
+            if (matches.length >= 25) break;
+          }
         }
       }
     }
@@ -1275,7 +1685,7 @@ export default function FixablyInventoryDashboard({
     });
 
     return matches;
-  }, [snapshot?.items, partSearchInput]);
+  }, [snapshot?.items, snapshot?.transfers, partSearchInput]);
 
   // Autocomplete filtered list based on user search input
   const filteredPartCatalog = useMemo(() => {
@@ -1307,8 +1717,35 @@ export default function FixablyInventoryDashboard({
       return sn === query || (queryClean && snClean === queryClean);
     });
 
-    return exact || null;
-  }, [selectedSerialUnit, partSearchQuery, partSearchInput, snapshot?.items]);
+    if (exact) return exact;
+
+    if (Array.isArray(snapshot?.transfers)) {
+      const matchedTrs = snapshot.transfers.filter(tr => {
+        const sn = String(tr.serialNumber || tr.serial_number || '').trim().toUpperCase();
+        const snClean = sn.replace(/[^A-Z0-9]/g, '');
+        return sn === query || (queryClean && snClean === queryClean);
+      });
+      if (matchedTrs.length > 0) {
+        const latestTr = matchedTrs[matchedTrs.length - 1];
+        return {
+          serialNumber: latestTr.serialNumber || latestTr.serial_number,
+          partNumber: latestTr.productCode || latestTr.part_number || 'N/A',
+          description: latestTr.productName || latestTr.description || 'Transferred Part',
+          siteCode: latestTr.toSiteName || latestTr.toSiteCode || 'BRANCH',
+          siteName: latestTr.toSiteName || `MOBILECARE - ${latestTr.toSiteCode || 'BRANCH'}`,
+          agingDays: 0,
+          statusLabel: 'Historical / Consumed',
+          badgeBg: '#f5f3ff',
+          badgeColor: '#6d28d9',
+          stockType: latestTr.isSiteToSite ? 'Site-to-Site Transfer' : 'Transfer Ledger',
+          lastReceivedDate: latestTr.receivedDate || '',
+          isHistoricalTransferRecord: true
+        };
+      }
+    }
+
+    return null;
+  }, [selectedSerialUnit, partSearchQuery, partSearchInput, snapshot?.items, snapshot?.transfers]);
 
   // Available stock per site for the currently searched part number or located serial
   const partStockBySite = useMemo(() => {
@@ -1479,250 +1916,183 @@ export default function FixablyInventoryDashboard({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', width: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', width: '100%' }}>
 
-      {/* 1. Refined Main Header Banner */}
+      {/* 1. Executive Page Header */}
       <div
         className="card"
         style={{
-          padding: '18px 22px',
+          padding: '20px 24px',
           background: '#ffffff',
-          border: '1.5px solid #cbd5e1',
-          borderRadius: '12px',
-          boxShadow: '0 2px 8px rgba(15, 23, 42, 0.04)'
+          border: '1px solid #e2e8f0',
+          borderRadius: '14px',
+          boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           
-          <div style={{ flex: 1, minWidth: '300px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Globe size={22} color="#0284c7" />
+          <div style={{ flex: 1, minWidth: '280px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div
+                style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%)',
+                  border: '1px solid #bae6fd',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                {viewMode === 'multi_site' ? (
+                  <Building2 size={22} color="#0284c7" />
+                ) : (
+                  <Layers size={22} color="#0284c7" />
+                )}
               </div>
               <div>
-                <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
-                  {(!isSuperadmin && isPmgUser) ? 'Branch Inventory Health & Multi-Site Stock' : 'All Stocks & Multi-Site Inventory'}
-                </h2>
-                <div style={{ fontSize: '12.5px', color: '#64748b', marginTop: '2px' }}>
-                  {(!isSuperadmin && isPmgUser)
-                    ? 'Branch on-hand health analytics with network-wide cross-site parts availability'
-                    : 'Network-wide on-hand inventory visibility, Fixably aging health & GSX repair reconciliation'}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
+                    {(!isSuperadmin && isPmgUser)
+                      ? 'Branch Inventory Health & Multi-Site Stock'
+                      : viewMode === 'multi_site'
+                      ? 'Multi-Site Inventory Dashboard'
+                      : 'All Stocks & Inventory'}
+                  </h2>
+                  {snapshot && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '3px 10px',
+                        borderRadius: '999px',
+                        fontSize: '11.5px',
+                        fontWeight: 700,
+                        background: '#ecfdf5',
+                        color: '#047857',
+                        border: '1px solid #a7f3d0'
+                      }}
+                    >
+                      <CheckCircle2 size={12} color="#059669" />
+                      <span>Live Reconciled</span>
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '13px', color: '#64748b', marginTop: '4px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                  {snapshot ? (
+                    <>
+                      <span>
+                        Source: <strong style={{ color: '#334155', fontWeight: 600 }}>{snapshot.fileName || 'output.csv'}</strong>
+                      </span>
+                      <span style={{ color: '#cbd5e1' }}>•</span>
+                      <span>
+                        Updated {new Date(snapshot.timestamp).toLocaleDateString()} at {new Date(snapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span style={{ color: '#cbd5e1' }}>•</span>
+                      <span style={{ color: '#0f172a', fontWeight: 600 }}>
+                        {(!isSuperadmin && isPmgUser)
+                          ? `${displayMetrics.totalUnits.toLocaleString()} Branch Units (${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Network)`
+                          : `${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Units across ${snapshot.sites?.length || 0} Service Points`}
+                      </span>
+                    </>
+                  ) : (
+                    <span>Network-wide on-hand inventory visibility, Fixably aging health &amp; stock transfer reconciliation</span>
+                  )}
                 </div>
               </div>
             </div>
-
-            {snapshot && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
-                <span className="badge" style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  <CheckCircle2 size={12} color="#059669" />
-                  <span>File: {snapshot.fileName || 'output.csv'}</span>
-                </span>
-                <span className="badge" style={{ background: '#f8fafc', color: '#334155', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 600 }}>
-                  Synced: {new Date(snapshot.timestamp).toLocaleDateString()} {new Date(snapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                <span className="badge" style={{ background: '#0284c7', color: '#ffffff', fontSize: '11px', fontWeight: 800 }}>
-                  {(!isSuperadmin && isPmgUser)
-                    ? `${displayMetrics.totalUnits.toLocaleString()} Branch Units (${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Network Total)`
-                    : `${(snapshot.globalMetrics?.totalUnits || snapshot.items?.length || 0).toLocaleString()} Units On-Hand`}
-                </span>
-                <span className="badge" style={{ background: '#f1f5f9', color: '#0f172a', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 700 }}>
-                  {snapshot.sites?.length || 0} Authorized Service Points
-                </span>
-                {isSuperadmin ? (
-                  (snapshot.investigationItems?.length > 0 || snapshot.globalMetrics?.investigationCount > 0) && (
-                    <span
-                      className="badge"
-                      onClick={() => {
-                        setViewMode('all_stocks');
-                        setInvestigationFilter(prev => prev === 'INVESTIGATION_ONLY' ? 'ALL' : 'INVESTIGATION_ONLY');
-                      }}
-                      style={{
-                        background: '#fff1f2',
-                        color: '#be123c',
-                        border: '1.5px solid #fecdd3',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                      title="Click to view items appearing in closed GSX repairs"
-                    >
-                      <ShieldAlert size={12} color="#be123c" />
-                      <span>{snapshot.investigationItems?.length || snapshot.globalMetrics?.investigationCount} Flagged in KGB</span>
-                    </span>
-                  )
-                ) : (
-                  userSiteData?.investigationCount > 0 && (
-                    <span
-                      className="badge"
-                      onClick={() => {
-                        if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
-                        setSegmentedTab('investigation');
-                      }}
-                      style={{
-                        background: '#fff1f2',
-                        color: '#be123c',
-                        border: '1.5px solid #fecdd3',
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                      title="Click to view branch items appearing in closed GSX repairs"
-                    >
-                      <ShieldAlert size={12} color="#be123c" />
-                      <span>{userSiteData.investigationCount} Flagged in KGB (Branch)</span>
-                    </span>
-                  )
-                )}
-              </div>
-            )}
           </div>
 
-          {/* View Switcher Pills & Action Buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
-            {/* View Mode Switcher: Strictly Superadmins Only */}
-            {isSuperadmin && (
-              <div style={{ display: 'inline-flex', background: '#f1f5f9', padding: '3px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('all_stocks')}
-                  style={{
-                    padding: '7px 18px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    fontSize: '12.5px',
-                    fontWeight: viewMode === 'all_stocks' ? 800 : 600,
-                    background: viewMode === 'all_stocks' ? '#0284c7' : 'transparent',
-                    color: viewMode === 'all_stocks' ? '#ffffff' : '#334155',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    transition: 'all 0.15s ease',
-                    boxShadow: viewMode === 'all_stocks' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
-                  }}
-                >
-                  <Layers size={14} />
-                  <span>All Stocks (Master Directory)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setViewMode('multi_site')}
-                  style={{
-                    padding: '7px 18px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    fontSize: '12.5px',
-                    fontWeight: viewMode === 'multi_site' ? 800 : 600,
-                    background: viewMode === 'multi_site' ? '#0284c7' : 'transparent',
-                    color: viewMode === 'multi_site' ? '#ffffff' : '#334155',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    transition: 'all 0.15s ease',
-                    boxShadow: viewMode === 'multi_site' ? '0 1px 4px rgba(2, 132, 199, 0.3)' : 'none'
-                  }}
-                >
-                  <Building2 size={14} />
-                  <span>Multi-Site (Branch Aging &amp; Health)</span>
-                </button>
-              </div>
-            )}
-
-            {/* PMG User Assigned Branch Pill */}
+          {/* Right Utility Controls (No duplicate navigation buttons) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             {!isSuperadmin && isPmgUser && (
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#f8fafc', padding: '7px 14px', borderRadius: '8px', border: '1.5px solid #cbd5e1', fontSize: '12px' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#f8fafc', padding: '7px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px' }}>
                 <Building2 size={15} color="#0284c7" />
-                <span style={{ fontWeight: 700, color: '#334155' }}>Assigned Branch:</span>
+                <span style={{ fontWeight: 600, color: '#475569' }}>Assigned Branch:</span>
                 <strong style={{ color: '#0284c7', fontWeight: 800 }}>{userSiteCodeClean ? `ASP ${userSiteCodeClean}` : 'PMG Branch'}</strong>
-                <span className="badge" style={{ fontSize: '10.5px', background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0', fontWeight: 800 }}>
-                  Active
-                </span>
               </div>
             )}
 
-            {/* Superadmin Upload Center and Network-Wide Export Tools */}
             {isSuperadmin && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  className="btn btn-sm"
                   onClick={() => setIsDropzoneOpen(prev => !prev)}
                   style={{
-                    fontSize: '12px',
-                    padding: '6px 14px',
+                    height: '36px',
+                    padding: '0 14px',
+                    fontSize: '12.5px',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '6px',
+                    gap: '7px',
                     fontWeight: 700,
-                    color: '#0284c7',
-                    border: '1.5px solid #0284c7',
-                    background: isDropzoneOpen ? '#e0f2fe' : '#ffffff',
-                    borderRadius: '6px',
-                    cursor: 'pointer'
+                    color: isDropzoneOpen ? '#ffffff' : '#0f172a',
+                    border: isDropzoneOpen ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                    background: isDropzoneOpen ? '#0284c7' : '#ffffff',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+                    transition: 'all 0.15s ease'
                   }}
                 >
-                  <UploadCloud size={14} color="#0284c7" />
-                  <span>{isDropzoneOpen ? 'Close Upload Center' : 'Upload Reports (3-Slot)'}</span>
+                  <UploadCloud size={15} color={isDropzoneOpen ? '#ffffff' : '#0284c7'} />
+                  <span>{isDropzoneOpen ? 'Close Data Sync' : 'Sync / Upload Files'}</span>
                 </button>
 
                 {snapshot && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => exportDeadStockToExcel(snapshot.items, 'NETWORK')}
-                      style={{
-                        fontSize: '12px',
-                        padding: '6px 14px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontWeight: 700,
-                        color: '#dc2626',
-                        border: '1.5px solid #f87171',
-                        background: '#fff1f2',
-                        borderRadius: '6px',
-                        cursor: 'pointer'
-                      }}
-                      title="Export all network dead stock (>= 180 days) for pull-out logistics"
-                    >
-                      <Download size={13} color="#dc2626" />
-                      <span>Dead Stock (.xlsx)</span>
-                    </button>
+                  <button
+                    type="button"
+                    onClick={() => exportDeadStockToExcel(snapshot.items, 'NETWORK')}
+                    style={{
+                      height: '36px',
+                      padding: '0 14px',
+                      fontSize: '12.5px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: 600,
+                      color: '#334155',
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Export network dead stock (≥ 180 days) to Excel"
+                  >
+                    <Download size={14} color="#64748b" />
+                    <span>Export Dead Stock</span>
+                  </button>
+                )}
 
-                    {snapshot.investigationItems?.length > 0 && (
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={() => exportInvestigationToExcel(snapshot.investigationItems, 'NETWORK')}
-                        style={{
-                          fontSize: '12px',
-                          padding: '6px 14px',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontWeight: 700,
-                          color: '#be123c',
-                          border: '1.5px solid #fecdd3',
-                          background: '#ffe4e6',
-                          borderRadius: '6px',
-                          cursor: 'pointer'
-                        }}
-                        title="Export all flagged investigation items (closed GSX repairs) for dispatch audit"
-                      >
-                        <ShieldAlert size={13} color="#be123c" />
-                        <span>Investigation (.xlsx)</span>
-                      </button>
-                    )}
-                  </>
+                {snapshot && snapshot.investigationItems?.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => exportInvestigationToExcel(snapshot.investigationItems, 'NETWORK')}
+                    style={{
+                      height: '36px',
+                      padding: '0 14px',
+                      fontSize: '12.5px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontWeight: 600,
+                      color: '#be123c',
+                      border: '1px solid #fecdd3',
+                      background: '#fff1f2',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Export flagged investigation items (closed GSX repairs) to Excel"
+                  >
+                    <ShieldAlert size={14} color="#e11d48" />
+                    <span>Export Flagged ({snapshot.investigationItems.length})</span>
+                  </button>
                 )}
               </div>
             )}
@@ -1751,7 +2121,7 @@ export default function FixablyInventoryDashboard({
               if (e.target.files?.[0]) handleSlotFileChange('site_stock', e.target.files[0]);
               e.target.value = '';
             }}
-            accept=".csv,.txt"
+            accept=".csv,.xlsx,.xls,.txt"
             style={{ display: 'none' }}
           />
           <input
@@ -1761,7 +2131,7 @@ export default function FixablyInventoryDashboard({
               if (e.target.files?.[0]) handleSlotFileChange('kgb_used', e.target.files[0]);
               e.target.value = '';
             }}
-            accept=".csv,.txt"
+            accept=".csv,.xlsx,.xls,.txt"
             style={{ display: 'none' }}
           />
           <input
@@ -1771,7 +2141,7 @@ export default function FixablyInventoryDashboard({
               if (e.target.files?.[0]) handleSlotFileChange('stock_transfer', e.target.files[0]);
               e.target.value = '';
             }}
-            accept=".csv,.txt"
+            accept=".csv,.xlsx,.xls,.txt"
             style={{ display: 'none' }}
           />
 
@@ -1786,7 +2156,7 @@ export default function FixablyInventoryDashboard({
                   Unified Fixably Multi-File Ingestion Center
                 </h3>
                 <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                  Select or drop your export files to reconcile branch on-hand inventory, GSX repair consumption, and DC transfers.
+                  Select or drop CSV / XLSX export files to automatically validate, reconcile branch inventory, and sync stock transfers in real time.
                 </div>
               </div>
             </div>
@@ -1829,7 +2199,7 @@ export default function FixablyInventoryDashboard({
               </div>
 
               <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>output.csv</code> (Stock Name, Part Number, Serial, Last Received Date)
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>output.csv / .xlsx</code> (Stock Name, Part Number, Serial, Last Received Date)
               </div>
 
               {slots.site_stock.valid ? (
@@ -1905,7 +2275,7 @@ export default function FixablyInventoryDashboard({
               ) : (
                 <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
                   <UploadCloud size={24} color="#0284c7" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0284c7' }}>Select or drop output.csv</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0284c7' }}>Select or drop CSV / XLSX</div>
                   <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>Fixably branch on-hand stock export</div>
                 </div>
               )}
@@ -1937,7 +2307,7 @@ export default function FixablyInventoryDashboard({
               </div>
 
               <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>kgb_used.csv</code> (Order ID, Product KGB, Repair Closed Date)
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>kgb_used.csv / .xlsx</code> (Order ID, Product KGB, Repair Closed Date)
               </div>
 
               {slots.kgb_used.valid ? (
@@ -2013,7 +2383,7 @@ export default function FixablyInventoryDashboard({
               ) : (
                 <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
                   <UploadCloud size={24} color="#ea580c" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#ea580c' }}>Select or drop kgb_used.csv</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#ea580c' }}>Select or drop CSV / XLSX</div>
                   <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>GSX closed repair consumed parts</div>
                 </div>
               )}
@@ -2040,65 +2410,82 @@ export default function FixablyInventoryDashboard({
                   <strong style={{ fontSize: '13.5px', color: '#0f172a' }}>Slot 3: Stock Transfers</strong>
                 </div>
                 <span style={{ fontSize: '10.5px', fontWeight: 800, padding: '2px 7px', borderRadius: '4px', background: slots.stock_transfer.valid ? '#dcfce7' : '#e0e7ff', color: slots.stock_transfer.valid ? '#15803d' : '#3730a3' }}>
-                  RECOMMENDED
+                  AUTO-SYNC
                 </span>
               </div>
 
               <div style={{ fontSize: '12px', color: '#475569', marginBottom: '12px' }}>
-                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>stock_transfer.csv</code> (From Stock, To Stock, Serial Number)
+                Expected: <code style={{ fontWeight: 700, color: '#0284c7' }}>stock_transfer.csv / .xlsx</code> (From Stock, To Stock, Serial Number)
               </div>
 
               {slots.stock_transfer.valid ? (
-                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={15} color="#16a34a" />
-                      <span>{slots.stock_transfer.name}</span>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <CheckCircle2 size={15} color="#16a34a" />
+                        <span>{slots.stock_transfer.name}</span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
+                        {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
+                        {slots.stock_transfer.updatedAt && (
+                          <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
-                      {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
-                      {slots.stock_transfer.updatedAt && (
-                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          stockTransferInputRef.current?.click();
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          border: '1px solid #86efac',
+                          background: '#f0fdf4',
+                          borderRadius: '4px',
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          color: '#15803d'
+                        }}
+                        title="Replace / Update File"
+                      >
+                        <RefreshCw size={11} />
+                        <span>Replace</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleClearSlot('stock_transfer');
+                        }}
+                        style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
+                        title="Remove file"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  {(slots.stock_transfer.validationDetails || snapshot?.transferStats) && (
+                    <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #bbf7d0', display: 'flex', gap: '6px', flexWrap: 'wrap', fontSize: '10.5px' }}>
+                      <span style={{ background: '#f5f3ff', color: '#6d28d9', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                        {(slots.stock_transfer.validationDetails?.siteToSiteCount ?? snapshot?.transferStats?.siteToSiteCount ?? 0).toLocaleString()} Site-to-Site
+                      </span>
+                      <span style={{ background: '#eff6ff', color: '#0369a1', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                        {(slots.stock_transfer.validationDetails?.dcToSiteCount ?? snapshot?.transferStats?.dcToSiteCount ?? 0).toLocaleString()} DC Transfers
+                      </span>
+                      {(slots.stock_transfer.validationDetails?.duplicateCount > 0 || slots.stock_transfer.validationDetails?.missingFieldsCount > 0) && (
+                        <span style={{ background: '#fef3c7', color: '#b45309', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                          {slots.stock_transfer.validationDetails.duplicateCount || 0} dup / {slots.stock_transfer.validationDetails.missingFieldsCount || 0} skipped
+                        </span>
                       )}
                     </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        stockTransferInputRef.current?.click();
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        border: '1px solid #86efac',
-                        background: '#f0fdf4',
-                        borderRadius: '4px',
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        color: '#15803d'
-                      }}
-                      title="Replace / Update File"
-                    >
-                      <RefreshCw size={11} />
-                      <span>Replace</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleClearSlot('stock_transfer');
-                      }}
-                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                      title="Remove file"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
+                  )}
                 </div>
               ) : slots.stock_transfer.error ? (
                 <div style={{ background: '#ffffff', border: '1.5px solid #fecdd3', borderRadius: '8px', padding: '10px 12px' }}>
@@ -2121,8 +2508,8 @@ export default function FixablyInventoryDashboard({
               ) : (
                 <div style={{ border: '1.5px dashed #cbd5e1', borderRadius: '8px', padding: '18px 10px', textAlign: 'center', background: '#ffffff' }}>
                   <UploadCloud size={24} color="#6d28d9" style={{ margin: '0 auto 6px' }} />
-                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#6d28d9' }}>Select or drop stock_transfer.csv</div>
-                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>DC transfers for DC Stock classification</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#6d28d9' }}>Select or drop CSV / XLSX</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>DC &amp; Site-to-Site stock transfers</div>
                 </div>
               )}
             </div>
@@ -2201,34 +2588,44 @@ export default function FixablyInventoryDashboard({
         </div>
       )}
 
-      {/* 3. Global Summary KPI Cards (Interactive Filters) */}
+      {/* 3. Global Summary KPI Cards (Balanced 4-Column Executive Grid) */}
       {(displayMetrics || snapshot?.globalMetrics) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-          
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+            gap: '14px'
+          }}
+        >
           {/* Card 1: Total Active Value */}
           <div
             className="card"
             style={{
-              padding: '16px',
+              padding: '18px 20px',
               background: '#ffffff',
-              border: '1.5px solid #cbd5e1',
+              border: '1px solid #e2e8f0',
+              borderTop: '3px solid #0284c7',
               borderRadius: '12px',
-              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Active Value
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                Active Inventory Value
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Boxes size={15} color="#0284c7" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#f0f9ff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Boxes size={16} color="#0284c7" />
               </div>
             </div>
-            <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+            <div style={{ fontSize: '23px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
               ${Number(displayMetrics.totalValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
-              {displayMetrics.isScopedToBranch ? `Assigned Branch (${displayMetrics.branchCode})` : `Across ${displayMetrics.sitesCount} service sites`}
+            <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>
+              {displayMetrics.isScopedToBranch ? `Assigned Branch (${displayMetrics.branchCode})` : `Across ${displayMetrics.sitesCount} service points`}
             </div>
           </div>
 
@@ -2237,44 +2634,58 @@ export default function FixablyInventoryDashboard({
             className="card"
             onClick={() => {
               if (isSuperadmin) {
+                setViewMode('all_stocks');
                 setAgingFilter('ALL');
                 setInvestigationFilter('ALL');
+                setTransferFilter('ALL');
               } else {
                 if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
                 setSegmentedTab('all_stock');
               }
             }}
             style={{
-              padding: '16px',
+              padding: '18px 20px',
               background: '#ffffff',
-              border: (agingFilter === 'ALL' && investigationFilter === 'ALL') ? '2px solid #0284c7' : '1.5px solid #cbd5e1',
+              border: (viewMode === 'all_stocks' && agingFilter === 'ALL' && investigationFilter === 'ALL' && transferFilter === 'ALL') ? '2px solid #0284c7' : '1px solid #e2e8f0',
+              borderTop: '3px solid #10b981',
               borderRadius: '12px',
               cursor: 'pointer',
-              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)'
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
+              transition: 'all 0.15s ease'
             }}
-            title={displayMetrics.isScopedToBranch ? 'Click to view branch on-hand units' : 'Click to reset filters and view all on-hand units'}
+            title={displayMetrics.isScopedToBranch ? 'Click to view branch on-hand units' : 'Click to view all on-hand units'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                Total On-Hand
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                Total Units On-Hand
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Package size={15} color="#16a34a" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Package size={16} color="#059669" />
               </div>
             </div>
-            <div style={{ fontSize: '21px', fontWeight: 900, color: '#0f172a' }}>
-              {displayMetrics.totalUnits.toLocaleString()}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+                {displayMetrics.totalUnits.toLocaleString()}
+              </div>
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#059669', background: '#ecfdf5', padding: '2px 7px', borderRadius: '999px' }}>
+                {displayMetrics.uniqueParts} SKUs
+              </span>
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', fontWeight: 600 }}>
-              {displayMetrics.uniqueParts} catalog parts {displayMetrics.isScopedToBranch ? '(Branch)' : ''}
+            <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>
+              {displayMetrics.isScopedToBranch ? 'Active branch catalog' : 'Click to view all on-hand stock'}
             </div>
           </div>
 
-          {/* Card 3: Dead Stock (>= 180 days) - Action Required */}
+          {/* Card 3: Dead Stock (>= 180 days) */}
           <div
             className="card"
             onClick={() => {
               if (isSuperadmin) {
+                setViewMode('all_stocks');
                 setAgingFilter(prev => prev === AGING_BRACKETS.DEAD_STOCK ? 'ALL' : AGING_BRACKETS.DEAD_STOCK);
               } else {
                 if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
@@ -2282,33 +2693,39 @@ export default function FixablyInventoryDashboard({
               }
             }}
             style={{
-              padding: '16px',
-              background: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '#ffe4e6' : '#fff1f2',
-              border: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '2px solid #e11d48' : '1.5px solid #fecdd3',
+              padding: '18px 20px',
+              background: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '#fff1f2' : '#ffffff',
+              border: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '2px solid #e11d48' : '1px solid #e2e8f0',
+              borderTop: '3px solid #e11d48',
               borderRadius: '12px',
               cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
               transition: 'all 0.15s ease'
             }}
             title={displayMetrics.isScopedToBranch ? 'Click to view branch Dead Stock (≥ 180 days)' : 'Click to filter to Dead Stock (≥ 180 days)'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 Dead Stock (≥ 180d)
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffe4e6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <AlertTriangle size={15} color="#e11d48" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fff1f2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <AlertTriangle size={16} color="#e11d48" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#be123c', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 {displayMetrics.agingCounts[AGING_BRACKETS.DEAD_STOCK]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#e11d48' }}>
-                ({displayMetrics.deadStockPercent}%)
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#be123c', background: '#ffe4e6', padding: '2px 7px', borderRadius: '999px' }}>
+                {displayMetrics.deadStockPercent}%
               </span>
             </div>
-            <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
-              {displayMetrics.isScopedToBranch ? 'Assigned Branch (RMA Pull-Out)' : (agingFilter === AGING_BRACKETS.DEAD_STOCK ? 'Filtering Active (Click to reset)' : 'Action Required (RMA Pull-Out)')}
+            <div style={{ fontSize: '11.5px', fontWeight: 600, color: agingFilter === AGING_BRACKETS.DEAD_STOCK ? '#be123c' : '#64748b' }}>
+              {agingFilter === AGING_BRACKETS.DEAD_STOCK ? 'Filter active • Click to reset' : 'Action required (RMA pull-out)'}
             </div>
           </div>
 
@@ -2317,6 +2734,7 @@ export default function FixablyInventoryDashboard({
             className="card"
             onClick={() => {
               if (isSuperadmin) {
+                setViewMode('all_stocks');
                 setAgingFilter(prev => prev === AGING_BRACKETS.NON_MOVING ? 'ALL' : AGING_BRACKETS.NON_MOVING);
               } else {
                 if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
@@ -2324,33 +2742,39 @@ export default function FixablyInventoryDashboard({
               }
             }}
             style={{
-              padding: '16px',
-              background: agingFilter === AGING_BRACKETS.NON_MOVING ? '#ffedd5' : '#fff7ed',
-              border: agingFilter === AGING_BRACKETS.NON_MOVING ? '2px solid #ea580c' : '1.5px solid #fed7aa',
+              padding: '18px 20px',
+              background: agingFilter === AGING_BRACKETS.NON_MOVING ? '#fff7ed' : '#ffffff',
+              border: agingFilter === AGING_BRACKETS.NON_MOVING ? '2px solid #ea580c' : '1px solid #e2e8f0',
+              borderTop: '3px solid #ea580c',
               borderRadius: '12px',
               cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
               transition: 'all 0.15s ease'
             }}
             title={displayMetrics.isScopedToBranch ? 'Click to view branch Non-Moving Stock (90–179 days)' : 'Click to filter to Non-Moving Stock (90–179 days)'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 Non-Moving (90–179d)
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffedd5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Clock size={15} color="#ea580c" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fff7ed', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Clock size={16} color="#ea580c" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <div style={{ fontSize: '21px', fontWeight: 900, color: '#c2410c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#c2410c', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 {displayMetrics.agingCounts[AGING_BRACKETS.NON_MOVING]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#ea580c' }}>
-                ({displayMetrics.nonMovingPercent}%)
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#c2410c', background: '#ffedd5', padding: '2px 7px', borderRadius: '999px' }}>
+                {displayMetrics.nonMovingPercent}%
               </span>
             </div>
-            <div style={{ fontSize: '10.5px', color: '#9a3412', marginTop: '3px', fontWeight: 700 }}>
-              {displayMetrics.isScopedToBranch ? 'Assigned Branch Pre-Aging Tier' : (agingFilter === AGING_BRACKETS.NON_MOVING ? 'Filtering Active' : 'Pre-aging inventory tier')}
+            <div style={{ fontSize: '11.5px', color: agingFilter === AGING_BRACKETS.NON_MOVING ? '#c2410c' : '#64748b', fontWeight: 600 }}>
+              {agingFilter === AGING_BRACKETS.NON_MOVING ? 'Filter active • Click to reset' : 'Pre-aging inventory tier'}
             </div>
           </div>
 
@@ -2359,6 +2783,7 @@ export default function FixablyInventoryDashboard({
             className="card"
             onClick={() => {
               if (isSuperadmin) {
+                setViewMode('all_stocks');
                 setAgingFilter(prev => prev === AGING_BRACKETS.SLOW_MOVING ? 'ALL' : AGING_BRACKETS.SLOW_MOVING);
               } else {
                 if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
@@ -2366,33 +2791,39 @@ export default function FixablyInventoryDashboard({
               }
             }}
             style={{
-              padding: '16px',
-              background: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '#fef3c7' : '#fffbeb',
-              border: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '2px solid #d97706' : '1.5px solid #fde68a',
+              padding: '18px 20px',
+              background: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '#fffbeb' : '#ffffff',
+              border: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '2px solid #d97706' : '1px solid #e2e8f0',
+              borderTop: '3px solid #d97706',
               borderRadius: '12px',
               cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
               transition: 'all 0.15s ease'
             }}
             title={displayMetrics.isScopedToBranch ? 'Click to view branch Slow-Moving Stock (60–89 days)' : 'Click to filter to Slow-Moving Stock (60–89 days)'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 Slow-Moving (60–89d)
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <TrendingDown size={15} color="#d97706" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <TrendingDown size={16} color="#d97706" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <div style={{ fontSize: '21px', fontWeight: 900, color: '#b45309' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#b45309', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 {displayMetrics.agingCounts[AGING_BRACKETS.SLOW_MOVING]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#d97706' }}>
-                ({displayMetrics.slowMovingPercent}%)
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#b45309', background: '#fef3c7', padding: '2px 7px', borderRadius: '999px' }}>
+                {displayMetrics.slowMovingPercent}%
               </span>
             </div>
-            <div style={{ fontSize: '10.5px', color: '#92400e', marginTop: '3px', fontWeight: 700 }}>
-              {displayMetrics.isScopedToBranch ? 'Assigned Branch Velocity Slowing' : (agingFilter === AGING_BRACKETS.SLOW_MOVING ? 'Filtering Active' : 'Velocity slowing down')}
+            <div style={{ fontSize: '11.5px', color: agingFilter === AGING_BRACKETS.SLOW_MOVING ? '#b45309' : '#64748b', fontWeight: 600 }}>
+              {agingFilter === AGING_BRACKETS.SLOW_MOVING ? 'Filter active • Click to reset' : 'Monitor branch rotation'}
             </div>
           </div>
 
@@ -2401,6 +2832,7 @@ export default function FixablyInventoryDashboard({
             className="card"
             onClick={() => {
               if (isSuperadmin) {
+                setViewMode('all_stocks');
                 setAgingFilter(prev => prev === AGING_BRACKETS.IN_STOCK ? 'ALL' : AGING_BRACKETS.IN_STOCK);
               } else {
                 if (userSiteCodeClean) setSelectedSiteCode(userSiteCodeClean);
@@ -2408,33 +2840,39 @@ export default function FixablyInventoryDashboard({
               }
             }}
             style={{
-              padding: '16px',
-              background: agingFilter === AGING_BRACKETS.IN_STOCK ? '#dcfce7' : '#f0fdf4',
-              border: agingFilter === AGING_BRACKETS.IN_STOCK ? '2px solid #16a34a' : '1.5px solid #bbf7d0',
+              padding: '18px 20px',
+              background: agingFilter === AGING_BRACKETS.IN_STOCK ? '#f0fdf4' : '#ffffff',
+              border: agingFilter === AGING_BRACKETS.IN_STOCK ? '2px solid #16a34a' : '1px solid #e2e8f0',
+              borderTop: '3px solid #16a34a',
               borderRadius: '12px',
               cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
               transition: 'all 0.15s ease'
             }}
             title={displayMetrics.isScopedToBranch ? 'Click to view branch Active In-Stock (< 60 days)' : 'Click to filter to Active In-Stock (< 60 days)'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 Active Stock (&lt; 60d)
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <CheckCircle2 size={15} color="#16a34a" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <CheckCircle2 size={16} color="#16a34a" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <div style={{ fontSize: '21px', fontWeight: 900, color: '#15803d' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#15803d', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 {displayMetrics.agingCounts[AGING_BRACKETS.IN_STOCK]?.toLocaleString() || 0}
               </div>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#16a34a' }}>
-                ({displayMetrics.inStockPercent}%)
+              <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 7px', borderRadius: '999px' }}>
+                {displayMetrics.inStockPercent}%
               </span>
             </div>
-            <div style={{ fontSize: '10.5px', color: '#166534', marginTop: '3px', fontWeight: 700 }}>
-              {displayMetrics.isScopedToBranch ? 'Assigned Branch Fresh Active Rotation' : (agingFilter === AGING_BRACKETS.IN_STOCK ? 'Filtering Active' : 'Fresh active rotation')}
+            <div style={{ fontSize: '11.5px', color: agingFilter === AGING_BRACKETS.IN_STOCK ? '#15803d' : '#64748b', fontWeight: 600 }}>
+              {agingFilter === AGING_BRACKETS.IN_STOCK ? 'Filter active • Click to reset' : 'Healthy active rotation'}
             </div>
           </div>
 
@@ -2451,41 +2889,93 @@ export default function FixablyInventoryDashboard({
               }
             }}
             style={{
-              padding: '16px',
-              background: investigationFilter === 'INVESTIGATION_ONLY' ? '#ffe4e6' : '#fff1f2',
-              border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1.5px solid #fecdd3',
+              padding: '18px 20px',
+              background: investigationFilter === 'INVESTIGATION_ONLY' ? '#fff1f2' : '#ffffff',
+              border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1px solid #e2e8f0',
+              borderTop: '3px solid #f43f5e',
               borderRadius: '12px',
               cursor: 'pointer',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              gap: '8px',
               transition: 'all 0.15s ease'
             }}
             title={displayMetrics.isScopedToBranch ? 'Click to view branch parts flagged in closed repairs' : 'Click to filter on-hand parts consumed in GSX repairs'}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#be123c', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                 KGB Closed Repairs
               </span>
-              <div style={{ width: '28px', height: '28px', borderRadius: '6px', background: '#ffe4e6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <ShieldAlert size={15} color="#e11d48" />
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fff1f2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <ShieldAlert size={16} color="#e11d48" />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-              <div style={{ fontSize: '21px', fontWeight: 900, color: '#be123c' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: '23px', fontWeight: 800, color: '#be123c', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
                 {displayMetrics.investigationCount.toLocaleString()}
               </div>
-              <span style={{ fontSize: '11px', fontWeight: 800, color: '#e11d48' }}>
-                UNITS
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#be123c', background: '#ffe4e6', padding: '2px 7px', borderRadius: '999px' }}>
+                FLAGGED
               </span>
             </div>
-            <div style={{ fontSize: '10.5px', fontWeight: 800, color: '#be123c', marginTop: '3px' }}>
-              {displayMetrics.isScopedToBranch ? 'Assigned branch repair flags' : (investigationFilter === 'INVESTIGATION_ONLY' ? 'Filtering Active (Click to reset)' : 'On-hand parts used in GSX')}
+            <div style={{ fontSize: '11.5px', fontWeight: 600, color: investigationFilter === 'INVESTIGATION_ONLY' ? '#be123c' : '#64748b' }}>
+              {investigationFilter === 'INVESTIGATION_ONLY' ? 'Filter active • Click to reset' : 'On-hand parts matched in GSX'}
             </div>
           </div>
+
+          {/* Card 8: Site Transfers & Stock Movements */}
+          {isSuperadmin && (
+            <div
+              className="card"
+              onClick={() => {
+                setViewMode(prev => prev === 'site_transfers' ? 'all_stocks' : 'site_transfers');
+                setTransfersSubTab('site_to_site');
+              }}
+              style={{
+                padding: '18px 20px',
+                background: viewMode === 'site_transfers' ? '#f5f3ff' : '#ffffff',
+                border: viewMode === 'site_transfers' ? '2px solid #6d28d9' : '1px solid #e2e8f0',
+                borderTop: '3px solid #6d28d9',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                gap: '8px',
+                transition: 'all 0.15s ease'
+              }}
+              title="Click to toggle between On-Hand Stock Directory and Site Transfers & Movement Ledger"
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                  Site Transfers
+                </span>
+                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#f5f3ff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <ArrowRightLeft size={16} color="#6d28d9" />
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                <div style={{ fontSize: '23px', fontWeight: 800, color: '#5b21b6', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+                  {(snapshot?.siteToSiteTransfers?.length || snapshot?.transferStats?.siteToSiteCount || 0).toLocaleString()}
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#6d28d9', background: '#ede9fe', padding: '2px 7px', borderRadius: '999px' }}>
+                  SITE-TO-SITE
+                </span>
+              </div>
+              <div style={{ fontSize: '11.5px', fontWeight: 600, color: viewMode === 'site_transfers' ? '#6d28d9' : '#64748b' }}>
+                {(snapshot?.transfers?.length || snapshot?.transferStats?.totalTransfers || 0).toLocaleString()} total movements • {viewMode === 'site_transfers' ? 'Viewing Ledger' : 'View Ledger'}
+              </div>
+            </div>
+          )}
 
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW 1: "ALL STOCKS" MASTER DIRECTORY TABLE (High-Visibility Redesign) */}
+      {/* VIEW 1: "ALL STOCKS" MASTER DIRECTORY TABLE (Clean Integrated Workspace)  */}
       {/* ========================================================================= */}
       {viewMode === 'all_stocks' && isSuperadmin && (
         <div
@@ -2493,34 +2983,161 @@ export default function FixablyInventoryDashboard({
           style={{
             padding: 0,
             overflow: 'hidden',
-            border: '1.5px solid #cbd5e1',
-            borderRadius: '12px',
+            border: '1px solid #e2e8f0',
+            borderRadius: '14px',
             background: '#ffffff',
-            boxShadow: '0 4px 16px rgba(15, 23, 42, 0.06)'
+            boxShadow: '0 2px 12px rgba(15, 23, 42, 0.04)'
           }}
         >
-          {/* Filter Bar with Strong Visual Hierarchy */}
-          <div style={{ padding: '16px 20px', background: '#f8fafc', borderBottom: '1.5px solid #cbd5e1' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              
-              {/* Search Bar */}
-              <div style={{ position: 'relative', flex: 1, minWidth: '280px', maxWidth: '420px' }}>
-                <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#0284c7' }} />
+          {/* Integrated Workspace Tab Header (Replaces Duplicate Top Page Switcher) */}
+          <div
+            style={{
+              padding: '0 24px',
+              background: '#ffffff',
+              borderBottom: '1px solid #e2e8f0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px', overflowX: 'auto' }}>
+              <button
+                type="button"
+                onClick={() => setViewMode('all_stocks')}
+                style={{
+                  padding: '15px 4px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: '2.5px solid #0284c7',
+                  color: '#0284c7',
+                  fontSize: '13.5px',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Package size={16} />
+                <span>On-Hand Stock Directory</span>
+                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 800, background: '#e0f2fe', color: '#0369a1' }}>
+                  {(snapshot?.items?.length || 0).toLocaleString()}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('site_transfers');
+                  setTransfersSubTab('site_to_site');
+                }}
+                style={{
+                  padding: '15px 4px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: '2.5px solid transparent',
+                  color: '#64748b',
+                  fontSize: '13.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  whiteSpace: 'nowrap',
+                  transition: 'color 0.15s ease'
+                }}
+              >
+                <ArrowRightLeft size={16} />
+                <span>Site Transfers &amp; Movement Ledger</span>
+                <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: '#f5f3ff', color: '#6d28d9' }}>
+                  {(snapshot?.siteToSiteTransfers?.length || snapshot?.transferStats?.siteToSiteCount || 0).toLocaleString()} Site-to-Site
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('site_transfers');
+                  setTransfersSubTab('activity_logs');
+                }}
+                style={{
+                  padding: '15px 4px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: '2.5px solid transparent',
+                  color: '#64748b',
+                  fontSize: '13.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  whiteSpace: 'nowrap',
+                  transition: 'color 0.15s ease'
+                }}
+              >
+                <Clock size={15} />
+                <span>Upload &amp; Sync Audit Log</span>
+                {activityLogs.length > 0 && (
+                  <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: '#f1f5f9', color: '#475569' }}>
+                    {activityLogs.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Quick Summary Pills */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 0' }}>
+              <span style={{ padding: '4px 10px', borderRadius: '999px', background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ddd6fe', fontSize: '11.5px', fontWeight: 700 }}>
+                DC Stock: {filteredMasterItems.filter(i => i.stockType === 'DC Stock').length.toLocaleString()}
+              </span>
+              <span style={{ padding: '4px 10px', borderRadius: '999px', background: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '11.5px', fontWeight: 700 }}>
+                MSPI-Owned: {filteredMasterItems.filter(i => i.stockType !== 'DC Stock').length.toLocaleString()}
+              </span>
+              <span
+                onClick={() => {
+                  setViewMode('site_transfers');
+                  setTransfersSubTab('site_to_site');
+                }}
+                style={{ padding: '4px 10px', borderRadius: '999px', background: '#faf5ff', color: '#5b21b6', border: '1px solid #e9d5ff', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}
+                title="Click to inspect Site-to-Site Transfer Ledger"
+              >
+                Relocated: {filteredMasterItems.filter(i => i.siteToSiteCount > 0 || i.relocatedByTransfer || i.synthesizedFromTransfer).length.toLocaleString()}
+              </span>
+              {filteredMasterItems.filter(i => i.isInvestigation).length > 0 && (
+                <span style={{ padding: '4px 10px', borderRadius: '999px', background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3', fontSize: '11.5px', fontWeight: 700 }}>
+                  Flagged: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Structured Filter Toolbar */}
+          <div style={{ padding: '18px 24px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+            {/* Row 1: Expansive Search Input + Result Count + Reset */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
+              <div style={{ position: 'relative', flex: '1 1 360px', maxWidth: '640px' }}>
+                <Search size={16} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
                 <input
                   type="text"
                   className="form-input"
                   style={{
-                    paddingLeft: '36px',
-                    paddingRight: masterSearch ? '30px' : '10px',
+                    width: '100%',
+                    paddingLeft: '40px',
+                    paddingRight: masterSearch ? '34px' : '12px',
                     fontSize: '13px',
-                    height: '38px',
-                    borderRadius: '8px',
-                    border: '1.5px solid #cbd5e1',
+                    height: '40px',
+                    borderRadius: '10px',
+                    border: '1px solid #cbd5e1',
                     background: '#ffffff',
                     color: '#0f172a',
-                    fontWeight: 600
+                    fontWeight: 500,
+                    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)'
                   }}
-                  placeholder="Search part #, description, serial #, branch, order #..."
+                  placeholder="Search by part number, description, serial number, branch code, or movement trail..."
                   value={masterSearch}
                   onChange={(e) => setMasterSearch(e.target.value)}
                 />
@@ -2528,148 +3145,194 @@ export default function FixablyInventoryDashboard({
                   <button
                     type="button"
                     onClick={() => setMasterSearch('')}
-                    style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b' }}
+                    style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center' }}
                   >
-                    <X size={14} />
+                    <X size={15} />
                   </button>
                 )}
               </div>
 
-              {/* Dropdown Filters */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                
-                {/* Site Filter */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Branch:</label>
-                  <select
-                    className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
-                    value={siteFilter}
-                    onChange={(e) => setSiteFilter(e.target.value)}
-                  >
-                    <option value="ALL">All Branches ({snapshot?.sites?.length || 0})</option>
-                    {snapshot?.sites?.map(s => (
-                      <option key={s.siteCode} value={s.siteCode}>
-                        {s.siteCode} ({s.totalUnits})
-                      </option>
-                    ))}
-                  </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: '12.5px', color: '#475569' }}>
+                  Showing <strong style={{ color: '#0f172a', fontWeight: 800 }}>{filteredMasterItems.length.toLocaleString()}</strong> of {(snapshot?.items?.length || 0).toLocaleString()} units
                 </div>
 
-                {/* Aging Status Filter */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Aging:</label>
-                  <select
-                    className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
-                    value={agingFilter}
-                    onChange={(e) => setAgingFilter(e.target.value)}
-                  >
-                    <option value="ALL">All Aging Brackets</option>
-                    <option value={AGING_BRACKETS.DEAD_STOCK}>Dead Stock (≥ 180d)</option>
-                    <option value={AGING_BRACKETS.NON_MOVING}>Non-Moving (90–179d)</option>
-                    <option value={AGING_BRACKETS.SLOW_MOVING}>Slow-Moving (60–89d)</option>
-                    <option value={AGING_BRACKETS.IN_STOCK}>Active Stock (&lt; 60d)</option>
-                  </select>
-                </div>
-
-                {/* Stock Classification Filter */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Type:</label>
-                  <select
-                    className="form-select"
-                    style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
-                    value={classificationFilter}
-                    onChange={(e) => setClassificationFilter(e.target.value)}
-                  >
-                    <option value="ALL">All Stock Types</option>
-                    <option value="DC Stock">DC Stock</option>
-                    <option value="MSPI-Owned / C/I REP">MSPI-Owned / C/I REP</option>
-                  </select>
-                </div>
-
-                {/* Investigation Filter */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>GSX Status:</label>
-                  <select
-                    className="form-select"
-                    style={{
-                      fontSize: '12px',
-                      padding: '6px 10px',
-                      height: '38px',
-                      borderRadius: '8px',
-                      border: investigationFilter === 'INVESTIGATION_ONLY' ? '2px solid #e11d48' : '1.5px solid #cbd5e1',
-                      background: investigationFilter === 'INVESTIGATION_ONLY' ? '#fff1f2' : '#ffffff',
-                      color: investigationFilter === 'INVESTIGATION_ONLY' ? '#be123c' : '#0f172a',
-                      fontWeight: 700
-                    }}
-                    value={investigationFilter}
-                    onChange={(e) => setInvestigationFilter(e.target.value)}
-                  >
-                    <option value="ALL">All Statuses</option>
-                    <option value="INVESTIGATION_ONLY">Flagged in Closed Repairs ({snapshot?.investigationItems?.length || snapshot?.globalMetrics?.investigationCount || 0})</option>
-                    <option value="CLEAN_ONLY">Verified Clean Stock</option>
-                  </select>
-                </div>
-
-                {/* Rows per page */}
-                <select
-                  className="form-select"
-                  style={{ fontSize: '12px', padding: '6px 10px', height: '38px', borderRadius: '8px', border: '1.5px solid #cbd5e1', background: '#ffffff', width: '90px', fontWeight: 600 }}
-                  value={rowsPerPage}
-                  onChange={(e) => setRowsPerPage(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
-                >
-                  <option value={25}>25 / page</option>
-                  <option value={50}>50 / page</option>
-                  <option value={100}>100 / page</option>
-                  <option value={200}>200 / page</option>
-                  <option value="ALL">View All</option>
-                </select>
-
-                {(masterSearch || siteFilter !== 'ALL' || agingFilter !== 'ALL' || classificationFilter !== 'ALL' || investigationFilter !== 'ALL') && (
+                {(masterSearch || siteFilter !== 'ALL' || agingFilter !== 'ALL' || classificationFilter !== 'ALL' || investigationFilter !== 'ALL' || transferFilter !== 'ALL') && (
                   <button
                     type="button"
-                    className="btn btn-sm btn-secondary"
                     onClick={() => {
                       setMasterSearch('');
                       setSiteFilter('ALL');
                       setAgingFilter('ALL');
                       setClassificationFilter('ALL');
                       setInvestigationFilter('ALL');
+                      setTransferFilter('ALL');
                     }}
-                    style={{ fontSize: '12px', padding: '6px 12px', height: '38px', fontWeight: 700 }}
-                    title="Reset all filters"
+                    style={{
+                      fontSize: '12px',
+                      padding: '0 12px',
+                      height: '34px',
+                      fontWeight: 700,
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff',
+                      color: '#dc2626',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px'
+                    }}
+                    title="Reset all active filters"
                   >
-                    Reset
+                    <X size={13} />
+                    <span>Clear Filters</span>
                   </button>
                 )}
-
               </div>
-
             </div>
 
-            {/* Results count & active filters display */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#475569', marginTop: '12px', paddingTop: '8px', borderTop: '1px solid #e2e8f0' }}>
-              <div>
-                Showing <strong style={{ color: '#0f172a' }}>{filteredMasterItems.length.toLocaleString()}</strong> of {snapshot?.items?.length.toLocaleString() || 0} total units
-                {investigationFilter === 'INVESTIGATION_ONLY' && (
-                  <span style={{ marginLeft: '8px', color: '#be123c', fontWeight: 800 }}>
-                    (Filtered to units matching closed GSX repair consumption)
-                  </span>
-                )}
+            {/* Row 2: 6-Column Uniform Filter Grid with Stacked Micro-Labels */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: '12px'
+              }}
+            >
+              {/* Branch Filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Branch Location
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', fontSize: '12.5px', padding: '0 10px', height: '38px', borderRadius: '8px', border: siteFilter !== 'ALL' ? '1.5px solid #0284c7' : '1px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
+                  value={siteFilter}
+                  onChange={(e) => setSiteFilter(e.target.value)}
+                >
+                  <option value="ALL">All Branches ({snapshot?.sites?.length || 0})</option>
+                  {snapshot?.sites?.map(s => (
+                    <option key={s.siteCode} value={s.siteCode}>
+                      {s.siteCode} ({s.totalUnits})
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <span className="badge" style={{ background: '#ede9fe', color: '#6d28d9', border: '1px solid #c4b5fd', fontSize: '11px', fontWeight: 800 }}>
-                  DC Stock: {filteredMasterItems.filter(i => i.stockType === 'DC Stock').length.toLocaleString()}
-                </span>
-                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #7dd3fc', fontSize: '11px', fontWeight: 800 }}>
-                  MSPI-Owned: {filteredMasterItems.filter(i => i.stockType !== 'DC Stock').length.toLocaleString()}
-                </span>
-                {filteredMasterItems.filter(i => i.isInvestigation).length > 0 && (
-                  <span className="badge" style={{ background: '#fff1f2', color: '#be123c', border: '1.5px solid #fecdd3', fontSize: '11px', fontWeight: 800 }}>
-                    Flagged: {filteredMasterItems.filter(i => i.isInvestigation).length.toLocaleString()}
-                  </span>
-                )}
+
+              {/* Aging Bracket Filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Aging Bracket
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', fontSize: '12.5px', padding: '0 10px', height: '38px', borderRadius: '8px', border: agingFilter !== 'ALL' ? '1.5px solid #0284c7' : '1px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
+                  value={agingFilter}
+                  onChange={(e) => setAgingFilter(e.target.value)}
+                >
+                  <option value="ALL">All Aging Brackets</option>
+                  <option value={AGING_BRACKETS.DEAD_STOCK}>Dead Stock (≥ 180d)</option>
+                  <option value={AGING_BRACKETS.NON_MOVING}>Non-Moving (90–179d)</option>
+                  <option value={AGING_BRACKETS.SLOW_MOVING}>Slow-Moving (60–89d)</option>
+                  <option value={AGING_BRACKETS.IN_STOCK}>Active Stock (&lt; 60d)</option>
+                </select>
+              </div>
+
+              {/* Stock Classification Filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Stock Ownership
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', fontSize: '12.5px', padding: '0 10px', height: '38px', borderRadius: '8px', border: classificationFilter !== 'ALL' ? '1.5px solid #0284c7' : '1px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
+                  value={classificationFilter}
+                  onChange={(e) => setClassificationFilter(e.target.value)}
+                >
+                  <option value="ALL">All Stock Types</option>
+                  <option value="DC Stock">DC Stock</option>
+                  <option value="MSPI-Owned / C/I REP">MSPI-Owned / C/I REP</option>
+                </select>
+              </div>
+
+              {/* Stock Movement / Transfer Filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Transfer Movement
+                </label>
+                <select
+                  className="form-select"
+                  style={{
+                    width: '100%',
+                    fontSize: '12.5px',
+                    padding: '0 10px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    border: transferFilter !== 'ALL' ? '1.5px solid #6d28d9' : '1px solid #cbd5e1',
+                    background: transferFilter !== 'ALL' ? '#f5f3ff' : '#ffffff',
+                    color: transferFilter !== 'ALL' ? '#6d28d9' : '#0f172a',
+                    fontWeight: 600
+                  }}
+                  value={transferFilter}
+                  onChange={(e) => setTransferFilter(e.target.value)}
+                >
+                  <option value="ALL">All Movements</option>
+                  <option value="SITE_TO_SITE_ONLY">
+                    Site-to-Site Transferred ({snapshot?.items?.filter(i => i.siteToSiteCount > 0 || i.relocatedByTransfer || i.synthesizedFromTransfer).length || 0})
+                  </option>
+                  <option value="RELOCATED_ONLY">
+                    Relocated / Post-Cutoff ({snapshot?.items?.filter(i => i.relocatedByTransfer || i.synthesizedFromTransfer).length || 0})
+                  </option>
+                  <option value="TRANSFERRED_ONLY">
+                    All Transferred Units ({snapshot?.items?.filter(i => i.transferCount > 0 || i.isDcTransfer).length || 0})
+                  </option>
+                </select>
+              </div>
+
+              {/* GSX Repair Audit Filter */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  GSX Repair Audit
+                </label>
+                <select
+                  className="form-select"
+                  style={{
+                    width: '100%',
+                    fontSize: '12.5px',
+                    padding: '0 10px',
+                    height: '38px',
+                    borderRadius: '8px',
+                    border: investigationFilter === 'INVESTIGATION_ONLY' ? '1.5px solid #e11d48' : '1px solid #cbd5e1',
+                    background: investigationFilter === 'INVESTIGATION_ONLY' ? '#fff1f2' : '#ffffff',
+                    color: investigationFilter === 'INVESTIGATION_ONLY' ? '#be123c' : '#0f172a',
+                    fontWeight: 600
+                  }}
+                  value={investigationFilter}
+                  onChange={(e) => setInvestigationFilter(e.target.value)}
+                >
+                  <option value="ALL">All Audit Statuses</option>
+                  <option value="INVESTIGATION_ONLY">Flagged in Closed Repairs ({snapshot?.investigationItems?.length || snapshot?.globalMetrics?.investigationCount || 0})</option>
+                  <option value="CLEAN_ONLY">Verified Clean Stock</option>
+                </select>
+              </div>
+
+              {/* Rows Per Page */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Page Size
+                </label>
+                <select
+                  className="form-select"
+                  style={{ width: '100%', fontSize: '12.5px', padding: '0 10px', height: '38px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#ffffff', fontWeight: 600, color: '#0f172a' }}
+                  value={rowsPerPage}
+                  onChange={(e) => setRowsPerPage(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
+                >
+                  <option value={25}>25 rows / page</option>
+                  <option value={50}>50 rows / page</option>
+                  <option value={100}>100 rows / page</option>
+                  <option value={200}>200 rows / page</option>
+                  <option value="ALL">Show All Rows</option>
+                </select>
               </div>
             </div>
           </div>
@@ -2692,6 +3355,7 @@ export default function FixablyInventoryDashboard({
                     <th style={{ width: '110px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Branch</th>
                     <th style={{ width: '140px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Classification</th>
                     <th style={{ minWidth: '175px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Serial Number</th>
+                    <th style={{ minWidth: '210px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Movement History &amp; Owner</th>
                     <th style={{ width: '120px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Last Received</th>
                     <th style={{ minWidth: '220px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>Aging &amp; Status</th>
                     <th style={{ minWidth: '180px', padding: '12px 14px', fontSize: '11px', fontWeight: 800, background: '#0f172a', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em', position: 'sticky', top: 0, zIndex: 10, borderBottom: '2px solid #0284c7', whiteSpace: 'nowrap' }}>GSX / Dispatch Status</th>
@@ -2703,20 +3367,23 @@ export default function FixablyInventoryDashboard({
                     const rowNumber = rowsPerPage === 'ALL' ? idx + 1 : (currentPage - 1) * rowsPerPage + idx + 1;
                     const isCopied = copiedSerial === item.serialNumber;
                     const isEven = idx % 2 === 1;
+                    const isSiteTransferred = Boolean(item.siteToSiteCount > 0 || item.relocatedByTransfer || item.synthesizedFromTransfer);
+                    const movementTrailText = item.movementTrail || (item.isDcTransfer ? `DC → ${item.cleanSiteCode || item.siteCode}` : `${item.cleanSiteCode || item.siteCode}`);
+                    const currentOwnerText = item.currentOwner || `${item.cleanSiteCode || item.siteCode}_MSPI-OWNED`;
 
                     return (
                       <tr
                         key={item.id}
                         style={{
                           borderBottom: '1px solid #e2e8f0',
-                          background: item.isInvestigation ? '#fff5f5' : isEven ? '#f8fafc' : '#ffffff',
+                          background: item.isInvestigation ? '#fff5f5' : isSiteTransferred ? '#faf5ff' : isEven ? '#f8fafc' : '#ffffff',
                           transition: 'background-color 0.1s ease'
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.backgroundColor = '#e0f2fe';
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = item.isInvestigation ? '#fff5f5' : isEven ? '#f8fafc' : '#ffffff';
+                          e.currentTarget.style.backgroundColor = item.isInvestigation ? '#fff5f5' : isSiteTransferred ? '#faf5ff' : isEven ? '#f8fafc' : '#ffffff';
                         }}
                       >
                         <td style={{ textAlign: 'center', color: '#64748b', fontSize: '12px', fontWeight: 700, verticalAlign: 'middle', padding: '12px 10px', whiteSpace: 'nowrap' }}>
@@ -2746,29 +3413,36 @@ export default function FixablyInventoryDashboard({
                         </td>
 
                         <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                          <span
-                            onClick={() => {
-                              setSelectedSiteCode(item.cleanSiteCode || item.siteCode.replace(/^(ASP|APP)\s+/, ''));
-                              setViewMode('multi_site');
-                            }}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              padding: '4px 9px',
-                              borderRadius: '6px',
-                              background: '#f1f5f9',
-                              color: '#1e293b',
-                              fontWeight: 700,
-                              fontSize: '11.5px',
-                              cursor: 'pointer',
-                              whiteSpace: 'nowrap',
-                              border: '1px solid #e2e8f0',
-                              transition: 'background-color 0.15s ease'
-                            }}
-                            title="Click to view branch in Multi-Site dashboard"
-                          >
-                            {item.siteCode}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', alignItems: 'flex-start' }}>
+                            <span
+                              onClick={() => {
+                                setSelectedSiteCode(item.cleanSiteCode || item.siteCode.replace(/^(ASP|APP)\s+/, ''));
+                                setViewMode('multi_site');
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                padding: '4px 9px',
+                                borderRadius: '6px',
+                                background: isSiteTransferred ? '#ede9fe' : '#f1f5f9',
+                                color: isSiteTransferred ? '#5b21b6' : '#1e293b',
+                                fontWeight: 800,
+                                fontSize: '11.5px',
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                border: isSiteTransferred ? '1px solid #c4b5fd' : '1px solid #e2e8f0',
+                                transition: 'background-color 0.15s ease'
+                              }}
+                              title="Click to view branch in Multi-Site dashboard"
+                            >
+                              {item.siteCode}
+                            </span>
+                            {item.previousSiteCode && item.previousSiteCode !== (item.cleanSiteCode || item.siteCode.replace(/^(ASP|APP)\s+/, '')) && (
+                              <span style={{ fontSize: '10px', color: '#6d28d9', fontWeight: 700 }}>
+                                From {item.previousSiteCode}
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
@@ -2795,17 +3469,31 @@ export default function FixablyInventoryDashboard({
                         <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
                           {item.serialNumber ? (
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{
-                                fontSize: '12px',
-                                color: '#0f172a',
-                                background: '#f8fafc',
-                                border: '1px solid #e2e8f0',
-                                padding: '3px 8px',
-                                borderRadius: '5px',
-                                fontWeight: 600,
-                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                letterSpacing: '0.02em'
-                              }}>
+                              <span
+                                onClick={() => {
+                                  const details = resolveSerialFullDetails(item.serialNumber, {
+                                    inventoryUnits: effectiveInventoryUnits,
+                                    fixablyItems: snapshot?.items || [],
+                                    fixablyTransfers: snapshot?.transfers || [],
+                                    sites,
+                                    parts
+                                  });
+                                  if (details) setInspectedSerialDetails(details);
+                                }}
+                                style={{
+                                  fontSize: '12px',
+                                  color: '#0f172a',
+                                  background: '#f8fafc',
+                                  border: '1px solid #cbd5e1',
+                                  padding: '3px 8px',
+                                  borderRadius: '5px',
+                                  fontWeight: 700,
+                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                  letterSpacing: '0.02em',
+                                  cursor: 'pointer'
+                                }}
+                                title="Click to inspect full Serial Dossier & Ownership History"
+                              >
                                 {item.serialNumber}
                               </span>
                               <button
@@ -2820,6 +3508,49 @@ export default function FixablyInventoryDashboard({
                           ) : (
                             <span style={{ color: '#94a3b8', fontSize: '11.5px', fontStyle: 'italic' }}>Non-serialized (Qty: {item.quantity})</span>
                           )}
+                        </td>
+
+                        <td style={{ verticalAlign: 'middle', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                          <div
+                            onClick={() => setInspectedMovementUnit({
+                              ...item,
+                              serial_number: item.serialNumber,
+                              part_number: item.partNumber,
+                              site_code: item.siteCode,
+                              current_owner: currentOwnerText,
+                              movement_history: item.movementHistory
+                            })}
+                            style={{ cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', gap: '3px' }}
+                            title="Click to inspect chronological Stock Transfer & Movement Timeline"
+                          >
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  padding: '2px 8px',
+                                  borderRadius: '5px',
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background: isSiteTransferred ? '#ede9fe' : item.transferCount > 0 ? '#eff6ff' : '#f1f5f9',
+                                  color: isSiteTransferred ? '#5b21b6' : item.transferCount > 0 ? '#0369a1' : '#475569',
+                                  border: isSiteTransferred ? '1px solid #c4b5fd' : item.transferCount > 0 ? '1px solid #bae6fd' : '1px solid #e2e8f0'
+                                }}
+                              >
+                                <ArrowRightLeft size={11} />
+                                <span>{movementTrailText}</span>
+                              </span>
+                              {(item.transferCount > 0) && (
+                                <span style={{ fontSize: '10.5px', fontWeight: 800, color: isSiteTransferred ? '#6d28d9' : '#0284c7' }}>
+                                  ({item.transferCount} {item.transferCount === 1 ? 'transfer' : 'transfers'})
+                                </span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 700, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                              Owner: {currentOwnerText}
+                            </span>
+                          </div>
                         </td>
 
                         <td style={{ verticalAlign: 'middle', padding: '12px 14px', fontSize: '12px', color: '#475569', fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', whiteSpace: 'nowrap' }}>
@@ -2980,6 +3711,635 @@ export default function FixablyInventoryDashboard({
 
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* VIEW 3: SITE TRANSFERS, MOVEMENT HISTORY & ACTIVITY AUDIT LEDGER          */}
+      {/* ========================================================================= */}
+      {viewMode === 'site_transfers' && isSuperadmin && (() => {
+        const allTransfersList = Array.isArray(snapshot?.transfers) ? snapshot.transfers : [];
+        const siteToSiteList = Array.isArray(snapshot?.siteToSiteTransfers)
+          ? snapshot.siteToSiteTransfers
+          : allTransfersList.filter(t => t.isSiteToSite);
+        const adjustmentList = [
+          ...(Array.isArray(snapshot?.adjustmentTransfers) ? snapshot.adjustmentTransfers : allTransfersList.filter(t => t.isAdjustment)),
+          ...(Array.isArray(snapshot?.returnToDcTransfers) ? snapshot.returnToDcTransfers : allTransfersList.filter(t => t.isReturnToDc))
+        ];
+
+        const activeSourceList =
+          transfersSubTab === 'site_to_site'
+            ? siteToSiteList
+            : transfersSubTab === 'adjustments'
+            ? adjustmentList
+            : allTransfersList;
+
+        // Sort newest receivedDate first so recent transfers (e.g. 2026-10-27 BHS -> POD) appear at the top
+        const sortedTransfers = [...activeSourceList].sort((a, b) => {
+          const da = a.receivedDate || '';
+          const db = b.receivedDate || '';
+          if (da !== db) return db.localeCompare(da);
+          return (b.rowIndex || 0) - (a.rowIndex || 0);
+        });
+
+        const uniqueFromCodes = Array.from(new Set(activeSourceList.map(t => t.fromSiteCode).filter(Boolean))).sort();
+        const uniqueToCodes = Array.from(new Set(activeSourceList.map(t => t.toSiteCode).filter(Boolean))).sort();
+
+        const filteredTransfers = sortedTransfers.filter(tr => {
+          if (transfersFromFilter !== 'ALL' && tr.fromSiteCode !== transfersFromFilter) return false;
+          if (transfersToFilter !== 'ALL' && tr.toSiteCode !== transfersToFilter) return false;
+          if (transfersTypeFilter !== 'ALL' && tr.transferType !== transfersTypeFilter) return false;
+          if (transfersSearch.trim()) {
+            const q = transfersSearch.toLowerCase().trim();
+            const sn = String(tr.serialNumber || '').toLowerCase();
+            const pn = String(tr.productCode || '').toLowerCase();
+            const desc = String(tr.productName || '').toLowerCase();
+            const fromSt = String(tr.fromStock || '').toLowerCase();
+            const toSt = String(tr.toStock || '').toLowerCase();
+            const fromNm = String(tr.fromSiteName || '').toLowerCase();
+            const toNm = String(tr.toSiteName || '').toLowerCase();
+            if (
+              !sn.includes(q) &&
+              !pn.includes(q) &&
+              !desc.includes(q) &&
+              !fromSt.includes(q) &&
+              !toSt.includes(q) &&
+              !fromNm.includes(q) &&
+              !toNm.includes(q)
+            ) {
+              return false;
+            }
+          }
+          return true;
+        });
+
+        const trRowsPerPage = 50;
+        const trTotalPages = Math.max(1, Math.ceil(filteredTransfers.length / trRowsPerPage));
+        const safeTrPage = Math.min(transfersPage, trTotalPages);
+        const paginatedTransfers = filteredTransfers.slice((safeTrPage - 1) * trRowsPerPage, safeTrPage * trRowsPerPage);
+
+        const activeItemBySerial = new Map();
+        (snapshot?.items || []).forEach(it => {
+          if (it.serialNumber) activeItemBySerial.set(it.serialNumber.toUpperCase(), it);
+        });
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Integrated Workspace Card with Top Navigation Tabs */}
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '14px', background: '#ffffff', boxShadow: '0 2px 12px rgba(15, 23, 42, 0.04)' }}>
+              <div
+                style={{
+                  padding: '0 24px',
+                  background: '#ffffff',
+                  borderBottom: '1px solid #e2e8f0',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '24px', overflowX: 'auto' }}>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode('all_stocks')}
+                    style={{
+                      padding: '15px 4px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: '2.5px solid transparent',
+                      color: '#64748b',
+                      fontSize: '13.5px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Package size={16} />
+                    <span>On-Hand Stock Directory</span>
+                    <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: '#f1f5f9', color: '#475569' }}>
+                      {(snapshot?.items?.length || 0).toLocaleString()}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewMode('site_transfers');
+                      if (transfersSubTab === 'activity_logs') setTransfersSubTab('site_to_site');
+                    }}
+                    style={{
+                      padding: '15px 4px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: transfersSubTab !== 'activity_logs' ? '2.5px solid #6d28d9' : '2.5px solid transparent',
+                      color: transfersSubTab !== 'activity_logs' ? '#6d28d9' : '#64748b',
+                      fontSize: '13.5px',
+                      fontWeight: transfersSubTab !== 'activity_logs' ? 800 : 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <ArrowRightLeft size={16} />
+                    <span>Site Transfers &amp; Movement Ledger</span>
+                    <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 800, background: '#ede9fe', color: '#6d28d9' }}>
+                      {siteToSiteList.length.toLocaleString()} Site-to-Site
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewMode('site_transfers');
+                      setTransfersSubTab('activity_logs');
+                    }}
+                    style={{
+                      padding: '15px 4px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderBottom: transfersSubTab === 'activity_logs' ? '2.5px solid #0f172a' : '2.5px solid transparent',
+                      color: transfersSubTab === 'activity_logs' ? '#0f172a' : '#64748b',
+                      fontSize: '13.5px',
+                      fontWeight: transfersSubTab === 'activity_logs' ? 800 : 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Clock size={15} />
+                    <span>Upload &amp; Sync Audit Log</span>
+                    {activityLogs.length > 0 && (
+                      <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: '#f1f5f9', color: '#475569' }}>
+                        {activityLogs.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Top Summary Banner for Stock Transfers & Validation */}
+              <div style={{ padding: '18px 24px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
+                <div style={{ padding: '14px 16px', background: '#ffffff', border: '1px solid #e2e8f0', borderLeft: '3px solid #6d28d9', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Site-to-Site Transfer Records
+                  </div>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {siteToSiteList.length.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
+                    {siteToSiteList.length > 0 && sortedTransfers[0]
+                      ? `Latest: ${sortedTransfers[0].fromSiteCode} → ${sortedTransfers[0].toSiteCode} (${sortedTransfers[0].receivedDate})`
+                      : 'Branch-to-branch stock movements'}
+                  </div>
+                </div>
+
+                <div style={{ padding: '14px 16px', background: '#ffffff', border: '1px solid #e2e8f0', borderLeft: '3px solid #0284c7', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#0284c7', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Total Stock Movement Ledger
+                  </div>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {allTransfersList.length.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
+                    {(snapshot?.transferStats?.dcToSiteCount ?? snapshot?.transferStats?.dcTransfersCount ?? snapshot?.dcToSiteTransfers?.length ?? 0).toLocaleString()} DC-to-Site • {siteToSiteList.length.toLocaleString()} Site-to-Site
+                  </div>
+                </div>
+
+                <div style={{ padding: '14px 16px', background: '#ffffff', border: '1px solid #e2e8f0', borderLeft: '3px solid #16a34a', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Active Relocated / Synced Units
+                  </div>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {(snapshot?.items?.filter(i => i.siteToSiteCount > 0 || i.relocatedByTransfer || i.synthesizedFromTransfer).length || 0).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
+                    Reflected in active destination branch stock
+                  </div>
+                </div>
+
+                <div style={{ padding: '14px 16px', background: '#ffffff', border: '1px solid #e2e8f0', borderLeft: '3px solid #d97706', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Adjustments, Repair &amp; DC Returns
+                  </div>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+                    {adjustmentList.length.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
+                    {(snapshot?.transferStats?.adjustmentsCount || 0).toLocaleString()} Repair/Adj • {(snapshot?.transferStats?.returnToDcCount || 0).toLocaleString()} Return to DC
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: '14px 24px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ display: 'inline-flex', background: '#e2e8f0', padding: '3px', borderRadius: '8px', gap: '2px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => { setTransfersSubTab('site_to_site'); setTransfersPage(1); }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: transfersSubTab === 'site_to_site' ? 800 : 600,
+                      background: transfersSubTab === 'site_to_site' ? '#6d28d9' : 'transparent',
+                      color: transfersSubTab === 'site_to_site' ? '#ffffff' : '#334155',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Site-to-Site Transfers ({siteToSiteList.length.toLocaleString()})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setTransfersSubTab('all_movements'); setTransfersPage(1); }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: transfersSubTab === 'all_movements' ? 800 : 600,
+                      background: transfersSubTab === 'all_movements' ? '#0284c7' : 'transparent',
+                      color: transfersSubTab === 'all_movements' ? '#ffffff' : '#334155',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    All Stock Movement History ({allTransfersList.length.toLocaleString()})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setTransfersSubTab('adjustments'); setTransfersPage(1); }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: transfersSubTab === 'adjustments' ? 800 : 600,
+                      background: transfersSubTab === 'adjustments' ? '#d97706' : 'transparent',
+                      color: transfersSubTab === 'adjustments' ? '#ffffff' : '#334155',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Inventory Adjustments &amp; DC Returns ({adjustmentList.length.toLocaleString()})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTransfersSubTab('activity_logs')}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: transfersSubTab === 'activity_logs' ? 800 : 600,
+                      background: transfersSubTab === 'activity_logs' ? '#0f172a' : 'transparent',
+                      color: transfersSubTab === 'activity_logs' ? '#ffffff' : '#334155',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Upload &amp; Sync Activity Logs ({activityLogs.length})
+                  </button>
+                </div>
+
+                {transfersSubTab !== 'activity_logs' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <div style={{ position: 'relative', minWidth: '240px' }}>
+                      <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#6d28d9' }} />
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ paddingLeft: '32px', height: '34px', fontSize: '12.5px', borderRadius: '7px', border: '1.5px solid #cbd5e1', fontWeight: 600 }}
+                        placeholder="Search serial, part #, branch (e.g. BHS, POD)..."
+                        value={transfersSearch}
+                        onChange={(e) => { setTransfersSearch(e.target.value); setTransfersPage(1); }}
+                      />
+                    </div>
+
+                    <select
+                      className="form-select"
+                      style={{ height: '34px', fontSize: '12px', padding: '4px 8px', borderRadius: '7px', border: '1.5px solid #cbd5e1', fontWeight: 600 }}
+                      value={transfersFromFilter}
+                      onChange={(e) => { setTransfersFromFilter(e.target.value); setTransfersPage(1); }}
+                    >
+                      <option value="ALL">From: All Sources</option>
+                      {uniqueFromCodes.map(c => (
+                        <option key={c} value={c}>From: {c}</option>
+                      ))}
+                    </select>
+
+                    <select
+                      className="form-select"
+                      style={{ height: '34px', fontSize: '12px', padding: '4px 8px', borderRadius: '7px', border: '1.5px solid #cbd5e1', fontWeight: 600 }}
+                      value={transfersToFilter}
+                      onChange={(e) => { setTransfersToFilter(e.target.value); setTransfersPage(1); }}
+                    >
+                      <option value="ALL">To: All Destinations</option>
+                      {uniqueToCodes.map(c => (
+                        <option key={c} value={c}>To: {c}</option>
+                      ))}
+                    </select>
+
+                    {(transfersSearch || transfersFromFilter !== 'ALL' || transfersToFilter !== 'ALL' || transfersTypeFilter !== 'ALL') && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                          setTransfersSearch('');
+                          setTransfersFromFilter('ALL');
+                          setTransfersToFilter('ALL');
+                          setTransfersTypeFilter('ALL');
+                          setTransfersPage(1);
+                        }}
+                        style={{ height: '34px', fontSize: '12px', fontWeight: 700 }}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Sub-Tab Content: Activity Logs vs Transfer Ledger Table */}
+              {transfersSubTab === 'activity_logs' ? (
+                <div style={{ padding: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                        File Upload, Validation &amp; Synchronization Audit Log
+                      </h4>
+                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                        Tracks who uploaded each file, when it was uploaded, validation results, and how many inventory &amp; transfer records were updated.
+                      </div>
+                    </div>
+                  </div>
+
+                  {activityLogs.length === 0 ? (
+                    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b', background: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                      No upload activity logs recorded yet in this browser session. Upload a file in the 3-Slot Ingestion Center to log validation &amp; sync events.
+                    </div>
+                  ) : (
+                    <div className="table-container" style={{ overflowX: 'auto' }}>
+                      <table className="data-table" style={{ width: '100%', fontSize: '12.5px', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ background: '#0f172a', color: '#ffffff' }}>
+                            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800 }}>Timestamp</th>
+                            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800 }}>Uploaded By</th>
+                            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800 }}>Action / Event</th>
+                            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800 }}>File Name</th>
+                            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800 }}>Records Affected &amp; Details</th>
+                            <th style={{ padding: '10px 12px', textAlign: 'center', fontSize: '11px', fontWeight: 800 }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activityLogs.map((log) => (
+                            <tr key={log.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', fontWeight: 600 }}>
+                                {new Date(log.timestamp).toLocaleDateString()} {new Date(log.timestamp).toLocaleTimeString()}
+                              </td>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                <div style={{ fontWeight: 700, color: '#0f172a' }}>{log.uploadedBy}</div>
+                                <div style={{ fontSize: '11px', color: '#64748b' }}>{log.userEmail} ({log.userRole})</div>
+                              </td>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e293b' }}>
+                                {log.actionType}
+                              </td>
+                              <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#0284c7', fontWeight: 700 }}>
+                                {log.fileName}
+                              </td>
+                              <td style={{ padding: '10px 12px', color: '#334155', lineHeight: 1.4 }}>
+                                {log.summary}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <span
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: '999px',
+                                    fontSize: '10.5px',
+                                    fontWeight: 800,
+                                    background: log.status === 'ERROR' ? '#fee2e2' : log.status === 'WARNING' ? '#fef3c7' : '#dcfce7',
+                                    color: log.status === 'ERROR' ? '#b91c1c' : log.status === 'WARNING' ? '#b45309' : '#15803d'
+                                  }}
+                                >
+                                  {log.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div style={{ padding: '10px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#475569' }}>
+                    <div>
+                      Showing <strong style={{ color: '#0f172a' }}>{filteredTransfers.length.toLocaleString()}</strong> transfer transactions
+                      {transfersSubTab === 'site_to_site' && sortedTransfers[0] && (
+                        <span style={{ marginLeft: '8px', color: '#6d28d9', fontWeight: 700 }}>
+                          • Sorted newest first (Latest: {sortedTransfers[0].fromStock} → {sortedTransfers[0].toStock})
+                        </span>
+                      )}
+                    </div>
+                    {snapshot?.validationSummary?.stockTransfer?.warnings?.length > 0 && (
+                      <div style={{ color: '#b45309', fontWeight: 700, fontSize: '11.5px' }}>
+                        Validation Note: {snapshot.validationSummary.stockTransfer.warnings.join(' ')}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="table-container" style={{ overflowX: 'auto', maxHeight: '680px' }}>
+                    {paginatedTransfers.length === 0 ? (
+                      <div style={{ padding: '50px 20px', textAlign: 'center', color: '#64748b' }}>
+                        <ArrowRightLeft size={36} color="#94a3b8" style={{ marginBottom: '8px' }} />
+                        <h4 style={{ margin: '0 0 4px', color: '#0f172a', fontSize: '15px', fontWeight: 800 }}>No Matching Stock Transfer Records</h4>
+                        <p style={{ margin: 0, fontSize: '12.5px' }}>Try clearing your search or selecting another transfer category tab.</p>
+                      </div>
+                    ) : (
+                      <table className="data-table" style={{ width: '100%', fontSize: '12.5px', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ background: '#0f172a', color: '#ffffff', borderBottom: '2px solid #6d28d9' }}>
+                            <th style={{ padding: '11px 12px', textAlign: 'center', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>#</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Received Date</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Transaction Type</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>From Stock (Origin)</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>To Stock (Destination)</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Product Code &amp; Description</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Serial Number</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Current Stock Status</th>
+                            <th style={{ padding: '11px 12px', textAlign: 'right', fontSize: '11px', fontWeight: 800, position: 'sticky', top: 0, background: '#0f172a', zIndex: 10 }}>Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paginatedTransfers.map((tr, idx) => {
+                            const rowNum = (safeTrPage - 1) * trRowsPerPage + idx + 1;
+                            const activeUnit = activeItemBySerial.get(String(tr.serialNumber || '').toUpperCase());
+                            const isSiteToSite = tr.isSiteToSite;
+
+                            return (
+                              <tr
+                                key={tr.id || `${tr.serialNumber}-${idx}`}
+                                style={{
+                                  borderBottom: '1px solid #e2e8f0',
+                                  background: isSiteToSite ? '#faf5ff' : idx % 2 === 1 ? '#f8fafc' : '#ffffff'
+                                }}
+                              >
+                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#64748b', fontWeight: 700 }}>
+                                  {rowNum}
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontWeight: 700, color: '#0f172a' }}>
+                                  {tr.receivedDate || '—'}
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                  <span
+                                    style={{
+                                      padding: '3px 8px',
+                                      borderRadius: '6px',
+                                      fontSize: '11px',
+                                      fontWeight: 800,
+                                      background: isSiteToSite ? '#ede9fe' : tr.isAdjustment ? '#fef3c7' : tr.isReturnToDc ? '#fee2e2' : '#e0f2fe',
+                                      color: isSiteToSite ? '#5b21b6' : tr.isAdjustment ? '#b45309' : tr.isReturnToDc ? '#b91c1c' : '#0369a1',
+                                      border: isSiteToSite ? '1px solid #c4b5fd' : '1px solid #cbd5e1'
+                                    }}
+                                  >
+                                    {tr.transferType}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ fontWeight: 800, color: '#334155' }}>{tr.fromSiteCode}</div>
+                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>{tr.fromStock}</div>
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 800, color: isSiteToSite ? '#5b21b6' : '#0284c7' }}>
+                                    <span>→ {tr.toSiteCode}</span>
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>{tr.toStock}</div>
+                                </td>
+                                <td style={{ padding: '10px 12px' }}>
+                                  <div style={{ fontWeight: 800, color: '#0284c7', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{tr.productCode}</div>
+                                  <div style={{ fontSize: '12px', color: '#0f172a', fontWeight: 500 }}>{tr.productName}</div>
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <span
+                                      onClick={() => {
+                                        const details = resolveSerialFullDetails(tr.serialNumber, {
+                                          inventoryUnits: effectiveInventoryUnits,
+                                          fixablyItems: snapshot?.items || [],
+                                          fixablyTransfers: snapshot?.transfers || [],
+                                          sites,
+                                          parts
+                                        });
+                                        if (details) setInspectedSerialDetails(details);
+                                      }}
+                                      style={{
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: '12px',
+                                        fontWeight: 800,
+                                        color: '#0f172a',
+                                        background: '#f8fafc',
+                                        border: '1px solid #cbd5e1',
+                                        padding: '3px 8px',
+                                        borderRadius: '5px',
+                                        cursor: 'pointer'
+                                      }}
+                                      title="Click to inspect full Serial Dossier & Ownership Trail"
+                                    >
+                                      {tr.serialNumber}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectedMovementUnit({
+                                        serialNumber: tr.serialNumber,
+                                        serial_number: tr.serialNumber,
+                                        partNumber: tr.productCode,
+                                        part_number: tr.productCode,
+                                        description: tr.productName,
+                                        siteCode: activeUnit?.siteCode || tr.toSiteCode,
+                                        siteName: activeUnit?.siteName || tr.toSiteName,
+                                        currentOwner: activeUnit?.currentOwner || tr.currentOwner,
+                                        movementHistory: activeUnit?.movementHistory || [tr.fromSiteCode, tr.toSiteCode]
+                                      })}
+                                      style={{
+                                        border: '1px solid #c4b5fd',
+                                        background: '#ede9fe',
+                                        color: '#5b21b6',
+                                        borderRadius: '4px',
+                                        padding: '2px 6px',
+                                        fontSize: '10.5px',
+                                        fontWeight: 800,
+                                        cursor: 'pointer'
+                                      }}
+                                      title="View Movement Timeline"
+                                    >
+                                      Timeline
+                                    </button>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                                  {activeUnit ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#15803d', fontWeight: 800, fontSize: '11.5px' }}>
+                                        <CheckCircle2 size={12} color="#16a34a" />
+                                        <span>In Stock at {activeUnit.siteCode}</span>
+                                      </span>
+                                      {activeUnit.movementTrail && (
+                                        <span style={{ fontSize: '10.5px', color: '#6d28d9', fontWeight: 700 }}>
+                                          Trail: {activeUnit.movementTrail}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>
+                                      Historical / Consumed
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                                  ${Number(tr.transferValue || 0).toFixed(2)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+
+                  {trTotalPages > 1 && (
+                    <div style={{ padding: '12px 20px', background: '#f8fafc', borderTop: '1.5px solid #cbd5e1', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
+                        Page <strong>{safeTrPage}</strong> of <strong>{trTotalPages}</strong>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={safeTrPage <= 1}
+                          onClick={() => setTransfersPage(p => Math.max(1, p - 1))}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={safeTrPage >= trTotalPages}
+                          onClick={() => setTransfersPage(p => Math.min(trTotalPages, p + 1))}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ========================================================================= */}
       {/* VIEW 2: "MULTI-SITE" BRANCH AGING & HEALTH DASHBOARD */}
@@ -3428,7 +4788,8 @@ export default function FixablyInventoryDashboard({
                               repairUsageRecords: [],
                               sites,
                               parts,
-                              fixablyItems: snapshot?.items || []
+                              fixablyItems: snapshot?.items || [],
+                              fixablyTransfers: snapshot?.transfers || []
                             });
                             if (sd) setInspectedSerialDetails(sd);
                           }}
@@ -5103,6 +6464,16 @@ export default function FixablyInventoryDashboard({
         <SerialDossierModal
           serialDetails={inspectedSerialDetails}
           onClose={() => setInspectedSerialDetails(null)}
+        />
+      )}
+
+      {/* Chronological Stock Movement & Ownership Timeline Modal */}
+      {inspectedMovementUnit && (
+        <MovementHistoryModal
+          unit={inspectedMovementUnit}
+          sites={sites}
+          transferHistory={loadLocalTransferHistory()}
+          onClose={() => setInspectedMovementUnit(null)}
         />
       )}
 

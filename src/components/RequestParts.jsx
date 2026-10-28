@@ -1460,7 +1460,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       repairUsageRecords,
       sites,
       parts,
-      fixablyItems: fixablySnapshot?.items || []
+      fixablyItems: fixablySnapshot?.items || [],
+      fixablyTransfers: fixablySnapshot?.transfers || []
     }, 12);
 
     return resolvedSerials.filter(sd => {

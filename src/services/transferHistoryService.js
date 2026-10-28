@@ -284,6 +284,92 @@ export function recordBatchTransfers(transferItems = []) {
 }
 
 /**
+ * Synchronizes Fixably Stock Transfer CSV/XLSX records into the transfer history registry,
+ * deduplicating against existing entries while preserving full chronological movement trails
+ * (e.g., DC -> BHS on 2026-07-04 and BHS -> POD on 2026-10-27).
+ */
+export function syncFixablyTransfersToHistory(fixablyTransfers = [], uploadedBy = 'Fixably Sync Engine') {
+  if (!Array.isArray(fixablyTransfers) || fixablyTransfers.length === 0) {
+    return loadLocalTransferHistory();
+  }
+
+  const currentList = loadLocalTransferHistory();
+  const seenKeys = new Set();
+
+  currentList.forEach(item => {
+    const sn = String(item.serial_number || '').trim().toUpperCase();
+    const dt = String(item.transfer_date || '').slice(0, 10);
+    const fromCode = normalizeSiteCode(item.from_site_code);
+    const toCode = normalizeSiteCode(item.to_site_code);
+    const pn = String(item.part_number || '').trim().toUpperCase();
+    if (sn) {
+      seenKeys.add(`${sn}|${dt}|${fromCode}|${toCode}|${pn}`);
+    }
+  });
+
+  const nowIso = new Date().toISOString();
+  const newEntries = [];
+
+  fixablyTransfers.forEach((tr, idx) => {
+    const sn = String(tr.serialNumber || tr.serial_number || '').trim().toUpperCase();
+    if (!sn) return;
+
+    const pn = String(tr.productCode || tr.part_number || tr.partNumber || '').trim().toUpperCase();
+    const fromCode = normalizeSiteCode(tr.fromSiteCode || tr.fromStock || 'DC');
+    const toCode = normalizeSiteCode(tr.toSiteCode || tr.toStock || 'DC');
+    const dateStr = String(tr.receivedDate || tr.transfer_date || nowIso).slice(0, 10);
+    const dedupeKey = `${sn}|${dateStr}|${fromCode}|${toCode}|${pn}`;
+    if (seenKeys.has(dedupeKey)) return;
+    seenKeys.add(dedupeKey);
+
+    let resolvedType = 'Transfer';
+    if (tr.isReturnToDc || (toCode === 'DC' && fromCode !== 'DC')) {
+      resolvedType = 'Return';
+    } else if (tr.isAdjustment || fromCode === toCode) {
+      resolvedType = 'Adjustment';
+    } else if (tr.isSiteToSite) {
+      resolvedType = 'Site-to-Site Transfer';
+    }
+
+    // Add slight millisecond offset by rowIndex so multiple hops on the same or chronological dates preserve exact CSV order
+    const baseTime = dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
+      ? new Date(`${dateStr}T08:00:00.000Z`).getTime() + ((tr.rowIndex || idx) * 1000)
+      : Date.now() + idx;
+
+    newEntries.push({
+      id: `fixably-xfer-${dateStr}-${sn}-${fromCode}-${toCode}-${tr.rowIndex || idx}`,
+      part_number: pn,
+      description: tr.productName || tr.description || null,
+      serial_number: sn,
+      from_site_code: fromCode,
+      from_site_name: tr.fromSiteName || tr.fromStock || fromCode,
+      to_site_code: toCode,
+      to_site_name: tr.toSiteName || tr.toStock || toCode,
+      from_owner: formatSiteOwner(fromCode),
+      to_owner: formatSiteOwner(toCode),
+      transfer_type: resolvedType,
+      transfer_value: Number(tr.transferValue || tr.transfer_value || 0),
+      transfer_date: new Date(baseTime).toISOString(),
+      received_date: dateStr,
+      user_name: uploadedBy || 'Fixably Sync Engine',
+      user_id: null,
+      manifest_ref: tr.fromStock && tr.toStock ? `${tr.fromStock} → ${tr.toStock}` : null,
+      notes: tr.productName ? `${tr.productName}${tr.transferValue ? ` ($${tr.transferValue})` : ''}` : null,
+      created_at: nowIso
+    });
+  });
+
+  if (newEntries.length === 0) {
+    return currentList;
+  }
+
+  const updatedList = [...newEntries, ...currentList];
+  saveLocalTransferHistory(updatedList);
+  syncToCloud(updatedList);
+  return updatedList;
+}
+
+/**
  * Returns all recorded transfers for a specific serial number or part number
  */
 export function getTransferHistoryForPart({ serialNumber, partNumber }, allTransfers = null) {
@@ -320,27 +406,39 @@ export function resolvePartOwnershipDetails(unitOrSerial, allTransfers = null) {
     : null;
 
   const currentSiteCode = typeof unitOrSerial === 'object'
-    ? normalizeSiteCode(unitOrSerial?.site_code || unitOrSerial?.current_site_id || 'DC')
+    ? normalizeSiteCode(unitOrSerial?.site_code || unitOrSerial?.siteCode || unitOrSerial?.current_site_id || 'DC')
     : 'DC';
 
   const transfers = getTransferHistoryForPart({ serialNumber: targetSn, partNumber: targetPn }, allTransfers);
 
-  // If no transfer entries yet exist, construct baseline origin trail from unit attributes
+  // If no transfer entries in localStorage yet, construct from unit's embedded transfer metadata or baseline origin
   if (transfers.length === 0) {
     const baseSite = currentSiteCode || 'DC';
     const baseOwner = formatSiteOwner(baseSite);
-    const rawOwner = unitOrSerial?.current_owner || baseOwner;
+    const rawOwner = unitOrSerial?.current_owner || unitOrSerial?.currentOwner || baseOwner;
+    const embeddedHistory = unitOrSerial?.movement_history || unitOrSerial?.movementHistory;
+    const movementHistory = Array.isArray(embeddedHistory) && embeddedHistory.length > 0
+      ? embeddedHistory
+      : [baseSite];
+    const latestTr = unitOrSerial?.latestTransfer || null;
+    const embeddedCount = typeof unitOrSerial?.transfer_count === 'number'
+      ? unitOrSerial.transfer_count
+      : (typeof unitOrSerial?.transferCount === 'number'
+          ? unitOrSerial.transferCount
+          : (movementHistory.length > 1 ? movementHistory.length - 1 : 0));
+    const latestDate = latestTr?.receivedDate || unitOrSerial?.latest_transfer_date || null;
+
     return {
       currentOwner: rawOwner ? String(rawOwner).toUpperCase() : baseOwner,
-      movementHistory: Array.isArray(unitOrSerial?.movement_history) && unitOrSerial.movement_history.length > 0
-        ? unitOrSerial.movement_history
-        : [baseSite],
-      movementTrail: Array.isArray(unitOrSerial?.movement_history) && unitOrSerial.movement_history.length > 0
-        ? unitOrSerial.movement_history.join(' → ')
-        : baseSite,
-      transferCount: 0,
-      latestTransferDate: null,
-      latestTransferFormatted: 'No recorded transfers',
+      movementHistory,
+      movementTrail: movementHistory.join(' → '),
+      transferCount: embeddedCount,
+      latestTransferDate: latestDate,
+      latestTransferFormatted: latestDate
+        ? formatTransferDate(latestDate, false)
+        : (embeddedCount > 0 && movementHistory.length >= 2
+            ? `${movementHistory[movementHistory.length - 2]} → ${movementHistory[movementHistory.length - 1]}`
+            : 'No recorded transfers'),
       transfers: []
     };
   }

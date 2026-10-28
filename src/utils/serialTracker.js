@@ -4,7 +4,48 @@
  */
 import { defaultPartsCatalog } from '../data/defaultCatalog.js';
 import { isShipmentActive, isShipmentReceived } from './shipmentHelpers.js';
-import { resolvePartOwnershipDetails } from '../services/transferHistoryService.js';
+import {
+  resolvePartOwnershipDetails,
+  loadLocalTransferHistory,
+  normalizeSiteCode,
+  formatSiteOwner
+} from '../services/transferHistoryService.js';
+
+/**
+ * Resolves effective Fixably items and stock transfer records, falling back to
+ * persisted snapshot / transfer history when a caller omits them.
+ */
+function resolveEffectiveFixablySources(fixablyItems = [], fixablyTransfers = []) {
+  let effectiveFixablyItems = Array.isArray(fixablyItems) ? fixablyItems : [];
+  let effectiveFixablyTransfers = Array.isArray(fixablyTransfers) ? fixablyTransfers : [];
+
+  if (
+    (effectiveFixablyItems.length === 0 || effectiveFixablyTransfers.length === 0) &&
+    typeof localStorage !== 'undefined'
+  ) {
+    try {
+      const rawSnap = localStorage.getItem('mdc_fixably_snapshot');
+      if (rawSnap) {
+        const parsedSnap = JSON.parse(rawSnap);
+        if (effectiveFixablyItems.length === 0 && Array.isArray(parsedSnap?.items)) {
+          effectiveFixablyItems = parsedSnap.items;
+        }
+        if (effectiveFixablyTransfers.length === 0 && Array.isArray(parsedSnap?.transfers)) {
+          effectiveFixablyTransfers = parsedSnap.transfers;
+        }
+      }
+    } catch {
+      // Ignore storage parse warnings
+    }
+  }
+
+  const localHistory = loadLocalTransferHistory();
+  return {
+    effectiveFixablyItems,
+    effectiveFixablyTransfers,
+    localHistory: Array.isArray(localHistory) ? localHistory : []
+  };
+}
 
 /**
  * Normalizes and cleans raw barcode / serial input
@@ -102,10 +143,17 @@ export function resolveSerialFullDetails(serialInput, {
   repairUsageRecords = [],
   sites = [],
   parts = [],
-  fixablyItems = []
+  fixablyItems = [],
+  fixablyTransfers = []
 } = {}) {
   const cleanSerial = cleanSerialNumberInput(serialInput);
   if (!cleanSerial) return null;
+
+  const {
+    effectiveFixablyItems,
+    effectiveFixablyTransfers,
+    localHistory
+  } = resolveEffectiveFixablySources(fixablyItems, fixablyTransfers);
 
   // 1. Check Inventory Units
   const unit = (inventoryUnits || []).find(u =>
@@ -134,19 +182,79 @@ export function resolveSerialFullDetails(serialInput, {
 
   // 4. Check Fixably Branch Inventory Items
   let fixablyUnit = null;
-  if (Array.isArray(fixablyItems)) {
-    fixablyUnit = fixablyItems.find(it =>
+  if (Array.isArray(effectiveFixablyItems)) {
+    fixablyUnit = effectiveFixablyItems.find(it =>
       cleanSerialNumberInput(it.serialNumber || it.serial_number) === cleanSerial
     );
   }
 
-  // If serial is not found in any dataset, return null
-  if (!unit && !linkedShipment && !usageRecord && !fixablyUnit) {
+  // 5. Check Fixably Stock Transfers & Transfer History Ledger
+  const matchedTransfers = [];
+  const seenTransferKeys = new Set();
+
+  const appendMatchedTransfer = (tr, idx) => {
+    const sn = cleanSerialNumberInput(tr.serialNumber || tr.serial_number);
+    if (sn !== cleanSerial) return;
+
+    const pn = String(tr.productCode || tr.part_number || tr.partNumber || '').trim().toUpperCase();
+    const fromCode = normalizeSiteCode(tr.fromSiteCode || tr.from_site_code || tr.fromStock || 'DC');
+    const toCode = normalizeSiteCode(tr.toSiteCode || tr.to_site_code || tr.toStock || 'DC');
+    const dateSlice = String(tr.receivedDate || tr.received_date || tr.transfer_date || '').slice(0, 10);
+    const dedupeKey = `${sn}|${dateSlice}|${fromCode}|${toCode}|${pn}`;
+    if (seenTransferKeys.has(dedupeKey)) return;
+    seenTransferKeys.add(dedupeKey);
+
+    let desc = tr.productName || tr.description || null;
+    if (!desc && tr.notes && typeof tr.notes === 'string') {
+      desc = tr.notes.replace(/\s*\(\$[\d.,]+\)\s*$/, '').trim();
+    }
+
+    const isReturnToDc = Boolean(tr.isReturnToDc || tr.transfer_type === 'Return' || (toCode === 'DC' && fromCode !== 'DC'));
+    const isAdjustment = Boolean(tr.isAdjustment || tr.transfer_type === 'Adjustment' || fromCode === toCode);
+    const isSiteToSite = Boolean(tr.isSiteToSite || tr.transfer_type === 'Site-to-Site Transfer' || (fromCode !== 'DC' && toCode !== 'DC' && fromCode !== toCode));
+
+    matchedTransfers.push({
+      id: tr.id || `xfer-${cleanSerial}-${idx}`,
+      part_number: pn,
+      description: desc,
+      serial_number: cleanSerial,
+      from_site_code: fromCode,
+      from_site_name: tr.fromSiteName || tr.from_site_name || tr.fromStock || fromCode,
+      to_site_code: toCode,
+      to_site_name: tr.toSiteName || tr.to_site_name || tr.toStock || toCode,
+      from_owner: tr.from_owner || formatSiteOwner(fromCode),
+      to_owner: tr.currentOwner || tr.to_owner || formatSiteOwner(toCode),
+      transfer_type: tr.transferType || tr.transfer_type || (isSiteToSite ? 'Site-to-Site Transfer' : isReturnToDc ? 'Return' : isAdjustment ? 'Adjustment' : 'Transfer'),
+      transfer_date: tr.transfer_date || (dateSlice ? `${dateSlice}T08:00:00.000Z` : ''),
+      receivedDate: dateSlice,
+      transferValue: Number(tr.transferValue || tr.transfer_value || 0),
+      isSiteToSite,
+      isReturnToDc,
+      isAdjustment,
+      rowIndex: tr.rowIndex ?? idx
+    });
+  };
+
+  effectiveFixablyTransfers.forEach((tr, idx) => appendMatchedTransfer(tr, idx));
+  localHistory.forEach((tr, idx) => appendMatchedTransfer(tr, effectiveFixablyTransfers.length + idx));
+
+  matchedTransfers.sort((a, b) => {
+    const cmp = String(a.receivedDate || '').localeCompare(String(b.receivedDate || ''));
+    if (cmp !== 0) return cmp;
+    return (a.rowIndex || 0) - (b.rowIndex || 0);
+  });
+
+  const latestMatchedTransfer = matchedTransfers.length > 0
+    ? matchedTransfers[matchedTransfers.length - 1]
+    : null;
+
+  // If serial is not found in any dataset (including stock transfer ledger), return null
+  if (!unit && !linkedShipment && !usageRecord && !fixablyUnit && !latestMatchedTransfer) {
     return null;
   }
 
-  // 5. Resolve Part Metadata
-  const rawPn = unit?.part_number || shipmentItem?.part_number || shipmentItem?.partNumber || usageRecord?.part_number || fixablyUnit?.partNumber || fixablyUnit?.part_number || '';
+  // 6. Resolve Part Metadata
+  const rawPn = unit?.part_number || shipmentItem?.part_number || shipmentItem?.partNumber || usageRecord?.part_number || fixablyUnit?.partNumber || fixablyUnit?.part_number || latestMatchedTransfer?.part_number || '';
   const cleanPn = String(rawPn).trim().toUpperCase();
 
   const fullCatalog = [...(parts || []), ...(defaultPartsCatalog || [])];
@@ -155,14 +263,81 @@ export function resolveSerialFullDetails(serialInput, {
     || null;
 
   const partNumber = matchedPart?.part_number || cleanPn || 'Apple Service Part';
-  const partDescription = matchedPart?.description || fixablyUnit?.description || unit?.description || shipmentItem?.description || usageRecord?.description || 'Apple Genuine Component';
-  const iphoneModel = matchedPart?.iphone_model || unit?.iphone_model || 'iPhone';
+  const partDescription = matchedPart?.description || fixablyUnit?.description || unit?.description || shipmentItem?.description || usageRecord?.description || latestMatchedTransfer?.description || 'Apple Genuine Component';
+  let iphoneModel = matchedPart?.iphone_model || unit?.iphone_model || '';
+  if (!iphoneModel && partDescription) {
+    const modelMatch = partDescription.match(/iPhone\s+[0-9A-Za-z\s+ProMaxMiniPlusSEe]+/i);
+    if (modelMatch) iphoneModel = modelMatch[0].trim();
+  }
+  if (!iphoneModel) iphoneModel = 'iPhone';
   const categoryId = matchedPart?.category_id || unit?.category_id || '';
-  const stockingPrice = matchedPart?.stocking_price || unit?.stocking_price || 0;
+  const stockingPrice = matchedPart?.stocking_price || unit?.stocking_price || fixablyUnit?.partValue || latestMatchedTransfer?.transferValue || 0;
 
-  // 6. Determine Destination Site / Current Site
-  const currentSiteId = unit?.current_site_id || unit?.site_id || linkedShipment?.site_id || fixablyUnit?.siteId;
-  const currentSiteCode = unit?.site_code || linkedShipment?.site_code || fixablyUnit?.siteCode;
+  // 7. Resolve Stock Ownership & Transfer History first so latest transfers inform current site
+  const unitRecDate = String(unit?.received_date || unit?.received_at || '').slice(0, 10);
+  const fixablyRecDate = String(fixablyUnit?.lastReceivedDate || fixablyUnit?.dateReceived || '').slice(0, 10);
+  const preferFixably = Boolean(
+    fixablyUnit && (
+      !unit ||
+      fixablyUnit.wasRelocatedByTransfer ||
+      fixablyUnit.wasSynthesizedFromTransfer ||
+      (fixablyRecDate && (!unitRecDate || fixablyRecDate >= unitRecDate))
+    )
+  );
+
+  const primaryUnitRef = preferFixably
+    ? {
+        ...unit,
+        ...fixablyUnit,
+        serial_number: cleanSerial,
+        part_number: partNumber,
+        site_code: fixablyUnit.siteCode || fixablyUnit.site_code || unit?.site_code,
+        current_site_id: fixablyUnit.siteId || fixablyUnit.current_site_id || unit?.current_site_id,
+        current_owner: fixablyUnit.currentOwner || fixablyUnit.current_owner || unit?.current_owner,
+        movement_history: fixablyUnit.movementHistory || fixablyUnit.movement_history || unit?.movement_history,
+        transfer_count: fixablyUnit.transferCount ?? fixablyUnit.transfer_count ?? unit?.transfer_count
+      }
+    : (unit || {
+        serial_number: cleanSerial,
+        part_number: partNumber,
+        site_code: fixablyUnit?.siteCode || linkedShipment?.site_code || latestMatchedTransfer?.to_site_code || 'DC',
+        current_site_id: fixablyUnit?.siteId || linkedShipment?.site_id
+      });
+
+  const ownership = resolvePartOwnershipDetails(
+    primaryUnitRef,
+    matchedTransfers.length > 0 ? matchedTransfers : null
+  );
+  const latestRecordedTransfer = ownership.transfers?.length > 0
+    ? ownership.transfers[ownership.transfers.length - 1]
+    : (fixablyUnit?.latestTransfer || latestMatchedTransfer || null);
+  const latestTransferDateSlice = String(
+    latestRecordedTransfer?.receivedDate ||
+    latestRecordedTransfer?.transfer_date ||
+    latestMatchedTransfer?.receivedDate ||
+    ''
+  ).slice(0, 10);
+  const latestTransferToCode =
+    latestRecordedTransfer?.to_site_code ||
+    latestRecordedTransfer?.toSiteCode ||
+    latestMatchedTransfer?.to_site_code ||
+    null;
+  const hasNewerTransferOverride = Boolean(
+    latestTransferToCode &&
+    latestTransferDateSlice &&
+    (!unitRecDate || latestTransferDateSlice >= unitRecDate) &&
+    (!fixablyRecDate || latestTransferDateSlice >= fixablyRecDate)
+  );
+
+  // Determine Destination Site / Current Site
+  const currentSiteId = preferFixably
+    ? (fixablyUnit?.siteId || unit?.current_site_id || unit?.site_id || linkedShipment?.site_id)
+    : (hasNewerTransferOverride ? null : (unit?.current_site_id || unit?.site_id || linkedShipment?.site_id || fixablyUnit?.siteId));
+  const currentSiteCode = hasNewerTransferOverride
+    ? latestTransferToCode
+    : (preferFixably
+        ? (fixablyUnit?.siteCode || unit?.site_code || linkedShipment?.site_code)
+        : (unit?.site_code || linkedShipment?.site_code || fixablyUnit?.siteCode || latestMatchedTransfer?.to_site_code));
 
   let siteObj = (sites || []).find(s =>
     (currentSiteId && s.id === currentSiteId) ||
@@ -174,28 +349,44 @@ export function resolveSerialFullDetails(serialInput, {
     siteObj = (sites || []).find(s => s.id === usageRecord.site_id || s.code === usageRecord.site_code);
   }
 
+  const normSiteCodeUpper = String(siteObj?.code || currentSiteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
   const isDcSite = Boolean(
-    (!fixablyUnit && !siteObj) ||
+    (!fixablyUnit && !siteObj && (!normSiteCodeUpper || normSiteCodeUpper === 'DC' || normSiteCodeUpper === 'DC-MDC')) ||
     siteObj?.id === 'site-dc' ||
     siteObj?.code === 'DC-MDC' ||
     siteObj?.code === 'DC' ||
     siteObj?.is_dc === true ||
-    (fixablyUnit && (fixablyUnit.stockType === 'DC Stock' || fixablyUnit.stockType === 'DC_STOCK'))
+    normSiteCodeUpper === 'DC' ||
+    normSiteCodeUpper === 'DC-MDC'
   );
 
-  const siteName = fixablyUnit?.siteName || (isDcSite ? 'DC Stocks' : (siteObj ? siteObj.name : 'Branch Site'));
-  const siteCode = fixablyUnit?.siteCode || (siteObj ? siteObj.code : (isDcSite ? 'DC-MDC' : 'BRANCH'));
+  const siteName = (preferFixably && fixablyUnit?.siteName)
+    ? fixablyUnit.siteName
+    : (isDcSite ? 'DC Stocks' : (siteObj ? siteObj.name : (fixablyUnit?.siteName || (normSiteCodeUpper ? `MOBILECARE - ${normSiteCodeUpper}` : 'Branch Site'))));
+  const siteCode = siteObj
+    ? siteObj.code
+    : (preferFixably && fixablyUnit?.siteCode ? fixablyUnit.siteCode : (isDcSite ? 'DC-MDC' : (currentSiteCode || 'BRANCH')));
 
-  // 7. Determine Lifecycle Status
+  // 8. Determine Lifecycle Status
   // Priority order:
   // A. Used (in repair usage records or unit status is 'used')
   // B. In Transit (in an active shipment that is not received_confirmed)
-  // C. In Stock at Branch (confirmed received at site or in Fixably site stock)
-  // D. In Stock at DC (at central distribution center)
+  // C. Historical / Consumed Transfer (in Fixably Stock Transfer ledger but no longer in active on-hand snapshot)
+  // D. In Stock at Branch (confirmed received at site or in Fixably site stock)
+  // E. In Stock at DC (at central distribution center)
+  const isHistoricalTransferOnly = Boolean(
+    !unit &&
+    !fixablyUnit &&
+    !linkedShipment &&
+    !usageRecord &&
+    latestMatchedTransfer
+  );
+
   const isUsed = Boolean(
     unit?.status === 'used' ||
     unit?.used_at ||
-    usageRecord
+    usageRecord ||
+    (isHistoricalTransferOnly && latestMatchedTransfer?.isAdjustment)
   );
 
   const isShippedInTransit = Boolean(
@@ -216,6 +407,16 @@ export function resolveSerialFullDetails(serialInput, {
     statusKey = 'in_transit';
     statusBadgeLabel = `In Transit to ${siteName}`;
     statusBadgeType = 'transit';
+  } else if (isHistoricalTransferOnly) {
+    if (latestMatchedTransfer?.isReturnToDc || isDcSite) {
+      statusKey = 'returned_dc';
+      statusBadgeLabel = 'Returned to DC Stocks (Historical Transfer)';
+      statusBadgeType = 'dc';
+    } else {
+      statusKey = 'transferred_historical';
+      statusBadgeLabel = `${latestMatchedTransfer?.isSiteToSite ? 'Site-to-Site Transfer' : 'Transferred'} to ${siteName} (Historical / Consumed)`;
+      statusBadgeType = 'site';
+    }
   } else if (!isDcSite) {
     statusKey = 'in_stock_site';
     statusBadgeLabel = `In Stock at ${siteName}`;
@@ -226,17 +427,22 @@ export function resolveSerialFullDetails(serialInput, {
     statusBadgeType = 'dc';
   }
 
-  // 8. Recorded Site Arrival Date
-  // Resolved from confirmed shipment received date or unit received timestamp at the site or Fixably dateReceived
+  // 9. Recorded Site Arrival Date
   let siteArrivalDate = null;
   let siteArrivalFormatted = null;
 
-  if (linkedShipment && isShipmentReceived(linkedShipment)) {
+  if (hasNewerTransferOverride && latestTransferDateSlice) {
+    siteArrivalDate = latestTransferDateSlice;
+  } else if (preferFixably && (fixablyUnit?.lastReceivedDate || fixablyUnit?.dateReceived)) {
+    siteArrivalDate = fixablyUnit.lastReceivedDate || fixablyUnit.dateReceived;
+  } else if (linkedShipment && isShipmentReceived(linkedShipment)) {
     siteArrivalDate = linkedShipment.received_date || linkedShipment.received_at;
   } else if (!isDcSite && (unit?.received_at || unit?.received_date)) {
     siteArrivalDate = unit.received_date || unit.received_at;
   } else if (fixablyUnit?.lastReceivedDate || fixablyUnit?.dateReceived) {
     siteArrivalDate = fixablyUnit.lastReceivedDate || fixablyUnit.dateReceived;
+  } else if (latestMatchedTransfer?.receivedDate) {
+    siteArrivalDate = latestMatchedTransfer.receivedDate;
   }
 
   if (siteArrivalDate) {
@@ -250,7 +456,7 @@ export function resolveSerialFullDetails(serialInput, {
     }
   }
 
-  // 9. Recorded Date Used
+  // 10. Recorded Date Used
   let dateUsed = null;
   let dateUsedFormatted = null;
   let usedByName = null;
@@ -258,24 +464,24 @@ export function resolveSerialFullDetails(serialInput, {
   let usageNotes = null;
 
   if (isUsed) {
-    dateUsed = usageRecord?.used_at || unit?.used_at || null;
+    dateUsed = usageRecord?.used_at || unit?.used_at || (isHistoricalTransferOnly ? latestTransferDateSlice : null);
     if (dateUsed) {
       try {
         const d = new Date(dateUsed);
         dateUsedFormatted = !isNaN(d.getTime())
-          ? d.toISOString().replace('T', ' ').slice(0, 16)
+          ? (String(dateUsed).length <= 10 ? String(dateUsed) : d.toISOString().replace('T', ' ').slice(0, 16))
           : String(dateUsed);
       } catch {
         dateUsedFormatted = String(dateUsed);
       }
     }
     usedByName = usageRecord?.used_by || usageRecord?.used_by_name || unit?.used_by_name || 'Branch Specialist';
-    workOrderNumber = usageRecord?.work_order_number || unit?.work_order_number || 'Internal Repair';
+    workOrderNumber = usageRecord?.work_order_number || unit?.work_order_number || (isHistoricalTransferOnly ? 'Repair / Stock Adjustment' : 'Internal Repair');
     usageNotes = usageRecord?.usage_notes || unit?.usage_notes || unit?.notes || '';
   }
 
-  // 10. DC Scan-In / Intake Date
-  const dcScanInDate = unit?.created_at || unit?.received_at || null;
+  // 11. DC Scan-In / Intake Date
+  const dcScanInDate = unit?.created_at || unit?.received_at || fixablyUnit?.previousReceivedDate || fixablyUnit?.lastReceivedDate || matchedTransfers[0]?.receivedDate || null;
   let dcScanInFormatted = null;
   if (dcScanInDate) {
     try {
@@ -286,12 +492,28 @@ export function resolveSerialFullDetails(serialInput, {
     }
   }
 
-  const ownership = resolvePartOwnershipDetails(unit || {
-    serial_number: cleanSerial,
-    part_number: partNumber,
-    site_code: siteCode,
-    current_site_id: siteObj?.id
-  });
+  const resolvedMovementHistory =
+    (ownership.movementHistory?.length > (fixablyUnit?.movementHistory?.length || 0) &&
+     ownership.movementHistory?.length >= (unit?.movement_history?.length || 0))
+      ? ownership.movementHistory
+      : (fixablyUnit?.movementHistory?.length >= (unit?.movement_history?.length || 0)
+          ? fixablyUnit.movementHistory
+          : (unit?.movement_history || ownership.movementHistory));
+  const resolvedMovementTrail = Array.isArray(resolvedMovementHistory) && resolvedMovementHistory.length > 0
+    ? resolvedMovementHistory.join(' → ')
+    : ownership.movementTrail;
+  const resolvedCurrentOwner =
+    (ownership.transferCount > 0 ? ownership.currentOwner : null) ||
+    (preferFixably ? fixablyUnit?.currentOwner : null) ||
+    unit?.current_owner ||
+    fixablyUnit?.currentOwner ||
+    ownership.currentOwner;
+  const resolvedTransferCount = Math.max(
+    ownership.transferCount || 0,
+    fixablyUnit?.transferCount || 0,
+    unit?.transfer_count || 0,
+    matchedTransfers.length
+  );
 
   return {
     found: true,
@@ -307,26 +529,34 @@ export function resolveSerialFullDetails(serialInput, {
     stockingPrice,
     stocking_price: stockingPrice,
     // Stock Ownership & Movement History
-    currentOwner: unit?.current_owner || fixablyUnit?.stockType || ownership.currentOwner,
-    current_owner: unit?.current_owner || fixablyUnit?.stockType || ownership.currentOwner,
-    movementHistory: unit?.movement_history || ownership.movementHistory,
-    movement_history: unit?.movement_history || ownership.movementHistory,
-    movementTrail: ownership.movementTrail,
-    movement_trail: ownership.movementTrail,
-    transferCount: ownership.transferCount,
-    transfer_count: ownership.transferCount,
-    latestTransferDate: ownership.latestTransferDate,
-    latest_transfer_date: ownership.latestTransferDate,
-    latestTransferFormatted: ownership.latestTransferFormatted,
-    transfers: ownership.transfers,
-    transfer_history: ownership.transfers,
+    currentOwner: resolvedCurrentOwner,
+    current_owner: resolvedCurrentOwner,
+    movementHistory: resolvedMovementHistory,
+    movement_history: resolvedMovementHistory,
+    movementTrail: resolvedMovementTrail,
+    movement_trail: resolvedMovementTrail,
+    transferCount: resolvedTransferCount,
+    transfer_count: resolvedTransferCount,
+    latestTransferDate: ownership.latestTransferDate || fixablyUnit?.latestTransfer?.receivedDate || latestMatchedTransfer?.receivedDate || null,
+    latest_transfer_date: ownership.latestTransferDate || fixablyUnit?.latestTransfer?.receivedDate || latestMatchedTransfer?.receivedDate || null,
+    latestTransferFormatted: ownership.latestTransferFormatted !== 'No recorded transfers'
+      ? ownership.latestTransferFormatted
+      : (fixablyUnit?.latestTransfer
+          ? `${fixablyUnit.latestTransfer.fromSiteCode} → ${fixablyUnit.latestTransfer.toSiteCode} (${fixablyUnit.latestTransfer.receivedDate})`
+          : (latestMatchedTransfer
+              ? `${latestMatchedTransfer.from_site_code} → ${latestMatchedTransfer.to_site_code} (${latestMatchedTransfer.receivedDate})`
+              : ownership.latestTransferFormatted)),
+    latestTransferType: latestMatchedTransfer?.transfer_type || fixablyUnit?.latestTransfer?.transferType || null,
+    isHistoricalTransfer: isHistoricalTransferOnly,
+    transfers: ownership.transfers?.length > 0 ? ownership.transfers : matchedTransfers,
+    transfer_history: ownership.transfers?.length > 0 ? ownership.transfers : matchedTransfers,
     // Fixably specifics
     agingDays: fixablyUnit?.agingDays ?? null,
     agingBracket: fixablyUnit?.agingBracket ?? null,
     stockType: fixablyUnit?.stockType || unit?.stock_type || (isDcSite ? 'DC Stock' : 'MSPI-Owned'),
     isInvestigation: Boolean(fixablyUnit?.isInvestigation),
     // Location & Stock State
-    status: unit?.status || (isUsed ? 'used' : isShippedInTransit ? 'shipped' : 'in_stock'),
+    status: unit?.status || (isUsed ? 'used' : isShippedInTransit ? 'shipped' : isHistoricalTransferOnly ? 'historical_transfer' : 'in_stock'),
     statusKey,
     statusBadgeLabel,
     statusBadgeType,
@@ -388,12 +618,13 @@ export function resolveSerialFullDetails(serialInput, {
       riderName: linkedShipment.rider_name
     } : null,
     // Raw source reference
-    rawUnit: unit || fixablyUnit || null
+    rawUnit: unit || fixablyUnit || latestMatchedTransfer || null
   };
 }
 
 /**
- * Searches across all inventory units, shipments, usage records, and branch site stock for serials matching a query
+ * Searches across all inventory units, shipments, usage records, branch site stock,
+ * and stock transfer records for serials matching a query.
  *
  * @param {string} query
  * @param {Object} datasets
@@ -406,12 +637,19 @@ export function searchSerialsWithFullDetails(query, {
   repairUsageRecords = [],
   sites = [],
   parts = [],
-  fixablyItems = []
+  fixablyItems = [],
+  fixablyTransfers = []
 } = {}, maxResults = 5) {
   if (!query || !query.trim()) return [];
 
   const cleanQuery = cleanSerialNumberInput(query);
   if (!cleanQuery || cleanQuery.length < 3) return [];
+
+  const {
+    effectiveFixablyItems,
+    effectiveFixablyTransfers,
+    localHistory
+  } = resolveEffectiveFixablySources(fixablyItems, fixablyTransfers);
 
   const matchedSerialsSet = new Set();
 
@@ -442,8 +680,24 @@ export function searchSerialsWithFullDetails(query, {
   });
 
   // 4. Match from fixablyItems (Branch stock snapshot)
-  (fixablyItems || []).forEach(f => {
+  (effectiveFixablyItems || []).forEach(f => {
     const s = cleanSerialNumberInput(f.serialNumber || f.serial_number);
+    if (s && s.includes(cleanQuery)) {
+      matchedSerialsSet.add(s);
+    }
+  });
+
+  // 5. Match from fixablyTransfers (Stock Transfer CSV/XLSX ledger)
+  (effectiveFixablyTransfers || []).forEach(tr => {
+    const s = cleanSerialNumberInput(tr.serialNumber || tr.serial_number);
+    if (s && s.includes(cleanQuery)) {
+      matchedSerialsSet.add(s);
+    }
+  });
+
+  // 6. Match from localTransferHistory (Part Transfer History Registry)
+  (localHistory || []).forEach(h => {
+    const s = cleanSerialNumberInput(h.serial_number || h.serialNumber);
     if (s && s.includes(cleanQuery)) {
       matchedSerialsSet.add(s);
     }
@@ -467,7 +721,8 @@ export function searchSerialsWithFullDetails(query, {
       repairUsageRecords,
       sites,
       parts,
-      fixablyItems
+      fixablyItems: effectiveFixablyItems,
+      fixablyTransfers: effectiveFixablyTransfers
     })
   ).filter(Boolean);
 }

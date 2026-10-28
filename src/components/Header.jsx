@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { clearOperationalLocalStorage } from '../utils/cacheManager';
-import { Search, Barcode, PackageCheck, RefreshCw, Calendar, Menu } from 'lucide-react';
+import { Search, RefreshCw, Calendar, Menu } from 'lucide-react';
 import HeaderCategoryFilter from './HeaderCategoryFilter';
 import { formatTo12HourTime } from '../utils/dateUtils';
 
 export default function Header() {
   const {
     activeTab,
-    setActiveTab,
     cloudSyncStatus,
     isAutoRefreshing,
     lastSyncedAt,
@@ -20,7 +19,6 @@ export default function Header() {
     offlineQueue,
     processOfflineSyncQueue: _processOfflineSyncQueue,
     activePeriod,
-    canAccess,
     isMobileNavOpen,
     setIsMobileNavOpen,
     currentUser,
@@ -296,34 +294,6 @@ export default function Header() {
           </div>
           <kbd className="header-search-shortcut">⌘K</kbd>
         </button>
-
-        {/* Quick Scan Switcher Group */}
-        {(canAccess('scan-in') || canAccess('scan-out')) && (
-          <div className="header-scan-switcher">
-            {canAccess('scan-in') && (
-              <button
-                className={`header-scan-btn ${activeTab === 'scan-in' ? 'active' : ''}`}
-                onClick={() => setActiveTab('scan-in')}
-                title="Receive Scan-In"
-              >
-                <Barcode size={13} />
-                <span className="scan-text-full">Scan-In</span>
-                <span className="scan-text-short">In</span>
-              </button>
-            )}
-            {canAccess('scan-out') && (
-              <button
-                className={`header-scan-btn ${activeTab === 'scan-out' ? 'active' : ''}`}
-                onClick={() => setActiveTab('scan-out')}
-                title="Pack Scan-Out"
-              >
-                <PackageCheck size={13} />
-                <span className="scan-text-full">Scan-Out</span>
-                <span className="scan-text-short">Out</span>
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
     </header>

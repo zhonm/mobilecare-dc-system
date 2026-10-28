@@ -32,6 +32,8 @@ import AutoLogoutWarningModal from '../components/AutoLogoutWarningModal';
 import { useInactivitySyncGuard } from '../hooks/useInactivitySyncGuard';
 import InactivityRefreshModal from '../components/InactivityRefreshModal';
 import { initOfflineDriveSyncListener } from '../services/driveOfflineQueueService';
+import { parseStockTransferCsv, hydrateFixablySnapshot } from '../utils/fixablyInventoryEngine';
+import { syncFixablyTransfersToHistory } from '../services/transferHistoryService';
 
 // Re-export constants and helpers for backward compatibility
 export {
@@ -281,13 +283,45 @@ export function AppProvider({ children }) {
           const recs = await dbStorage.getAllSavedRecords();
           const fixRec = recs?.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
           if (fixRec?.snapshot?.items?.length) idb = fixRec.snapshot;
+          else if (fixRec?.snapshot_data?.items?.length) idb = fixRec.snapshot_data;
         }
-        if (isMounted && idb?.items?.length) {
+        if (idb && (!Array.isArray(idb.transfers) || idb.transfers.length === 0)) {
+          try {
+            const savedTransferSlot = await dbStorage.getItem('mdc_uploaded_slot_stock_transfer');
+            const transferText = savedTransferSlot?.content || null;
+            if (transferText) {
+              const parsedTr = await parseStockTransferCsv(transferText);
+              if (parsedTr?.success && parsedTr.transfers?.length > 0) {
+                idb = {
+                  ...idb,
+                  transfers: parsedTr.transfers,
+                  siteToSiteTransfers: parsedTr.siteToSiteTransfers || [],
+                  dcToSiteTransfers: parsedTr.dcToSiteTransfers || [],
+                  returnToDcTransfers: parsedTr.returnToDcTransfers || [],
+                  adjustmentTransfers: parsedTr.adjustmentTransfers || []
+                };
+              }
+            }
+          } catch (e) {}
+        }
+        if (idb?.items?.length) {
+          idb = hydrateFixablySnapshot(idb);
+        }
+        if (Array.isArray(idb?.transfers) && idb.transfers.length > 0) {
+          try {
+            syncFixablyTransfersToHistory(idb.transfers, 'App Startup Sync');
+          } catch (e) {}
+        }
+        if (isMounted && (idb?.items?.length || idb?.transfers?.length)) {
           setFixablySnapshot(prev => {
             const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
             const idbMs = idb?.timestamp ? new Date(idb.timestamp).getTime() : 0;
-            if (prevMs > idbMs) return prev;
-            return (prev?.timestamp === idb.timestamp && prev?.items?.length === idb.items?.length) ? prev : idb;
+            if (prevMs > idbMs && (prev?.transfers?.length || 0) >= (idb?.transfers?.length || 0)) return prev;
+            return (
+              prev?.timestamp === idb.timestamp &&
+              prev?.items?.length === idb.items?.length &&
+              (prev?.transfers?.length || 0) >= (idb?.transfers?.length || 0)
+            ) ? prev : idb;
           });
         }
       } catch (e) {}

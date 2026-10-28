@@ -6,7 +6,9 @@ console.log('===================================================================
 console.log('TEST SUITE: Fixably Inventory Value 3,416 Discrepancy & Realtime Cache Invalidation');
 console.log('========================================================================');
 
-const csvPath = 'Custom reports - Inventory Value.csv';
+const csvPath = fs.existsSync('Custom reports - Inventory Value.csv')
+  ? 'Custom reports - Inventory Value.csv'
+  : 'xlsx files/Custom reports - Inventory Value.csv';
 assert.ok(fs.existsSync(csvPath), 'Custom reports - Inventory Value.csv must exist');
 
 const content = fs.readFileSync(csvPath, 'utf8');

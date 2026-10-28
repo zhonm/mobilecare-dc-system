@@ -206,17 +206,19 @@ export default function SerialDossierModal({
           </div>
 
           {/* 2. Usage Status & Consumed Date */}
-          <div style={{ background: serialDetails.isUsed ? '#faf5ff' : '#f0fdf4', padding: '14px', borderRadius: '10px', border: serialDetails.isUsed ? '1px solid #e9d5ff' : '1px solid #bbf7d0' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: serialDetails.isUsed ? '#7c3aed' : '#15803d', textTransform: 'uppercase', marginBottom: '4px' }}>
+          <div style={{ background: serialDetails.isUsed ? '#faf5ff' : serialDetails.isHistoricalTransfer ? '#fffbeb' : '#f0fdf4', padding: '14px', borderRadius: '10px', border: serialDetails.isUsed ? '1px solid #e9d5ff' : serialDetails.isHistoricalTransfer ? '1px solid #fde68a' : '1px solid #bbf7d0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: serialDetails.isUsed ? '#7c3aed' : serialDetails.isHistoricalTransfer ? '#b45309' : '#15803d', textTransform: 'uppercase', marginBottom: '4px' }}>
               <Wrench size={14} />
-              <span>Usage / Repair Consumption</span>
+              <span>Usage / Stock Status</span>
             </div>
-            <div style={{ fontSize: '14px', fontWeight: 800, color: serialDetails.isUsed ? '#6d28d9' : '#166534' }}>
-              {serialDetails.isUsed ? 'Used in Customer Repair' : 'Available & Unused Stock'}
+            <div style={{ fontSize: '14px', fontWeight: 800, color: serialDetails.isUsed ? '#6d28d9' : serialDetails.isHistoricalTransfer ? '#92400e' : '#166534' }}>
+              {serialDetails.isUsed ? 'Used in Customer Repair' : serialDetails.isHistoricalTransfer ? 'Historical / Consumed Transfer' : 'Available & Unused Stock'}
             </div>
-            <div style={{ fontSize: '11.5px', color: serialDetails.isUsed ? '#5b21b6' : '#15803d', marginTop: '2px' }}>
+            <div style={{ fontSize: '11.5px', color: serialDetails.isUsed ? '#5b21b6' : serialDetails.isHistoricalTransfer ? '#b45309' : '#15803d', marginTop: '2px' }}>
               {serialDetails.isUsed ? (
                 <>Date Used: <strong>{serialDetails.dateUsedFormatted || 'Recorded'}</strong> &bull; WO: <strong>{serialDetails.workOrderNumber}</strong></>
+              ) : serialDetails.isHistoricalTransfer ? (
+                <span>Recorded in Stock Transfer Ledger ({serialDetails.latestTransferType || 'Site-to-Site Transfer'})</span>
               ) : (
                 <span>Active in inventory ready for work order allocation</span>
               )}

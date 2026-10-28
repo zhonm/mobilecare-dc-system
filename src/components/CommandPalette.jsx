@@ -322,15 +322,23 @@ export default function CommandPalette({ isOpen, onClose }) {
           repairUsageRecords,
           sites,
           parts,
-          fixablyItems: fixablySnapshot?.items || []
+          fixablyItems: fixablySnapshot?.items || [],
+          fixablyTransfers: fixablySnapshot?.transfers || []
         }, 8);
 
-        // Site-restricted staff only search units belonging to or shipped to their branch
+        // Site-restricted staff only search units belonging to, transferred from/to, or shipped to their branch
+        const cleanUserSiteCode = String(userSiteObj?.code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
         const permittedSerials = resolvedSerials.filter(sd => {
           if (isSuper) return true;
+          const cleanSdSiteCode = String(sd.siteCode || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
+          const inMovementHistory = cleanUserSiteCode && Array.isArray(sd.movementHistory) && sd.movementHistory.some(
+            c => String(c || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim() === cleanUserSiteCode
+          );
           return (
             sd.siteId === userSiteId ||
             sd.siteCode === userSiteObj?.code ||
+            (cleanUserSiteCode && cleanSdSiteCode === cleanUserSiteCode) ||
+            inMovementHistory ||
             sd.linkedShipment?.site_id === userSiteId ||
             sd.linkedShipment?.site_code === userSiteObj?.code
           );
@@ -562,12 +570,17 @@ export default function CommandPalette({ isOpen, onClose }) {
                         <strong style={{ color: '#f1f5f9', fontSize: '11.5px' }}>
                           {sd.isDcSite ? 'DC Stocks' : sd.siteName}
                         </strong>
+                        {sd.movementTrail && sd.transferCount > 0 && (
+                          <span style={{ color: '#38bdf8', fontSize: '10.5px', fontWeight: 700, display: 'block', marginTop: '2px', fontFamily: 'var(--font-mono)' }}>
+                            Trail: {sd.movementTrail}
+                          </span>
+                        )}
                       </div>
 
                       {/* 2. Recorded Arrival Date at Site */}
                       <div>
                         <span style={{ color: '#64748b', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
-                          Site Arrival Date:
+                          {sd.isHistoricalTransfer ? 'Transfer Received Date:' : 'Site Arrival Date:'}
                         </span>
                         <strong style={{ color: sd.siteArrivalFormatted ? '#38bdf8' : '#94a3b8', fontSize: '11.5px' }}>
                           {sd.siteArrivalFormatted || (sd.statusBadgeType === 'transit' ? 'Pending Site Arrival' : (sd.dcScanInFormatted ? `DC: ${sd.dcScanInFormatted}` : 'In DC Stock'))}
@@ -577,11 +590,15 @@ export default function CommandPalette({ isOpen, onClose }) {
                       {/* 3. Used by Site & Date Used */}
                       <div>
                         <span style={{ color: '#64748b', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, display: 'block' }}>
-                          Usage / Repair Date:
+                          {sd.isHistoricalTransfer ? 'Current Stock Status:' : 'Usage / Repair Date:'}
                         </span>
                         {sd.isUsed ? (
                           <strong style={{ color: '#c084fc', fontSize: '11.5px' }}>
                             Used: {sd.dateUsedFormatted ? sd.dateUsedFormatted.slice(0, 10) : 'Recorded'} {sd.workOrderNumber ? `(${sd.workOrderNumber})` : ''}
+                          </strong>
+                        ) : sd.isHistoricalTransfer ? (
+                          <strong style={{ color: '#fbbf24', fontSize: '11.5px' }}>
+                            Historical / Consumed ({sd.latestTransferType || 'Site-to-Site Transfer'})
                           </strong>
                         ) : (
                           <strong style={{ color: '#4ade80', fontSize: '11.5px' }}>
