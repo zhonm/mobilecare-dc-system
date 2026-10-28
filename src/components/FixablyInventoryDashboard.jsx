@@ -487,9 +487,18 @@ export default function FixablyInventoryDashboard({
           }
         }
 
-        const currentSlotsSignature = computeSlotsSignature(savedSiteStock, savedKgb, savedTransfer);
-
-        let cached = await dbStorage.getItem('mdc_fixably_snapshot');
+        // 2. Concurrently fetch local cached snapshot and Supabase Cloud record
+        let [cached, cloudResult] = await Promise.all([
+          dbStorage.getItem('mdc_fixably_snapshot').catch(() => null),
+          supabase
+            ? supabase
+                .from('saved_records')
+                .select('*')
+                .eq('id', 'master_fixably_inventory_snapshot')
+                .maybeSingle()
+                .catch(() => ({ data: null, error: null }))
+            : Promise.resolve({ data: null, error: null })
+        ]);
 
         // Secondary fallback to permanent saved records archive in IndexedDB
         if (!cached || !cached.items || cached.items.length === 0) {
@@ -498,6 +507,8 @@ export default function FixablyInventoryDashboard({
             const snapRec = savedRecs.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
             if (snapRec && snapRec.snapshot && snapRec.snapshot.items?.length > 0) {
               cached = snapRec.snapshot;
+            } else if (snapRec && snapRec.snapshot_data && snapRec.snapshot_data.items?.length > 0) {
+              cached = snapRec.snapshot_data;
             }
           } catch (e) {}
         }
@@ -510,156 +521,88 @@ export default function FixablyInventoryDashboard({
           } catch (e) {}
         }
 
-        // Check if any uploaded slot file (Site Stock, KGB, or Stock Transfer) is newer than the snapshot,
-        // or if the cached snapshot does not match the uploaded slots / lacks uploaded stock transfer records
-        const siteSlotMs = savedSiteStock?.updatedAt ? new Date(savedSiteStock.updatedAt).getTime() : 0;
-        const kgbSlotMs = savedKgb?.updatedAt ? new Date(savedKgb.updatedAt).getTime() : 0;
-        const transferSlotMs = savedTransfer?.updatedAt ? new Date(savedTransfer.updatedAt).getTime() : 0;
-        const maxSlotMs = Math.max(siteSlotMs, kgbSlotMs, transferSlotMs);
-        const cachedUpdatedAt = cached?.timestamp ? new Date(cached.timestamp).getTime() : 0;
-        const isAnySlotStrictlyNewer = Boolean(maxSlotMs && (!cachedUpdatedAt || maxSlotMs > cachedUpdatedAt));
-        const isMissingTransferRecords = Boolean(
-          savedTransfer?.content &&
-          cached?.items?.length > 0 &&
-          (!Array.isArray(cached.transfers) || cached.transfers.length === 0)
-        );
-        const isSlotSignatureMismatch = Boolean(
-          savedSiteStock?.content &&
-          currentSlotsSignature &&
-          cached?.slotsSignature !== currentSlotsSignature
-        );
+        const cloudRec = cloudResult?.data;
+        const cloudSnapData = cloudRec?.snapshot_data;
+        const hasCloudSnapshot = Boolean(cloudSnapData && Array.isArray(cloudSnapData.items) && cloudSnapData.items.length > 0);
+        const hasLocalSnapshot = Boolean(cached && Array.isArray(cached.items) && cached.items.length > 0);
 
-        const needsDiscrepancyHeal = Boolean(
-          savedSiteStock?.content &&
-          cached?.items &&
-          savedSiteStock.rowCount &&
-          cached.items.length !== savedSiteStock.rowCount &&
-          isAnySlotStrictlyNewer
-        );
+        const cloudHasTransfers = Boolean(hasCloudSnapshot && Array.isArray(cloudSnapData.transfers) && cloudSnapData.transfers.length > 0);
+        const localHasTransfers = Boolean(hasLocalSnapshot && Array.isArray(cached.transfers) && cached.transfers.length > 0);
 
-        // Use strictly the Stock Transfer file uploaded by the user in Slot 3
-        const effectiveTransferContent = savedTransfer?.content || null;
+        const cloudTimestamp = cloudRec?.updated_at || cloudSnapData?.timestamp || '';
+        const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
 
-        const effectiveSiteStockContent = savedSiteStock?.content || (
-          (isAnySlotStrictlyNewer || isMissingTransferRecords) && cached?.items?.length > 0
-            ? serializeSnapshotItemsToCsv(cached.items)
-            : null
-        );
+        const localTimestamp = cached?.timestamp || snapshotTimestampRef.current || localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
+        const localMs = localTimestamp ? new Date(localTimestamp).getTime() : 0;
 
-        // Auto-reconcile from saved slots whenever uploaded slots exist and snapshot is missing, older, or out of sync with slots
-        if (
-          (isSlotSignatureMismatch || needsDiscrepancyHeal || isAnySlotStrictlyNewer || isMissingTransferRecords || !cached || !cached.items || cached.items.length === 0) &&
-          effectiveSiteStockContent
-        ) {
-          try {
-            const autoReconciled = await reconcileFixablyMultiFile({
-              siteStockContent: effectiveSiteStockContent,
-              kgbUsedContent: savedKgb?.content || null,
-              stockTransferContent: effectiveTransferContent,
-              options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
-            });
+        let winningSnapshot = null;
+        let shouldSyncWinningToCloud = false;
 
-            if (autoReconciled.success && autoReconciled.items?.length > 0) {
-              if (currentSlotsSignature) {
-                autoReconciled.slotsSignature = currentSlotsSignature;
+        if (hasCloudSnapshot && hasLocalSnapshot) {
+          // Resolution between Cloud and Local:
+          if (cloudHasTransfers && !localHasTransfers) {
+            // Cloud has full reconciled transfers, local is missing them -> Cloud MUST win!
+            winningSnapshot = cloudSnapData;
+            if (cloudTimestamp && !winningSnapshot.timestamp) winningSnapshot.timestamp = cloudTimestamp;
+          } else if (localHasTransfers && !cloudHasTransfers) {
+            // Local has transfers, cloud lacks them -> Local wins and heals cloud!
+            winningSnapshot = cached;
+            shouldSyncWinningToCloud = true;
+          } else if (cloudMs >= localMs) {
+            // Cloud is equal or newer -> Cloud wins
+            winningSnapshot = cloudSnapData;
+            if (cloudTimestamp && !winningSnapshot.timestamp) winningSnapshot.timestamp = cloudTimestamp;
+          } else {
+            // Local is strictly newer -> Local wins and syncs to cloud
+            winningSnapshot = cached;
+            shouldSyncWinningToCloud = true;
+          }
+        } else if (hasCloudSnapshot) {
+          winningSnapshot = cloudSnapData;
+          if (cloudTimestamp && !winningSnapshot.timestamp) winningSnapshot.timestamp = cloudTimestamp;
+        } else if (hasLocalSnapshot) {
+          winningSnapshot = cached;
+          shouldSyncWinningToCloud = true;
+        } else {
+          // No snapshot exists anywhere: only in this rare cold-start scenario do we auto-reconcile from saved slots if available
+          if (savedSiteStock?.content) {
+            try {
+              const autoReconciled = await reconcileFixablyMultiFile({
+                siteStockContent: savedSiteStock.content,
+                kgbUsedContent: savedKgb?.content || null,
+                stockTransferContent: savedTransfer?.content || null,
+                options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+              });
+              if (autoReconciled.success && autoReconciled.items?.length > 0) {
+                winningSnapshot = autoReconciled;
+                shouldSyncWinningToCloud = true;
               }
-              cached = autoReconciled;
-              await persistFixablySnapshotLocally(cached);
-              if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
-                syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
-              }
-              await syncSnapshotToCloud(cached);
+            } catch (coldStartErr) {
+              console.warn('[Fixably] Cold-start auto-reconciliation note:', coldStartErr);
             }
-          } catch (autoRecErr) {
-            console.warn('Auto-reconcile from saved slots error:', autoRecErr);
           }
         }
 
-        // Render available local/cached snapshot immediately for instant UI feedback without blank screen
-        if (cached && cached.items && cached.items.length > 0) {
-          cached = hydrateFixablySnapshot(cached, sitesRef.current);
-          if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
-            syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
+        if (winningSnapshot && winningSnapshot.items && winningSnapshot.items.length > 0) {
+          const hydrated = hydrateFixablySnapshot(winningSnapshot, sitesRef.current);
+          if (winningSnapshot.timestamp && !hydrated.timestamp) {
+            hydrated.timestamp = winningSnapshot.timestamp;
           }
+
+          // Persist hydrated snapshot locally
+          await persistFixablySnapshotLocally(hydrated);
+
+          // Sync transfers to transfer history ledger
+          if (Array.isArray(hydrated.transfers) && hydrated.transfers.length > 0) {
+            syncFixablyTransfersToHistory(hydrated.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
+          }
+
+          if (shouldSyncWinningToCloud && supabase) {
+            await syncSnapshotToCloud(hydrated);
+          }
+
           if (isMounted) {
-            setSnapshot(cached);
-            setIsLoading(false);
-            setIsDropzoneOpen(false);
-          }
-        }
-
-        // Supabase Cloud Multi-User Synchronization: Ensure latest complete cloud snapshot syncs without overwriting newer/reconciled local slots
-        if (supabase) {
-          try {
-            const { data: cloudRec, error: cloudErr } = await supabase
-              .from('saved_records')
-              .select('*')
-              .eq('id', 'master_fixably_inventory_snapshot')
-              .maybeSingle();
-
-            if (!cloudErr && cloudRec?.snapshot_data && Array.isArray(cloudRec.snapshot_data.items) && cloudRec.snapshot_data.items.length > 0) {
-              const cloudTimestamp = cloudRec.updated_at || cloudRec.snapshot_data?.timestamp || '';
-              const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
-              const localTimestamp = cached?.timestamp || snapshotTimestampRef.current || localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
-              const localMs = localTimestamp ? new Date(localTimestamp).getTime() : 0;
-
-              const localHasTransfers = Boolean((Array.isArray(cached?.transfers) && cached.transfers.length > 0) || savedTransfer?.content);
-              const cloudHasTransfers = Boolean(Array.isArray(cloudRec.snapshot_data.transfers) && cloudRec.snapshot_data.transfers.length > 0);
-              const localMatchedUploadedSlots = Boolean(savedSiteStock?.content && currentSlotsSignature && cached?.slotsSignature === currentSlotsSignature);
-
-              // Guard 1: If local has reconciled transfers (or uploaded slots) and cloud is missing transfers or older, heal cloud instead of overwriting local
-              if (cached?.items?.length > 0 && ((localHasTransfers && !cloudHasTransfers) || (localMs > cloudMs))) {
-                await syncSnapshotToCloud(cached);
-              }
-              // Guard 2: Only apply cloud snapshot if local is empty OR (cloud is strictly newer AND has transfers if local has transfers AND local uploaded slots are not already authoritative)
-              else if (
-                (!cached || !cached.items || cached.items.length === 0) ||
-                (cloudMs > 0 && cloudMs > localMs && cloudMs > maxSlotMs && (!localHasTransfers || cloudHasTransfers) && !localMatchedUploadedSlots)
-              ) {
-                console.info('[FixablyDashboard] Synchronizing with newer cloud snapshot:', cloudTimestamp, 'vs local:', localTimestamp);
-                let cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sitesRef.current);
-                if (cloudTimestamp && !cloudHydrated.timestamp) {
-                  cloudHydrated.timestamp = cloudTimestamp;
-                }
-                // If cloud snapshot is missing transfers, enrich it with available transfer content
-                if ((!Array.isArray(cloudHydrated.transfers) || cloudHydrated.transfers.length === 0) && (savedTransfer?.content || effectiveTransferContent)) {
-                  const enrichedCloud = await reconcileFixablyMultiFile({
-                    siteStockContent: savedSiteStock?.content || serializeSnapshotItemsToCsv(cloudHydrated.items),
-                    kgbUsedContent: savedKgb?.content || null,
-                    stockTransferContent: savedTransfer?.content || effectiveTransferContent,
-                    options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
-                  });
-                  if (enrichedCloud.success && enrichedCloud.items?.length > 0) {
-                    if (currentSlotsSignature) enrichedCloud.slotsSignature = currentSlotsSignature;
-                    cloudHydrated = enrichedCloud;
-                    await syncSnapshotToCloud(cloudHydrated);
-                  }
-                }
-                cached = cloudHydrated;
-                await persistFixablySnapshotLocally(cloudHydrated);
-                if (Array.isArray(cloudHydrated.transfers) && cloudHydrated.transfers.length > 0) {
-                  syncFixablyTransfersToHistory(cloudHydrated.transfers, currentUser?.email || 'Cloud-Sync').catch(() => {});
-                }
-                if (isMounted) {
-                  setSnapshot(cloudHydrated);
-                  setIsLoading(false);
-                  setIsDropzoneOpen(false);
-                }
-                return;
-              }
-            } else if (!cloudErr && !cloudRec?.snapshot_data?.items?.length && cached?.items?.length > 0) {
-              await syncSnapshotToCloud(cached);
-            }
-          } catch (cloudFetchErr) {
-            console.warn('Fixably cloud synchronization check note:', cloudFetchErr);
-          }
-        }
-
-        // If local cache was already populated, we are done
-        if (cached && cached.items && cached.items.length > 0) {
-          cached = hydrateFixablySnapshot(cached, sitesRef.current);
-          if (isMounted) {
-            setSnapshot(cached);
+            setSnapshot(hydrated);
             setIsLoading(false);
             setIsDropzoneOpen(false);
           }

@@ -1997,9 +1997,43 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
     ? snapshot.investigationItems
     : snapshot.items.filter(it => it.isInvestigation);
 
+  const totalNetworkUnits = snapshot.items.reduce((s, it) => s + (it.quantity || 1), 0);
+  const totalNetworkValue = snapshot.items.reduce((s, it) => s + (Number(it.totalValue) || Number(it.partValue) || 0), 0);
+  const uniquePartsSet = new Set(snapshot.items.map(it => it.partNumber || it.part_number).filter(Boolean));
+  const globalAgingCounts = {
+    [AGING_BRACKETS.DEAD_STOCK]: 0,
+    [AGING_BRACKETS.NON_MOVING]: 0,
+    [AGING_BRACKETS.SLOW_MOVING]: 0,
+    [AGING_BRACKETS.IN_STOCK]: 0
+  };
+  snapshot.items.forEach(it => {
+    const brk = it.agingBracket || AGING_BRACKETS.IN_STOCK;
+    if (globalAgingCounts[brk] !== undefined) {
+      globalAgingCounts[brk] += (it.quantity || 1);
+    } else {
+      globalAgingCounts[AGING_BRACKETS.IN_STOCK] += (it.quantity || 1);
+    }
+  });
+
+  const reconstructedGlobalMetrics = {
+    totalUnits: totalNetworkUnits,
+    totalValue: totalNetworkValue,
+    uniqueParts: uniquePartsSet.size,
+    sitesCount: siteSummaries.length,
+    investigationCount: investigationItems.length,
+    transferredUnitsCount: snapshot.items.filter(it => it.isTransferred).length,
+    relocatedUnitsCount: snapshot.items.filter(it => it.wasRelocatedByTransfer || it.relocatedByTransfer).length,
+    agingCounts: globalAgingCounts,
+    deadStockPercent: totalNetworkUnits > 0 ? ((globalAgingCounts[AGING_BRACKETS.DEAD_STOCK] / totalNetworkUnits) * 100).toFixed(1) : '0.0',
+    slowMovingPercent: totalNetworkUnits > 0 ? ((globalAgingCounts[AGING_BRACKETS.SLOW_MOVING] / totalNetworkUnits) * 100).toFixed(1) : '0.0',
+    nonMovingPercent: totalNetworkUnits > 0 ? ((globalAgingCounts[AGING_BRACKETS.NON_MOVING] / totalNetworkUnits) * 100).toFixed(1) : '0.0',
+    inStockPercent: totalNetworkUnits > 0 ? ((globalAgingCounts[AGING_BRACKETS.IN_STOCK] / totalNetworkUnits) * 100).toFixed(1) : '0.0'
+  };
+
   return {
     ...snapshot,
     investigationItems,
-    sites: siteSummaries
+    sites: siteSummaries,
+    globalMetrics: reconstructedGlobalMetrics
   };
 }

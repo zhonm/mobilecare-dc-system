@@ -840,12 +840,10 @@ export function useCloudSync({
           if (remoteFixablyHeader) {
             let cachedFixably = null;
             let savedTransferSlot = null;
-            let savedSiteStockSlot = null;
             try {
-              [cachedFixably, savedTransferSlot, savedSiteStockSlot] = await Promise.all([
+              [cachedFixably, savedTransferSlot] = await Promise.all([
                 dbStorage.getItem('mdc_fixably_snapshot'),
-                dbStorage.getItem('mdc_uploaded_slot_stock_transfer'),
-                dbStorage.getItem('mdc_uploaded_slot_site_stock')
+                dbStorage.getItem('mdc_uploaded_slot_stock_transfer')
               ]);
             } catch (e) {}
             const hasLocalFixably = Boolean(cachedFixably && cachedFixably.items && cachedFixably.items.length > 0);
@@ -858,17 +856,13 @@ export function useCloudSync({
 
             const lsMs = lsTimestamp ? new Date(lsTimestamp).getTime() : 0;
             const idbMs = cachedFixably?.timestamp ? new Date(cachedFixably.timestamp).getTime() : 0;
-            const slotMs = Math.max(
-              savedSiteStockSlot?.updatedAt ? new Date(savedSiteStockSlot.updatedAt).getTime() : 0,
-              savedTransferSlot?.updatedAt ? new Date(savedTransferSlot.updatedAt).getTime() : 0
-            );
-            const localMs = Math.max(lsMs, idbMs, slotMs);
+            const localMs = Math.max(lsMs, idbMs);
             const localFixablyUpdatedAt = cachedFixably?.timestamp || lsTimestamp || new Date(localMs || Date.now()).toISOString();
 
             const remoteMs = remoteFixablyHeader.updated_at ? new Date(remoteFixablyHeader.updated_at).getTime() : 0;
 
             const isCloudStrictlyNewer = Boolean(remoteMs && (!localMs || remoteMs > localMs));
-            const isLocalStrictlyNewer = Boolean(hasLocalFixably && localMs && remoteMs && localMs > remoteMs);
+            const isLocalStrictlyNewer = Boolean(hasLocalFixably && localMs && remoteMs && localMs > remoteMs && localHasTransfers);
 
             if (isLocalStrictlyNewer) {
               // Local user has NEWER inventory snapshot than cloud!
@@ -3322,10 +3316,9 @@ export function useCloudSync({
             const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
             const localMs = Math.max(
               localTimestamp ? new Date(localTimestamp).getTime() : 0,
-              localSnap?.timestamp ? new Date(localSnap.timestamp).getTime() : 0,
-              savedTransferSlot?.updatedAt ? new Date(savedTransferSlot.updatedAt).getTime() : 0
+              localSnap?.timestamp ? new Date(localSnap.timestamp).getTime() : 0
             );
-            const isLocalStrictlyNewer = Boolean(localSnap?.items?.length > 0 && ((localMs > 0 && cloudMs > 0 && localMs > cloudMs) || (localHasTransfers && !cloudHasTransfers)));
+            const isLocalStrictlyNewer = Boolean(localSnap?.items?.length > 0 && ((localMs > 0 && cloudMs > 0 && localMs > cloudMs && localHasTransfers) || (localHasTransfers && !cloudHasTransfers)));
             const shouldUpdateLocal = (!localSnap || !localSnap.items || localSnap.items.length === 0)
               ? true
               : Boolean(cloudMs > 0 && (localMs === 0 || cloudMs > localMs) && (!localHasTransfers || cloudHasTransfers));
