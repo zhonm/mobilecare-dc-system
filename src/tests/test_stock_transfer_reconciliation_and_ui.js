@@ -221,7 +221,40 @@ async function runTests() {
   assert.strictEqual(fallbackSearch[0].movementTrail, 'VER → MAG');
   console.log('  ✓ Passed Test 7: searchSerialsWithFullDetails & resolveSerialFullDetails consistently return F8Y6272C2QP18FKBK (VER → MAG, 661-21991)');
 
-  console.log('\n=== ALL 7 STOCK TRANSFER & INVENTORY VERIFICATION TESTS PASSED 100%! ===');
+  // 8. Test 8: Full-scale Compact Payload Quota Safety & Refresh Revert Guard Verification
+  console.log('Test 8: Verifying full-scale compactFixablySnapshot quota safety (<2.5MB) & refresh revert guards...');
+  const fullReconciled = await reconcileFixablyMultiFile({
+    siteStockContent: siteStock1Text,
+    kgbUsedContent: kgbUsedText,
+    stockTransferContent: transferCsvText,
+    options: {
+      currentDate: new Date('2026-10-09T00:00:00Z'),
+      expandQuantity: true,
+      sites: [
+        { id: 1, code: 'APP BHS', name: 'BONIFACIO HIGH STREET' },
+        { id: 2, code: 'ASP VN', name: 'VERTIS NORTH' },
+        { id: 3, code: 'APP RM', name: 'MAGNOLIA' }
+      ]
+    }
+  });
+  fullReconciled.slotsSignature = 'site_stock.csv|1000|kgb.csv|500|stock_transfer.csv|2000';
+  const fullCompacted = compactFixablySnapshot(fullReconciled);
+  const fullJsonStr = JSON.stringify(fullCompacted);
+  assert.ok(fullJsonStr.length < 2600000, `Compact snapshot must be < 2.6MB for LocalStorage & Supabase upsert, got ${fullJsonStr.length} bytes`);
+  assert.strictEqual(fullCompacted.slotsSignature, 'site_stock.csv|1000|kgb.csv|500|stock_transfer.csv|2000');
+
+  const rehydratedFull = hydrateFixablySnapshot(JSON.parse(fullJsonStr), [
+    { id: 1, code: 'APP BHS', name: 'BONIFACIO HIGH STREET' },
+    { id: 2, code: 'ASP VN', name: 'VERTIS NORTH' },
+    { id: 3, code: 'APP RM', name: 'MAGNOLIA' }
+  ]);
+  assert.strictEqual(rehydratedFull.items.length, fullReconciled.items.length, 'Hydrated unit count must match 100% before and after refresh');
+  assert.strictEqual(rehydratedFull.sites.length, fullReconciled.sites.length, 'Hydrated service point count must match 100% before and after refresh');
+  assert.strictEqual(rehydratedFull.transfers.length, 3404, 'Hydrated total transfers must remain 3,404');
+  assert.strictEqual(rehydratedFull.siteToSiteTransfers.length, 178, 'Hydrated site-to-site transfers must remain 178');
+  console.log(`  ✓ Passed Test 8: Compact payload is ${(fullJsonStr.length / 1024 / 1024).toFixed(2)} MB and preserves 100% of ${rehydratedFull.items.length} units, ${rehydratedFull.sites.length} sites, and ${rehydratedFull.siteToSiteTransfers.length} site-to-site transfers across refreshes`);
+
+  console.log('\n=== ALL 8 STOCK TRANSFER & INVENTORY VERIFICATION TESTS PASSED 100%! ===');
 }
 
 runTests().catch(err => {

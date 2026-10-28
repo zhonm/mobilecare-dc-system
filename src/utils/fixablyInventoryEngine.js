@@ -822,7 +822,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           (normSite.code === 'ILO' && (clean === 'ILO' || code === 'ASP ILO')) ||
           (normSite.code === 'COT' && (clean === 'COT' || code === 'ASP COT'));
       });
-      const siteCode = matchedSite?.code || normSite.code;
+      const siteCode = normSite.code;
       const siteName = matchedSite?.name || normSite.name;
       const siteId = matchedSite?.id || `site-${siteCode.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
       return { matchedSite, siteCode, siteName, siteId };
@@ -948,6 +948,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           id: `fixably-${i}-${cleanPn}-${cleanSerial || 'noserial'}${qtyUnits > 1 ? `-${q}` : ''}`,
           rowIndex: i,
           stockName: effectiveStockName,
+          originalStockName: rawStockName,
           stockType: stockClassification,
           rawStockType,
           partNumber: cleanPn,
@@ -958,6 +959,7 @@ export async function parseFixablyExportCsv(fileOrContent, options = {}) {
           raw_serial: cleanSerial,
           imei: rawImei || latestTr?.imei || '',
           lastReceivedDate: aging.receivedDate,
+          originalReceivedDate: originalReceivedDate || rawLastReceived,
           dateReceived: aging.receivedDate,
           received_at: aging.receivedDate,
           quantity: effectiveUnitQty,
@@ -1741,8 +1743,8 @@ export function exportSiteToExcel(siteData, items = []) {
 }
 
 /**
- * Strips redundant nested item arrays to create an ultra-compact payload (~2MB)
- * safe for Supabase PostgreSQL upserts (preventing HTTP 413 Payload Too Large).
+ * Strips redundant nested item arrays to create an ultra-compact payload (~1MB)
+ * safe for both LocalStorage (<5MB limit) and Supabase PostgreSQL upserts.
  */
 export function compactFixablySnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return snapshot;
@@ -1763,13 +1765,15 @@ export function compactFixablySnapshot(snapshot) {
       agingBracket: it.agingBracket || AGING_BRACKETS.IN_STOCK
     };
     if (it.stockName) item.stockName = it.stockName;
-    if (it.siteName) item.siteName = it.siteName;
-    if (it.siteId) item.siteId = it.siteId;
+    if (it.originalStockName && it.originalStockName !== it.stockName) {
+      item.originalStockName = it.originalStockName;
+    }
+    if (it.originalReceivedDate && it.originalReceivedDate !== item.lastReceivedDate) {
+      item.originalReceivedDate = it.originalReceivedDate;
+    }
     if (it.imei) item.imei = it.imei;
-    if (it.currentOwner || it.current_owner) item.currentOwner = it.currentOwner || it.current_owner;
-    if (Array.isArray(it.movementHistory) && it.movementHistory.length > 0) {
+    if (Array.isArray(it.movementHistory) && it.movementHistory.length > 1) {
       item.movementHistory = it.movementHistory;
-      item.movementTrail = it.movementTrail || it.movementHistory.join(' → ');
     }
     if (typeof it.transferCount === 'number' && it.transferCount > 0) {
       item.transferCount = it.transferCount;
@@ -1778,11 +1782,19 @@ export function compactFixablySnapshot(snapshot) {
       item.siteToSiteCount = it.siteToSiteCount;
     }
     if (it.isTransferred) item.isTransferred = true;
-    if (it.wasRelocatedByTransfer) item.wasRelocatedByTransfer = true;
-    if (it.wasSynthesizedFromTransfer) item.wasSynthesizedFromTransfer = true;
+    if (it.wasRelocatedByTransfer || it.relocatedByTransfer) item.wasRelocatedByTransfer = true;
+    if (it.wasSynthesizedFromTransfer || it.synthesizedFromTransfer) item.wasSynthesizedFromTransfer = true;
     if (it.previousSiteCode) item.previousSiteCode = it.previousSiteCode;
     if (it.previousReceivedDate) item.previousReceivedDate = it.previousReceivedDate;
-    if (it.latestTransfer) item.latestTransfer = it.latestTransfer;
+    if (it.latestTransfer && (it.isTransferred || it.wasRelocatedByTransfer || it.wasSynthesizedFromTransfer)) {
+      item.latestTransfer = {
+        receivedDate: it.latestTransfer.receivedDate || '',
+        fromSiteCode: it.latestTransfer.fromSiteCode || '',
+        toSiteCode: it.latestTransfer.toSiteCode || '',
+        transferType: it.latestTransfer.transferType || '',
+        isSiteToSite: Boolean(it.latestTransfer.isSiteToSite)
+      };
+    }
     if (it.isInvestigation || it.isFlaggedInvestigation) {
       item.isInvestigation = true;
       if (it.investigationDetails) item.investigationDetails = it.investigationDetails;
@@ -1790,15 +1802,38 @@ export function compactFixablySnapshot(snapshot) {
     return item;
   });
 
+  const compactTransfers = Array.isArray(snapshot.transfers)
+    ? snapshot.transfers.map(t => {
+        const ct = {
+          rowIndex: t.rowIndex,
+          fromStock: t.fromStock || '',
+          fromSiteCode: t.fromSiteCode || t.from_site || '',
+          toStock: t.toStock || '',
+          toSiteCode: t.toSiteCode || t.to_site || '',
+          receivedDate: t.receivedDate || t.received_at || '',
+          productCode: t.productCode || t.part_number || '',
+          productName: t.productName || t.description || '',
+          serialNumber: t.serialNumber || t.serial_number || '',
+          transferValue: t.transferValue ?? t.unit_value ?? 0,
+          transferType: t.transferType || 'DC-to-Site Transfer'
+        };
+        if (t.isSiteToSite) ct.isSiteToSite = true;
+        if (t.isDcToSite) ct.isDcToSite = true;
+        if (t.isReturnToDc) ct.isReturnToDc = true;
+        if (t.isAdjustment) ct.isAdjustment = true;
+        if (t.imei) ct.imei = t.imei;
+        if (t.quantity && t.quantity !== 1) ct.quantity = t.quantity;
+        return ct;
+      })
+    : [];
+
   return {
     fileName: snapshot.fileName || 'output.csv',
     timestamp: snapshot.timestamp || new Date().toISOString(),
+    slotsSignature: snapshot.slotsSignature || null,
     items: compactItems,
-    transfers: Array.isArray(snapshot.transfers) ? snapshot.transfers : [],
-    siteToSiteTransfers: Array.isArray(snapshot.siteToSiteTransfers) ? snapshot.siteToSiteTransfers : [],
-    dcToSiteTransfers: Array.isArray(snapshot.dcToSiteTransfers) ? snapshot.dcToSiteTransfers : [],
-    returnToDcTransfers: Array.isArray(snapshot.returnToDcTransfers) ? snapshot.returnToDcTransfers : [],
-    adjustmentTransfers: Array.isArray(snapshot.adjustmentTransfers) ? snapshot.adjustmentTransfers : [],
+    transfers: compactTransfers,
+    reconciledTransferMetrics: snapshot.reconciledTransferMetrics || null,
     transferStats: snapshot.transferStats || snapshot.batchSummary?.transferStats || null,
     validationSummary: snapshot.validationSummary || snapshot.batchSummary?.validation || null,
     globalMetrics: snapshot.globalMetrics || null,
@@ -1816,6 +1851,43 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
   }
 
   if (Array.isArray(snapshot.transfers) && snapshot.transfers.length > 0) {
+    snapshot.transfers = snapshot.transfers.map(t => {
+      const fromSiteCode = t.fromSiteCode || t.from_site || '';
+      const toSiteCode = t.toSiteCode || t.to_site || '';
+      const productCode = t.productCode || t.part_number || '';
+      const productName = t.productName || t.description || '';
+      const serialNumber = t.serialNumber || t.serial_number || '';
+      const receivedDate = t.receivedDate || t.received_at || '';
+      const transferValue = t.transferValue ?? t.unit_value ?? 0;
+      const transferType = t.transferType || 'DC_TO_SITE';
+      return {
+        id: t.id || `transfer-${t.rowIndex || 0}-${serialNumber || 'noserial'}`,
+        ...t,
+        fromSiteCode,
+        fromSiteName: t.fromSiteName || fromSiteCode,
+        from_site: fromSiteCode,
+        toSiteCode,
+        toSiteName: t.toSiteName || toSiteCode,
+        to_site: toSiteCode,
+        productCode,
+        part_number: productCode,
+        productName,
+        description: productName,
+        serialNumber,
+        serial_number: serialNumber,
+        receivedDate,
+        received_at: receivedDate,
+        transferValue,
+        unit_value: transferValue,
+        quantity: t.quantity || 1,
+        transferType,
+        currentOwner: t.currentOwner || `${toSiteCode || 'DC'}_MSPI-OWNED`,
+        isDcToSite: Boolean(t.isDcToSite || transferType === 'DC-to-Site Transfer' || transferType === 'DC_TO_SITE'),
+        isSiteToSite: Boolean(t.isSiteToSite || transferType === 'Site-to-Site Transfer' || transferType === 'SITE_TO_SITE'),
+        isReturnToDc: Boolean(t.isReturnToDc || transferType === 'Return to DC' || transferType === 'RETURN_TO_DC'),
+        isAdjustment: Boolean(t.isAdjustment || transferType.includes('Adjustment') || transferType === 'INVENTORY_ADJUSTMENT')
+      };
+    });
     if (!Array.isArray(snapshot.siteToSiteTransfers) || snapshot.siteToSiteTransfers.length === 0) {
       snapshot.siteToSiteTransfers = snapshot.transfers.filter(t => t.isSiteToSite);
     }
@@ -1863,7 +1935,9 @@ export function hydrateFixablySnapshot(snapshot, sitesList = []) {
       it.isSerialized = it.serialNumber && !it.serialNumber.startsWith('Non-serialized');
     }
 
-    const siteCode = (it.siteCode || it.site_code || 'UNKNOWN').toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    const normSite = normalizeSite(it.cleanSiteCode || it.siteCode || it.site_code || it.stockName || 'UNKNOWN');
+    const siteCode = normSite.code || 'UNKNOWN';
+    it.siteCode = siteCode;
     it.cleanSiteCode = siteCode;
     if (it.wasRelocatedByTransfer || it.relocatedByTransfer) {
       it.relocatedByTransfer = true;

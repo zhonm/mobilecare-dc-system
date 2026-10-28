@@ -330,16 +330,22 @@ export function AppProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    const applyIfNewerAndComplete = (prev, incoming) => {
+      if (!incoming?.items?.length) return prev;
+      const prevHasTr = Array.isArray(prev?.transfers) && prev.transfers.length > 0;
+      const incHasTr = Array.isArray(incoming?.transfers) && incoming.transfers.length > 0;
+      if (prevHasTr && !incHasTr) return prev;
+      const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
+      const incomingMs = incoming?.timestamp ? new Date(incoming.timestamp).getTime() : 0;
+      if (prevMs > incomingMs && (prevHasTr || !incHasTr)) return prev;
+      return hydrateFixablySnapshot(incoming);
+    };
+
     const handleSnapshotStorage = (e) => {
       if (e.key === 'mdc_fixably_snapshot' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          setFixablySnapshot(prev => {
-            const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
-            const incomingMs = parsed?.timestamp ? new Date(parsed.timestamp).getTime() : 0;
-            if (prevMs > incomingMs) return prev;
-            return parsed;
-          });
+          setFixablySnapshot(prev => applyIfNewerAndComplete(prev, parsed));
         } catch (err) {}
       }
     };
@@ -350,22 +356,12 @@ export function AppProvider({ children }) {
       bc.onmessage = async (msg) => {
         if (msg.data?.type === 'FIXABLY_SNAPSHOT_UPDATED') {
           if (msg.data?.payload?.snapshot) {
-            setFixablySnapshot(prev => {
-              const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
-              const incomingMs = msg.data.payload.snapshot?.timestamp ? new Date(msg.data.payload.snapshot.timestamp).getTime() : 0;
-              if (prevMs > incomingMs) return prev;
-              return msg.data.payload.snapshot;
-            });
+            setFixablySnapshot(prev => applyIfNewerAndComplete(prev, msg.data.payload.snapshot));
           } else {
             try {
               const idb = await dbStorage.getItem('mdc_fixably_snapshot');
               if (idb?.items?.length) {
-                setFixablySnapshot(prev => {
-                  const prevMs = prev?.timestamp ? new Date(prev.timestamp).getTime() : 0;
-                  const incomingMs = idb?.timestamp ? new Date(idb.timestamp).getTime() : 0;
-                  if (prevMs > incomingMs) return prev;
-                  return idb;
-                });
+                setFixablySnapshot(prev => applyIfNewerAndComplete(prev, idb));
               }
             } catch (e) {}
           }

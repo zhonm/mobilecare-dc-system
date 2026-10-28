@@ -104,17 +104,28 @@ export default function FixablyInventoryDashboard({
 
   const [localSnapshot, setLocalSnapshot] = useState(propSnapshot || null);
   const snapshotTimestampRef = useRef(propSnapshot?.timestamp || '');
+  const snapshotHasTransfersRef = useRef(Boolean(propSnapshot?.transfers?.length > 0));
+  const sitesRef = useRef(sites);
+  useEffect(() => {
+    sitesRef.current = sites;
+  }, [sites]);
 
-  // Keep snapshotTimestampRef synchronized whenever localSnapshot updates
+  // Keep snapshotTimestampRef & snapshotHasTransfersRef synchronized whenever localSnapshot updates
   useEffect(() => {
     if (localSnapshot?.timestamp) {
       snapshotTimestampRef.current = localSnapshot.timestamp;
     }
-  }, [localSnapshot?.timestamp]);
+    if (Array.isArray(localSnapshot?.transfers)) {
+      snapshotHasTransfersRef.current = localSnapshot.transfers.length > 0;
+    }
+  }, [localSnapshot?.timestamp, localSnapshot?.transfers]);
 
   const setSnapshot = useCallback((val) => {
     if (val?.timestamp) {
       snapshotTimestampRef.current = val.timestamp;
+    }
+    if (Array.isArray(val?.transfers)) {
+      snapshotHasTransfersRef.current = val.transfers.length > 0;
     }
     setLocalSnapshot(val);
     if (typeof propSetSnapshot === 'function') {
@@ -122,25 +133,35 @@ export default function FixablyInventoryDashboard({
     }
   }, [propSetSnapshot]);
 
-  // Synchronize from parent propSnapshot ONLY if propSnapshot is newer or equal
+  // Synchronize from parent propSnapshot ONLY if propSnapshot is newer/equal AND does not strip transfers
   useEffect(() => {
-    if (propSnapshot) {
+    if (propSnapshot && Array.isArray(propSnapshot.items) && propSnapshot.items.length > 0) {
+      const incomingHasTransfers = Array.isArray(propSnapshot.transfers) && propSnapshot.transfers.length > 0;
+      if (snapshotHasTransfersRef.current && !incomingHasTransfers) {
+        // Never allow an unreconciled parent snapshot (0 transfers) to overwrite a reconciled local snapshot
+        return;
+      }
       const incomingMs = propSnapshot.timestamp ? new Date(propSnapshot.timestamp).getTime() : 0;
       const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
-      if (incomingMs >= currentMs || !currentMs) {
+      if (incomingMs >= currentMs || !currentMs || (!snapshotHasTransfersRef.current && incomingHasTransfers)) {
         snapshotTimestampRef.current = propSnapshot.timestamp || '';
+        snapshotHasTransfersRef.current = incomingHasTransfers;
         setLocalSnapshot(propSnapshot);
       }
     }
   }, [propSnapshot]);
 
-  // Evaluate active snapshot by timestamp to guarantee newly uploaded data is never shadowed
+  // Evaluate active snapshot by transfer-completeness and timestamp to guarantee reconciled data is never shadowed
   const snapshot = useMemo(() => {
     if (!propSnapshot) return localSnapshot;
     if (!localSnapshot) return propSnapshot;
+    const localHasTransfers = Array.isArray(localSnapshot.transfers) && localSnapshot.transfers.length > 0;
+    const propHasTransfers = Array.isArray(propSnapshot.transfers) && propSnapshot.transfers.length > 0;
+    if (localHasTransfers && !propHasTransfers) return localSnapshot;
+    if (propHasTransfers && !localHasTransfers) return propSnapshot;
     const propMs = propSnapshot.timestamp ? new Date(propSnapshot.timestamp).getTime() : 0;
     const localMs = localSnapshot.timestamp ? new Date(localSnapshot.timestamp).getTime() : 0;
-    return localMs > propMs ? localSnapshot : propSnapshot;
+    return localMs >= propMs ? localSnapshot : propSnapshot;
   }, [propSnapshot, localSnapshot]);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -260,7 +281,80 @@ export default function FixablyInventoryDashboard({
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  // Push compact snapshot to Supabase Cloud (<2MB) and broadcast to peers
+  // Deterministic fingerprint of the user's uploaded 3-slot files
+  const computeSlotsSignature = useCallback((siteSlot, kgbSlot, transferSlot) => {
+    if (!siteSlot?.content && !transferSlot?.content) return null;
+    return [
+      siteSlot?.name || '',
+      siteSlot?.size || (siteSlot?.content?.length || 0),
+      kgbSlot?.name || '',
+      kgbSlot?.size || (kgbSlot?.content?.length || 0),
+      transferSlot?.name || '',
+      transferSlot?.size || (transferSlot?.content?.length || 0)
+    ].join('|');
+  }, []);
+
+  // Multi-Tier Local Persistence Helper: saves timestamps first, then IndexedDB, then quota-safe LocalStorage
+  const persistFixablySnapshotLocally = useCallback(async (snapToPersist) => {
+    if (!snapToPersist || !Array.isArray(snapToPersist.items) || snapToPersist.items.length === 0) return;
+    const effectiveTs = snapToPersist.timestamp || new Date().toISOString();
+    snapToPersist.timestamp = effectiveTs;
+    snapshotTimestampRef.current = effectiveTs;
+    if (Array.isArray(snapToPersist.transfers)) {
+      snapshotHasTransfersRef.current = snapToPersist.transfers.length > 0;
+    }
+
+    // 1. Always persist timestamps first so a localStorage payload quota limit never leaves stale timestamps
+    try {
+      localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTs);
+      localStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+    } catch (e) {}
+    try {
+      await dbStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+    } catch (e) {}
+
+    // 2. Persist full hydrated snapshot in IndexedDB (no 5MB limit)
+    try {
+      await dbStorage.setItem('mdc_fixably_snapshot', snapToPersist);
+    } catch (e) {
+      console.warn('dbStorage.setItem mdc_fixably_snapshot note:', e);
+    }
+
+    // 3. Persist permanent archival backup in IndexedDB STORE_SAVED_RECORDS
+    try {
+      await dbStorage.putSavedRecord({
+        id: 'master_fixably_inventory_snapshot',
+        record_type: 'fixably_snapshot',
+        snapshot: snapToPersist,
+        created_at: effectiveTs
+      });
+    } catch (e) {
+      console.warn('dbStorage.putSavedRecord master_fixably_inventory_snapshot note:', e);
+    }
+
+    // 4. Persist compact snapshot in localStorage with automatic slim fallback if browser 5MB quota is tight
+    try {
+      const compact = compactFixablySnapshot(snapToPersist);
+      localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compact));
+    } catch (quotaErr) {
+      try {
+        const compact = compactFixablySnapshot(snapToPersist);
+        const slimCompact = {
+          ...compact,
+          transfers: Array.isArray(compact.transfers)
+            ? compact.transfers.filter(t => t.transferType === 'SITE_TO_SITE' || t.isSiteToSite)
+            : []
+        };
+        localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(slimCompact));
+      } catch (fallbackErr) {
+        try {
+          localStorage.removeItem('mdc_fixably_snapshot');
+        } catch (e) {}
+      }
+    }
+  }, []);
+
+  // Push compact snapshot to Supabase Cloud (<2.5MB) and broadcast to peers
   const syncSnapshotToCloud = useCallback(async (snapToSync) => {
     if (!supabase || !snapToSync?.items?.length) return false;
     try {
@@ -393,9 +487,22 @@ export default function FixablyInventoryDashboard({
           }
         }
 
+        const currentSlotsSignature = computeSlotsSignature(savedSiteStock, savedKgb, savedTransfer);
+
         let cached = await dbStorage.getItem('mdc_fixably_snapshot');
 
-        // Secondary fallback to localStorage
+        // Secondary fallback to permanent saved records archive in IndexedDB
+        if (!cached || !cached.items || cached.items.length === 0) {
+          try {
+            const savedRecs = await dbStorage.getAllSavedRecords();
+            const snapRec = savedRecs.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
+            if (snapRec && snapRec.snapshot && snapRec.snapshot.items?.length > 0) {
+              cached = snapRec.snapshot;
+            }
+          } catch (e) {}
+        }
+
+        // Tertiary fallback to localStorage
         if (!cached || !cached.items || cached.items.length === 0) {
           try {
             const rawLocal = localStorage.getItem('mdc_fixably_snapshot');
@@ -403,20 +510,8 @@ export default function FixablyInventoryDashboard({
           } catch (e) {}
         }
 
-        // Tertiary fallback to permanent saved records archive
-        if (!cached || !cached.items || cached.items.length === 0) {
-          try {
-            const savedRecs = await dbStorage.getAllSavedRecords();
-            const snapRec = savedRecs.find(r => r.id === 'master_fixably_inventory_snapshot' || r.record_type === 'fixably_snapshot');
-            if (snapRec && snapRec.snapshot && snapRec.snapshot.items?.length > 0) {
-              cached = snapRec.snapshot;
-              await dbStorage.setItem('mdc_fixably_snapshot', cached);
-            }
-          } catch (e) {}
-        }
-
         // Check if any uploaded slot file (Site Stock, KGB, or Stock Transfer) is newer than the snapshot,
-        // or if the cached snapshot lacks stock transfer records
+        // or if the cached snapshot does not match the uploaded slots / lacks uploaded stock transfer records
         const siteSlotMs = savedSiteStock?.updatedAt ? new Date(savedSiteStock.updatedAt).getTime() : 0;
         const kgbSlotMs = savedKgb?.updatedAt ? new Date(savedKgb.updatedAt).getTime() : 0;
         const transferSlotMs = savedTransfer?.updatedAt ? new Date(savedTransfer.updatedAt).getTime() : 0;
@@ -424,8 +519,14 @@ export default function FixablyInventoryDashboard({
         const cachedUpdatedAt = cached?.timestamp ? new Date(cached.timestamp).getTime() : 0;
         const isAnySlotStrictlyNewer = Boolean(maxSlotMs && (!cachedUpdatedAt || maxSlotMs > cachedUpdatedAt));
         const isMissingTransferRecords = Boolean(
+          savedTransfer?.content &&
           cached?.items?.length > 0 &&
           (!Array.isArray(cached.transfers) || cached.transfers.length === 0)
+        );
+        const isSlotSignatureMismatch = Boolean(
+          savedSiteStock?.content &&
+          currentSlotsSignature &&
+          cached?.slotsSignature !== currentSlotsSignature
         );
 
         const needsDiscrepancyHeal = Boolean(
@@ -445,9 +546,9 @@ export default function FixablyInventoryDashboard({
             : null
         );
 
-        // Auto-reconcile from saved slots or cached items whenever a newer slot (including Stock Transfer) exists or transfers are missing
+        // Auto-reconcile from saved slots whenever uploaded slots exist and snapshot is missing, older, or out of sync with slots
         if (
-          (needsDiscrepancyHeal || isAnySlotStrictlyNewer || isMissingTransferRecords || !cached || !cached.items || cached.items.length === 0) &&
+          (isSlotSignatureMismatch || needsDiscrepancyHeal || isAnySlotStrictlyNewer || isMissingTransferRecords || !cached || !cached.items || cached.items.length === 0) &&
           effectiveSiteStockContent
         ) {
           try {
@@ -455,22 +556,15 @@ export default function FixablyInventoryDashboard({
               siteStockContent: effectiveSiteStockContent,
               kgbUsedContent: savedKgb?.content || null,
               stockTransferContent: effectiveTransferContent,
-              options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+              options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
             });
 
             if (autoReconciled.success && autoReconciled.items?.length > 0) {
+              if (currentSlotsSignature) {
+                autoReconciled.slotsSignature = currentSlotsSignature;
+              }
               cached = autoReconciled;
-              await dbStorage.setItem('mdc_fixably_snapshot', cached);
-              try {
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cached)));
-                localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
-              } catch (e) {}
-              await dbStorage.putSavedRecord({
-                id: 'master_fixably_inventory_snapshot',
-                record_type: 'fixably_snapshot',
-                snapshot: cached,
-                created_at: cached.timestamp || new Date().toISOString()
-              });
+              await persistFixablySnapshotLocally(cached);
               if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
                 syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
               }
@@ -483,7 +577,7 @@ export default function FixablyInventoryDashboard({
 
         // Render available local/cached snapshot immediately for instant UI feedback without blank screen
         if (cached && cached.items && cached.items.length > 0) {
-          cached = hydrateFixablySnapshot(cached, sites);
+          cached = hydrateFixablySnapshot(cached, sitesRef.current);
           if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
             syncFixablyTransfersToHistory(cached.transfers, currentUser?.email || 'Auto-Sync').catch(() => {});
           }
@@ -494,7 +588,7 @@ export default function FixablyInventoryDashboard({
           }
         }
 
-        // Supabase Cloud Multi-User Synchronization: Ensure latest cloud snapshot overrides stale local cache
+        // Supabase Cloud Multi-User Synchronization: Ensure latest complete cloud snapshot syncs without overwriting newer/reconciled local slots
         if (supabase) {
           try {
             const { data: cloudRec, error: cloudErr } = await supabase
@@ -509,10 +603,21 @@ export default function FixablyInventoryDashboard({
               const localTimestamp = cached?.timestamp || snapshotTimestampRef.current || localStorage.getItem('mdc_fixably_snapshot_timestamp') || '';
               const localMs = localTimestamp ? new Date(localTimestamp).getTime() : 0;
 
-              // Only apply cloud snapshot if cloud is strictly newer AND local slot files weren't uploaded more recently
-              if ((!cached || !cached.items || cached.items.length === 0 || (cloudMs > 0 && cloudMs > localMs)) && cloudMs > maxSlotMs) {
+              const localHasTransfers = Boolean((Array.isArray(cached?.transfers) && cached.transfers.length > 0) || savedTransfer?.content);
+              const cloudHasTransfers = Boolean(Array.isArray(cloudRec.snapshot_data.transfers) && cloudRec.snapshot_data.transfers.length > 0);
+              const localMatchedUploadedSlots = Boolean(savedSiteStock?.content && currentSlotsSignature && cached?.slotsSignature === currentSlotsSignature);
+
+              // Guard 1: If local has reconciled transfers (or uploaded slots) and cloud is missing transfers or older, heal cloud instead of overwriting local
+              if (cached?.items?.length > 0 && ((localHasTransfers && !cloudHasTransfers) || (localMs > cloudMs))) {
+                await syncSnapshotToCloud(cached);
+              }
+              // Guard 2: Only apply cloud snapshot if local is empty OR (cloud is strictly newer AND has transfers if local has transfers AND local uploaded slots are not already authoritative)
+              else if (
+                (!cached || !cached.items || cached.items.length === 0) ||
+                (cloudMs > 0 && cloudMs > localMs && cloudMs > maxSlotMs && (!localHasTransfers || cloudHasTransfers) && !localMatchedUploadedSlots)
+              ) {
                 console.info('[FixablyDashboard] Synchronizing with newer cloud snapshot:', cloudTimestamp, 'vs local:', localTimestamp);
-                let cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+                let cloudHydrated = hydrateFixablySnapshot(cloudRec.snapshot_data, sitesRef.current);
                 if (cloudTimestamp && !cloudHydrated.timestamp) {
                   cloudHydrated.timestamp = cloudTimestamp;
                 }
@@ -522,26 +627,16 @@ export default function FixablyInventoryDashboard({
                     siteStockContent: savedSiteStock?.content || serializeSnapshotItemsToCsv(cloudHydrated.items),
                     kgbUsedContent: savedKgb?.content || null,
                     stockTransferContent: savedTransfer?.content || effectiveTransferContent,
-                    options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+                    options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
                   });
                   if (enrichedCloud.success && enrichedCloud.items?.length > 0) {
+                    if (currentSlotsSignature) enrichedCloud.slotsSignature = currentSlotsSignature;
                     cloudHydrated = enrichedCloud;
+                    await syncSnapshotToCloud(cloudHydrated);
                   }
                 }
                 cached = cloudHydrated;
-                await dbStorage.setItem('mdc_fixably_snapshot', cloudHydrated);
-                try {
-                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cloudHydrated)));
-                  localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp || cloudHydrated.timestamp || '');
-                  localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
-                  await dbStorage.setItem('mdc_fixably_updated_at', cloudTimestamp || cloudHydrated.timestamp || '');
-                } catch (e) {}
-                await dbStorage.putSavedRecord({
-                  id: 'master_fixably_inventory_snapshot',
-                  record_type: 'fixably_snapshot',
-                  snapshot: cloudHydrated,
-                  created_at: cloudTimestamp || cloudHydrated.timestamp || new Date().toISOString()
-                });
+                await persistFixablySnapshotLocally(cloudHydrated);
                 if (Array.isArray(cloudHydrated.transfers) && cloudHydrated.transfers.length > 0) {
                   syncFixablyTransfersToHistory(cloudHydrated.transfers, currentUser?.email || 'Cloud-Sync').catch(() => {});
                 }
@@ -552,63 +647,17 @@ export default function FixablyInventoryDashboard({
                 }
                 return;
               }
+            } else if (!cloudErr && !cloudRec?.snapshot_data?.items?.length && cached?.items?.length > 0) {
+              await syncSnapshotToCloud(cached);
             }
           } catch (cloudFetchErr) {
             console.warn('Fixably cloud synchronization check note:', cloudFetchErr);
           }
         }
 
-        // Quaternary fallback: if local cache was already populated and cloud was not newer, we are done
+        // If local cache was already populated, we are done
         if (cached && cached.items && cached.items.length > 0) {
-          return;
-        }
-
-        // Quinary auto-seed fallback: ONLY if no local, cloud, or user-uploaded file exists
-        if ((!cached || !cached.items || cached.items.length === 0) && !savedSiteStock?.content && typeof fetch !== 'undefined') {
-          try {
-            const resp = await fetch('/output.csv');
-            if (resp.ok) {
-              const csvText = await resp.text();
-              if (csvText && csvText.includes('Stock Name')) {
-                let kgbText = null;
-                let transferText = null;
-                try {
-                  const kResp = await fetch('/kgb_used.csv');
-                  if (kResp.ok) kgbText = await kResp.text();
-                } catch (e) {}
-                try {
-                  const tResp = await fetch('/stock_transfer.csv');
-                  if (tResp.ok) transferText = await tResp.text();
-                } catch (e) {}
-
-                const autoReconciled = await reconcileFixablyMultiFile({
-                  siteStockContent: csvText,
-                  kgbUsedContent: kgbText,
-                  stockTransferContent: transferText,
-                  options: { sites, currentDate: new Date('2026-10-09T00:00:00Z') }
-                });
-
-                if (autoReconciled.success && autoReconciled.items?.length > 0) {
-                  cached = autoReconciled;
-                  await dbStorage.setItem('mdc_fixably_snapshot', cached);
-                  try {
-                    localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cached));
-                    localStorage.setItem('mdc_fixably_snapshot_timestamp', cached.timestamp);
-                  } catch (e) {}
-                  if (Array.isArray(cached.transfers) && cached.transfers.length > 0) {
-                    syncFixablyTransfersToHistory(cached.transfers, 'System Auto-Seed').catch(() => {});
-                  }
-                  await syncSnapshotToCloud(cached);
-                }
-              }
-            }
-          } catch (autoSeedErr) {
-            console.warn('Auto-seed note:', autoSeedErr);
-          }
-        }
-
-        if (cached && cached.items && cached.items.length > 0) {
-          cached = hydrateFixablySnapshot(cached, sites);
+          cached = hydrateFixablySnapshot(cached, sitesRef.current);
           if (isMounted) {
             setSnapshot(cached);
             setIsLoading(false);
@@ -633,7 +682,7 @@ export default function FixablyInventoryDashboard({
     return () => {
       isMounted = false;
     };
-  }, [sites, syncSnapshotToCloud, setSnapshot, serializeSnapshotItemsToCsv, currentUser?.email]);
+  }, [computeSlotsSignature, persistFixablySnapshotLocally, syncSnapshotToCloud, setSnapshot, serializeSnapshotItemsToCsv, currentUser?.email]);
 
   // Real-time multi-user & cross-device snapshot synchronization listener
   useEffect(() => {
@@ -642,6 +691,11 @@ export default function FixablyInventoryDashboard({
 
     const handleApplySyncedSnapshot = (incomingSnapshot) => {
       if (incomingSnapshot && Array.isArray(incomingSnapshot.items) && incomingSnapshot.items.length > 0) {
+        const incomingHasTransfers = Array.isArray(incomingSnapshot.transfers) && incomingSnapshot.transfers.length > 0;
+        if (snapshotHasTransfersRef.current && !incomingHasTransfers) {
+          console.log('[FixablyDashboard] Ignoring incoming snapshot that lacks transfer records.');
+          return;
+        }
         const incomingMs = incomingSnapshot.timestamp ? new Date(incomingSnapshot.timestamp).getTime() : 0;
         const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
         if (currentMs > 0 && incomingMs > 0 && incomingMs < currentMs) {
@@ -681,7 +735,7 @@ export default function FixablyInventoryDashboard({
       if (e.key === 'mdc_fixably_snapshot' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          handleApplySyncedSnapshot(parsed);
+          handleApplySyncedSnapshot(hydrateFixablySnapshot(parsed, sitesRef.current));
         } catch (err) {}
       }
     };
@@ -729,29 +783,22 @@ export default function FixablyInventoryDashboard({
             }
 
             if (snapData && Array.isArray(snapData.items) && snapData.items.length > 0) {
+              const incomingHasTransfers = Array.isArray(snapData.transfers) && snapData.transfers.length > 0;
+              if (snapshotHasTransfersRef.current && !incomingHasTransfers) {
+                console.log('[FixablyDashboard Realtime] Ignoring incomplete cloud payload (0 transfers).');
+                return;
+              }
               const remoteMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
               const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
               if (currentMs > 0 && remoteMs > 0 && remoteMs < currentMs) {
                 console.log('[FixablyDashboard Realtime] Ignoring older cloud payload:', remoteTimestamp, 'vs active:', snapshotTimestampRef.current);
                 return;
               }
-              const newSnapshot = hydrateFixablySnapshot(snapData, sites);
+              const newSnapshot = hydrateFixablySnapshot(snapData, sitesRef.current);
               if (remoteTimestamp && !newSnapshot.timestamp) {
                 newSnapshot.timestamp = remoteTimestamp;
               }
-              await dbStorage.setItem('mdc_fixably_snapshot', newSnapshot);
-              try {
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(newSnapshot));
-                localStorage.setItem('mdc_fixably_snapshot_timestamp', remoteTimestamp || newSnapshot.timestamp || '');
-                localStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
-                await dbStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
-              } catch (e) {}
-              await dbStorage.putSavedRecord({
-                id: 'master_fixably_inventory_snapshot',
-                record_type: 'fixably_snapshot',
-                snapshot: newSnapshot,
-                created_at: remoteTimestamp || newSnapshot.timestamp || new Date().toISOString()
-              });
+              await persistFixablySnapshotLocally(newSnapshot);
               handleApplySyncedSnapshot(newSnapshot);
             }
           }
@@ -772,19 +819,15 @@ export default function FixablyInventoryDashboard({
                   .eq('id', 'master_fixably_inventory_snapshot')
                   .maybeSingle();
                 if (cloudRec?.snapshot_data && Array.isArray(cloudRec.snapshot_data.items)) {
+                  const incomingHasTransfers = Array.isArray(cloudRec.snapshot_data.transfers) && cloudRec.snapshot_data.transfers.length > 0;
+                  if (snapshotHasTransfersRef.current && !incomingHasTransfers) return;
                   const remoteTimestamp = cloudRec.updated_at || cloudRec.snapshot_data.timestamp || '';
                   const remoteMs = remoteTimestamp ? new Date(remoteTimestamp).getTime() : 0;
                   const currentMs = snapshotTimestampRef.current ? new Date(snapshotTimestampRef.current).getTime() : 0;
                   if (currentMs > 0 && remoteMs > 0 && remoteMs < currentMs) return;
-                  const newSnapshot = hydrateFixablySnapshot(cloudRec.snapshot_data, sites);
+                  const newSnapshot = hydrateFixablySnapshot(cloudRec.snapshot_data, sitesRef.current);
                   if (remoteTimestamp && !newSnapshot.timestamp) newSnapshot.timestamp = remoteTimestamp;
-                  await dbStorage.setItem('mdc_fixably_snapshot', newSnapshot);
-                  try {
-                    localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(newSnapshot));
-                    localStorage.setItem('mdc_fixably_snapshot_timestamp', remoteTimestamp || newSnapshot.timestamp || '');
-                    localStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
-                    await dbStorage.setItem('mdc_fixably_updated_at', remoteTimestamp || newSnapshot.timestamp || '');
-                  } catch (e) {}
+                  await persistFixablySnapshotLocally(newSnapshot);
                   handleApplySyncedSnapshot(newSnapshot);
                 }
               } catch (e) {}
@@ -813,14 +856,11 @@ export default function FixablyInventoryDashboard({
                 .eq('id', 'master_fixably_inventory_snapshot')
                 .maybeSingle();
               if (fullDoc?.snapshot_data?.items) {
-                const refreshed = hydrateFixablySnapshot(fullDoc.snapshot_data, sites);
+                const incomingHasTransfers = Array.isArray(fullDoc.snapshot_data.transfers) && fullDoc.snapshot_data.transfers.length > 0;
+                if (snapshotHasTransfersRef.current && !incomingHasTransfers) return;
+                const refreshed = hydrateFixablySnapshot(fullDoc.snapshot_data, sitesRef.current);
                 if (fullDoc.updated_at && !refreshed.timestamp) refreshed.timestamp = fullDoc.updated_at;
-                await dbStorage.setItem('mdc_fixably_snapshot', refreshed);
-                try {
-                  localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(refreshed));
-                  localStorage.setItem('mdc_fixably_snapshot_timestamp', fullDoc.updated_at);
-                  localStorage.setItem('mdc_fixably_updated_at', fullDoc.updated_at);
-                } catch (e) {}
+                await persistFixablySnapshotLocally(refreshed);
                 handleApplySyncedSnapshot(refreshed);
               }
             }
@@ -845,7 +885,7 @@ export default function FixablyInventoryDashboard({
         supabase.removeChannel(realtimeChannel).catch(() => {});
       }
     };
-  }, [sites, setSnapshot, currentUser?.email, currentUser?.id]);
+  }, [persistFixablySnapshotLocally, setSnapshot, currentUser?.email, currentUser?.id]);
 
   // Core reconciliation & synchronization runner (usable both from automatic upload trigger and manual button)
   const executeReconciliationAndSync = useCallback(async ({
@@ -867,7 +907,7 @@ export default function FixablyInventoryDashboard({
         siteStockContent: siteStockText,
         kgbUsedContent: kgbText,
         stockTransferContent: transferText,
-        options: { sites, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
+        options: { sites: sitesRef.current, currentDate: new Date('2026-10-09T00:00:00Z'), expandQuantity: true }
       });
 
       if (!reconciled.success) {
@@ -893,29 +933,28 @@ export default function FixablyInventoryDashboard({
       }
       snapshotTimestampRef.current = effectiveTs;
 
-      // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
-      await dbStorage.setItem('mdc_fixably_snapshot', reconciled);
+      // Stamp deterministic signature of the active uploaded slot files
       try {
-        localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(reconciled)));
-        localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveTs);
-        localStorage.setItem('mdc_fixably_updated_at', effectiveTs);
-        await dbStorage.setItem('mdc_fixably_updated_at', effectiveTs);
+        const [s1, s2, s3] = await Promise.all([
+          dbStorage.getItem('mdc_uploaded_slot_site_stock'),
+          dbStorage.getItem('mdc_uploaded_slot_kgb_used'),
+          dbStorage.getItem('mdc_uploaded_slot_stock_transfer')
+        ]);
+        const sig = computeSlotsSignature(s1, s2, s3);
+        if (sig) reconciled.slotsSignature = sig;
+      } catch (e) {}
+
+      // Multi-Tier Persistence: IndexedDB App State, LocalStorage, and Permanent Archive
+      await persistFixablySnapshotLocally(reconciled);
+      try {
         const existingBatches = (await dbStorage.getItem('inventory_sync_batches')) || [];
         const updatedBatches = [
           reconciled.batchSummary,
           ...(Array.isArray(existingBatches) ? existingBatches.slice(0, 19) : [])
         ];
         await dbStorage.setItem('inventory_sync_batches', updatedBatches);
-
-        // Permanent archival backup in STORE_SAVED_RECORDS (immune to cache clearance)
-        await dbStorage.putSavedRecord({
-          id: 'master_fixably_inventory_snapshot',
-          record_type: 'fixably_snapshot',
-          snapshot: reconciled,
-          created_at: effectiveTs
-        });
       } catch (e) {
-        console.warn('Fixably snapshot backup note:', e);
+        console.warn('Fixably snapshot batch backup note:', e);
       }
 
       // Synchronize all parsed Fixably stock transfers into the global Part Transfer History Ledger
@@ -937,7 +976,7 @@ export default function FixablyInventoryDashboard({
         setIsDropzoneOpen(false);
       }
 
-      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2MB) to Supabase Cloud
+      // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2.5MB) to Supabase Cloud
       await syncSnapshotToCloud(reconciled);
 
       // Synchronize with application active stock (inventoryUnits)
@@ -1006,7 +1045,6 @@ export default function FixablyInventoryDashboard({
       setParseProgress(null);
     }
   }, [
-    sites,
     appendActivityLog,
     showToast,
     currentUser?.fullName,
@@ -1016,6 +1054,8 @@ export default function FixablyInventoryDashboard({
     syncSnapshotToCloud,
     syncWithAppInventory,
     batchAddScanInUnits,
+    computeSlotsSignature,
+    persistFixablySnapshotLocally,
     slots.stock_transfer?.name,
     slots.site_stock?.name
   ]);

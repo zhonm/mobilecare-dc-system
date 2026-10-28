@@ -838,22 +838,34 @@ export function useCloudSync({
           // If remote updated_at matches local cache, skip payload download entirely.
           const remoteFixablyHeader = heavyHeaders.find(h => h.id === 'master_fixably_inventory_snapshot');
           if (remoteFixablyHeader) {
-            let localFixablyUpdatedAt = null;
-            try {
-              localFixablyUpdatedAt = localStorage.getItem('mdc_fixably_snapshot_timestamp') || localStorage.getItem('mdc_fixably_updated_at');
-            } catch (e) {}
-            if (!localFixablyUpdatedAt) {
-              try {
-                const cachedSnap = await dbStorage.getItem('mdc_fixably_snapshot');
-                localFixablyUpdatedAt = cachedSnap?.timestamp;
-              } catch (e) {}
-            }
             let cachedFixably = null;
-            try { cachedFixably = await dbStorage.getItem('mdc_fixably_snapshot'); } catch (e) {}
+            let savedTransferSlot = null;
+            let savedSiteStockSlot = null;
+            try {
+              [cachedFixably, savedTransferSlot, savedSiteStockSlot] = await Promise.all([
+                dbStorage.getItem('mdc_fixably_snapshot'),
+                dbStorage.getItem('mdc_uploaded_slot_stock_transfer'),
+                dbStorage.getItem('mdc_uploaded_slot_site_stock')
+              ]);
+            } catch (e) {}
             const hasLocalFixably = Boolean(cachedFixably && cachedFixably.items && cachedFixably.items.length > 0);
+            const localHasTransfers = Boolean((Array.isArray(cachedFixably?.transfers) && cachedFixably.transfers.length > 0) || savedTransferSlot?.content);
+
+            let lsTimestamp = null;
+            try {
+              lsTimestamp = localStorage.getItem('mdc_fixably_snapshot_timestamp') || localStorage.getItem('mdc_fixably_updated_at');
+            } catch (e) {}
+
+            const lsMs = lsTimestamp ? new Date(lsTimestamp).getTime() : 0;
+            const idbMs = cachedFixably?.timestamp ? new Date(cachedFixably.timestamp).getTime() : 0;
+            const slotMs = Math.max(
+              savedSiteStockSlot?.updatedAt ? new Date(savedSiteStockSlot.updatedAt).getTime() : 0,
+              savedTransferSlot?.updatedAt ? new Date(savedTransferSlot.updatedAt).getTime() : 0
+            );
+            const localMs = Math.max(lsMs, idbMs, slotMs);
+            const localFixablyUpdatedAt = cachedFixably?.timestamp || lsTimestamp || new Date(localMs || Date.now()).toISOString();
 
             const remoteMs = remoteFixablyHeader.updated_at ? new Date(remoteFixablyHeader.updated_at).getTime() : 0;
-            const localMs = localFixablyUpdatedAt ? new Date(localFixablyUpdatedAt).getTime() : (cachedFixably?.timestamp ? new Date(cachedFixably.timestamp).getTime() : 0);
 
             const isCloudStrictlyNewer = Boolean(remoteMs && (!localMs || remoteMs > localMs));
             const isLocalStrictlyNewer = Boolean(hasLocalFixably && localMs && remoteMs && localMs > remoteMs);
@@ -902,8 +914,12 @@ export function useCloudSync({
                     .maybeSingle();
                   if (fullFixablyDoc) {
                     const cloudDocMs = fullFixablyDoc.updated_at ? new Date(fullFixablyDoc.updated_at).getTime() : 0;
-                    // Double check before applying: ensure cloud document is NOT older than local!
-                    if (!hasLocalFixably || cloudDocMs >= localMs) {
+                    const cloudHasTransfers = Boolean(
+                      Array.isArray(fullFixablyDoc?.snapshot_data?.transfers) &&
+                      fullFixablyDoc.snapshot_data.transfers.length > 0
+                    );
+                    // Double check before applying: ensure cloud document is NOT older than local AND does not strip transfers!
+                    if ((!hasLocalFixably || cloudDocMs >= localMs) && (!hasLocalFixably || !localHasTransfers || cloudHasTransfers)) {
                       systemRows.push(fullFixablyDoc);
                       const effectiveUpdated = fullFixablyDoc.updated_at || new Date().toISOString();
                       try {
@@ -918,13 +934,12 @@ export function useCloudSync({
                         }
                         await dbStorage.setItem('mdc_fixably_snapshot', hydrated);
                         try {
-                          localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(hydrated));
-                          localStorage.setItem('mdc_fixably_snapshot_timestamp', effectiveUpdated);
+                          localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(hydrated)));
                         } catch (e) {}
                         if (setFixablySnapshot) setFixablySnapshot(hydrated);
                       }
                     } else {
-                      // Local is actually newer: retain local snapshot!
+                      // Local is newer OR has reconciled transfers that cloud lacks: retain local snapshot and heal cloud!
                       systemRows.push({
                         ...remoteFixablyHeader,
                         snapshot_data: cachedFixably,
@@ -932,6 +947,23 @@ export function useCloudSync({
                       });
                       if (cachedFixably && setFixablySnapshot) {
                         setFixablySnapshot(cachedFixably);
+                      }
+                      if (supabase && cachedFixably?.items?.length > 0 && localHasTransfers && !cloudHasTransfers) {
+                        (async () => {
+                          try {
+                            const compact = compactFixablySnapshot(cachedFixably);
+                            await supabase.from('saved_records').upsert({
+                              id: 'master_fixably_inventory_snapshot',
+                              record_type: 'fixably_snapshot',
+                              period_label: 'Master Fixably Inventory Snapshot',
+                              period_year: new Date().getFullYear(),
+                              period_month: new Date().getMonth() + 1,
+                              snapshot_data: compact,
+                              saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
+                              updated_at: new Date().toISOString()
+                            }, { onConflict: 'id' });
+                          } catch (e) {}
+                        })();
                       }
                     }
                   }
@@ -3270,8 +3302,12 @@ export function useCloudSync({
             const cloudTimestamp = cloudFixablyDoc.updated_at || cloudSnap.timestamp || '';
 
             let localSnap = null;
+            let savedTransferSlot = null;
             try {
-              localSnap = await dbStorage.getItem('mdc_fixably_snapshot');
+              [localSnap, savedTransferSlot] = await Promise.all([
+                dbStorage.getItem('mdc_fixably_snapshot'),
+                dbStorage.getItem('mdc_uploaded_slot_stock_transfer')
+              ]);
             } catch (e) {}
             if (!localSnap || !localSnap.items?.length) {
               try {
@@ -3280,23 +3316,29 @@ export function useCloudSync({
               } catch (e) {}
             }
 
-            const effectiveLocalTimestamp = localTimestamp || localSnap?.timestamp || '';
+            const localHasTransfers = Boolean((Array.isArray(localSnap?.transfers) && localSnap.transfers.length > 0) || savedTransferSlot?.content);
+            const cloudHasTransfers = Boolean(Array.isArray(cloudSnap?.transfers) && cloudSnap.transfers.length > 0);
+
             const cloudMs = cloudTimestamp ? new Date(cloudTimestamp).getTime() : 0;
-            const localMs = effectiveLocalTimestamp ? new Date(effectiveLocalTimestamp).getTime() : 0;
-            const isLocalStrictlyNewer = Boolean(localSnap?.items?.length > 0 && localMs > 0 && cloudMs > 0 && localMs > cloudMs);
-            const shouldUpdateLocal = (!localSnap || !localSnap.items || localSnap.items.length === 0) 
-              ? true 
-              : Boolean(cloudMs > 0 && (localMs === 0 || cloudMs > localMs));
+            const localMs = Math.max(
+              localTimestamp ? new Date(localTimestamp).getTime() : 0,
+              localSnap?.timestamp ? new Date(localSnap.timestamp).getTime() : 0,
+              savedTransferSlot?.updatedAt ? new Date(savedTransferSlot.updatedAt).getTime() : 0
+            );
+            const isLocalStrictlyNewer = Boolean(localSnap?.items?.length > 0 && ((localMs > 0 && cloudMs > 0 && localMs > cloudMs) || (localHasTransfers && !cloudHasTransfers)));
+            const shouldUpdateLocal = (!localSnap || !localSnap.items || localSnap.items.length === 0)
+              ? true
+              : Boolean(cloudMs > 0 && (localMs === 0 || cloudMs > localMs) && (!localHasTransfers || cloudHasTransfers));
             if (shouldUpdateLocal) {
               if (cloudTimestamp && !cloudSnap.timestamp) {
                 cloudSnap.timestamp = cloudTimestamp;
               }
               try {
-                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(cloudSnap));
                 if (cloudTimestamp) {
                   localStorage.setItem('mdc_fixably_snapshot_timestamp', cloudTimestamp);
                   localStorage.setItem('mdc_fixably_updated_at', cloudTimestamp);
                 }
+                localStorage.setItem('mdc_fixably_snapshot', JSON.stringify(compactFixablySnapshot(cloudSnap)));
               } catch (e) {}
               await dbStorage.setItem('mdc_fixably_snapshot', cloudSnap);
               await dbStorage.putSavedRecord({
@@ -3313,9 +3355,10 @@ export function useCloudSync({
               }
               if (setFixablySnapshot) setFixablySnapshot(cloudSnap);
             } else if (isLocalStrictlyNewer && supabase && localSnap?.items?.length > 0) {
-              // Local is strictly newer than cloud doc: push local snapshot to cloud to auto-heal
+              // Local is strictly newer or has reconciled transfers that cloud lacks: push local snapshot to cloud to auto-heal
               try {
                 const compact = compactFixablySnapshot(localSnap);
+                const healTimestamp = new Date().toISOString();
                 await supabase.from('saved_records').upsert({
                   id: 'master_fixably_inventory_snapshot',
                   record_type: 'fixably_snapshot',
@@ -3324,10 +3367,10 @@ export function useCloudSync({
                   period_month: new Date().getMonth() + 1,
                   snapshot_data: compact,
                   saved_by_name: currentUser?.fullName || currentUser?.email || 'System',
-                  updated_at: effectiveLocalTimestamp || new Date().toISOString()
+                  updated_at: healTimestamp
                 }, { onConflict: 'id' });
                 broadcastCloudEvent('FIXABLY_SNAPSHOT_UPDATED', {
-                  timestamp: effectiveLocalTimestamp,
+                  timestamp: healTimestamp,
                   totalUnits: localSnap.items.length
                 });
               } catch (pushErr) {
