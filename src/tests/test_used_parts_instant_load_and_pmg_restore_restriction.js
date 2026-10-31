@@ -12,30 +12,25 @@ console.log('TEST SUITE: Used Parts Instant Load, Realtime Sync & PMG Restore Re
 console.log('========================================================================\n');
 
 // --------------------------------------------------------------------------
-// 1. Verify RequestParts.jsx Restore UI Restrictions
+// 1. Verify RequestParts.jsx Restore UI Restrictions (Removed per user request)
 // --------------------------------------------------------------------------
-console.log('--- 1. Testing UI Role Restrictions for Restore Feature ---');
+console.log('--- 1. Testing UI Restrictions: Revert button feature completely removed ---');
 
 const requestPartsPath = path.join(projectRoot, 'src/components/RequestParts.jsx');
 const requestPartsContent = fs.readFileSync(requestPartsPath, 'utf8');
 
+// The user explicitly requested to completely remove the Revert button feature from Used Parts History
 assert.ok(
-  requestPartsContent.includes('canRestore = isAdmin') || requestPartsContent.includes('canRestore = isSuperadmin'),
-  'RequestParts.jsx must define canRestore based on admin privileges'
+  !requestPartsContent.includes('unmarkUnitAsUsed(u.serial_number)'),
+  'RequestParts.jsx must NOT render Revert button in Used Parts Log (feature removed per user request)'
 );
 
 assert.ok(
-  requestPartsContent.includes('{canRestore && <th style={{ width: \'110px\', textAlign: \'center\' }}>Action</th>}'),
-  'RequestParts.jsx must conditionally render Action header in Used Parts log'
+  !requestPartsContent.includes('<span>Revert</span>'),
+  'RequestParts.jsx must NOT render Revert button label'
 );
 
-assert.ok(
-  requestPartsContent.includes('{canRestore && (') &&
-  requestPartsContent.includes('unmarkUnitAsUsed(u.serial_number)'),
-  'RequestParts.jsx must conditionally render Revert/Restore button only for Admins'
-);
-
-console.log('  ✓ PASS: RequestParts.jsx hides Revert/Restore Part feature from PMG users');
+console.log('  ✓ PASS: RequestParts.jsx completely removes Revert button feature as requested');
 
 // --------------------------------------------------------------------------
 // 2. Verify useCloudSync.js Global Alerts & Realtime Inventory Handlers

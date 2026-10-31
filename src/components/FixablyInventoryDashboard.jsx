@@ -26,14 +26,16 @@ import {
   Zap,
   Lock,
   ArrowRightLeft,
-  Barcode
+  Barcode,
+  Wrench
 } from 'lucide-react';
 import dbStorage from '../utils/dbStorage.js';
 import { supabase } from '../supabase/client.js';
-import { resolveSite } from '../utils/appContextHelpers.js';
+import { resolveSite, readInventoryFromLocalStorage } from '../utils/appContextHelpers.js';
 import { isProvincialSite } from '../utils/partResolver.js';
 import { resolveSerialFullDetails } from '../utils/serialTracker.js';
 import { syncFixablyTransfersToHistory, loadLocalTransferHistory } from '../services/transferHistoryService.js';
+import { executeKgbConsumptionSync } from '../utils/kgbConsumptionEngine.js';
 import SerialDossierModal from './SerialDossierModal.jsx';
 import MovementHistoryModal from './MovementHistoryModal.jsx';
 import {
@@ -64,7 +66,10 @@ export default function FixablyInventoryDashboard({
   snapshot: propSnapshot = null,
   setSnapshot: propSetSnapshot = null,
   initialViewMode = 'all_stocks',
-  initialSelectedSiteId = null
+  initialSelectedSiteId = null,
+  setInventoryUnits = null,
+  repairUsageRecords = [],
+  setRepairUsageRecords = null
 }) {
   const effectiveInventoryUnits = inventoryUnits?.length ? inventoryUnits : _inventoryUnits;
   const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN' || currentUser?.isSuperAdmin);
@@ -109,6 +114,15 @@ export default function FixablyInventoryDashboard({
   useEffect(() => {
     sitesRef.current = sites;
   }, [sites]);
+
+  const effectiveParts = useMemo(
+    () => (parts && parts.length > 0) ? parts : (_parts || []),
+    [parts, _parts]
+  );
+  const partsRef = useRef(effectiveParts);
+  useEffect(() => {
+    partsRef.current = effectiveParts;
+  }, [effectiveParts]);
 
   // Keep snapshotTimestampRef & snapshotHasTransfersRef synchronized whenever localSnapshot updates
   useEffect(() => {
@@ -948,6 +962,30 @@ export default function FixablyInventoryDashboard({
         }
       }
 
+      // Synchronize GSX KGB consumed parts with Parts Consumption Log and Used Parts History
+      if (kgbText) {
+        setParseProgress({ stage: 'Synchronizing GSX KGB consumed parts with Parts Consumption Log...', percent: 92 });
+        try {
+          await executeKgbConsumptionSync({
+            fileOrContent: kgbText,
+            fileName: slots.kgb_used?.name || 'GSX_KGB_Used_Report.csv',
+            inventoryUnits: effectiveInventoryUnits?.length ? effectiveInventoryUnits : (await dbStorage.getItem('mdc_inventory') || []),
+            setInventoryUnits,
+            fixablySnapshot: reconciled,
+            setFixablySnapshot: setSnapshot,
+            repairUsageRecords,
+            setRepairUsageRecords,
+            sites: sitesRef.current || sites,
+            parts: partsRef.current || effectiveParts || parts,
+            currentUser,
+            supabase,
+            broadcastCloudEvent
+          });
+        } catch (kgbErr) {
+          console.warn('Fixably KGB consumption sync note:', kgbErr);
+        }
+      }
+
       // Record detailed activity log entry
       const trStats = reconciled.transferStats || {};
       await appendActivityLog({
@@ -990,9 +1028,7 @@ export default function FixablyInventoryDashboard({
   }, [
     appendActivityLog,
     showToast,
-    currentUser?.fullName,
-    currentUser?.name,
-    currentUser?.email,
+    currentUser,
     setSnapshot,
     syncSnapshotToCloud,
     syncWithAppInventory,
@@ -1000,7 +1036,16 @@ export default function FixablyInventoryDashboard({
     computeSlotsSignature,
     persistFixablySnapshotLocally,
     slots.stock_transfer?.name,
-    slots.site_stock?.name
+    slots.site_stock?.name,
+    slots.kgb_used?.name,
+    broadcastCloudEvent,
+    effectiveInventoryUnits,
+    effectiveParts,
+    parts,
+    repairUsageRecords,
+    setInventoryUnits,
+    setRepairUsageRecords,
+    sites
   ]);
 
   // Handle slot file assignment, validation, persistent storage, and real-time auto-reconciliation
@@ -1152,6 +1197,74 @@ export default function FixablyInventoryDashboard({
         dbStorage.removeItem('mdc_uploaded_slot_stock_transfer')
       ]);
     } catch (e) {}
+  };
+
+  const [isSyncingKgbOnly, setIsSyncingKgbOnly] = useState(false);
+
+  // Quick Direct Sync of KGB Report (without requiring full 3-file reconciliation)
+  const handleQuickSyncKgb = async (e) => {
+    e?.stopPropagation();
+    const kgbSource = slots.kgb_used.file || slots.kgb_used.content;
+    if (!kgbSource) {
+      showToast?.('Please select or upload a GSX KGB Used Report first.', 'error');
+      return;
+    }
+    setIsSyncingKgbOnly(true);
+    try {
+      // Resolve currently active inventory units or load from persistent storage
+      let activeUnits = (effectiveInventoryUnits && effectiveInventoryUnits.length > 0) ? effectiveInventoryUnits : [];
+      if (activeUnits.length === 0) {
+        try {
+          const idbUnits = await dbStorage.getItem('mdc_inventory');
+          if (Array.isArray(idbUnits) && idbUnits.length > 0) activeUnits = idbUnits;
+        } catch (e) {}
+      }
+      if (activeUnits.length === 0) {
+        try {
+          const localUnits = readInventoryFromLocalStorage();
+          if (Array.isArray(localUnits) && localUnits.length > 0) activeUnits = localUnits;
+        } catch (e) {}
+      }
+
+      let activeRep = (repairUsageRecords && repairUsageRecords.length > 0) ? repairUsageRecords : [];
+      if (activeRep.length === 0) {
+        try {
+          const idbRep = await dbStorage.getItem('mdc_repair_usage');
+          if (Array.isArray(idbRep) && idbRep.length > 0) activeRep = idbRep;
+        } catch (e) {}
+      }
+
+      const res = await executeKgbConsumptionSync({
+        fileOrContent: kgbSource,
+        fileName: slots.kgb_used.name || 'GSX_KGB_Used_Report.csv',
+        inventoryUnits: activeUnits,
+        setInventoryUnits,
+        fixablySnapshot: snapshot,
+        setFixablySnapshot: setSnapshot,
+        repairUsageRecords: activeRep,
+        setRepairUsageRecords,
+        sites: sitesRef.current || sites,
+        parts: partsRef.current || effectiveParts || parts,
+        currentUser,
+        supabase,
+        broadcastCloudEvent,
+        showToast
+      });
+      if (res?.success) {
+        await appendActivityLog({
+          actionType: 'KGB_CONSUMPTION_SYNC',
+          status: 'SUCCESS',
+          fileName: slots.kgb_used.name || 'GSX_KGB_Used_Report.csv',
+          summary: `Synchronized ${res.summary.totalAddedToConsumptionLog.toLocaleString()} consumed parts (${res.summary.matchedOnHandCount.toLocaleString()} on-hand matched, ${res.summary.duplicatesSkippedCount.toLocaleString()} duplicates skipped).`,
+          affectedRecords: res.summary.totalAddedToConsumptionLog
+        });
+      }
+    } catch (err) {
+      console.error('KGB quick sync error:', err);
+      showToast?.(`KGB sync failed: ${err?.message || err}`, 'error');
+    } finally {
+      setIsSyncingKgbOnly(false);
+    }
   };
 
   // Process & Reconcile Multi-File Sync
@@ -2308,6 +2421,28 @@ export default function FixablyInventoryDashboard({
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={handleQuickSyncKgb}
+                      disabled={isSyncingKgbOnly}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        border: '1px solid #059669',
+                        background: '#ecfdf5',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: isSyncingKgbOnly ? 'not-allowed' : 'pointer',
+                        color: '#059669'
+                      }}
+                      title="Sync consumed parts directly into Parts Consumption Log"
+                    >
+                      <Wrench size={11} className={isSyncingKgbOnly ? 'animate-spin' : ''} />
+                      <span>{isSyncingKgbOnly ? 'Syncing...' : 'Sync Consumption'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {

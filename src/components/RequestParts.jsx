@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment, useDeferredValue } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isUUID, getCleanDisplaySerial } from '../utils/appContextHelpers';
 import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus, resolveCanonicalIPhoneModel } from '../utils/partResolver';
@@ -48,7 +48,10 @@ import {
   Edit3,
   Truck,
   PackageCheck,
+  ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ChevronDown,
   ChevronUp,
   MapPin,
@@ -70,6 +73,108 @@ const REASON_PRESETS = [
   'Quarterly Buffer Replenishment'
 ];
 
+/**
+ * Smart windowing for pagination page buttons (e.g. [1, 2, 3, 4, 5, '...', 325])
+ */
+function getPageNumbers(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, '...', totalPages];
+  }
+  if (currentPage >= totalPages - 3) {
+    return [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+  return [1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages];
+}
+
+/**
+ * Renders usage notes with clear visual structure, badges, and high readability
+ */
+function renderUsageNotesContent(u) {
+  const rawNotes = u?.usage_notes || u?.notes || '';
+  if (!rawNotes || rawNotes === '—') {
+    return (
+      <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '12px' }}>
+        Standard repair consumption
+      </span>
+    );
+  }
+
+  // Strip internal metadata prefix if present
+  const cleanStr = rawNotes.split('| __META__:')[0].trim();
+
+  // If formatted GSX KGB notes containing pipe-separated details
+  if (cleanStr.includes('|')) {
+    const segments = cleanStr.split('|').map(s => s.trim()).filter(Boolean);
+    const strategySeg = segments.find(s => s.toLowerCase().includes('consumed in gsx'));
+    const closedSeg = segments.find(s => s.toLowerCase().startsWith('closed:'));
+    const orderSeg = segments.find(s => s.toLowerCase().startsWith('order #') || s.toLowerCase().startsWith('order:'));
+    const kbbSeg = segments.find(s => s.toLowerCase().startsWith('kbb:'));
+    const otherSegs = segments.filter(s => s !== strategySeg && s !== closedSeg && s !== orderSeg && s !== kbbSeg);
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', padding: '2px 0' }}>
+        {strategySeg && (
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: '#ecfdf5',
+                color: '#065f46',
+                border: '1px solid #a7f3d0'
+              }}
+            >
+              <Wrench size={11} color="#059669" />
+              <span>{strategySeg}</span>
+            </span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', fontSize: '11.5px' }}>
+          {closedSeg && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#334155', fontWeight: 500 }}>
+              <Calendar size={12} color="#0284c7" />
+              <span>{closedSeg}</span>
+            </span>
+          )}
+          {orderSeg && (
+            <span style={{ color: '#0369a1', fontWeight: 600 }}>
+              {orderSeg}
+            </span>
+          )}
+        </div>
+
+        {kbbSeg && (
+          <div style={{ fontSize: '11px', color: '#475569', fontFamily: 'var(--font-mono)' }}>
+            <span style={{ fontWeight: 600, color: '#64748b' }}>Return KBB:</span> {kbbSeg.replace(/^KBB:\s*/i, '')}
+          </div>
+        )}
+
+        {otherSegs.length > 0 && (
+          <div style={{ fontSize: '11.5px', color: '#334155', lineHeight: 1.4 }}>
+            {otherSegs.join(' • ')}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Regular plain-text usage notes
+  return (
+    <div style={{ fontSize: '12px', color: '#1e293b', lineHeight: 1.45, fontWeight: 500 }}>
+      {cleanStr}
+    </div>
+  );
+}
+
 export default function RequestParts({ defaultTab = 'requests_table', initialView = 'all_stocks', _embeddedMode = false, onNavigateToStation = null }) {
   const {
     activeTab: globalActiveTab,
@@ -79,9 +184,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     parts = [],
     categories = [],
     inventoryUnits = [],
+    setInventoryUnits,
     partsRequests = [],
     shipments = [],
     repairUsageRecords = [],
+    setRepairUsageRecords,
     confirmSiteReceive,
     submitPartsRequest,
     submitBatchPartsRequests,
@@ -92,7 +199,6 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     getUsedPartsForSite,
     getUsedUnitsLog,
     markUnitAsUsed,
-    unmarkUnitAsUsed,
     deleteScanInUnit,
     clearSiteParts,
     updateUnitDetails,
@@ -119,7 +225,6 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'SUPERADMIN';
   const isPmgUser = currentUser?.role === 'parts_management';
   const isAdmin = isSuperadmin || currentUser?.role === 'admin' || currentUser?.isSuperAdmin;
-  const canRestore = isAdmin;
   const currentUserSiteRef = currentUser?.siteId || currentUser?.site_id || currentUser?.siteCode || currentUser?.site_code;
 
   // User site resolution (Superadmin is explicitly Central DC, not retail branches)
@@ -304,6 +409,19 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const [isSubmittingMarkUsed, setIsSubmittingMarkUsed] = useState(false);
   const [usedHistorySubTab, setUsedHistorySubTab] = useState('live_log'); // 'live_log' | 'aggregated_data'
   const [usedLogSearchQuery, setUsedLogSearchQuery] = useState('');
+  const deferredUsedLogSearchQuery = useDeferredValue(usedLogSearchQuery);
+  const [usedLogPage, setUsedLogPage] = useState(1);
+  const [usedLogPageSize, setUsedLogPageSize] = useState(50);
+  const [histUsagePage, setHistUsagePage] = useState(1);
+  const [histUsagePageSize] = useState(25);
+
+  useEffect(() => {
+    setUsedLogPage(1);
+  }, [deferredUsedLogSearchQuery, selectedSiteId]);
+
+  useEffect(() => {
+    setHistUsagePage(1);
+  }, [selectedSiteId]);
 
   // Table Search & Filter State
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -1073,18 +1191,61 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const liveUsedUnitsLog = useMemo(() => {
     const siteFilter = selectedSiteId === 'ALL' && isSuperadmin ? 'ALL' : (selectedSiteId || userSiteObj.id || currentUser?.siteId);
     const units = typeof getUsedUnitsLog === 'function' ? getUsedUnitsLog(siteFilter) : [];
-    if (!usedLogSearchQuery.trim()) return units;
-    const q = usedLogSearchQuery.toLowerCase().trim();
+    if (!deferredUsedLogSearchQuery.trim()) return units;
+    const q = deferredUsedLogSearchQuery.toLowerCase().trim();
+    const tokens = q.split(/\s+/).filter(Boolean);
     return units.filter(u => {
       const pn = String(u.part_number || '').toLowerCase();
       const desc = String(u.description || '').toLowerCase();
       const sn = String(u.serial_number || '').toLowerCase();
-      const wo = String(u.work_order_number || '').toLowerCase();
+      const wo = String(u.work_order_number || u.repair_number || '').toLowerCase();
       const tech = String(u.used_by_name || u.used_by || '').toLowerCase();
       const notes = String(u.usage_notes || u.notes || '').toLowerCase();
-      return pn.includes(q) || desc.includes(q) || sn.includes(q) || wo.includes(q) || tech.includes(q) || notes.includes(q);
+      const site = String(u.site_code || u.site_name || '').toLowerCase();
+      const kbb = String(u.product_kbb || '').toLowerCase();
+      const haystack = `${pn} ${desc} ${sn} ${wo} ${tech} ${notes} ${site} ${kbb}`;
+      return tokens.every(tok => haystack.includes(tok));
     });
-  }, [getUsedUnitsLog, selectedSiteId, isSuperadmin, userSiteObj, currentUser, usedLogSearchQuery]);
+  }, [getUsedUnitsLog, selectedSiteId, isSuperadmin, userSiteObj, currentUser, deferredUsedLogSearchQuery]);
+
+  // Paginated live used units
+  const totalUsedLogPages = Math.max(1, Math.ceil(liveUsedUnitsLog.length / usedLogPageSize));
+  const safeUsedLogPage = Math.min(Math.max(1, usedLogPage), totalUsedLogPages);
+  const paginatedUsedUnits = useMemo(() => {
+    const start = (safeUsedLogPage - 1) * usedLogPageSize;
+    return liveUsedUnitsLog.slice(start, start + usedLogPageSize);
+  }, [liveUsedUnitsLog, safeUsedLogPage, usedLogPageSize]);
+
+  // High-performance single-pass metrics calculation for usage history
+  const usageMetrics = useMemo(() => {
+    let displayCount = 0;
+    let batteryCount = 0;
+    const skuSet = new Set();
+    const len = liveUsedUnitsLog.length;
+    for (let i = 0; i < len; i++) {
+      const u = liveUsedUnitsLog[i];
+      const desc = (u.description || u.part_number || '').toLowerCase();
+      const cat = (u.part_category || '').toLowerCase();
+      if (desc.includes('disp') || cat.includes('disp')) displayCount++;
+      if (desc.includes('batt') || cat.includes('batt')) batteryCount++;
+      if (u.part_number) skuSet.add(u.part_number);
+    }
+    return {
+      total: len,
+      displayCount,
+      batteryCount,
+      uniqueSkus: skuSet.size
+    };
+  }, [liveUsedUnitsLog]);
+
+  // Paginated historical usage summary
+  const totalHistPages = Math.max(1, Math.ceil((siteUsageData?.summaryList?.length || 0) / histUsagePageSize));
+  const safeHistPage = Math.min(Math.max(1, histUsagePage), totalHistPages);
+  const paginatedHistList = useMemo(() => {
+    const list = siteUsageData?.summaryList || [];
+    const start = (safeHistPage - 1) * histUsagePageSize;
+    return list.slice(start, start + histUsagePageSize);
+  }, [siteUsageData?.summaryList, safeHistPage, histUsagePageSize]);
 
   // Export Live Used Log to Excel
   const handleExportLiveUsedLogToXlsx = () => {
@@ -1693,19 +1854,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           }
         ];
       case 'usage_history': {
-        const displayCount = liveUsedUnitsLog.filter(u =>
-          (u.description || u.part_number || '').toLowerCase().includes('disp') ||
-          (u.part_category || '').toLowerCase().includes('disp')
-        ).length;
-        const batteryCount = liveUsedUnitsLog.filter(u =>
-          (u.description || u.part_number || '').toLowerCase().includes('batt') ||
-          (u.part_category || '').toLowerCase().includes('batt')
-        ).length;
         return [
           {
             id: 'usage-total',
             label: 'Total Consumed Units',
-            value: liveUsedUnitsLog.length,
+            value: usageMetrics.total,
             unit: 'parts recorded',
             subtext: 'Serialized repair installations',
             icon: Wrench,
@@ -1716,7 +1869,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           {
             id: 'usage-displays',
             label: 'Display Assemblies',
-            value: displayCount,
+            value: usageMetrics.displayCount,
             unit: 'screens consumed',
             subtext: 'Screen repair work orders',
             icon: Smartphone,
@@ -1727,7 +1880,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           {
             id: 'usage-batteries',
             label: 'Batteries Consumed',
-            value: batteryCount,
+            value: usageMetrics.batteryCount,
             unit: 'batteries consumed',
             subtext: 'Battery replacement work orders',
             icon: Zap,
@@ -1738,7 +1891,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           {
             id: 'usage-skus',
             label: 'Distinct Part Numbers',
-            value: new Set(liveUsedUnitsLog.map(u => u.part_number).filter(Boolean)).size,
+            value: usageMetrics.uniqueSkus,
             unit: 'unique SKUs',
             subtext: 'Serviced display & battery models',
             icon: Boxes,
@@ -1803,7 +1956,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     siteStockData,
     stockCategoryCounts.total,
     incomingShipments,
-    liveUsedUnitsLog,
+    liveUsedUnitsLog.length,
+    usageMetrics,
     regionStockTotals,
     metroManilaSites.length,
     provincialSites.length,
@@ -1823,6 +1977,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           parts={parts}
           setParts={setParts}
           inventoryUnits={inventoryUnits}
+          setInventoryUnits={setInventoryUnits}
+          repairUsageRecords={repairUsageRecords}
+          setRepairUsageRecords={setRepairUsageRecords}
           batchAddScanInUnits={batchAddScanInUnits}
           clearSiteParts={clearSiteParts}
           showToast={showToast}
@@ -4045,6 +4202,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           parts={parts}
           setParts={setParts}
           inventoryUnits={inventoryUnits}
+          setInventoryUnits={setInventoryUnits}
+          repairUsageRecords={repairUsageRecords}
+          setRepairUsageRecords={setRepairUsageRecords}
           batchAddScanInUnits={batchAddScanInUnits}
           clearSiteParts={clearSiteParts}
           showToast={showToast}
@@ -5448,80 +5608,182 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 </button>
               ) : null}
 
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  background: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#065f46'
+                }}
+                title="Parts consumption is automatically managed from GSX KGB reports processed in the Ingestion Center"
+              >
+                <CheckCircle2 size={13} color="#059669" />
+                <span>Automated via Ingestion Center</span>
+              </div>
+
+              {/* Secondary Manual Fallback */}
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                style={{ background: '#059669', borderColor: '#059669', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700 }}
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '4px', color: '#475569' }}
                 onClick={() => openMarkUsedModal()}
-                title="Record part used/consumed in repair"
+                title="Manual Override: Record an individual part used if not yet in GSX KGB report"
               >
-                <Wrench size={13} />
-                <span>Record Part Used</span>
+                <Wrench size={12} />
+                <span>Manual Override</span>
               </button>
+            </div>
+          </div>
+
+          {/* Single Source of Truth Automation Banner */}
+          <div
+            style={{
+              padding: '9px 18px',
+              background: '#f0fdf4',
+              borderBottom: '1px solid #bbf7d0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '8px'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <CheckCircle2 size={15} color="#059669" />
+              <span style={{ fontSize: '12px', color: '#166534', fontWeight: 600 }}>
+                <strong>Single Source of Truth:</strong> Parts consumption is automatically synchronized across all service branches from Apple GSX KGB Reports uploaded and processed in the Multi-Site Dashboard / Ingestion Center.
+              </span>
             </div>
           </div>
 
           {/* Sub-View 1: Live Used Units Log */}
           {usedHistorySubTab === 'live_log' && (
             <div>
-              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-                <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
-                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                  <input
-                    type="text"
-                    className="form-input"
-                    style={{ paddingLeft: '32px', fontSize: '12.5px' }}
-                    placeholder="Search by serial #, part #, work order, technician..."
-                    value={usedLogSearchQuery}
-                    onChange={(e) => setUsedLogSearchQuery(e.target.value)}
-                  />
+              {/* Top Filter & Quick-Pagination Bar */}
+              <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', background: '#ffffff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 320px', maxWidth: '420px' }}>
+                  <div style={{ position: 'relative', width: '100%' }}>
+                    <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                    <input
+                      type="text"
+                      className="form-input"
+                      style={{ paddingLeft: '32px', paddingRight: usedLogSearchQuery ? '28px' : '10px', fontSize: '12.5px', height: '34px' }}
+                      placeholder="Search serial, part #, repair #, technician..."
+                      value={usedLogSearchQuery}
+                      onChange={(e) => setUsedLogSearchQuery(e.target.value)}
+                    />
+                    {usedLogSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setUsedLogSearchQuery('')}
+                        style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#94a3b8' }}
+                        title="Clear search"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <span style={{ fontSize: '12px', color: '#64748b' }}>
-                  Showing <strong>{liveUsedUnitsLog.length}</strong> consumed serialized parts
-                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '12px', color: '#64748b' }}>
+                    Showing <strong>{liveUsedUnitsLog.length > 0 ? ((safeUsedLogPage - 1) * usedLogPageSize + 1).toLocaleString() : 0}</strong> – <strong>{Math.min(safeUsedLogPage * usedLogPageSize, liveUsedUnitsLog.length).toLocaleString()}</strong> of <strong>{liveUsedUnitsLog.length.toLocaleString()}</strong> consumed parts
+                  </span>
+
+                  {totalUsedLogPages > 1 && (
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '6px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={safeUsedLogPage === 1}
+                        onClick={() => setUsedLogPage(p => Math.max(1, p - 1))}
+                        style={{ height: '26px', padding: '0 6px', fontSize: '11px', background: 'transparent', border: 'none', boxShadow: 'none' }}
+                        title="Previous page"
+                      >
+                        <ChevronLeft size={13} />
+                      </button>
+                      <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', minWidth: '60px', textAlign: 'center' }}>
+                        {safeUsedLogPage} / {totalUsedLogPages}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={safeUsedLogPage === totalUsedLogPages}
+                        onClick={() => setUsedLogPage(p => Math.min(totalUsedLogPages, p + 1))}
+                        style={{ height: '26px', padding: '0 6px', fontSize: '11px', background: 'transparent', border: 'none', boxShadow: 'none' }}
+                        title="Next page"
+                      >
+                        <ChevronRight size={13} />
+                      </button>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+                    <span>Page size:</span>
+                    <select
+                      className="form-select"
+                      style={{ height: '30px', padding: '2px 22px 2px 8px', fontSize: '12px', width: 'auto', background: '#ffffff' }}
+                      value={usedLogPageSize}
+                      onChange={(e) => {
+                        setUsedLogPageSize(Number(e.target.value));
+                        setUsedLogPage(1);
+                      }}
+                    >
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={250}>250</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
-              <div className="table-container" style={{ overflowX: 'auto' }}>
+              {/* Scrollable Data Table Container */}
+              <div className="table-scroll-wrapper" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative' }}>
                 {liveUsedUnitsLog.length === 0 ? (
                   <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
                     <Wrench size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
                     <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Parts Recorded as Used Yet</h4>
-                    <p style={{ margin: '0 0 16px', fontSize: '12.5px' }}>
-                      When PMG technicians consume parts during repair work orders, mark them here to update real-time stock levels.
+                    <p style={{ margin: '0', fontSize: '12.5px', maxWidth: '520px', marginLeft: 'auto', marginRight: 'auto' }}>
+                      Parts consumption is automatically populated across all service branches from Apple GSX KGB Reports uploaded and processed in the Multi-Site Dashboard / Ingestion Center.
                     </p>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      style={{ background: '#059669', borderColor: '#059669' }}
-                      onClick={() => openMarkUsedModal()}
-                    >
-                      <Wrench size={13} />
-                      <span>Record First Used Part</span>
-                    </button>
                   </div>
                 ) : (
-                  <table className="data-table" style={{ width: '100%' }}>
+                  <table
+                    className="data-table"
+                    style={{
+                      width: '100%',
+                      minWidth: '1180px',
+                      borderCollapse: 'collapse',
+                      tableLayout: 'auto'
+                    }}
+                  >
                     <thead>
-                      <tr style={{ background: '#f8fafc' }}>
-                        <th style={{ width: '40px', textAlign: 'center' }}>#</th>
-                        <th style={{ minWidth: '100px' }}>Site Location</th>
-                        <th style={{ minWidth: '150px' }}>Part Number</th>
-                        <th style={{ minWidth: '220px' }}>Part Description</th>
-                        <th style={{ minWidth: '180px' }}>Serial Number</th>
-                        <th style={{ minWidth: '150px' }}>Work Order / Repair #</th>
-                        <th style={{ minWidth: '150px' }}>Date & Time Used</th>
-                        <th style={{ minWidth: '140px' }}>Used By</th>
-                        <th style={{ minWidth: '180px' }}>Usage Notes</th>
-                        {canRestore && <th style={{ width: '110px', textAlign: 'center' }}>Action</th>}
+                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                        <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px' }}>#</th>
+                        <th style={{ width: '100px', textAlign: 'center', padding: '12px 8px' }}>Site Location</th>
+                        <th style={{ width: '135px', padding: '12px 10px' }}>Part Number</th>
+                        <th style={{ minWidth: '180px', maxWidth: '240px', padding: '12px 10px' }}>Part Description</th>
+                        <th style={{ width: '190px', padding: '12px 10px' }}>Serial Number</th>
+                        <th style={{ width: '150px', textAlign: 'center', padding: '12px 10px' }}>Work Order / Repair #</th>
+                        <th style={{ width: '150px', padding: '12px 10px' }}>Date &amp; Time Used</th>
+                        <th style={{ width: '140px', padding: '12px 10px' }}>Used By</th>
+                        <th style={{ minWidth: '280px', padding: '12px 14px' }}>Usage Notes</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {liveUsedUnitsLog.map((u, idx) => (
-                        <tr key={u.id || u.serial_number || idx}>
-                          <td style={{ textAlign: 'center', fontSize: '11.5px', color: '#94a3b8' }}>
-                            {idx + 1}
+                      {paginatedUsedUnits.map((u, idx) => (
+                        <tr key={u.id || u.serial_number || idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ width: '48px', textAlign: 'center', fontSize: '11.5px', color: '#64748b', fontWeight: 600, padding: '12px 8px', verticalAlign: 'middle' }}>
+                            {(safeUsedLogPage - 1) * usedLogPageSize + idx + 1}
                           </td>
-                          <td>
+                          <td style={{ width: '100px', textAlign: 'center', padding: '12px 8px', verticalAlign: 'middle' }}>
                             <span
                               className="badge"
                               style={{
@@ -5529,169 +5791,383 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                 color: '#b45309',
                                 border: '1px solid #fde68a',
                                 fontSize: '11px',
-                                fontWeight: 700
+                                fontWeight: 700,
+                                letterSpacing: '0.02em',
+                                padding: '3px 8px'
                               }}
                             >
                               {u.site_code || u.site_name || resolveSite(u.current_site_id || u.site_id || u.siteId, sites)?.code || activeSiteObj?.code || 'BRANCH'}
                             </span>
                           </td>
-                          <td>
-                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                          <td style={{ width: '135px', padding: '12px 10px', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' }}>
                               {u.part_number}
                             </strong>
                           </td>
-                          <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
+                          <td style={{ minWidth: '180px', maxWidth: '240px', padding: '12px 10px', fontSize: '12.5px', color: '#1e293b', lineHeight: 1.45, verticalAlign: 'middle' }}>
                             {u.description || 'Apple Replacement Part'}
                           </td>
-                          <td>
+                          <td style={{ width: '190px', padding: '12px 10px', verticalAlign: 'middle' }}>
                             <span
                               style={{
                                 fontFamily: 'var(--font-mono)',
                                 fontWeight: 700,
-                                fontSize: '12px',
+                                fontSize: '11.5px',
                                 background: '#f1f5f9',
-                                padding: '3px 7px',
+                                padding: '3px 8px',
                                 borderRadius: '4px',
                                 color: '#0f172a',
-                                border: '1px solid #cbd5e1'
+                                border: '1px solid #cbd5e1',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap'
                               }}
                             >
-                                {getCleanDisplaySerial(u.serial_number, u)}
+                              {getCleanDisplaySerial(u.serial_number, u)}
                             </span>
+                            {u.product_kbb && (
+                              <div style={{ fontSize: '10px', color: '#64748b', marginTop: '3px', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                                KBB: <span style={{ color: '#0369a1', fontWeight: 600 }}>{u.product_kbb}</span>
+                              </div>
+                            )}
                           </td>
-                          <td>
+                          <td style={{ width: '150px', textAlign: 'center', padding: '12px 10px', verticalAlign: 'middle' }}>
                             {u.work_order_number ? (
-                              <span
-                                className="badge"
-                                style={{
-                                  background: '#e0f2fe',
-                                  color: '#0369a1',
-                                  border: '1px solid #bae6fd',
-                                  fontSize: '11.5px',
-                                  fontWeight: 700
-                                }}
-                              >
-                                {u.work_order_number}
-                              </span>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    background: '#e0f2fe',
+                                    color: '#0369a1',
+                                    border: '1px solid #bae6fd',
+                                    fontSize: '11.5px',
+                                    fontWeight: 700,
+                                    padding: '2px 7px',
+                                    borderRadius: '4px'
+                                  }}
+                                >
+                                  {u.work_order_number}
+                                </span>
+                                {(u.used_by_name?.includes('GSX') || u.usage_notes?.includes('GSX') || u.product_kgb) && (
+                                  <span
+                                    style={{
+                                      fontSize: '9.5px',
+                                      fontWeight: 800,
+                                      padding: '1px 5px',
+                                      borderRadius: '3px',
+                                      background: '#dcfce7',
+                                      color: '#15803d',
+                                      border: '1px solid #86efac',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                    title="Automated from official GSX KGB report"
+                                  >
+                                    GSX
+                                  </span>
+                                )}
+                              </div>
                             ) : (
                               <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '11.5px' }}>
                                 General Repair
                               </span>
                             )}
                           </td>
-                          <td style={{ fontSize: '12px', color: '#475569' }}>
+                          <td style={{ width: '150px', padding: '12px 10px', fontSize: '12px', color: '#475569', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
                             {u.used_at ? formatTo12HourDateTime(u.used_at) : 'Recent'}
                           </td>
-                          <td style={{ fontSize: '12px', color: '#0f172a', fontWeight: 600 }}>
+                          <td style={{ width: '140px', padding: '12px 10px', fontSize: '12px', color: '#0f172a', fontWeight: 600, verticalAlign: 'middle' }}>
                             {u.used_by_name || u.used_by || 'Branch Specialist'}
                           </td>
-                          <td style={{ fontSize: '12px', color: '#64748b' }}>
-                            {u.usage_notes || u.notes || '—'}
+                          <td style={{ minWidth: '280px', padding: '12px 14px', verticalAlign: 'middle' }}>
+                            {renderUsageNotesContent(u)}
                           </td>
-                          {canRestore && (
-                            <td style={{ textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-sm"
-                                style={{
-                                  fontSize: '11px',
-                                  padding: '3px 8px',
-                                  color: '#475569',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '3px'
-                                }}
-                                onClick={() => {
-                                  if (window.confirm(`Restore serial ${getCleanDisplaySerial(u.serial_number, u)} back to In-Stock status?`)) {
-                                    unmarkUnitAsUsed(u.serial_number);
-                                  }
-                                }}
-                                title="Undo: Revert this part back to In-Stock inventory"
-                              >
-                                <RotateCcw size={11} />
-                                <span>Revert</span>
-                              </button>
-                            </td>
-                          )}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
               </div>
+
+              {/* Bottom Comprehensive Pagination Footer */}
+              {liveUsedUnitsLog.length > 0 && (
+                <div
+                  style={{
+                    padding: '12px 18px',
+                    borderTop: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '12px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '12px', color: '#475569' }}>
+                      Showing <strong>{((safeUsedLogPage - 1) * usedLogPageSize + 1).toLocaleString()}</strong> to{' '}
+                      <strong>{Math.min(safeUsedLogPage * usedLogPageSize, liveUsedUnitsLog.length).toLocaleString()}</strong> of{' '}
+                      <strong>{liveUsedUnitsLog.length.toLocaleString()}</strong> records
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+                      <span>Rows per page:</span>
+                      <select
+                        className="form-select"
+                        style={{ height: '30px', padding: '2px 22px 2px 8px', fontSize: '12px', width: 'auto', background: '#ffffff' }}
+                        value={usedLogPageSize}
+                        onChange={(e) => {
+                          setUsedLogPageSize(Number(e.target.value));
+                          setUsedLogPage(1);
+                        }}
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                        <option value={250}>250</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeUsedLogPage === 1}
+                      onClick={() => setUsedLogPage(1)}
+                      style={{ height: '30px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+                      title="First Page"
+                    >
+                      <ChevronsLeft size={14} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeUsedLogPage === 1}
+                      onClick={() => setUsedLogPage(p => Math.max(1, p - 1))}
+                      style={{ height: '30px', padding: '0 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                      title="Previous Page"
+                    >
+                      <ChevronLeft size={13} />
+                      <span>Prev</span>
+                    </button>
+
+                    {getPageNumbers(safeUsedLogPage, totalUsedLogPages).map((pNum, pIdx) => {
+                      if (pNum === '...') {
+                        return (
+                          <span key={`dots-${pIdx}`} style={{ padding: '0 6px', fontSize: '12px', color: '#94a3b8' }}>
+                            …
+                          </span>
+                        );
+                      }
+                      const isActive = pNum === safeUsedLogPage;
+                      return (
+                        <button
+                          key={pNum}
+                          type="button"
+                          onClick={() => setUsedLogPage(pNum)}
+                          style={{
+                            height: '30px',
+                            minWidth: '32px',
+                            padding: '0 8px',
+                            borderRadius: '6px',
+                            border: isActive ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                            background: isActive ? '#0284c7' : '#ffffff',
+                            color: isActive ? '#ffffff' : '#334155',
+                            fontWeight: isActive ? 700 : 500,
+                            fontSize: '12px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {pNum}
+                        </button>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeUsedLogPage === totalUsedLogPages}
+                      onClick={() => setUsedLogPage(p => Math.min(totalUsedLogPages, p + 1))}
+                      style={{ height: '30px', padding: '0 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                      title="Next Page"
+                    >
+                      <span>Next</span>
+                      <ChevronRight size={13} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeUsedLogPage === totalUsedLogPages}
+                      onClick={() => setUsedLogPage(totalUsedLogPages)}
+                      style={{ height: '30px', padding: '0 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center' }}
+                      title="Last Page"
+                    >
+                      <ChevronsRight size={14} />
+                    </button>
+
+                    {totalUsedLogPages > 5 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '8px' }}>
+                        <span style={{ fontSize: '11.5px', color: '#64748b' }}>Go to:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={totalUsedLogPages}
+                          defaultValue={safeUsedLogPage}
+                          key={safeUsedLogPage}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const val = parseInt(e.target.value, 10);
+                              if (!isNaN(val) && val >= 1 && val <= totalUsedLogPages) {
+                                setUsedLogPage(val);
+                              }
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            if (!isNaN(val) && val >= 1 && val <= totalUsedLogPages) {
+                              setUsedLogPage(val);
+                            }
+                          }}
+                          style={{
+                            width: '54px',
+                            height: '30px',
+                            padding: '2px 6px',
+                            fontSize: '12px',
+                            borderRadius: '6px',
+                            border: '1px solid #cbd5e1',
+                            textAlign: 'center',
+                            background: '#ffffff'
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* Sub-View 2: Aggregated Historical Datasets */}
           {usedHistorySubTab === 'aggregated_data' && (
-            <div className="table-container" style={{ overflowX: 'auto' }}>
-              {siteUsageData.summaryList.length === 0 ? (
-                <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
-                  <TrendingDown size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
-                  <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Historical Usage Records</h4>
-                  <p style={{ margin: 0, fontSize: '12.5px' }}>
-                    No repair usage records are associated with {activeSiteObj.name}.
-                  </p>
-                </div>
-              ) : (
-                <table className="data-table" style={{ width: '100%' }}>
-                  <thead>
-                    <tr style={{ background: '#f8fafc' }}>
-                      <th style={{ minWidth: '160px' }}>Part Number</th>
-                      <th style={{ minWidth: '260px' }}>Part Description</th>
-                      <th style={{ textAlign: 'center', width: '130px' }}>Total Consumed</th>
-                      <th style={{ minWidth: '220px' }}>Monthly Consumption Breakdown</th>
-                      <th style={{ textAlign: 'center', width: '120px' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {siteUsageData.summaryList.map(item => (
-                      <tr key={item.partNumber}>
-                        <td>
-                          <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                            {item.partNumber}
-                          </strong>
-                        </td>
-                        <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
-                          {item.description || 'Apple Replacement Part'}
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <span className="badge badge-primary" style={{ fontSize: '12px', fontWeight: 800 }}>
-                            {item.totalUsed} used
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                            {Object.entries(item.byMonth || {}).map(([mo, cnt]) => (
-                              <span
-                                key={mo}
-                                style={{
-                                  fontSize: '11px',
-                                  background: '#f1f5f9',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  color: '#334155'
-                                }}
-                              >
-                                {mo}: <strong>{cnt}</strong>
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
-                            onClick={() => handleQuickRequestPart(item.partNumber)}
-                          >
-                            <Plus size={12} />
-                            <span>Request</span>
-                          </button>
-                        </td>
+            <div>
+              <div className="table-scroll-wrapper" style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                {siteUsageData.summaryList.length === 0 ? (
+                  <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                    <TrendingDown size={36} color="#cbd5e1" style={{ marginBottom: '10px' }} />
+                    <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px' }}>No Historical Usage Records</h4>
+                    <p style={{ margin: 0, fontSize: '12.5px' }}>
+                      No repair usage records are associated with {activeSiteObj.name}.
+                    </p>
+                  </div>
+                ) : (
+                  <table className="data-table" style={{ width: '100%', minWidth: '900px' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc' }}>
+                        <th style={{ minWidth: '160px' }}>Part Number</th>
+                        <th style={{ minWidth: '260px' }}>Part Description</th>
+                        <th style={{ textAlign: 'center', width: '130px' }}>Total Consumed</th>
+                        <th style={{ minWidth: '220px' }}>Monthly Consumption Breakdown</th>
+                        <th style={{ textAlign: 'center', width: '120px' }}>Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {paginatedHistList.map(item => (
+                        <tr key={item.partNumber}>
+                          <td>
+                            <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                              {item.partNumber}
+                            </strong>
+                          </td>
+                          <td style={{ fontSize: '12.5px', color: '#1e293b' }}>
+                            {item.description || 'Apple Replacement Part'}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span className="badge badge-primary" style={{ fontSize: '12px', fontWeight: 800 }}>
+                              {item.totalUsed} used
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {Object.entries(item.byMonth || {}).map(([mo, cnt]) => (
+                                <span
+                                  key={mo}
+                                  style={{
+                                    fontSize: '11px',
+                                    background: '#f1f5f9',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    color: '#334155'
+                                  }}
+                                >
+                                  {mo}: <strong>{cnt}</strong>
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ fontSize: '11px', padding: '3px 8px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff' }}
+                              onClick={() => handleQuickRequestPart(item.partNumber)}
+                            >
+                              <Plus size={12} />
+                              <span>Request</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Historical Summary Pagination Footer */}
+              {siteUsageData.summaryList.length > histUsagePageSize && (
+                <div
+                  style={{
+                    padding: '12px 18px',
+                    borderTop: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '12px'
+                  }}
+                >
+                  <div style={{ fontSize: '12px', color: '#475569' }}>
+                    Showing <strong>{((safeHistPage - 1) * histUsagePageSize + 1).toLocaleString()}</strong> to{' '}
+                    <strong>{Math.min(safeHistPage * histUsagePageSize, siteUsageData.summaryList.length).toLocaleString()}</strong> of{' '}
+                    <strong>{siteUsageData.summaryList.length.toLocaleString()}</strong> SKUs
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeHistPage === 1}
+                      onClick={() => setHistUsagePage(p => Math.max(1, p - 1))}
+                      style={{ height: '30px', padding: '0 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                    >
+                      <ChevronLeft size={13} />
+                      <span>Prev</span>
+                    </button>
+                    <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#334155', padding: '0 8px' }}>
+                      {safeHistPage} / {totalHistPages}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safeHistPage === totalHistPages}
+                      onClick={() => setHistUsagePage(p => Math.min(totalHistPages, p + 1))}
+                      style={{ height: '30px', padding: '0 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                    >
+                      <span>Next</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           )}

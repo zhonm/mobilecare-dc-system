@@ -1230,20 +1230,68 @@ export function usePartsRequests({
     const siteId = targetSite?.id || siteIdOrCode;
     const siteCode = targetSite?.code || siteIdOrCode;
 
-    return (inventoryUnits || []).filter(u => {
-      const isUsed = String(u.status || '').toLowerCase() === 'used';
-      if (!isUsed) return false;
+    const unitsMap = new Map();
 
-      if (siteIdOrCode && siteIdOrCode !== 'ALL') {
+    // 1. In-memory inventory units marked as 'used'
+    (inventoryUnits || []).forEach(u => {
+      const isUsed = String(u.status || '').toLowerCase() === 'used';
+      if (!isUsed) return;
+      const s = String(u.serial_number || '').trim().toUpperCase();
+      if (s) unitsMap.set(s, u);
+      else if (u.id) unitsMap.set(u.id, u);
+    });
+
+    // 2. Also harvest consumed entries from repairUsageRecords (e.g. from uploaded GSX KGB reports)
+    (repairUsageRecords || []).forEach(r => {
+      const s = String(r.serial_number || '').trim().toUpperCase();
+      if (!s) return;
+      if (!unitsMap.has(s)) {
+        unitsMap.set(s, {
+          id: r.id || `usage-${s}`,
+          serial_number: s,
+          part_number: r.part_number,
+          description: r.description,
+          current_site_id: r.site_id,
+          site_code: r.site_code,
+          site_name: r.site_name,
+          status: 'used',
+          work_order_number: r.work_order_number,
+          repair_number: r.repair_number,
+          product_kbb: r.product_kbb,
+          product_kgb: r.product_kgb || s,
+          used_at: r.used_at,
+          used_by_name: r.used_by || 'GSX KGB Ingestion',
+          usage_notes: r.usage_notes || 'Consumed in repair'
+        });
+      }
+    });
+
+    const allUsed = Array.from(unitsMap.values());
+
+    let targetUnits = allUsed;
+    if (siteIdOrCode && siteIdOrCode !== 'ALL') {
+      targetUnits = allUsed.filter(u => {
         const uSiteId = u.current_site_id || u.siteId;
         const uSiteCode = u.site_code || u.siteCode;
-        const matches = (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
-                        (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
-        if (!matches) return false;
-      }
-      return true;
-    }).sort((a, b) => new Date(b.used_at || b.received_at || 0) - new Date(a.used_at || a.received_at || 0));
-  }, [inventoryUnits, sites]);
+        return (uSiteId && (uSiteId === siteId || uSiteId === siteCode)) ||
+               (uSiteCode && (uSiteCode === siteCode || uSiteCode === siteId));
+      });
+    }
+
+    // High-performance timestamp parsing cached per record (avoids hundreds of thousands of Date allocations)
+    const fastParseTime = (val) => {
+      if (!val) return 0;
+      if (typeof val === 'number') return val;
+      const t = Date.parse(val);
+      return Number.isNaN(t) ? 0 : t;
+    };
+
+    return targetUnits.sort((a, b) => {
+      const tb = b._ts !== undefined ? b._ts : (b._ts = fastParseTime(b.used_at || b.received_at));
+      const ta = a._ts !== undefined ? a._ts : (a._ts = fastParseTime(a.used_at || a.received_at));
+      return tb - ta;
+    });
+  }, [inventoryUnits, repairUsageRecords, sites]);
 
   // 8. Mark Unit as Used / Consumed in Repair
   const markUnitAsUsed = useCallback(async ({

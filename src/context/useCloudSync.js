@@ -569,6 +569,7 @@ export function useCloudSync({
               'master_users_registry',
               'master_branch_inventory_registry',
               'master_used_parts_registry',
+              'master_kgb_upload_history_registry',
               'cleared_sites_registry',
               'deleted_unit_serials_registry',
               'master_fixably_inventory_snapshot'
@@ -603,6 +604,7 @@ export function useCloudSync({
             'master_session_audit_logs_registry',
             'master_branch_inventory_registry',
             'master_used_parts_registry',
+            'master_kgb_upload_history_registry',
             'cleared_sites_registry',
             'master_fixably_inventory_snapshot'
           ];
@@ -1729,6 +1731,31 @@ export function useCloudSync({
           setUploadAuditLogs(mergedUploads);
           try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(mergedUploads)); } catch (e) {}
           dbStorage.setItem('mdc_upload_audit_logs', mergedUploads);
+        }
+
+        // Hydrate & Merge GSX KGB Upload History
+        const kgbUploadRegistryDoc = dbSavedRecords.find(r => r.id === 'master_kgb_upload_history_registry');
+        const cloudKgbHistory = Array.isArray(kgbUploadRegistryDoc?.snapshot_data?.history)
+          ? kgbUploadRegistryDoc.snapshot_data.history
+          : [];
+        let localKgbHistory = [];
+        try {
+          const saved = localStorage.getItem('mdc_kgb_upload_history');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) localKgbHistory = parsed;
+          }
+        } catch (e) {}
+
+        const kgbHistMap = new Map();
+        cloudKgbHistory.forEach(h => { if (h?.id) kgbHistMap.set(h.id, h); });
+        localKgbHistory.forEach(h => { if (h?.id && !kgbHistMap.has(h.id)) kgbHistMap.set(h.id, h); });
+        const mergedKgbHistory = Array.from(kgbHistMap.values())
+          .sort((a, b) => new Date(b.uploadDate || 0) - new Date(a.uploadDate || 0))
+          .slice(0, 100);
+        if (mergedKgbHistory.length > 0) {
+          try { localStorage.setItem('mdc_kgb_upload_history', JSON.stringify(mergedKgbHistory)); } catch (e) {}
+          dbStorage.setItem('mdc_kgb_upload_history', mergedKgbHistory);
         }
 
         // Hydrate & Merge Deletion Audit Logs
@@ -3964,7 +3991,7 @@ export function useCloudSync({
                   };
                 });
               }
-            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'INVENTORY_CACHE_INVALIDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED'].includes(ev.data.type)) {
+            } else if (['GLOBAL_FORCE_CACHE_REFRESH', 'INVENTORY_CACHE_INVALIDATED', 'DATASET_UPLOADED', 'FILE_IMPORT_APPLIED', 'MASTER_DATA_CLEARED', 'SHIPMENT_SAVED', 'SHIPMENTS_IMPORTED', 'SHIPMENTS_CLEARED', 'SHIPMENT_DELETED', 'SHIPMENT_RECEIVED', 'STOCK_UPDATED', 'UNITS_IMPORTED', 'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'UNIT_DELETED', 'STOCK_UNITS_CLEARED', 'KGB_USED_REPORT_SYNCED', 'PART_MARKED_AS_USED'].includes(ev.data.type)) {
               if (ev.data.type === 'GLOBAL_FORCE_CACHE_REFRESH') {
                 await clearOperationalLocalStorage({ keepSession: true });
                 try { localStorage.removeItem('mdc_last_override_time'); } catch (e) {}

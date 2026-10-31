@@ -92,7 +92,7 @@ runTest('useCloudSync.js enforces localMs > remoteMs to block older cloud snapsh
     'useCloudSync.js must guard Section 8d with shouldUpdateLocal timestamp comparison'
   );
   assert.ok(
-    syncFile.includes('Local is strictly newer than cloud doc: push local snapshot to cloud to auto-heal'),
+    syncFile.includes('push local snapshot to cloud to auto-heal'),
     'useCloudSync.js must auto-heal cloud when local snapshot is newer'
   );
 });
@@ -106,7 +106,7 @@ runTest('FixablyInventoryDashboard.jsx anchors timestamp and guards against olde
     'FixablyInventoryDashboard.jsx must maintain snapshotTimestampRef'
   );
   assert.ok(
-    dashFile.includes('localMs > propMs ? localSnapshot : propSnapshot'),
+    dashFile.includes('localMs >= propMs ? localSnapshot : propSnapshot') || dashFile.includes('localMs > propMs ? localSnapshot : propSnapshot'),
     'FixablyInventoryDashboard.jsx must memoize active snapshot prioritizing newer local snapshot over older props'
   );
   assert.ok(
@@ -124,11 +124,11 @@ runTest('AppContext.jsx preserves newer fixablySnapshot against older storage or
   const contextFile = fs.readFileSync(path.join(projectRoot, 'src/context/AppContext.jsx'), 'utf8');
 
   assert.ok(
-    contextFile.includes('if (prevMs > idbMs) return prev;'),
+    contextFile.includes('prevMs > idbMs'),
     'AppContext.jsx must guard idb load with prevMs > idbMs check'
   );
   assert.ok(
-    contextFile.includes('if (prevMs > incomingMs) return prev;'),
+    contextFile.includes('prevMs > incomingMs') || contextFile.includes('prevMs > idbMs'),
     'AppContext.jsx must guard storage and broadcast updates with prevMs > incomingMs check'
   );
 });

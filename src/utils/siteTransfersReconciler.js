@@ -14,7 +14,7 @@ export const EXCEL_BRANCH_ORDER = [
 // Standard site mapping rules matching Google Sheet and Official Branch Directory
 export const SITE_CODE_MAPPINGS = [
   { code: 'ABR', pattern: /\bABR\b|\bDAVAO\b/i, name: 'MOBILECARE - DAVAO', shortName: 'Davao', standardExcelLabel: 'MOBILECARE - DAVAO' },
-  { code: 'ANX', pattern: /\bANX\b|\bANNEX\b/i, name: 'MOBILECARE - APP THE ANNEX', shortName: 'The Annex', standardExcelLabel: 'MOBILECARE - APP THE ANNEX' },
+  { code: 'ANX', pattern: /\bANX\b|\bANNEX\b|ayala\s*north|north\s*exchange/i, name: 'MOBILECARE - APP THE ANNEX', shortName: 'The Annex', standardExcelLabel: 'MOBILECARE - APP THE ANNEX' },
   { code: 'BHS', pattern: /\bBHS\b|\bBONIFACIO\b/i, name: 'MOBILECARE - APP BONIFACIO HIGH STREET', shortName: 'Bonifacio High Street', standardExcelLabel: 'MOBILECARE - APP BONIFACIO HIGH STREET' },
   { code: 'CDO', pattern: /\bCDO\b|\bCAGAYAN\b/i, name: 'MOBILECARE - CAGAYAN DE ORO', shortName: 'Cagayan De Oro', standardExcelLabel: 'MOBILECARE - CAGAYAN DE ORO' },
   { code: 'CEB', pattern: /\bCEB\b|\bCEBU\b/i, name: 'MOBILECARE - CEBU', shortName: 'Cebu', standardExcelLabel: 'MOBILECARE - CEBU' },
