@@ -15,10 +15,13 @@ EXCEPTION
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned');
+    CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned', 'used');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
+
+-- Ensure 'used' exists if enum was already created in earlier migrations
+ALTER TYPE inventory_status ADD VALUE IF NOT EXISTS 'used';
 
 DO $$ BEGIN
     CREATE TYPE po_status AS ENUM ('draft', 'submitted', 'partially_received', 'received', 'closed');

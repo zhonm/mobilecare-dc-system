@@ -10,6 +10,7 @@
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue.js';
+import { isUUID, toValidUUID } from '../utils/appContextHelpers.js';
 
 const STORAGE_KEY = 'mdc_part_transfer_history';
 
@@ -132,7 +133,7 @@ async function syncToCloud(records) {
   if (supabase) {
     try {
       const recent = records.slice(0, 50).map(r => ({
-        id: r.id,
+        id: isUUID(r.id) ? r.id : toValidUUID(r.id),
         part_number: r.part_number,
         serial_number: r.serial_number || null,
         from_site_code: r.from_site_code,

@@ -2406,7 +2406,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- 2. Custom Enums
 CREATE TYPE user_role AS ENUM ('superadmin', 'admin', 'planner', 'warehouse_staff', 'logistics_staff', 'technician', 'site_staff', 'management_viewer', 'parts_management', 'user');
-CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned');
+CREATE TYPE inventory_status AS ENUM ('in_stock', 'allocated', 'packed', 'shipped', 'delivered', 'received', 'damaged', 'returned', 'used');
 CREATE TYPE po_status AS ENUM ('draft', 'submitted', 'partially_received', 'received', 'closed');
 CREATE TYPE shipment_status AS ENUM ('draft', 'packing', 'ready_for_dispatch', 'pending_pickup', 'shipped', 'in_transit', 'delivered', 'received_confirmed', 'discrepancy', 'cancelled');
 

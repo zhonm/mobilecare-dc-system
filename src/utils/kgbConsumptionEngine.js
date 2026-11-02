@@ -683,7 +683,7 @@ export async function executeKgbConsumptionSync({
         const chunkSize = 50;
         for (let i = 0; i < serialsToUpdate.length; i += chunkSize) {
           const chunk = serialsToUpdate.slice(i, i + chunkSize);
-          await supabase
+          const { error: updErr } = await supabase
             .from('inventory_units')
             .update({
               status: 'used',
@@ -691,6 +691,17 @@ export async function executeKgbConsumptionSync({
               updated_at: nowIso
             })
             .in('serial_number', chunk);
+
+          if (updErr && String(updErr.message || '').includes('inventory_status')) {
+            // Database enum 'inventory_status' has not yet added 'used' value; gracefully update timestamps
+            await supabase
+              .from('inventory_units')
+              .update({
+                allocated_at: nowIso,
+                updated_at: nowIso
+              })
+              .in('serial_number', chunk);
+          }
         }
       }
     } catch (dbErr) {
