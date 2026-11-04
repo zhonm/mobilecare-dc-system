@@ -5,13 +5,14 @@ import { isUUID, safeUUID, toValidUUID, isExplicitlyCleared, canUserDeleteRecord
 import { unmarkDeletedShipmentIds, unmarkDeletedSerials } from '../services/deletionRegistryService';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import { isShipmentArchived, fetchArchivedShipmentsFromCloud } from '../utils/archiveManager';
-import { getTodayDateString, isShipmentReceived } from '../utils/shipmentHelpers';
+import { getTodayDateString, isShipmentReceived, detectRecommendedShippingMode, formatCourierWithMode } from '../utils/shipmentHelpers';
 import { formatSiteOwner, normalizeSiteCode, recordBatchTransfers } from '../services/transferHistoryService';
 
 export function useShipments({
   currentUser,
   _parts = [],
   sites = [],
+  supervisorSettings = {},
   showToast,
   broadcastCloudEvent,
   logDeletionAudit,

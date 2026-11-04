@@ -465,6 +465,7 @@ export function AppProvider({ children }) {
     currentUser: auth.currentUser,
     parts: catalogAndSites.parts,
     sites: catalogAndSites.sites,
+    supervisorSettings: catalogAndSites.supervisorSettings,
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     logDeletionAudit: auditLogs.logDeletionAudit,
