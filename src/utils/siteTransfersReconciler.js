@@ -158,13 +158,27 @@ export function lookupSheet35StockPrice(partNumber, customPrices = null, partsCa
 }
 
 /**
- * Parses GSX KBB/KGBs Used Report file (XLSX or CSV, supporting ; or , delimiters,
+ * Parses GSX KBB/KGBs Used Report file / string content (XLSX or CSV, supporting ; or , delimiters,
  * multi-sheet workbooks, and side-by-side multi-table sheets like "Used Serial").
  */
 export async function parseGsxKbbKgbsUsedFile(file) {
   try {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array' });
+    let workbook;
+    let fileName = typeof file === 'string' ? 'GSX KGB Used Report' : (file?.name || 'GSX KGB Used Report');
+
+    if (typeof file === 'string') {
+      workbook = XLSX.read(file, { type: 'string' });
+    } else if (file && typeof file.content === 'string') {
+      workbook = XLSX.read(file.content, { type: 'string' });
+      fileName = file.name || fileName;
+    } else if (file && typeof file.arrayBuffer === 'function') {
+      const buffer = await file.arrayBuffer();
+      workbook = XLSX.read(buffer, { type: 'array' });
+    } else if (file instanceof ArrayBuffer || ArrayBuffer.isView(file)) {
+      workbook = XLSX.read(file, { type: 'array' });
+    } else {
+      return { success: false, error: 'Invalid file format or missing content.' };
+    }
 
     // Prefer "KGB Used" or "Used Serial" sheet when a multi-sheet workbook is uploaded
     let sheetName = workbook.SheetNames[0];
@@ -293,7 +307,7 @@ export async function parseGsxKbbKgbsUsedFile(file) {
       success: true,
       records,
       metadata: {
-        fileName: file.name,
+        fileName,
         sheetName,
         totalRows: records.length,
         withSerialsCount: records.filter(r => Boolean(r.product_kgb)).length,
@@ -312,8 +326,22 @@ export async function parseGsxKbbKgbsUsedFile(file) {
  */
 export async function parseFifoMonitoringWorkbook(file) {
   try {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array' });
+    let workbook;
+    let fileName = typeof file === 'string' ? 'FIFO Monitoring Workbook' : (file?.name || 'FIFO Monitoring Workbook');
+
+    if (typeof file === 'string') {
+      workbook = XLSX.read(file, { type: 'string' });
+    } else if (file && typeof file.content === 'string') {
+      workbook = XLSX.read(file.content, { type: 'string' });
+      fileName = file.name || fileName;
+    } else if (file && typeof file.arrayBuffer === 'function') {
+      const buffer = await file.arrayBuffer();
+      workbook = XLSX.read(buffer, { type: 'array' });
+    } else if (file instanceof ArrayBuffer || ArrayBuffer.isView(file)) {
+      workbook = XLSX.read(file, { type: 'array' });
+    } else {
+      return { success: false, error: 'Invalid file format or missing content.' };
+    }
 
     const transferSheetName = workbook.SheetNames.find(n => /^stock\s*transfers?$/i.test(n.trim())) ||
       workbook.SheetNames.find(n => /stock\s*transfer/i.test(n));
@@ -439,7 +467,7 @@ export async function parseFifoMonitoringWorkbook(file) {
       gsxRecords,
       customPrices,
       metadata: {
-        fileName: file.name,
+        fileName,
         transferSheetName,
         kgbSheetName,
         priceSheetName,
@@ -529,15 +557,15 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
   // Step 1: Filter transfers (DC Stocks Only by default, matching 'Used Serial'!H3: ISNUMBER(SEARCH("DC", FromStock)))
   const rawTransfersCount = (transferRecords || []).length;
   const scopedTransfers = (transferRecords || []).filter(t => {
-    const sn = String(t.serial_number || '').trim().toUpperCase();
+    const sn = String(t.serial_number || t.serialNumber || '').trim().toUpperCase();
     if (!sn || sn === 'N/A' || sn === 'NA' || sn === 'NONE' || sn === '—' || sn === '-') {
       return false;
     }
-    const fromStock = String(t.from_stock || '').toUpperCase();
+    const fromStock = String(t.from_stock || t.fromStock || '').toUpperCase();
     if (dcStocksOnly) {
       return fromStock.includes('DC');
     }
-    const desc = t.product_name || t.part_description || t.description || '';
+    const desc = t.product_name || t.productName || t.part_description || t.description || '';
     return isIPhone13AndUp(desc);
   });
 
@@ -591,10 +619,10 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
   // first occurrence wins (matching Excel XLOOKUP top-to-bottom behavior).
   const gsxBySerial = new Map();
   gsxRecords.forEach(g => {
-    const sn = String(g.product_kgb || '').trim().toUpperCase();
+    const sn = String(g.product_kgb || g.productKgb || g.serial_number || g.serialNumber || '').trim().toUpperCase();
     if (!sn || sn === 'N/A' || sn === 'NA' || sn === 'NONE' || sn === '—' || sn === '-') return;
 
-    const descUpper = String(g.product_description || '').trim().toUpperCase();
+    const descUpper = String(g.product_description || g.productDescription || g.description || '').trim().toUpperCase();
     if (descUpper && !(descUpper.includes('IPHONE') && (descUpper.includes('BATTERY') || descUpper.includes('DISPLAY')))) {
       return;
     }
@@ -617,31 +645,36 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
   const transferredSerialSet = new Set();
 
   scopedTransfers.forEach((t, idx) => {
-    const serialNumber = String(t.serial_number || '').trim().toUpperCase();
+    const serialNumber = String(t.serial_number || t.serialNumber || '').trim().toUpperCase();
     transferredSerialSet.add(serialNumber);
 
     const prevCount = serialOccurrences.get(serialNumber) || 0;
     serialOccurrences.set(serialNumber, prevCount + 1);
 
-    const normalizedRecStr = normalizeDate(t.transfer_received_date);
+    const normalizedRecStr = normalizeDate(t.transfer_received_date || t.receivedDate || t.transfer_date);
     const recDateMs = normalizedRecStr ? new Date(`${normalizedRecStr}T00:00:00Z`).getTime() : NaN;
-    const fromSite = normalizeSite(t.from_stock);
-    const currentSite = normalizeSite(t.to_stock);
+    const fromStockRaw = t.from_stock || t.fromStock || '';
+    const toStockRaw = t.to_stock || t.toStock || '';
+    const productCodeRaw = t.product_code || t.productCode || t.part_number || '';
+    const productNameRaw = t.product_name || t.productName || t.part_description || t.description || '';
+    const fromSite = normalizeSite(fromStockRaw);
+    const currentSite = normalizeSite(toStockRaw);
 
     if (prevCount > 0) {
       duplicateSerials.push({
         serial_number: serialNumber,
-        product_code: t.product_code,
-        product_name: t.product_name,
-        to_stock: t.to_stock,
+        product_code: productCodeRaw,
+        product_name: productNameRaw,
+        to_stock: toStockRaw,
         transfer_received_date: normalizedRecStr
       });
     }
 
     const gsxMatch = gsxBySerial.get(serialNumber) || null;
-    const normalizedClosedStr = gsxMatch ? normalizeDate(gsxMatch.repair_closed_date) : '';
+    const normalizedClosedStr = gsxMatch ? normalizeDate(gsxMatch.repair_closed_date || gsxMatch.repairClosedDate || gsxMatch.closedDate || gsxMatch.used_at) : '';
     const isUsed = Boolean(gsxMatch && normalizedClosedStr);
-    const gsxSite = gsxMatch ? normalizeSite(gsxMatch.location_name) : null;
+    const gsxLocationRaw = gsxMatch ? (gsxMatch.location_name || gsxMatch.locationName || gsxMatch.site_name || gsxMatch.raw_site_name || '') : '';
+    const gsxSite = gsxMatch ? normalizeSite(gsxLocationRaw) : null;
 
     // Cross-Site ("Transferred to ...") check matching 'KGB Used Serials'!A2:
     // IF((cc <> "") * ISERROR(SEARCH(standard_j, cc)), "Transferred to " & cc, cc)
@@ -723,31 +756,31 @@ export function reconcileSiteTransfers(transferRecords = [], gsxRecords = [], pa
     }
 
     // Official Sheet35 Stocking Price Lookup (XLOOKUP(PartNumber, Sheet35!P:P, Sheet35!S:S, 0))
-    const sheet35Price = lookupSheet35StockPrice(t.product_code, effectiveCustomPrices, partsCatalog);
-    if (sheet35Price === 0 && t.product_code) {
-      missingPricePartSet.add(String(t.product_code).trim().toUpperCase());
+    const sheet35Price = lookupSheet35StockPrice(productCodeRaw, effectiveCustomPrices, partsCatalog);
+    if (sheet35Price === 0 && productCodeRaw) {
+      missingPricePartSet.add(String(productCodeRaw).trim().toUpperCase());
     }
-    const resolvedPart = resolvePartInfo(t.product_code, partsCatalog);
+    const resolvedPart = resolvePartInfo(productCodeRaw, partsCatalog);
     const unitPrice = sheet35Price;
 
     reconciledRecords.push({
       row_id: `${serialNumber}-${currentSite.code}-${idx}`,
       serial_number: serialNumber,
-      product_code: String(t.product_code || '').trim(),
-      product_name: String(t.product_name || resolvedPart?.description || '').trim(),
+      product_code: String(productCodeRaw || '').trim(),
+      product_name: String(productNameRaw || resolvedPart?.description || '').trim(),
       category_id: resolvedPart?.category_id || '',
-      transfer_received_date: normalizedRecStr || String(t.transfer_received_date || ''),
-      first_received_date: normalizedRecStr || String(t.transfer_received_date || ''),
+      transfer_received_date: normalizedRecStr || String(t.transfer_received_date || t.receivedDate || ''),
+      first_received_date: normalizedRecStr || String(t.transfer_received_date || t.receivedDate || ''),
       transfer_count: prevCount + 1,
       transfer_trail: [{
         date: normalizedRecStr,
-        from: t.from_stock,
-        to: t.to_stock,
-        qty: t.transfer_quantity || 1
+        from: fromStockRaw,
+        to: toStockRaw,
+        qty: t.transfer_quantity || t.quantity || 1
       }],
-      from_stock: String(t.from_stock || '').trim(),
+      from_stock: String(fromStockRaw || '').trim(),
       from_site: fromSite,
-      to_stock: String(t.to_stock || '').trim(),
+      to_stock: String(toStockRaw || '').trim(),
       current_site: currentSite,
       transfer_type: transferType,
       unit_price: unitPrice,

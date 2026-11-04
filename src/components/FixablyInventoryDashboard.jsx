@@ -1105,6 +1105,21 @@ export default function FixablyInventoryDashboard({
 
       // Automatically persist to IndexedDB so uploaded files survive page refreshes, logouts, & restarts
       await dbStorage.setItem('mdc_uploaded_slot_' + slotKey, slotData);
+      try {
+        localStorage.setItem('mdc_uploaded_slot_' + slotKey + '_ts', nowIso);
+      } catch (_) {}
+
+      // Realtime cross-module broadcast to FIFO & DC Aging Stocks Audit
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('mdc_fifo_audit_sync');
+          bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', slotKey, updatedAt: nowIso });
+          bc.close();
+        } catch (_) {}
+      }
+      if (typeof broadcastCloudEvent === 'function') {
+        broadcastCloudEvent('FIFO_AUDIT_UPDATED', { slotKey, updatedAt: nowIso });
+      }
 
       const vDetails = validation.validationDetails;
       const warnSuffix = vDetails?.warnings?.length ? ` (${vDetails.warnings.join(' ')})` : '';
@@ -1180,6 +1195,13 @@ export default function FixablyInventoryDashboard({
     }));
     try {
       await dbStorage.removeItem('mdc_uploaded_slot_' + slotKey);
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('mdc_fifo_audit_sync');
+          bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', slotKey, cleared: true });
+          bc.close();
+        } catch (_) {}
+      }
     } catch (e) {}
   };
 
@@ -1196,6 +1218,13 @@ export default function FixablyInventoryDashboard({
         dbStorage.removeItem('mdc_uploaded_slot_kgb_used'),
         dbStorage.removeItem('mdc_uploaded_slot_stock_transfer')
       ]);
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('mdc_fifo_audit_sync');
+          bc.postMessage({ type: 'FIFO_AUDIT_UPDATED', clearedAll: true });
+          bc.close();
+        } catch (_) {}
+      }
     } catch (e) {}
   };
 
@@ -2267,7 +2296,7 @@ export default function FixablyInventoryDashboard({
           </div>
 
           {/* The 3 Drop Slots Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '16px', marginBottom: '20px' }}>
             
             {/* SLOT 1: Site Stocks (output.csv) [Required] */}
             <div
@@ -2299,20 +2328,57 @@ export default function FixablyInventoryDashboard({
               </div>
 
               {slots.site_stock.valid ? (
-                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={15} color="#16a34a" />
-                      <span>{slots.site_stock.name}</span>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px' }}>
+                  {/* File Name & Metadata (Full Width) */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', minWidth: 0, flex: 1 }}>
+                      <CheckCircle2 size={16} color="#16a34a" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontSize: '13px',
+                          fontWeight: 800,
+                          color: '#166534',
+                          lineHeight: '1.35',
+                          wordBreak: 'break-word'
+                        }} title={slots.site_stock.name}>
+                          {slots.site_stock.name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                          {formatFileSize(slots.site_stock.size)} • {slots.site_stock.rowCount.toLocaleString()} inventory units
+                          {slots.site_stock.updatedAt && (
+                            <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.site_stock.updatedAt).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
-                      {formatFileSize(slots.site_stock.size)} • {slots.site_stock.rowCount.toLocaleString()} inventory units
-                      {slots.site_stock.updatedAt && (
-                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.site_stock.updatedAt).toLocaleDateString()}</span>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('site_stock');
+                      }}
+                      style={{
+                        height: '24px',
+                        width: '24px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid #fecdd3',
+                        background: '#fee2e2',
+                        borderRadius: '5px',
+                        padding: 0,
+                        cursor: 'pointer',
+                        color: '#dc2626',
+                        flexShrink: 0
+                      }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+
+                  {/* Action Bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', paddingTop: '8px', borderTop: '1px solid #f0fdf4' }}>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -2320,33 +2386,25 @@ export default function FixablyInventoryDashboard({
                         siteStockInputRef.current?.click();
                       }}
                       style={{
+                        height: '28px',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px',
+                        justifyContent: 'center',
+                        gap: '5px',
                         border: '1px solid #86efac',
                         background: '#f0fdf4',
-                        borderRadius: '4px',
-                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        padding: '0 12px',
                         fontSize: '11px',
                         fontWeight: 700,
+                        whiteSpace: 'nowrap',
                         cursor: 'pointer',
                         color: '#15803d'
                       }}
                       title="Replace / Update File"
                     >
-                      <RefreshCw size={11} />
-                      <span>Replace</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleClearSlot('site_stock');
-                      }}
-                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                      title="Remove file"
-                    >
-                      <X size={13} />
+                      <RefreshCw size={11} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap' }}>Replace</span>
                     </button>
                   </div>
                 </div>
@@ -2407,41 +2465,83 @@ export default function FixablyInventoryDashboard({
               </div>
 
               {slots.kgb_used.valid ? (
-                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <CheckCircle2 size={15} color="#16a34a" />
-                      <span>{slots.kgb_used.name}</span>
+                <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px' }}>
+                  {/* File Name & Metadata (Full Width) */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', minWidth: 0, flex: 1 }}>
+                      <CheckCircle2 size={16} color="#16a34a" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontSize: '13px',
+                          fontWeight: 800,
+                          color: '#166534',
+                          lineHeight: '1.35',
+                          wordBreak: 'break-word'
+                        }} title={slots.kgb_used.name}>
+                          {slots.kgb_used.name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                          {formatFileSize(slots.kgb_used.size)} • {slots.kgb_used.rowCount.toLocaleString()} repair log rows
+                          {slots.kgb_used.updatedAt && (
+                            <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.kgb_used.updatedAt).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
-                      {formatFileSize(slots.kgb_used.size)} • {slots.kgb_used.rowCount.toLocaleString()} repair log rows
-                      {slots.kgb_used.updatedAt && (
-                        <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.kgb_used.updatedAt).toLocaleDateString()}</span>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('kgb_used');
+                      }}
+                      style={{
+                        height: '24px',
+                        width: '24px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid #fecdd3',
+                        background: '#fee2e2',
+                        borderRadius: '5px',
+                        padding: 0,
+                        cursor: 'pointer',
+                        color: '#dc2626',
+                        flexShrink: 0
+                      }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+
+                  {/* Action Bar: Sync Consumption + Replace */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '8px', borderTop: '1px solid #f0fdf4' }}>
                     <button
                       type="button"
                       onClick={handleQuickSyncKgb}
                       disabled={isSyncingKgbOnly}
                       style={{
+                        flex: 1,
+                        height: '28px',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px',
+                        justifyContent: 'center',
+                        gap: '5px',
                         border: '1px solid #059669',
                         background: '#ecfdf5',
-                        borderRadius: '4px',
-                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        padding: '0 10px',
                         fontSize: '11px',
                         fontWeight: 700,
+                        whiteSpace: 'nowrap',
                         cursor: isSyncingKgbOnly ? 'not-allowed' : 'pointer',
-                        color: '#059669'
+                        color: '#059669',
+                        boxSizing: 'border-box'
                       }}
                       title="Sync consumed parts directly into Parts Consumption Log"
                     >
-                      <Wrench size={11} className={isSyncingKgbOnly ? 'animate-spin' : ''} />
-                      <span>{isSyncingKgbOnly ? 'Syncing...' : 'Sync Consumption'}</span>
+                      <Wrench size={12} className={isSyncingKgbOnly ? 'animate-spin' : ''} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap' }}>{isSyncingKgbOnly ? 'Syncing...' : 'Sync Consumption'}</span>
                     </button>
                     <button
                       type="button"
@@ -2450,33 +2550,27 @@ export default function FixablyInventoryDashboard({
                         kgbInputRef.current?.click();
                       }}
                       style={{
+                        height: '28px',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px',
+                        justifyContent: 'center',
+                        gap: '5px',
                         border: '1px solid #86efac',
                         background: '#f0fdf4',
-                        borderRadius: '4px',
-                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        padding: '0 12px',
                         fontSize: '11px',
                         fontWeight: 700,
+                        whiteSpace: 'nowrap',
                         cursor: 'pointer',
-                        color: '#15803d'
+                        color: '#15803d',
+                        flexShrink: 0,
+                        boxSizing: 'border-box'
                       }}
                       title="Replace / Update File"
                     >
-                      <RefreshCw size={11} />
-                      <span>Replace</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleClearSlot('kgb_used');
-                      }}
-                      style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                      title="Remove file"
-                    >
-                      <X size={13} />
+                      <RefreshCw size={11} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap' }}>Replace</span>
                     </button>
                   </div>
                 </div>
@@ -2538,57 +2632,87 @@ export default function FixablyInventoryDashboard({
 
               {slots.stock_transfer.valid ? (
                 <div style={{ background: '#ffffff', border: '1.5px solid #86efac', borderRadius: '8px', padding: '10px 12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <CheckCircle2 size={15} color="#16a34a" />
-                        <span>{slots.stock_transfer.name}</span>
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#4b5563', marginTop: '2px' }}>
-                        {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
-                        {slots.stock_transfer.updatedAt && (
-                          <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
-                        )}
+                  {/* File Name & Metadata (Full Width) */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', minWidth: 0, flex: 1 }}>
+                      <CheckCircle2 size={16} color="#16a34a" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          fontSize: '13px',
+                          fontWeight: 800,
+                          color: '#166534',
+                          lineHeight: '1.35',
+                          wordBreak: 'break-word'
+                        }} title={slots.stock_transfer.name}>
+                          {slots.stock_transfer.name}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                          {formatFileSize(slots.stock_transfer.size)} • {slots.stock_transfer.rowCount.toLocaleString()} transfer records
+                          {slots.stock_transfer.updatedAt && (
+                            <span style={{ color: '#047857', fontWeight: 600 }}> • Saved {new Date(slots.stock_transfer.updatedAt).toLocaleDateString()}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          stockTransferInputRef.current?.click();
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          border: '1px solid #86efac',
-                          background: '#f0fdf4',
-                          borderRadius: '4px',
-                          padding: '4px 8px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          color: '#15803d'
-                        }}
-                        title="Replace / Update File"
-                      >
-                        <RefreshCw size={11} />
-                        <span>Replace</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleClearSlot('stock_transfer');
-                        }}
-                        style={{ border: 'none', background: '#fee2e2', borderRadius: '4px', padding: '5px', cursor: 'pointer', color: '#dc2626' }}
-                        title="Remove file"
-                      >
-                        <X size={13} />
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClearSlot('stock_transfer');
+                      }}
+                      style={{
+                        height: '24px',
+                        width: '24px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid #fecdd3',
+                        background: '#fee2e2',
+                        borderRadius: '5px',
+                        padding: 0,
+                        cursor: 'pointer',
+                        color: '#dc2626',
+                        flexShrink: 0
+                      }}
+                      title="Remove file"
+                    >
+                      <X size={13} />
+                    </button>
                   </div>
+
+                  {/* Action Bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px', paddingTop: '8px', borderTop: '1px solid #f0fdf4' }}>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        stockTransferInputRef.current?.click();
+                      }}
+                      style={{
+                        height: '28px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '5px',
+                        border: '1px solid #86efac',
+                        background: '#f0fdf4',
+                        borderRadius: '6px',
+                        padding: '0 12px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                        color: '#15803d',
+                        flexShrink: 0,
+                        boxSizing: 'border-box'
+                      }}
+                      title="Replace / Update File"
+                    >
+                      <RefreshCw size={11} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap' }}>Replace</span>
+                    </button>
+                  </div>
+
                   {(slots.stock_transfer.validationDetails || snapshot?.transferStats) && (
                     <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #bbf7d0', display: 'flex', gap: '6px', flexWrap: 'wrap', fontSize: '10.5px' }}>
                       <span style={{ background: '#f5f3ff', color: '#6d28d9', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>

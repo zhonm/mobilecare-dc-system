@@ -5,7 +5,6 @@ import { supabase } from '../supabase/client';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue';
 import {
   parseGsxKbbKgbsUsedFile,
-  parseFifoMonitoringWorkbook,
   reconcileSiteTransfers,
   normalizeDate,
   APPLE_STOCKING_PRICE_COUNT
@@ -16,7 +15,6 @@ import {
 } from '../utils/excelParser';
 import {
   FileSpreadsheet,
-  UploadCloud,
   Download,
   Printer,
   FileText,
@@ -36,7 +34,6 @@ import {
   DollarSign,
   Layers,
   BookOpen,
-  Sparkles,
   Database
 } from 'lucide-react';
 
@@ -55,15 +52,9 @@ export default function SiteTransfersFifoReport() {
   const [gsxMeta, setGsxMeta] = useState(null);
   const [customPriceMap, setCustomPriceMap] = useState(null);
 
-  const [isProcessingTransfers, setIsProcessingTransfers] = useState(false);
-  const [isProcessingGsx, setIsProcessingGsx] = useState(false);
-  const [isProcessingWorkbook, setIsProcessingWorkbook] = useState(false);
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [lastCloudSyncTime, setLastCloudSyncTime] = useState(null);
 
-  const transferInputRef = useRef(null);
-  const gsxInputRef = useRef(null);
-  const workbookInputRef = useRef(null);
   const isSyncingRef = useRef(false);
 
   // Active view tab: scorecard | branch_sheet | aging | fifo | ledger | discrepancies | guide
@@ -378,33 +369,198 @@ export default function SiteTransfersFifoReport() {
     }
   }, [uploadTransfersToCloud, uploadGsxToCloud]);
 
-  // Initial Load: IndexedDB local cache first, then lightweight cloud sync check
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const [cachedGsx, cachedGsxMeta, cachedTrf, cachedTrfMeta, wasCleared] = await Promise.all([
-          dbStorage.getItem('mdc_gsx_used_records'),
-          dbStorage.getItem('mdc_gsx_used_meta'),
-          dbStorage.getItem('mdc_site_transfers_records'),
-          dbStorage.getItem('mdc_site_transfers_meta'),
-          dbStorage.getItem('mdc_site_transfers_cleared')
-        ]);
-        if (isMounted && !wasCleared) {
-          if (Array.isArray(cachedGsx) && cachedGsx.length > 0) {
-            setGsxData(cachedGsx);
-            setGsxMeta(cachedGsxMeta || null);
-          }
-          if (Array.isArray(cachedTrf) && cachedTrf.length > 0) {
-            setTransfersData(cachedTrf);
-            setTransfersMeta(cachedTrfMeta || null);
+  // Centralized Data Ingestion: Directly integrate All Stocks & Multi-Site uploaded reports as Single Source of Truth
+  const loadDataFromAllStocks = useCallback(async ({ force = false, silent = false } = {}) => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    if (!silent) setIsCloudSyncing(true);
+
+    try {
+      // 1. Fetch uploaded slot files from All Stocks Ingestion Center, Fixably snapshot, and local caches
+      const [
+        slotTrf,
+        slotKgb,
+        fixablySnapshot,
+        cachedTrf,
+        cachedTrfMeta,
+        cachedGsx,
+        cachedGsxMeta
+      ] = await Promise.all([
+        dbStorage.getItem('mdc_uploaded_slot_stock_transfer'),
+        dbStorage.getItem('mdc_uploaded_slot_kgb_used'),
+        dbStorage.getItem('mdc_fixably_snapshot'),
+        dbStorage.getItem('mdc_site_transfers_records'),
+        dbStorage.getItem('mdc_site_transfers_meta'),
+        dbStorage.getItem('mdc_gsx_used_records'),
+        dbStorage.getItem('mdc_gsx_used_meta')
+      ]);
+
+      let nextTrfData = null;
+      let nextTrfMeta = null;
+      let nextGsxData = null;
+      let nextGsxMeta = null;
+
+      // ── Resolve Stock Transfers (Slot 3) ─────────────────────────
+      if (slotTrf && slotTrf.content) {
+        const isNewerSlot = force || !cachedTrfMeta?.uploadedAt || (slotTrf.updatedAt && slotTrf.updatedAt !== cachedTrfMeta.uploadedAt);
+        if (isNewerSlot || !Array.isArray(cachedTrf) || cachedTrf.length === 0) {
+          const parsed = await parseStockTransfersReportFile(slotTrf);
+          if (parsed.success && parsed.records?.length > 0) {
+            const cleanTrf = sanitizeTransfersForCloud(parsed.records);
+            nextTrfData = cleanTrf;
+            nextTrfMeta = {
+              fileName: slotTrf.name || 'Fixably Stock Transfer Report',
+              uploadedAt: slotTrf.updatedAt || new Date().toISOString(),
+              totalRows: cleanTrf.length,
+              source: 'All Stocks & Inventory (Slot 3)'
+            };
+            await Promise.all([
+              dbStorage.setItem('mdc_site_transfers_records', cleanTrf),
+              dbStorage.setItem('mdc_site_transfers_meta', nextTrfMeta),
+              dbStorage.removeItem('mdc_site_transfers_cleared')
+            ]);
+            uploadTransfersToCloud(cleanTrf, nextTrfMeta).catch(() => {});
           }
         }
-      } catch (e) {
-        console.warn('Could not load cached reconciliation datasets', e);
       }
-      if (isMounted) {
-        syncFromCloud({ force: false, silent: true });
+
+      // Fallback 1: Use cached transfers if available
+      if (!nextTrfData && Array.isArray(cachedTrf) && cachedTrf.length > 0) {
+        nextTrfData = cachedTrf;
+        nextTrfMeta = cachedTrfMeta || {
+          fileName: slotTrf?.name || 'Fixably Stock Transfers',
+          uploadedAt: slotTrf?.updatedAt || new Date().toISOString(),
+          totalRows: cachedTrf.length,
+          source: 'All Stocks & Inventory (Slot 3)'
+        };
+      }
+
+      // Fallback 2: Extract transfers from Fixably Snapshot if slot content is unavailable
+      if (!nextTrfData && Array.isArray(fixablySnapshot?.transfers) && fixablySnapshot.transfers.length > 0) {
+        const mapped = fixablySnapshot.transfers.map((t, idx) => ({
+          id: t.id || `trf-snap-${idx}`,
+          transfer_received_date: normalizeDate(t.receivedDate || t.transfer_received_date),
+          from_stock: t.fromStock || t.from_stock || '',
+          to_stock: t.toStock || t.to_stock || '',
+          product_code: String(t.productCode || t.product_code || '').trim().toUpperCase(),
+          product_name: t.productName || t.product_name || '',
+          serial_number: String(t.serialNumber || t.serial_number || '').trim().toUpperCase(),
+          transfer_quantity: Number(t.quantity || t.transfer_quantity) || 1,
+          transfer_value: Number(t.transferValue || t.transfer_value) || 0
+        }));
+        const cleanTrf = sanitizeTransfersForCloud(mapped);
+        if (cleanTrf.length > 0) {
+          nextTrfData = cleanTrf;
+          nextTrfMeta = {
+            fileName: slotTrf?.name || 'All Stocks Reconciled Transfers',
+            uploadedAt: fixablySnapshot.timestamp || new Date().toISOString(),
+            totalRows: cleanTrf.length,
+            source: 'All Stocks Reconciled Dataset'
+          };
+          await Promise.all([
+            dbStorage.setItem('mdc_site_transfers_records', cleanTrf),
+            dbStorage.setItem('mdc_site_transfers_meta', nextTrfMeta)
+          ]);
+        }
+      }
+
+      // ── Resolve GSX KGB Used Report (Slot 2) ───────────────────────
+      if (slotKgb && slotKgb.content) {
+        const isNewerSlot = force || !cachedGsxMeta?.uploadedAt || (slotKgb.updatedAt && slotKgb.updatedAt !== cachedGsxMeta.uploadedAt);
+        if (isNewerSlot || !Array.isArray(cachedGsx) || cachedGsx.length === 0) {
+          const parsed = await parseGsxKbbKgbsUsedFile(slotKgb);
+          if (parsed.success && parsed.records?.length > 0) {
+            const cleanGsx = sanitizeGsxForCloud(parsed.records);
+            nextGsxData = cleanGsx;
+            nextGsxMeta = {
+              fileName: slotKgb.name || 'GSX KGB Used Report',
+              uploadedAt: slotKgb.updatedAt || new Date().toISOString(),
+              totalRows: cleanGsx.length,
+              source: 'All Stocks & Inventory (Slot 2)'
+            };
+            await Promise.all([
+              dbStorage.setItem('mdc_gsx_used_records', cleanGsx),
+              dbStorage.setItem('mdc_gsx_used_meta', nextGsxMeta),
+              dbStorage.removeItem('mdc_site_transfers_cleared')
+            ]);
+            uploadGsxToCloud(cleanGsx, nextGsxMeta).catch(() => {});
+          }
+        }
+      }
+
+      // Fallback 1: Use cached GSX records if available
+      if (!nextGsxData && Array.isArray(cachedGsx) && cachedGsx.length > 0) {
+        nextGsxData = cachedGsx;
+        nextGsxMeta = cachedGsxMeta || {
+          fileName: slotKgb?.name || 'GSX KGB Used Report',
+          uploadedAt: slotKgb?.updatedAt || new Date().toISOString(),
+          totalRows: cachedGsx.length,
+          source: 'All Stocks & Inventory (Slot 2)'
+        };
+      }
+
+      // Fallback 2: Extract from master_used_parts_registry if available
+      if (!nextGsxData) {
+        const masterUsed = await dbStorage.getItem('master_used_parts_registry');
+        if (Array.isArray(masterUsed) && masterUsed.length > 0) {
+          const mapped = masterUsed.map(r => ({
+            order_id: String(r.work_order_number || r.order_id || '').trim(),
+            location_name: String(r.raw_site_name || r.site_name || '').trim(),
+            repair_closed_date: normalizeDate(r.repair_closed_date || r.used_at || r.created_at),
+            product_code: String(r.part_number || r.product_code || '').trim().toUpperCase(),
+            product_description: String(r.description || r.product_description || '').trim(),
+            product_kgb: String(r.serial_number || r.product_kgb || '').trim().toUpperCase(),
+            product_kbb: String(r.product_kbb || '').trim().toUpperCase(),
+            gsx_repair_number: String(r.repair_number || '').trim(),
+            current_gsx_status: 'SCOM'
+          }));
+          const cleanGsx = sanitizeGsxForCloud(mapped);
+          if (cleanGsx.length > 0) {
+            nextGsxData = cleanGsx;
+            nextGsxMeta = {
+              fileName: slotKgb?.name || 'Master Used Parts Registry',
+              uploadedAt: new Date().toISOString(),
+              totalRows: cleanGsx.length,
+              source: 'All Stocks & Used Parts Registry'
+            };
+            await Promise.all([
+              dbStorage.setItem('mdc_gsx_used_records', cleanGsx),
+              dbStorage.setItem('mdc_gsx_used_meta', nextGsxMeta)
+            ]);
+          }
+        }
+      }
+
+      if (nextTrfData) {
+        setTransfersData(nextTrfData);
+        setTransfersMeta(nextTrfMeta);
+      }
+      if (nextGsxData) {
+        setGsxData(nextGsxData);
+        setGsxMeta(nextGsxMeta);
+      }
+
+      // ── Cloud Sync Fallback (Multi-device remote sync) ──
+      if (supabase && (!nextTrfData || !nextGsxData || force)) {
+        await syncFromCloud({ force, silent: true });
+      }
+
+      setLastCloudSyncTime(new Date());
+    } catch (err) {
+      console.warn('[FIFO Audit Sync] Error in loadDataFromAllStocks:', err);
+    } finally {
+      isSyncingRef.current = false;
+      setIsCloudSyncing(false);
+    }
+  }, [sanitizeTransfersForCloud, sanitizeGsxForCloud, uploadTransfersToCloud, uploadGsxToCloud, syncFromCloud]);
+
+  // Initial Load & Realtime Cross-Module Synchronization
+  useEffect(() => {
+    (async () => {
+      try {
+        await loadDataFromAllStocks({ silent: true });
+      } catch (e) {
+        console.warn('Could not load reconciliation datasets', e);
       }
     })();
 
@@ -413,8 +569,15 @@ export default function SiteTransfersFifoReport() {
       realtimeChannel = supabase.channel('mdc_fifo_audit_realtime_room')
         .on('broadcast', { event: 'mdc_sync' }, (payload) => {
           const p = payload?.payload;
-          if (p && (p.type === 'FIFO_AUDIT_UPDATED' || p.type === 'FIFO_AUDIT_CLEARED' || p.type === 'MASTER_DATA_UPDATED')) {
-            syncFromCloud({ force: false, silent: true });
+          if (p && (
+            p.type === 'FIFO_AUDIT_UPDATED' ||
+            p.type === 'FIFO_AUDIT_CLEARED' ||
+            p.type === 'MASTER_DATA_UPDATED' ||
+            p.type === 'FIXABLY_SNAPSHOT_UPDATED' ||
+            p.type === 'KGB_USED_REPORT_SYNCED' ||
+            p.type === 'STOCK_UPDATED'
+          )) {
+            loadDataFromAllStocks({ force: false, silent: true });
           }
         })
         .on('postgres_changes', {
@@ -423,7 +586,7 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_TRANSFERS_DOC_ID}`
         }, () => {
-          syncFromCloud({ force: false, silent: true });
+          loadDataFromAllStocks({ force: false, silent: true });
         })
         .on('postgres_changes', {
           event: '*',
@@ -431,155 +594,61 @@ export default function SiteTransfersFifoReport() {
           table: 'saved_records',
           filter: `id=eq.${FIFO_GSX_DOC_ID}`
         }, () => {
-          syncFromCloud({ force: false, silent: true });
+          loadDataFromAllStocks({ force: false, silent: true });
         })
         .subscribe();
     }
 
-    let bc = null;
+    let bcFifo = null;
+    let bcFixably = null;
+    let bcSyncBus = null;
     try {
-      bc = new BroadcastChannel('mdc_fifo_audit_sync');
-      bc.onmessage = () => {
-        syncFromCloud({ force: false, silent: true });
+      bcFifo = new BroadcastChannel('mdc_fifo_audit_sync');
+      bcFifo.onmessage = () => {
+        loadDataFromAllStocks({ force: false, silent: true });
+      };
+    } catch (_) {}
+    try {
+      bcFixably = new BroadcastChannel('mdc_fixably_sync');
+      bcFixably.onmessage = () => {
+        loadDataFromAllStocks({ force: false, silent: true });
+      };
+    } catch (_) {}
+    try {
+      bcSyncBus = new BroadcastChannel('mdc_sync_bus');
+      bcSyncBus.onmessage = () => {
+        loadDataFromAllStocks({ force: false, silent: true });
       };
     } catch (_) {}
 
+    const handleStorageChange = (e) => {
+      if (
+        e.key === 'mdc_uploaded_slot_stock_transfer' ||
+        e.key === 'mdc_uploaded_slot_kgb_used' ||
+        e.key === 'mdc_fixably_snapshot' ||
+        e.key === 'master_used_parts_registry' ||
+        e.key === 'mdc_site_transfers_records' ||
+        e.key === 'mdc_gsx_used_records'
+      ) {
+        loadDataFromAllStocks({ force: false, silent: true });
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
     return () => {
-      isMounted = false;
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel);
       }
-      if (bc) bc.close();
+      if (bcFifo) bcFifo.close();
+      if (bcFixably) bcFixably.close();
+      if (bcSyncBus) bcSyncBus.close();
+      window.removeEventListener('storage', handleStorageChange);
     };
-  }, [syncFromCloud]);
+  }, [loadDataFromAllStocks]);
 
-  // Handle 1-Click Full Monitoring Workbook upload (loads Stock Transfer + KGB Used + Sheet35 simultaneously)
-  const handleFullWorkbookUpload = async (file) => {
-    if (!file) return;
-    setIsProcessingWorkbook(true);
-    try {
-      const res = await parseFifoMonitoringWorkbook(file);
-      if (res.success && (res.transfers.length > 0 || res.gsxRecords.length > 0)) {
-        if (res.transfers.length > 0) {
-          const cleanTrf = sanitizeTransfersForCloud(res.transfers);
-          const trfMeta = {
-            fileName: `${file.name} (Stock Transfer)`,
-            uploadedAt: new Date().toISOString(),
-            totalRows: cleanTrf.length
-          };
-          setTransfersData(cleanTrf);
-          setTransfersMeta(trfMeta);
-          await Promise.all([
-            dbStorage.setItem('mdc_site_transfers_records', cleanTrf),
-            dbStorage.setItem('mdc_site_transfers_meta', trfMeta),
-            dbStorage.removeItem('mdc_site_transfers_cleared')
-          ]);
-          await uploadTransfersToCloud(cleanTrf, trfMeta);
-        }
-        if (res.gsxRecords.length > 0) {
-          const cleanGsx = sanitizeGsxForCloud(res.gsxRecords);
-          const gMeta = {
-            fileName: `${file.name} (KGB Used)`,
-            uploadedAt: new Date().toISOString(),
-            totalRows: cleanGsx.length
-          };
-          setGsxData(cleanGsx);
-          setGsxMeta(gMeta);
-          await Promise.all([
-            dbStorage.setItem('mdc_gsx_used_records', cleanGsx),
-            dbStorage.setItem('mdc_gsx_used_meta', gMeta),
-            dbStorage.removeItem('mdc_site_transfers_cleared')
-          ]);
-          await uploadGsxToCloud(cleanGsx, gMeta);
-        }
-        if (res.customPrices && Object.keys(res.customPrices).length > 0) {
-          setCustomPriceMap(res.customPrices);
-        }
-        showToast(
-          `Loaded full FIFO Monitoring Workbook: ${res.transfers.length.toLocaleString()} transfers & ${res.gsxRecords.length.toLocaleString()} KGB repair records`,
-          'success'
-        );
-        setCurrentPage(1);
-      } else {
-        showToast(res.error || 'Workbook did not contain recognizable Stock Transfer or KGB Used sheets.', 'error');
-      }
-    } catch (err) {
-      showToast(`Error processing workbook: ${err.message}`, 'error');
-    } finally {
-      setIsProcessingWorkbook(false);
-      if (workbookInputRef.current) workbookInputRef.current.value = '';
-    }
-  };
-
-  // Handle Transfers file upload (Slot 1)
-  const handleTransfersUpload = async (file) => {
-    if (!file) return;
-    setIsProcessingTransfers(true);
-    try {
-      const res = await parseStockTransfersReportFile(file);
-      if (res.success) {
-        const cleanRecords = sanitizeTransfersForCloud(res.records);
-        const meta = {
-          ...res.metadata,
-          totalRows: cleanRecords.length
-        };
-        setTransfersData(cleanRecords);
-        setTransfersMeta(meta);
-        await Promise.all([
-          dbStorage.setItem('mdc_site_transfers_records', cleanRecords),
-          dbStorage.setItem('mdc_site_transfers_meta', meta),
-          dbStorage.removeItem('mdc_site_transfers_cleared')
-        ]);
-        await uploadTransfersToCloud(cleanRecords, meta);
-        showToast(`Loaded and cloud-synced ${cleanRecords.length.toLocaleString()} stock transfer records`, 'success');
-        setCurrentPage(1);
-      } else {
-        showToast(res.error || 'Failed to parse Stock Transfers file', 'error');
-      }
-    } catch (err) {
-      showToast(`Error processing Transfers file: ${err.message}`, 'error');
-    } finally {
-      setIsProcessingTransfers(false);
-      if (transferInputRef.current) transferInputRef.current.value = '';
-    }
-  };
-
-  // Handle GSX KBB/KGBs Used report upload (Slot 2)
-  const handleGsxUpload = async (file) => {
-    if (!file) return;
-    setIsProcessingGsx(true);
-    try {
-      const res = await parseGsxKbbKgbsUsedFile(file);
-      if (res.success) {
-        const cleanRecords = sanitizeGsxForCloud(res.records);
-        const meta = {
-          ...res.metadata,
-          totalRows: cleanRecords.length
-        };
-        setGsxData(cleanRecords);
-        setGsxMeta(meta);
-        await Promise.all([
-          dbStorage.setItem('mdc_gsx_used_records', cleanRecords),
-          dbStorage.setItem('mdc_gsx_used_meta', meta),
-          dbStorage.removeItem('mdc_site_transfers_cleared')
-        ]);
-        await uploadGsxToCloud(cleanRecords, meta);
-        showToast(`Loaded and cloud-synced ${cleanRecords.length.toLocaleString()} GSX used part records`, 'success');
-        setCurrentPage(1);
-      } else {
-        showToast(res.error || 'Failed to parse GSX report', 'error');
-      }
-    } catch (err) {
-      showToast(`Error processing GSX file: ${err.message}`, 'error');
-    } finally {
-      setIsProcessingGsx(false);
-      if (gsxInputRef.current) gsxInputRef.current.value = '';
-    }
-  };
-
-  // Clear datasets
+  // Reset audit cache and re-sync fresh from All Stocks & Multi-Site
   const handleClearAll = async () => {
-    if (!window.confirm('Clear uploaded Stock Transfer and GSX reports from this audit workspace? Both reports will be removed across all connected accounts and devices.')) return;
+    if (!window.confirm('Reset local audit cache? Data will automatically re-synchronize from the latest files uploaded in All Stocks & Inventory.')) return;
     setTransfersData([]);
     setTransfersMeta(null);
     setGsxData([]);
@@ -592,9 +661,6 @@ export default function SiteTransfersFifoReport() {
     setSelectedCommodity('ALL');
     setSearchQuery('');
     setCurrentPage(1);
-    if (transferInputRef.current) transferInputRef.current.value = '';
-    if (gsxInputRef.current) gsxInputRef.current.value = '';
-    if (workbookInputRef.current) workbookInputRef.current.value = '';
 
     const nowIso = new Date().toISOString();
     await Promise.all([
@@ -602,7 +668,6 @@ export default function SiteTransfersFifoReport() {
       dbStorage.removeItem('mdc_site_transfers_meta'),
       dbStorage.removeItem('mdc_gsx_used_records'),
       dbStorage.removeItem('mdc_gsx_used_meta'),
-      dbStorage.setItem('mdc_site_transfers_cleared', true),
       dbStorage.setItem('mdc_fifo_transfers_updated_at', nowIso),
       dbStorage.setItem('mdc_fifo_gsx_updated_at', nowIso)
     ]);
@@ -611,13 +676,13 @@ export default function SiteTransfersFifoReport() {
       localStorage.removeItem('mdc_site_transfers_meta');
       localStorage.removeItem('mdc_gsx_used_records');
       localStorage.removeItem('mdc_gsx_used_meta');
-      localStorage.setItem('mdc_site_transfers_cleared', 'true');
       localStorage.setItem('mdc_fifo_transfers_updated_at', nowIso);
       localStorage.setItem('mdc_fifo_gsx_updated_at', nowIso);
     } catch (_) {}
 
     await clearCloudAudit();
-    showToast('Audit workspace and cloud cache cleared across all accounts.', 'info');
+    showToast('Audit cache reset. Reloading fresh data from All Stocks...', 'info');
+    await loadDataFromAllStocks({ force: true, silent: false });
   };
 
   // Master reconciliation memo (replicates exact Excel formulas & 4-table branch structures)
@@ -783,12 +848,17 @@ export default function SiteTransfersFifoReport() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          {/* 1-Click Full Workbook Upload Button */}
+          {/* Automated Sync with All Stocks Button */}
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            onClick={() => workbookInputRef.current?.click()}
-            disabled={isProcessingWorkbook}
+            onClick={async () => {
+              showToast('Syncing latest records from All Stocks & Multi-Site Inventory...', 'info');
+              await loadDataFromAllStocks({ force: true, silent: false });
+              showToast('FIFO & Aging audit synchronized with All Stocks', 'success');
+            }}
+            disabled={isCloudSyncing}
+            title="Retrieve latest inventory, transfer and consumption records from All Stocks & Multi-Site"
             style={{
               background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
               borderColor: '#1d4ed8',
@@ -799,16 +869,14 @@ export default function SiteTransfersFifoReport() {
               gap: '6px'
             }}
           >
-            <Sparkles size={14} />
-            <span>{isProcessingWorkbook ? 'Parsing Workbook...' : '1-Click Upload Full .xlsx Workbook'}</span>
+            <RefreshCw size={13} style={{ animation: isCloudSyncing ? 'spin 1s linear infinite' : 'none' }} />
+            <span>{isCloudSyncing ? 'Syncing...' : 'Sync from All Stocks'}</span>
+            {lastCloudSyncTime && (
+              <span style={{ fontSize: '10px', color: '#bae6fd', marginLeft: '2px' }}>
+                ({new Date(lastCloudSyncTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+              </span>
+            )}
           </button>
-          <input
-            ref={workbookInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFullWorkbookUpload(f); }}
-          />
 
           <button
             type="button"
@@ -830,13 +898,8 @@ export default function SiteTransfersFifoReport() {
               gap: '6px'
             }}
           >
-            <RefreshCw size={13} style={{ animation: isCloudSyncing ? 'spin 1s linear infinite' : 'none' }} />
-            <span>{isCloudSyncing ? 'Syncing Cloud...' : 'Cloud Synced'}</span>
-            {lastCloudSyncTime && (
-              <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '2px' }}>
-                ({new Date(lastCloudSyncTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
-              </span>
-            )}
+            <Activity size={13} />
+            <span>Cloud Synced</span>
           </button>
 
           {records.length > 0 && (
@@ -892,224 +955,241 @@ export default function SiteTransfersFifoReport() {
               }}
             >
               <RefreshCw size={13} />
-              <span>Clear Audit</span>
+              <span>Reset Audit Cache</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* ── 3 Data Sources Specification Cards ──────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px', marginBottom: '16px' }}>
-
-        {/* Source 1: Fixably Stock Transfers Report */}
-        <div className="card" style={{
-          padding: '16px 18px',
-          border: '1.5px dashed',
-          borderColor: transfersMeta ? '#10b981' : '#cbd5e1',
-          background: transfersMeta ? '#f0fdf4' : '#fff',
-          borderRadius: '10px'
+      {/* ── Compact Auto Sync Bar (Single Source of Truth) ───────────────────── */}
+      <div style={{
+        background: '#ffffff',
+        border: '1px solid #e2e8f0',
+        borderRadius: '8px',
+        padding: '10px 14px',
+        marginBottom: '14px',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+      }}>
+        {/* Micro-header: Source of Truth & Status */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '8px',
+          paddingBottom: '8px',
+          marginBottom: '8px',
+          borderBottom: '1px solid #f1f5f9',
+          fontSize: '11.5px',
+          color: '#475569'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCircle2 size={14} color="#16a34a" style={{ flexShrink: 0 }} />
+            <span>
+              <strong style={{ color: '#0f172a' }}>Single Source of Truth:</strong> Automatically synchronized with <strong>All Stocks &amp; Multi-Site Inventory</strong> (Slot 2 &amp; Slot 3). Manual file upload eliminated.
+            </span>
+          </div>
+          <span style={{
+            fontSize: '10.5px',
+            fontWeight: 700,
+            color: '#15803d',
+            background: '#dcfce7',
+            border: '1px solid #86efac',
+            padding: '2px 8px',
+            borderRadius: '999px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}>
+            <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#16a34a' }}></span>
+            Automated Multi-Site Sync
+          </span>
+        </div>
+
+        {/* 3 compact horizontal data source cards */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: '10px'
+        }}>
+          {/* Source 1: Fixably Stock Transfers Report */}
+          <div style={{
+            background: transfersMeta ? '#f0fdf4' : '#f8fafc',
+            border: '1px solid',
+            borderColor: transfersMeta ? '#bbf7d0' : '#e2e8f0',
+            borderRadius: '6px',
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            minWidth: 0
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, flex: 1 }}>
               <div style={{
                 background: transfersMeta ? '#dcfce7' : '#f1f5f9',
-                color: transfersMeta ? '#15803d' : '#0284c7',
-                padding: '8px',
-                borderRadius: '8px'
+                color: transfersMeta ? '#15803d' : '#64748b',
+                padding: '6px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                marginTop: '1px'
               }}>
-                <FileSpreadsheet size={20} />
+                <FileSpreadsheet size={16} />
               </div>
-              <div>
-                <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
-                  Source 1: Fixably Stock Transfer Report
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', lineHeight: 1.2 }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                    Stock Transfers
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#64748b' }}>(Slot 3)</span>
                 </div>
-                <div style={{ fontSize: '11px', color: '#64748b' }}>
-                  Excel sheet: <code>Stock Transfer</code> → filtered to <code>DC_MSPI-Owned</code>
-                </div>
+                {transfersMeta ? (
+                  <>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#15803d', marginTop: '2px', wordBreak: 'break-word', lineHeight: 1.25 }} title={transfersMeta.fileName}>
+                      {transfersMeta.fileName}
+                    </div>
+                    <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '1px' }}>
+                      <strong style={{ color: '#166534' }}>{kpis.totalSerials.toLocaleString()}</strong> DC rows
+                      {kpis.nonDcTransfersExcluded > 0 && <span> ({kpis.nonDcTransfersExcluded.toLocaleString()} non-DC)</span>}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Awaiting upload in All Stocks (Slot 3)</div>
+                )}
               </div>
             </div>
-            {transfersMeta && (
-              <span className="badge badge-success" style={{ fontSize: '10.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <CheckCircle2 size={12} /> Ready
-              </span>
-            )}
-          </div>
-
-          {transfersMeta ? (
-            <div style={{ background: '#fff', borderRadius: '8px', padding: '10px 12px', border: '1px solid #bbf7d0', fontSize: '12px' }}>
-              <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {transfersMeta.fileName}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '11.5px' }}>
-                <span>
-                  <strong>{kpis.totalSerials.toLocaleString()}</strong> DC stock rows
-                  {kpis.nonDcTransfersExcluded > 0 && (
-                    <span style={{ color: '#94a3b8', marginLeft: '4px' }}>
-                      ({kpis.nonDcTransfersExcluded.toLocaleString()} non-DC filtered)
-                    </span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => transferInputRef.current?.click()}
-                  style={{ background: 'none', border: 'none', color: '#0284c7', cursor: 'pointer', fontWeight: 700 }}
-                >
-                  Replace File
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div
-              onClick={() => transferInputRef.current?.click()}
-              style={{
-                cursor: 'pointer',
-                textAlign: 'center',
-                padding: '14px',
-                background: '#f8fafc',
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0'
-              }}
-            >
-              <UploadCloud size={22} color="#0284c7" style={{ margin: '0 auto 4px' }} />
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a' }}>
-                {isProcessingTransfers ? 'Processing Transfers...' : 'Upload Stock Transfer Report (.xlsx / .csv)'}
-              </div>
-              <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
-                Columns: Transfer Received Date, From Stock, To Stock, Product Code, Product Name, Serial Number
-              </div>
-            </div>
-          )}
-          <input
-            ref={transferInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleTransfersUpload(f); }}
-          />
-        </div>
-
-        {/* Source 2: GSX KBB / KGBs Used Report */}
-        <div className="card" style={{
-          padding: '16px 18px',
-          border: '1.5px dashed',
-          borderColor: gsxMeta ? '#10b981' : '#cbd5e1',
-          background: gsxMeta ? '#f0fdf4' : '#fff',
-          borderRadius: '10px'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{
-                background: gsxMeta ? '#dcfce7' : '#f1f5f9',
-                color: gsxMeta ? '#15803d' : '#7c3aed',
-                padding: '8px',
-                borderRadius: '8px'
-              }}>
-                <FileText size={20} />
-              </div>
-              <div>
-                <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
-                  Source 2: GSX KBB / KGBs Used Report
-                </div>
-                <div style={{ fontSize: '11px', color: '#64748b' }}>
-                  Excel sheet: <code>KGB Used</code> → iPhone Display & Battery KGBs
-                </div>
-              </div>
-            </div>
-            {gsxMeta && (
-              <span className="badge badge-success" style={{ fontSize: '10.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <CheckCircle2 size={12} /> Ready
-              </span>
-            )}
-          </div>
-
-          {gsxMeta ? (
-            <div style={{ background: '#fff', borderRadius: '8px', padding: '10px 12px', border: '1px solid #bbf7d0', fontSize: '12px' }}>
-              <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {gsxMeta.fileName}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b', fontSize: '11.5px' }}>
-                <span>
-                  <strong>{gsxData.length.toLocaleString()}</strong> KGB serials • <strong>{kpis.usedCount.toLocaleString()}</strong> matched
-                </span>
-                <button
-                  type="button"
-                  onClick={() => gsxInputRef.current?.click()}
-                  style={{ background: 'none', border: 'none', color: '#7c3aed', cursor: 'pointer', fontWeight: 700 }}
-                >
-                  Replace File
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div
-              onClick={() => gsxInputRef.current?.click()}
-              style={{
-                cursor: 'pointer',
-                textAlign: 'center',
-                padding: '14px',
-                background: '#f8fafc',
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0'
-              }}
-            >
-              <UploadCloud size={22} color="#7c3aed" style={{ margin: '0 auto 4px' }} />
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a' }}>
-                {isProcessingGsx ? 'Processing GSX Report...' : 'Upload GSX KBB/KGBs Used Report (.xlsx / .csv)'}
-              </div>
-              <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
-                Columns: Order id, Location Name, Repair Closed Date, Product Code, Product Description, Product KGB
-              </div>
-            </div>
-          )}
-          <input
-            ref={gsxInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            style={{ display: 'none' }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleGsxUpload(f); }}
-          />
-        </div>
-
-        {/* Source 3: Built-In Sheet35 Apple Service Price List */}
-        <div className="card" style={{
-          padding: '16px 18px',
-          border: '1.5px solid #bae6fd',
-          background: '#f0f9ff',
-          borderRadius: '10px'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={{
-                background: '#e0f2fe',
-                color: '#0284c7',
-                padding: '8px',
-                borderRadius: '8px'
-              }}>
-                <Database size={20} />
-              </div>
-              <div>
-                <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
-                  Source 3: Apple Stocking Price List (Sheet35)
-                </div>
-                <div style={{ fontSize: '11px', color: '#475569' }}>
-                  Pre-loaded from <code>Sheet35!P2:S24490</code> (No manual upload required)
-                </div>
-              </div>
-            </div>
-            <span className="badge badge-info" style={{ fontSize: '10.5px', background: '#0284c7', color: '#fff', padding: '2px 8px', borderRadius: '999px' }}>
-              Built-In
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: '4px',
+              flexShrink: 0,
+              alignSelf: 'flex-start',
+              marginTop: '2px',
+              background: transfersMeta ? '#ecfdf5' : '#f1f5f9',
+              color: transfersMeta ? '#059669' : '#64748b',
+              border: transfersMeta ? '1px solid #a7f3d0' : '1px solid #cbd5e1'
+            }}>
+              {transfersMeta ? 'Live Synced' : 'Awaiting'}
             </span>
           </div>
 
-          <div style={{ background: '#fff', borderRadius: '8px', padding: '10px 12px', border: '1px solid #bae6fd', fontSize: '11.5px', color: '#334155' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-              <span>Indexed Apple Part Numbers:</span>
-              <strong>{APPLE_STOCKING_PRICE_COUNT.toLocaleString()} SKUs</strong>
+          {/* Source 2: GSX KBB / KGBs Used Report */}
+          <div style={{
+            background: gsxMeta ? '#f0fdf4' : '#f8fafc',
+            border: '1px solid',
+            borderColor: gsxMeta ? '#bbf7d0' : '#e2e8f0',
+            borderRadius: '6px',
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            minWidth: 0
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, flex: 1 }}>
+              <div style={{
+                background: gsxMeta ? '#dcfce7' : '#f1f5f9',
+                color: gsxMeta ? '#15803d' : '#64748b',
+                padding: '6px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                marginTop: '1px'
+              }}>
+                <FileText size={16} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', lineHeight: 1.2 }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                    GSX KGB Used
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#64748b' }}>(Slot 2)</span>
+                </div>
+                {gsxMeta ? (
+                  <>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#15803d', marginTop: '2px', wordBreak: 'break-word', lineHeight: 1.25 }} title={gsxMeta.fileName}>
+                      {gsxMeta.fileName}
+                    </div>
+                    <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '1px' }}>
+                      <strong style={{ color: '#166534' }}>{gsxData.length.toLocaleString()}</strong> KGBs (<strong style={{ color: '#047857' }}>{kpis.usedCount.toLocaleString()}</strong> used)
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>Awaiting upload in All Stocks (Slot 2)</div>
+                )}
+              </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748b' }}>
-              <span>Formula Replicated:</span>
-              <code>XLOOKUP(PartNo, Sheet35!$P:$P, Sheet35!$S:$S, 0)</code>
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: '4px',
+              flexShrink: 0,
+              alignSelf: 'flex-start',
+              marginTop: '2px',
+              background: gsxMeta ? '#ecfdf5' : '#f1f5f9',
+              color: gsxMeta ? '#059669' : '#64748b',
+              border: gsxMeta ? '1px solid #a7f3d0' : '1px solid #cbd5e1'
+            }}>
+              {gsxMeta ? 'Live Synced' : 'Awaiting'}
+            </span>
+          </div>
+
+          {/* Source 3: Built-In Sheet35 Apple Price List */}
+          <div style={{
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
+            borderRadius: '6px',
+            padding: '8px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            minWidth: 0
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+              <div style={{
+                background: '#e0f2fe',
+                color: '#0284c7',
+                padding: '6px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Database size={16} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', lineHeight: 1.2 }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                    Sheet35 Price List
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#0284c7' }}>(Apple Pricing)</span>
+                </div>
+                <div style={{ fontSize: '11px', color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                  <strong style={{ color: '#0369a1' }}>{APPLE_STOCKING_PRICE_COUNT.toLocaleString()}</strong> SKUs • <code>XLOOKUP(P:S)</code>
+                </div>
+              </div>
             </div>
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '2px 7px',
+              borderRadius: '4px',
+              flexShrink: 0,
+              background: '#e0f2fe',
+              color: '#0369a1',
+              border: '1px solid #7dd3fc'
+            }}>
+              Built-In
+            </span>
           </div>
         </div>
       </div>
@@ -1589,7 +1669,7 @@ export default function SiteTransfersFifoReport() {
                 {sitesScorecard.length === 0 ? (
                   <tr>
                     <td colSpan={13} style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>
-                      No transfer data loaded yet. Upload the Full Monitoring Workbook (.xlsx) or both individual reports above.
+                      No transfer data loaded yet. Transfer and KGB records will automatically sync here once uploaded in the All Stocks &amp; Multi-Site Ingestion Center.
                     </td>
                   </tr>
                 ) : (
@@ -2918,7 +2998,7 @@ export default function SiteTransfersFifoReport() {
               1. Required Files, Reports &amp; Data Sources Specification
             </h3>
             <p style={{ margin: '0 0 14px 0', fontSize: '12.5px', color: '#475569' }}>
-              To generate the exact same results as <code>FIFO &amp; (DC stocks only) Aging Stocks Monitoring.xlsx</code> without manual Excel work, the system ingests three data sources (either via <strong>1-Click Full Workbook Upload</strong> or via the two operational report slots):
+              To generate the exact same results as <code>FIFO &amp; (DC stocks only) Aging Stocks Monitoring.xlsx</code> without manual Excel work, the system automatically retrieves inventory and transfer data directly from the <strong>All Stocks &amp; Multi-Site Inventory</strong> ingestion slots:
             </p>
             <div style={{ overflowX: 'auto' }}>
               <table className="table" style={{ fontSize: '12px', margin: 0 }}>

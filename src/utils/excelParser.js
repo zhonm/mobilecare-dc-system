@@ -4529,12 +4529,26 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
 }
 
 /**
- * Parse Fixably Stock Transfers Report XLSX or CSV file
+ * Parse Fixably Stock Transfers Report XLSX or CSV file / string content
  */
 export async function parseStockTransfersReportFile(file) {
   try {
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array' });
+    let workbook;
+    let fileName = typeof file === 'string' ? 'Stock Transfer' : (file?.name || 'Stock Transfer');
+
+    if (typeof file === 'string') {
+      workbook = XLSX.read(file, { type: 'string' });
+    } else if (file && typeof file.content === 'string') {
+      workbook = XLSX.read(file.content, { type: 'string' });
+      fileName = file.name || fileName;
+    } else if (file && typeof file.arrayBuffer === 'function') {
+      const buffer = await file.arrayBuffer();
+      workbook = XLSX.read(buffer, { type: 'array' });
+    } else if (file instanceof ArrayBuffer || ArrayBuffer.isView(file)) {
+      workbook = XLSX.read(file, { type: 'array' });
+    } else {
+      return { success: false, error: 'Invalid file format or missing content.' };
+    }
     
     let targetSheetName = workbook.SheetNames[0];
     const preferredSheet = workbook.SheetNames.find(name => /^stock\s*transfers?$/i.test(String(name).trim()))
@@ -4691,7 +4705,7 @@ export async function parseStockTransfersReportFile(file) {
     }
 
     const metadata = {
-      fileName: file.name,
+      fileName,
       uploadedAt: new Date().toISOString(),
       totalRows: records.length,
       totalQty,
