@@ -761,6 +761,7 @@ export function AppProvider({ children }) {
         clearAllShipmentsData: shipmentsDomain.clearAllShipmentsData,
         saveShipment: shipmentsDomain.saveShipment,
         updateShipmentStatus: shipmentsDomain.updateShipmentStatus,
+        confirmCourierPickup: shipmentsDomain.confirmCourierPickup,
         confirmSiteReceive: shipmentsDomain.confirmSiteReceive,
         loadArchivedShipments: shipmentsDomain.loadArchivedShipments,
         isLoadingArchivedShipments: shipmentsDomain.isLoadingArchivedShipments,

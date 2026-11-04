@@ -67,6 +67,7 @@ export default function Shipments() {
     updateShipmentStatus,
     deleteShipment,
     reconcileCompletedDrafts,
+    confirmCourierPickup,
     confirmSiteReceive,
     partsRequests,
     updatePartsRequestStatus,
@@ -727,36 +728,52 @@ export default function Shipments() {
     const startTime = Date.now();
 
     try {
-      const updatedShipment = {
-        ...targetShipment,
-        status: 'shipped',
+      const courierPayload = {
         carrier: cleanCarrier,
-        courier: cleanCarrier,
-        shipping_mode: isLite ? shippingMode : (targetShipment?.shipping_mode || ''),
-        tracking_number: cleanTrk,
-        booking_id: cleanTrk,
-        pickup_by_name: cleanRider,
-        courier_name: cleanRider,
-        pickup_date: cleanPickupDate,
-        shipment_date: cleanPickupDate,
-        rider_phone: String(pickupModalState.riderPhone || '').trim(),
-        vehicle_plate: String(pickupModalState.vehiclePlate || '').trim(),
-        guard_on_duty: String(pickupModalState.guardOnDuty || '').trim(),
-        ...(cleanTS ? { transfer_slip: cleanTS, transfer_slip_number: cleanTS } : {}),
-        dispatched_at: new Date().toISOString(),
-        dispatched_by: currentUser?.fullName || 'Warehouse Staff',
-        updated_at: new Date().toISOString()
+        shippingMode: shippingMode,
+        trackingNumber: cleanTrk,
+        riderName: cleanRider,
+        pickupDate: cleanPickupDate,
+        riderPhone: String(pickupModalState.riderPhone || '').trim(),
+        vehiclePlate: String(pickupModalState.vehiclePlate || '').trim(),
+        guardOnDuty: String(pickupModalState.guardOnDuty || '').trim(),
+        transferSlip: cleanTS
       };
 
-      await saveShipment(updatedShipment);
+      if (typeof confirmCourierPickup === 'function') {
+        await confirmCourierPickup(targetShipment, courierPayload);
+      } else {
+        const updatedShipment = {
+          ...targetShipment,
+          status: 'shipped',
+          carrier: cleanCarrier,
+          courier: cleanCarrier,
+          shipping_mode: isLite ? shippingMode : (targetShipment?.shipping_mode || ''),
+          tracking_number: cleanTrk,
+          booking_id: cleanTrk,
+          pickup_by_name: cleanRider,
+          courier_name: cleanRider,
+          pickup_date: cleanPickupDate,
+          shipment_date: cleanPickupDate,
+          rider_phone: courierPayload.riderPhone,
+          vehicle_plate: courierPayload.vehiclePlate,
+          guard_on_duty: courierPayload.guardOnDuty,
+          ...(cleanTS ? { transfer_slip: cleanTS, transfer_slip_number: cleanTS } : {}),
+          dispatched_at: new Date().toISOString(),
+          dispatched_by: currentUser?.fullName || 'Warehouse Staff',
+          updated_at: new Date().toISOString()
+        };
 
-      // Guarantee minimum 400ms duration for reassuring visual feedback
-      const elapsed = Date.now() - startTime;
-      if (elapsed < 400) {
-        await new Promise(r => setTimeout(r, 400 - elapsed));
+        await saveShipment(updatedShipment);
       }
 
-      showToast(`Dispatched! Shipment ${updatedShipment.invoice_ref || updatedShipment.shipment_number} status set to SHIPPED (${cleanCarrier} #${cleanTrk}).`, 'success');
+      // Guarantee minimum 350ms duration for reassuring visual feedback
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 350) {
+        await new Promise(r => setTimeout(r, 350 - elapsed));
+      }
+
+      showToast(`Dispatched! Shipment ${invRef} status set to SHIPPED (${cleanCarrier} #${cleanTrk}).`, 'success');
       setPickupModalState(null);
     } catch (err) {
       console.error('Failed to confirm courier pickup:', err);
