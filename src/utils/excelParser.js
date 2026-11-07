@@ -13,7 +13,7 @@ import {
 import { sanitizeForSpreadsheet } from './security.js';
 import { resolvePartInfo, validateAppleSerialNumber, resolveCanonicalIPhoneModel } from './partResolver.js';
 import { getPartCategory } from './categoryFilter.js';
-import { getShipmentRiderName, getShipmentCourierDisplay, calculateDeclaredValuePHP, resolveItemStockingPrice } from './shipmentHelpers.js';
+import { getShipmentRiderName, getShipmentCourierDisplay, calculateDeclaredValuePHP, resolveItemStockingPrice, getPackingListFileName } from './shipmentHelpers.js';
 import { OFFICIAL_BRANCH_DIRECTORY } from '../constants/branchDirectory.js';
 import { normalizeSite, lookupSheet35StockPrice } from './siteTransfersReconciler.js';
 import { resolveSafeRegion, getCanonicalSiteSortIndex } from '../constants/config.js';
@@ -6800,9 +6800,9 @@ export async function exportPackingListXLSX(shipment = {}, items = [], site = {}
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const cleanRef = (shipment.invoice_ref || shipment.shipment_number || 'Manifest').replace(/[^a-zA-Z0-9#_-]/g, '_');
+    const downloadFilename = options?.customFileName || getPackingListFileName(shipment, site, 'xlsx');
     link.href = url;
-    link.download = `PackingList_${cleanRef}.xlsx`;
+    link.download = downloadFilename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

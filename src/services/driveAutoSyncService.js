@@ -33,15 +33,17 @@ export function getFormattedSaveTimestamp(date = new Date()) {
 export async function autoArchivePackingListToDrive(shipment, items = [], site = {}, options = {}) {
   try {
     const timestampStr = getFormattedSaveTimestamp();
-    const invoiceRef = String(shipment.invoice_ref || shipment.shipment_number || 'DRAFT').replace(/[/\\:*?"<>|]/g, '_');
-    const filename = `PackingList_${invoiceRef}_${timestampStr}.pdf`;
     const sourceItems = (items && items.length > 0) ? items : (shipment.items || []);
 
-    const { doc } = generatePackingListPDF(shipment, sourceItems, site, {
+    const { doc, filename: generatedFilename } = generatePackingListPDF(shipment, sourceItems, site, {
       ...options,
       includeDeclarationForm: true,
       saveFile: false
     });
+
+    const filename = options?.customFileName || (options?.includeTimestamp
+      ? generatedFilename.replace(/\.pdf$/i, `_${timestampStr}.pdf`)
+      : generatedFilename);
 
     const pdfBlob = doc.output('blob');
 

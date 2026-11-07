@@ -63,7 +63,7 @@ const mockSite = {
 try {
   generatePackingListPDF(mockShipment, mockItems, mockSite, { saveFile: true });
   assert.strictEqual(savedPagesCount, 2, 'Packing List PDF must contain exactly 2 pages (Page 1 Manifest + Page 2 Declaration Form)');
-  assert.strictEqual(savedFilename, 'PackingList_DCOWNED#090226B.pdf', 'Saved filename must match invoice ref pattern');
+  assert.strictEqual(savedFilename, 'DCOWNED#090226B_FES.pdf', 'Saved filename must match invoice ref + site code pattern');
   console.log('  ✓ PASS: generatePackingListPDF seamlessly builds 2-Page corporate PDF with updated Declaration Form');
 } finally {
   jsPDFClass.API.save = origSave;

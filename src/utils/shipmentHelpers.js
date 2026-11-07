@@ -1075,3 +1075,179 @@ export const resolveSiteBranchCode = (site, shipment = null) => {
   return 'ASP BRANCH';
 };
 
+/**
+ * Resolves the concise uppercase site code (e.g. "VER", "ILO", "SMS", "MEG", "NES")
+ * for inclusion in Packing List filenames (e.g. "DCOWNED#083126A_NES.pdf").
+ */
+export const resolvePackingListSiteCode = (site, shipment = null) => {
+  let siteObj = (typeof site === 'object' && site !== null) ? site : null;
+  let rawStr = typeof site === 'string' ? site : '';
+
+  const siteName = String(siteObj?.name || shipment?.destination_site_name || shipment?.site_name || shipment?.destinationSite || '').toUpperCase();
+  const rawCode = String(siteObj?.code || rawStr || shipment?.destination_site_code || shipment?.site_code || shipment?.receiving_branch || '').toUpperCase().trim();
+  const combined = `${rawCode} ${siteName}`.trim();
+
+  // If no direct name or code, try resolving site from site_id
+  const siteId = siteObj?.id || shipment?.destination_site_id || shipment?.site_id;
+  let resolvedFromIdName = '';
+  let resolvedFromIdCode = '';
+  if (siteId && (!siteName || !rawCode)) {
+    try {
+      const resolved = resolveSite(siteId);
+      if (resolved) {
+        resolvedFromIdName = String(resolved.name || '').toUpperCase();
+        resolvedFromIdCode = String(resolved.code || '').toUpperCase();
+      }
+    } catch (_) {}
+  }
+  const fullText = `${combined} ${resolvedFromIdCode} ${resolvedFromIdName}`.trim();
+  if (!fullText) return '';
+
+  // 1. Direct official MDC branch designations
+  // Vertis North -> VER (explicitly requested: VER)
+  if (fullText.includes('VERTIS') || /\bVER\b/.test(fullText) || /\bVN\b/.test(fullText) || fullText.includes('ASP VN')) return 'VER';
+
+  // Northeast Square -> NES (explicitly requested: NES)
+  if (fullText.includes('NORTHEAST') || /\bNES\b/.test(fullText) || fullText.includes('ASP NES')) return 'NES';
+
+  // Festive Walk Iloilo -> ILO (explicitly requested: ILO)
+  if (fullText.includes('ILOILO') || /\bILO\b/.test(fullText) || fullText.includes('FESTIVE') || fullText.includes('ASP ILO') || fullText.includes('APPILO')) return 'ILO';
+
+  // S'Maison -> SMS (explicitly requested: SMS)
+  if (fullText.includes("S'MAISON") || fullText.includes('S MAISON') || fullText.includes('SMAISON') || /\bSMS\b/.test(fullText) || fullText.includes('ASP SMS')) return 'SMS';
+
+  // Megamall -> MEG (explicitly requested: MEG)
+  if (fullText.includes('MEGAMALL') || /\bMEG\b/.test(fullText) || fullText.includes('APP MEG')) return 'MEG';
+
+  // Bonifacio High Street -> BHS
+  if (fullText.includes('BONIFACIO') || /\bBHS\b/.test(fullText) || fullText.includes('APP BHS')) return 'BHS';
+
+  // Greenbelt 3 -> GB3
+  if (fullText.includes('GREENBELT') || /\bGB3\b/.test(fullText) || fullText.includes('APP GB3')) return 'GB3';
+
+  // Power Plant Mall -> PPM
+  if (fullText.includes('POWER PLANT') || fullText.includes('ROCKWELL') || /\bPPM\b/.test(fullText) || fullText.includes('APP PPM')) return 'PPM';
+
+  // Glorietta 5 -> GL5
+  if (fullText.includes('GLORIETTA') || /\bGL5\b/.test(fullText) || fullText.includes('ASP GL5')) return 'GL5';
+
+  // Mall of Asia -> MOA
+  if (fullText.includes('MALL OF ASIA') || /\bMOA\b/.test(fullText) || fullText.includes('APP MOA')) return 'MOA';
+
+  // The Podium -> POD
+  if (fullText.includes('PODIUM') || /\bPOD\b/.test(fullText) || fullText.includes('ASP POD')) return 'POD';
+
+  // The Annex / North Exchange -> ANX
+  if (fullText.includes('ANNEX') || fullText.includes('NORTH EXCHANGE') || fullText.includes('AYALA NORTH') || /\bANX\b/.test(fullText) || fullText.includes('APP ANX')) return 'ANX';
+
+  // Trinoma -> TRI
+  if (fullText.includes('TRINOMA') || /\bTRI\b/.test(fullText) || fullText.includes('APP TRI')) return 'TRI';
+
+  // Festival Mall -> FES
+  if (fullText.includes('FESTIVAL') || /\bFES\b/.test(fullText) || fullText.includes('APP FES') || fullText.includes('SITE-FESTIVAL')) return 'FES';
+
+  // SM Marikina -> MRK
+  if (fullText.includes('MARIKINA') || /\bMRK\b/.test(fullText) || fullText.includes('ASP MRK')) return 'MRK';
+
+  // Magnolia -> MAG
+  if (fullText.includes('MAGNOLIA') || /\bMAG\b/.test(fullText) || /\bRM\b/.test(fullText) || fullText.includes('APP RM')) return 'MAG';
+
+  // Lima Estate -> LIM
+  if (fullText.includes('LIMA') || /\bLIM\b/.test(fullText) || fullText.includes('ASP LIM')) return 'LIM';
+
+  // Newpoint Mall / Pampanga -> NPM
+  if (fullText.includes('NEWPOINT') || fullText.includes('PAMPANGA') || /\bNPM\b/.test(fullText) || fullText.includes('ASP NPM')) return 'NPM';
+
+  // Naga -> NAG
+  if (fullText.includes('NAGA') || /\bNAG\b/.test(fullText) || fullText.includes('ASP NAG')) return 'NAG';
+
+  // La Union -> LAU
+  if (fullText.includes('LA UNION') || fullText.includes('UNION') || /\bLAU\b/.test(fullText) || fullText.includes('ASP LAU')) return 'LAU';
+
+  // Cebu -> CEB
+  if (fullText.includes('CEBU') || /\bCEB\b/.test(fullText) || fullText.includes('ASP CEB')) return 'CEB';
+
+  // Zamboanga -> ZAM
+  if (fullText.includes('ZAMBOANGA') || /\bZAM\b/.test(fullText) || fullText.includes('ASP ZAM')) return 'ZAM';
+
+  // Davao / Abreeza -> ABR
+  if (fullText.includes('DAVAO') || fullText.includes('ABREEZA') || /\bABR\b/.test(fullText) || /\bDVO\b/.test(fullText) || fullText.includes('ASP ABR')) return 'ABR';
+
+  // Cotabato -> COT
+  if (fullText.includes('COTABATO') || /\bCOT\b/.test(fullText) || /\bCBO\b/.test(fullText) || fullText.includes('ASP COT')) return 'COT';
+
+  // Cagayan de Oro -> CDO
+  if (fullText.includes('CAGAYAN') || /\bCDO\b/.test(fullText) || fullText.includes('ASP CDO')) return 'CDO';
+
+  // SM Lanang -> LAN
+  if (fullText.includes('LANANG') || /\bLAN\b/.test(fullText) || fullText.includes('APP LAN')) return 'LAN';
+
+  // SM Aura -> AUR
+  if (fullText.includes('AURA') || /\bAUR\b/.test(fullText) || fullText.includes('APP AUR') || fullText.includes('APP-AUR')) return 'AUR';
+
+  // Baguio -> BAG
+  if (fullText.includes('BAGUIO') || /\bBAG\b/.test(fullText) || fullText.includes('ASP BAG')) return 'BAG';
+
+  // Tacloban -> TAC
+  if (fullText.includes('TACLOBAN') || /\bTAC\b/.test(fullText) || fullText.includes('ASP TAC')) return 'TAC';
+
+  // Palawan -> PAL
+  if (fullText.includes('PALAWAN') || /\bPAL\b/.test(fullText) || fullText.includes('ASP PAL')) return 'PAL';
+
+  // Alabang Town Center -> ATC
+  if (fullText.includes('ALABANG') || /\bATC\b/.test(fullText) || fullText.includes('APP ATC')) return 'ATC';
+
+  // Sta. Lucia -> STA
+  if (fullText.includes('STA. LUCIA') || fullText.includes('STA LUCIA') || /\bSTA\b/.test(fullText) || fullText.includes('ASP STA')) return 'STA';
+
+  // Manila -> MAN
+  if (/\bMANILA\b/.test(fullText) || /\bMAN\b/.test(fullText) || fullText.includes('ASP MAN')) return 'MAN';
+
+  // Distribution Center -> DC
+  if (fullText.includes('DISTRIBUTION') || fullText.includes('DC-MDC') || /\bDC\b/.test(fullText)) return 'DC';
+
+  // 2. Dynamic fallback for any newly added sites:
+  let cleanCode = rawCode.replace(/^SITE[-_]/i, '').replace(/^(ASP|APP|PMA)\s+/i, '').replace(/[-_]+/g, '').trim();
+  if (cleanCode && cleanCode.length >= 2 && cleanCode.length <= 6) {
+    return cleanCode;
+  }
+
+  if (siteName) {
+    const cleanName = siteName
+      .replace(/^MOBILECARE\s*[-–—]?\s*/i, '')
+      .replace(/^(ASP|APP|PMA)\s+/i, '')
+      .replace(/SERVICE\s*BRANCH/i, '')
+      .trim();
+    const firstWord = cleanName.split(/[\s-_]+/)[0];
+    if (firstWord && firstWord.length >= 2) {
+      return firstWord.substring(0, 4);
+    }
+  }
+
+  return '';
+};
+
+/**
+ * Builds the standard packing list filename including the destination site code
+ * (e.g. "DCOWNED#083126A_NES.pdf" or "DCOWNED#083126A_NES.xlsx").
+ */
+export const getPackingListFileName = (shipment = {}, site = {}, extension = 'pdf') => {
+  const invoiceRef = String(shipment?.invoice_ref || shipment?.shipment_number || 'export')
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .trim();
+  const siteCode = resolvePackingListSiteCode(site, shipment);
+
+  let baseName = invoiceRef;
+  if (siteCode) {
+    const upperRef = invoiceRef.toUpperCase();
+    const upperCode = siteCode.toUpperCase();
+    if (!upperRef.endsWith(`_${upperCode}`) && !upperRef.endsWith(`-${upperCode}`) && !upperRef.endsWith(` ${upperCode}`)) {
+      baseName = `${invoiceRef}_${upperCode}`;
+    }
+  }
+
+  const cleanExt = extension ? (extension.startsWith('.') ? extension : `.${extension}`) : '';
+  return `${baseName}${cleanExt}`;
+};
+
+

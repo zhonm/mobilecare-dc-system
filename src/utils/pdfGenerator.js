@@ -4,7 +4,9 @@ import { MOBILECARE_LOGO_BASE64, MOBILECARE_NO_BG_LOGO_BASE64 } from '../assets/
 import { calculateWeeklySplit, getRowParityOffset } from './allocationEngine.js';
 import { getPartCategory, getCategoryBadgeStyle } from './categoryFilter.js';
 import { formatAuditEntityDisplay } from './appContextHelpers.js';
-import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode, calculateDeclaredValuePHP } from './shipmentHelpers.js';
+import { getShipmentCourierDisplay, getShipmentRiderName, healShipmentItem, resolveSiteBranchCode, calculateDeclaredValuePHP, getPackingListFileName, resolvePackingListSiteCode } from './shipmentHelpers.js';
+
+export { getPackingListFileName, resolvePackingListSiteCode };
 
 const getPdfDoc = (options = {}) => {
   const Constructor = typeof jsPDF === 'function' ? jsPDF : (jsPDF.jsPDF || jsPDF.default);
@@ -623,7 +625,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}, options 
   }
 
   // Save / Export
-  const filename = `PackingList_${shipment.invoice_ref || shipment.shipment_number || 'export'}.pdf`;
+  const filename = options?.customFileName || getPackingListFileName(shipment, site, 'pdf');
   if (options?.saveFile === true || (options?.saveFile !== false && typeof window !== 'undefined' && typeof document !== 'undefined')) {
     doc.save(filename);
   }
