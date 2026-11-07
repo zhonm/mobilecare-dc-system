@@ -149,8 +149,14 @@ async function syncToCloud(records) {
         manifest_ref: r.manifest_ref || null,
         notes: r.notes || null
       }));
-      await supabase.from('part_transfer_history').upsert(recent, { onConflict: 'id' });
-    } catch {
+      const { error: upsertErr } = await supabase
+        .from('part_transfer_history')
+        .upsert(recent, { onConflict: 'id', ignoreDuplicates: true });
+      if (upsertErr) {
+        console.warn('part_transfer_history sync note:', upsertErr.message);
+      }
+    } catch (err) {
+      console.warn('part_transfer_history sync error:', err.message);
       // Table may not yet be run in migrations; snapshot in saved_records provides 100% safety
     }
   }

@@ -321,7 +321,6 @@ export default function AllStocksImportModal({
           broadcastCloudEvent('INVENTORY_CACHE_INVALIDATED', {
             scope: 'ALL',
             count: finalImportedUnits.length,
-            units: finalImportedUnits,
             fileType: activeFileType,
             timestamp: Date.now()
           });
@@ -334,7 +333,7 @@ export default function AllStocksImportModal({
             const bus = new BroadcastChannel('mdc_sync_bus');
             bus.postMessage({
               type: 'INVENTORY_CACHE_INVALIDATED',
-              payload: { scope: 'ALL', count: finalImportedUnits.length, units: finalImportedUnits, timestamp: Date.now() }
+              payload: { scope: 'ALL', count: finalImportedUnits.length, timestamp: Date.now() }
             });
             bus.close();
           }

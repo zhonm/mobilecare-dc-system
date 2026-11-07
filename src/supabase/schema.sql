@@ -756,6 +756,7 @@ ALTER TABLE IF EXISTS public.dc_intake_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.saved_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.parts_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.part_transfer_history ENABLE ROW LEVEL SECURITY;
 
 -- 6.1 Profiles Policies
 DROP POLICY IF EXISTS "profiles_select_own_or_admin" ON public.profiles;
@@ -955,6 +956,13 @@ CREATE POLICY "audit_logs_select_admin" ON public.audit_logs
 CREATE POLICY "audit_logs_insert_authenticated" ON public.audit_logs
     FOR INSERT TO authenticated
     WITH CHECK (auth.uid() IS NOT NULL);
+
+-- 6.10 Part Transfer History Policies
+DROP POLICY IF EXISTS "part_transfer_history_all" ON public.part_transfer_history;
+CREATE POLICY "part_transfer_history_all" ON public.part_transfer_history
+    FOR ALL TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
 -- Grant privileges (RLS strictly controls data access)
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role, postgres;

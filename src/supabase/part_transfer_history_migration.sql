@@ -48,5 +48,25 @@ CREATE POLICY "Allow authenticated insert part_transfer_history"
     TO public
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow authenticated update part_transfer_history" ON public.part_transfer_history;
+CREATE POLICY "Allow authenticated update part_transfer_history"
+    ON public.part_transfer_history FOR UPDATE
+    TO public
+    USING (true)
+    WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow authenticated delete part_transfer_history" ON public.part_transfer_history;
+CREATE POLICY "Allow authenticated delete part_transfer_history"
+    ON public.part_transfer_history FOR DELETE
+    TO public
+    USING (true);
+
+DROP POLICY IF EXISTS "part_transfer_history_all" ON public.part_transfer_history;
+CREATE POLICY "part_transfer_history_all"
+    ON public.part_transfer_history FOR ALL
+    TO anon, authenticated
+    USING (true)
+    WITH CHECK (true);
+
 -- Ensure public access to sync under free tier / service role
 GRANT ALL ON TABLE public.part_transfer_history TO authenticated, anon;

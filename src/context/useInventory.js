@@ -857,8 +857,8 @@ export function useInventory({
 
       if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
       if (broadcastCloudEvent && !options.skipBroadcast) {
-        broadcastCloudEvent('STOCK_UPDATED', { count: units.length, units, timestamp: Date.now() });
-        broadcastCloudEvent('UNITS_IMPORTED', { count: units.length, units, timestamp: Date.now() });
+        broadcastCloudEvent('STOCK_UPDATED', { count: units.length, timestamp: Date.now() });
+        broadcastCloudEvent('UNITS_IMPORTED', { count: units.length, timestamp: Date.now() });
       }
     } catch (err) {
       console.warn('saveUnitsToSupabase notice:', err.message);
@@ -1862,11 +1862,10 @@ export function useInventory({
         siteId: resolvedSiteId,
         siteCode: resolvedSiteCode,
         count: newUnits.length,
-        units: newUnits,
         timestamp: Date.now()
       });
-      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
-      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
+      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, timestamp: Date.now() });
+      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, timestamp: Date.now() });
     }
 
     if (poMap.size > 0) {
@@ -1893,11 +1892,6 @@ export function useInventory({
         persistPurchaseOrders(nextOrders);
         return nextOrders;
       });
-    }
-
-    if (broadcastCloudEvent) {
-      broadcastCloudEvent('UNITS_IMPORTED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
-      broadcastCloudEvent('STOCK_UPDATED', { count: newUnits.length, units: newUnits, timestamp: Date.now() });
     }
 
     barcodeAudio.playSuccess();

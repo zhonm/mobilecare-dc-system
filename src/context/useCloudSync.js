@@ -200,10 +200,55 @@ export function useCloudSync({
     ].includes(eventType);
 
     if (supabase) {
+      // Sanitize payload for Supabase Realtime broadcast to prevent HTTP 422 "Payload size exceeds tenant limit"
+      // Supabase Realtime broadcast has a strict tenant limit (~100-256KB). Heavy bulk datasets (such as 2,000+ unit arrays)
+      // must NOT be transferred over websocket broadcast; websockets are for lightweight signaling.
+      let cloudPayload = payload;
+      if (cloudPayload && typeof cloudPayload === 'object') {
+        const { units, items, records, snapshot_data, snapshot, transfers, ...rest } = cloudPayload;
+        const hasBulkyArray = Boolean(
+          (Array.isArray(units) && units.length > 20) ||
+          (Array.isArray(items) && items.length > 20) ||
+          (Array.isArray(records) && records.length > 20) ||
+          (Array.isArray(transfers) && transfers.length > 20) ||
+          snapshot_data ||
+          snapshot
+        );
+
+        if (hasBulkyArray) {
+          cloudPayload = {
+            ...rest,
+            count: rest.count !== undefined ? rest.count : (units?.length ?? items?.length ?? records?.length ?? transfers?.length ?? 0),
+            hasBulkyData: true
+          };
+        }
+      }
+
+      // Strict size check guard (keep below 45KB to guarantee staying safely beneath tenant limit)
+      let msgStr;
+      try {
+        msgStr = JSON.stringify(cloudPayload);
+      } catch {
+        cloudPayload = { count: cloudPayload?.count || 0, truncated: true };
+        msgStr = '';
+      }
+
+      if (msgStr.length > 45000) {
+        // Fallback: minimal signaling notification only
+        cloudPayload = {
+          scope: cloudPayload?.scope,
+          siteCode: cloudPayload?.siteCode,
+          siteId: cloudPayload?.siteId,
+          count: cloudPayload?.count || 0,
+          timestamp: Date.now(),
+          truncated: true
+        };
+      }
+
       const msgObj = {
         type: 'broadcast',
         event: 'mdc_sync',
-        payload: { type: eventType, payload, senderId: currentUser?.id || 'anon', timestamp: Date.now() }
+        payload: { type: eventType, payload: cloudPayload, senderId: currentUser?.id || 'anon', timestamp: Date.now() }
       };
 
       // 1. If global alert, publish to lightweight alerts room (reaches all connected users with zero heartbeats)
