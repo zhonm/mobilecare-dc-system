@@ -34,7 +34,6 @@ import {
   Clock,
   Truck,
   Plane,
-  Ship,
   Loader2,
   ArrowLeftRight,
   Save
@@ -158,7 +157,10 @@ export default function ScanOutPacking() {
           const draftSite = sites.find(s => s.id === parsed.site_id);
           const initialCourier = draftSite?.region === 'Provincial' || (draftSite && draftSite.region !== 'Metro Manila') ? 'Lite Express' : 'Lalamove';
           const isLite = String(parsed.carrier || parsed.courier || initialCourier).toLowerCase().includes('lite express');
-          const resolvedMode = parsed.shipping_mode || parsed.freight_mode || (isLite ? detectRecommendedShippingMode(parsed.items) : '');
+          let resolvedMode = parsed.shipping_mode || parsed.freight_mode || (isLite ? detectRecommendedShippingMode(parsed.items) : '');
+          if (resolvedMode === 'Sea') {
+            resolvedMode = isLite ? detectRecommendedShippingMode(parsed.items) : '';
+          }
           return {
             ...parsed,
             created_date: parsed.created_date || (parsed.created_at ? new Date(parsed.created_at).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US')),
@@ -384,6 +386,24 @@ export default function ScanOutPacking() {
       }
     }
   }, [shipments, currentShipment, userDraftStorageKey]);
+
+  // Auto-migrate obsolete 'Sea' freight mode to Land or Air
+  useEffect(() => {
+    if (currentShipment?.shipping_mode === 'Sea') {
+      const isLite = String(currentShipment.carrier || currentShipment.courier || '').toLowerCase().includes('lite express');
+      const fallbackMode = detectRecommendedShippingMode(currentShipment.items || []);
+      setCurrentShipment(prev => {
+        if (prev.shipping_mode !== 'Sea') return prev;
+        const newCarrier = isLite ? formatCourierWithMode('Lite Express', fallbackMode) : prev.carrier;
+        return {
+          ...prev,
+          shipping_mode: fallbackMode,
+          carrier: newCarrier,
+          courier: newCarrier
+        };
+      });
+    }
+  }, [currentShipment?.shipping_mode, currentShipment?.items, currentShipment?.carrier, currentShipment?.courier]);
 
   // Live Packing Presence & Draft Sync: broadcast current user's active packing station to peers
   const currentItems = useMemo(() => currentShipment?.items || [], [currentShipment]);
@@ -924,10 +944,10 @@ export default function ScanOutPacking() {
         const hasBatt = hasBatteryItem(nextItems);
         let nextMode = prev.shipping_mode;
         if (isLite) {
-          if (hasBatt && prev.shipping_mode !== 'Land' && prev.shipping_mode !== 'Sea') {
+          if (hasBatt && prev.shipping_mode !== 'Land') {
             nextMode = 'Land';
             showToast('Battery detected: Freight mode automatically switched to Land Cargo for compliance.', 'info');
-          } else if (!nextMode) {
+          } else if (!nextMode || nextMode === 'Sea') {
             nextMode = hasBatt ? 'Land' : 'Air';
           }
         }
@@ -2276,31 +2296,6 @@ export default function ScanOutPacking() {
                     title="Land Cargo (Batteries & dangerous goods)"
                   >
                     <Truck size={11} /> Land
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleShippingModeChange('Sea')}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '2px 8px',
-                      borderRadius: '4px',
-                      fontSize: '10.5px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      border: currentShipment.shipping_mode === 'Sea'
-                        ? '1px solid #14b8a6'
-                        : '1px solid #334155',
-                      background: currentShipment.shipping_mode === 'Sea'
-                        ? '#0d9488'
-                        : '#1e293b',
-                      color: '#ffffff',
-                      transition: 'all 0.15s'
-                    }}
-                    title="Sea Cargo (Maritime freight & provincial vessel transport)"
-                  >
-                    <Ship size={11} /> Sea
                   </button>
                 </div>
               </div>
@@ -4595,31 +4590,6 @@ export default function ScanOutPacking() {
                             }}
                           >
                             <Truck size={11} /> Land
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTrackingModalState(prev => ({ ...prev, shippingModeInput: 'Sea', carrierInput: 'Lite Express (Sea)' }))}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '2px 8px',
-                              borderRadius: '4px',
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              border: trackingModalState.shippingModeInput === 'Sea'
-                                ? '1px solid #14b8a6'
-                                : '1px solid #cbd5e1',
-                              background: trackingModalState.shippingModeInput === 'Sea'
-                                ? '#0d9488'
-                                : '#f8fafc',
-                              color: trackingModalState.shippingModeInput === 'Sea'
-                                ? '#ffffff'
-                                : '#334155'
-                            }}
-                          >
-                            <Ship size={11} /> Sea
                           </button>
                         </div>
                       </div>

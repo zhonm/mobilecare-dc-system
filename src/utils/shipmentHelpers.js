@@ -815,8 +815,8 @@ export const detectRecommendedShippingMode = (items = []) => {
 };
 
 /**
- * Formats the courier name with shipping mode (Air, Land, or Sea) for display on Packing List & Declaration Form.
- * E.g., 'Lite Express (Air)', 'Lite Express (Land)', or 'Lite Express (Sea)'
+ * Formats the courier name with shipping mode (Air or Land) for display on Packing List & Declaration Form.
+ * E.g., 'Lite Express (Air)' or 'Lite Express (Land)'
  */
 export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
   const rawCarrier = String(carrier || '').trim();
@@ -828,20 +828,21 @@ export const formatCourierWithMode = (carrier = '', shippingMode = '') => {
   const normalizeMode = (m) => {
     const lower = String(m || '').trim().toLowerCase();
     if (lower === 'land') return 'Land';
-    if (lower === 'sea') return 'Sea';
-    if (lower === 'air') return 'Air';
+    if (lower === 'air' || lower === 'sea') return 'Air';
     return '';
   };
 
   // Extract explicit mode if already in carrier string
   if (/\((Air|Land|Sea)\)/i.test(rawCarrier)) {
     const match = rawCarrier.match(/\((Air|Land|Sea)\)/i);
-    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(match[1]) || 'Air';
+    const matchedMode = match[1].toLowerCase() === 'sea' ? '' : match[1];
+    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(matchedMode) || 'Air';
     return `Lite Express (${resolvedMode})`;
   }
   if (/- (Air|Land|Sea)/i.test(rawCarrier)) {
     const match = rawCarrier.match(/- (Air|Land|Sea)/i);
-    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(match[1]) || 'Air';
+    const matchedMode = match[1].toLowerCase() === 'sea' ? '' : match[1];
+    const resolvedMode = normalizeMode(shippingMode) || normalizeMode(matchedMode) || 'Air';
     return `Lite Express (${resolvedMode})`;
   }
 
@@ -863,7 +864,10 @@ export const getShipmentCourierDisplay = (shipment, items = null) => {
   if (!isLite) return rawCarrier;
 
   const resolvedItems = items || shipment.items || [];
-  const mode = shipment.shipping_mode || shipment.freight_mode || (resolvedItems.length > 0 ? detectRecommendedShippingMode(resolvedItems) : '');
+  let mode = shipment.shipping_mode || shipment.freight_mode || (resolvedItems.length > 0 ? detectRecommendedShippingMode(resolvedItems) : '');
+  if (mode === 'Sea') {
+    mode = resolvedItems.length > 0 ? detectRecommendedShippingMode(resolvedItems) : 'Air';
+  }
   
   if (mode) {
     return formatCourierWithMode(rawCarrier, mode);

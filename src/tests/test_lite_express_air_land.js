@@ -32,14 +32,14 @@ console.log('  ✓ PASS: detectRecommendedShippingMode accurately flags Land for
 // --- 3. Format Courier With Mode Tests ---
 assert.strictEqual(formatCourierWithMode('Lite Express', 'Air'), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lite Express', 'Land'), 'Lite Express (Land)');
-assert.strictEqual(formatCourierWithMode('Lite Express', 'Sea'), 'Lite Express (Sea)');
+assert.strictEqual(formatCourierWithMode('Lite Express', 'Sea'), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lite Express (Land)', 'Air'), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lite Express (Air)', 'Land'), 'Lite Express (Land)');
-assert.strictEqual(formatCourierWithMode('Lite Express (Air)', 'Sea'), 'Lite Express (Sea)');
-assert.strictEqual(formatCourierWithMode('Lite Express (Sea)', ''), 'Lite Express (Sea)');
+assert.strictEqual(formatCourierWithMode('Lite Express (Air)', 'Sea'), 'Lite Express (Air)');
+assert.strictEqual(formatCourierWithMode('Lite Express (Sea)', ''), 'Lite Express (Air)');
 assert.strictEqual(formatCourierWithMode('Lalamove', 'Air'), 'Lalamove');
 assert.strictEqual(formatCourierWithMode('Utility', 'Land'), 'Utility');
-console.log('  ✓ PASS: formatCourierWithMode handles Lite Express variants (Air, Land, Sea) and preserves other couriers');
+console.log('  ✓ PASS: formatCourierWithMode handles Lite Express variants (Air, Land) and safely migrates obsolete Sea to Air');
 
 // --- 4. Shipment Courier Display Tests ---
 const airShipment = {
@@ -61,7 +61,14 @@ const seaShipment = {
   shipping_mode: 'Sea',
   items: [batteryItem, displayItem]
 };
-assert.strictEqual(getShipmentCourierDisplay(seaShipment), 'Lite Express (Sea)');
+assert.strictEqual(getShipmentCourierDisplay(seaShipment), 'Lite Express (Land)');
+
+const seaDisplayShipment = {
+  carrier: 'Lite Express',
+  shipping_mode: 'Sea',
+  items: [displayItem]
+};
+assert.strictEqual(getShipmentCourierDisplay(seaDisplayShipment), 'Lite Express (Air)');
 
 const autoDetectedBatteryShipment = {
   carrier: 'Lite Express',
