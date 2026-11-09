@@ -702,15 +702,23 @@ export function usePartsRequests({
   const getStockOnHandForSite = useCallback((siteIdOrCode) => {
     if (!siteIdOrCode) return { partsSummary: {}, totalUnits: 0, units: [] };
 
-    const targetSite = resolveSite(siteIdOrCode, sites);
-    const siteId = targetSite?.id || siteIdOrCode;
-    const siteCode = targetSite?.code || siteIdOrCode;
-
-    // Central DC stock is strictly restricted to Superadmin; other users cannot query DC stock
+    const isAllTarget = String(siteIdOrCode).toUpperCase() === 'ALL';
     const isSuper = currentUser?.role === 'superadmin';
-    const isDcTarget = isDcSite(siteId, sites) || isDcSite(siteCode, sites);
-    if (!isSuper && isDcTarget) {
-      return { siteId, siteCode, partsSummary: {}, totalInStock: 0, totalAllocated: 0, totalPacked: 0, totalUnits: 0, units: [] };
+
+    let targetSite = null;
+    let siteId = siteIdOrCode;
+    let siteCode = siteIdOrCode;
+
+    if (!isAllTarget) {
+      targetSite = resolveSite(siteIdOrCode, sites);
+      siteId = targetSite?.id || siteIdOrCode;
+      siteCode = targetSite?.code || siteIdOrCode;
+
+      // Central DC stock is strictly restricted to Superadmin; other users cannot query DC stock
+      const isDcTarget = isDcSite(siteId, sites) || isDcSite(siteCode, sites);
+      if (!isSuper && isDcTarget) {
+        return { siteId, siteCode, partsSummary: {}, totalInStock: 0, totalAllocated: 0, totalPacked: 0, totalUnits: 0, units: [] };
+      }
     }
 
     const targetIdLower = String(siteId).toLowerCase();
@@ -735,7 +743,7 @@ export function usePartsRequests({
       }
     } catch (e) {}
 
-    const isBranchTarget = !isDcTarget;
+    const isBranchTarget = isAllTarget ? true : !isDcSite(siteId, sites) && !isDcSite(siteCode, sites);
     const clearTime = clearedSitesMap['ENTIRE_SYSTEM'] ||
       (isBranchTarget ? clearedSitesMap['ALL_BRANCHES'] : null) ||
       clearedSitesMap[siteId] ||
@@ -757,6 +765,13 @@ export function usePartsRequests({
     }
 
     const branchFixablyItems = (activeSnapshot?.items || []).filter(it => {
+      if (isAllTarget) {
+        if (!isSuper) {
+          const itCodeRaw = String(it.siteCode || it.site_code || '').toUpperCase().trim();
+          if (itCodeRaw === 'DC' || itCodeRaw === 'DC-MDC' || itCodeRaw.startsWith('DC-')) return false;
+        }
+        return true;
+      }
       const itCodeClean = String(it.siteCode || it.site_code || '').toUpperCase().replace(/^(ASP|APP)\s+/, '').trim();
       const itCodeRaw = String(it.siteCode || it.site_code || '').toUpperCase().trim();
       const itSiteId = String(it.siteId || it.current_site_id || '').toLowerCase().trim();
@@ -847,9 +862,9 @@ export function usePartsRequests({
           description: matchedPart?.description || it.description || `Part ${cleanPN}`,
           serial_number: cleanSerial,
           serialNumber: cleanSerial,
-          current_site_id: siteId,
-          site_code: siteCode,
-          site_name: targetSite?.name || it.siteName || siteCode,
+          current_site_id: it.siteId || it.current_site_id || siteId,
+          site_code: it.siteCode || siteCode,
+          site_name: it.siteName || targetSite?.name || siteCode,
           stockType: it.stockType || 'DC Stock',
           classification: it.stockType || 'DC Stock',
           received_at: it.lastReceivedDate || it.dateReceived || new Date().toISOString(),
@@ -859,13 +874,24 @@ export function usePartsRequests({
           status_label: it.statusLabel || 'In Stock',
           status: unitStatus,
           is_deleted: false,
-          is_fixably_synced: true
+          is_fixably_synced: true,
+          unit_value: it.unitValue ?? matchedPart?.stocking_price ?? 99,
+          currentOwner: it.currentOwner,
+          movementTrail: it.movementTrail,
+          movementHistory: it.movementHistory
         });
       });
 
       // Overlay in-transit shipments or packed units from DC
       (inventoryUnits || []).filter(u => {
         if (!u || u.is_deleted || u.status === 'deleted') return false;
+        if (isAllTarget) {
+          if (!isSuper) {
+            const uCode = String(u.site_code || u.siteCode || '').toUpperCase();
+            if (uCode === 'DC' || uCode === 'DC-MDC') return false;
+          }
+          return u.status === 'packed' || u.status === 'shipped' || u.status === 'in_transit' || u.status === 'allocated';
+        }
         const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();
         const uSiteCode = String(u.site_code || u.siteCode || '').toUpperCase();
         const uClean = uSiteCode.replace(/^(ASP|APP)\s+/, '');
@@ -888,8 +914,8 @@ export function usePartsRequests({
       });
 
       return {
-        siteId,
-        siteCode,
+        siteId: isAllTarget ? 'ALL' : siteId,
+        siteCode: isAllTarget ? 'ALL' : siteCode,
         partsSummary,
         totalInStock,
         totalAllocated,
@@ -915,6 +941,14 @@ export function usePartsRequests({
         if (!effectiveDateMs || effectiveDateMs <= clearTimeMs) {
           return false;
         }
+      }
+
+      if (isAllTarget) {
+        if (!isSuper) {
+          const uCode = String(u.site_code || u.siteCode || '').toUpperCase();
+          if (uCode === 'DC' || uCode === 'DC-MDC') return false;
+        }
+        return true;
       }
 
       const uSiteId = String(u.current_site_id || u.siteId || u.site_id || '').toLowerCase();

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment, useDeferredValue } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment, useDeferredValue, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveSite, isUUID, getCleanDisplaySerial } from '../utils/appContextHelpers';
 import { isProvincialSite, isDisplayOrBatteryForIPhone13Plus, resolveCanonicalIPhoneModel } from '../utils/partResolver';
@@ -61,7 +61,8 @@ import {
   Mail,
   Phone,
   Globe,
-  Barcode
+  Barcode,
+  Download
 } from 'lucide-react';
 
 const REASON_PRESETS = [
@@ -283,7 +284,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     }
   }, [defaultTab, pmgSubTab, activeTab, setPmgSubTab]);
 
-  const handleTabChange = (newTab) => {
+  const handleTabChange = useCallback((newTab) => {
     setActiveTab(newTab);
     if (setPmgSubTab) {
       setPmgSubTab(newTab);
@@ -296,7 +297,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     } else if (newTab !== 'all_stocks' && setGlobalActiveTab && globalActiveTab === 'all-stocks') {
       setGlobalActiveTab('request-parts');
     }
-  };
+  }, [setPmgSubTab, setGlobalActiveTab, globalActiveTab]);
 
   const [copiedWaybill, setCopiedWaybill] = useState(null);
 
@@ -424,7 +425,6 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   }, [selectedSiteId]);
 
   // Table Search & Filter State
-  const [statusFilter, setStatusFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [stockSearchQuery, setStockSearchQuery] = useState('');
@@ -437,6 +437,64 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   const [stockDeviceFilter, setStockDeviceFilter] = useState('ALL');
   const [collapsedDevices, setCollapsedDevices] = useState({});
   const [isIncomingShipmentsCollapsed, setIsIncomingShipmentsCollapsed] = useState(false);
+
+  // Branch Stock Sub-Tab & Serialized Directory State
+  const [stockSubTab, setStockSubTab] = useState('catalog'); // 'catalog' | 'serialized' | 'incoming'
+  const [serializedSearchQuery, setSerializedSearchQuery] = useState('');
+  const [serializedAgingFilter, setSerializedAgingFilter] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'SLOW' | 'NON_MOVING' | 'DEAD'
+  const [serializedClassificationFilter, setSerializedClassificationFilter] = useState('ALL'); // 'ALL' | 'DC_STOCK' | 'MSPI_OWNED' | 'RELOCATED'
+  const [serializedTransferFilter, setSerializedTransferFilter] = useState('ALL'); // 'ALL' | 'TRANSFERRED_ONLY' | 'NO_TRANSFERS'
+  const [serializedPage, setSerializedPage] = useState(1);
+  const [serializedPageSize, setSerializedPageSize] = useState(50);
+  const [copiedPartNumber, setCopiedPartNumber] = useState(null);
+
+  // Parts Requests Sub-Tab Navigation, Batch Actions, & Detail Drawer State
+  const [requestStatusTab, setRequestStatusTab] = useState('ALL'); // 'ALL' | 'pending' | 'approved' | 'fulfilled' | 'cancelled_rejected'
+  const [requestDateFilter, setRequestDateFilter] = useState('ALL'); // 'ALL' | 'today' | '7d' | '30d'
+  const [requestBranchFilter, setRequestBranchFilter] = useState('ALL');
+  const [requestPage, setRequestPage] = useState(1);
+  const [requestPageSize, setRequestPageSize] = useState(25);
+  const [selectedRequestIds, setSelectedRequestIds] = useState([]);
+  const [selectedRequestDetails, setSelectedRequestDetails] = useState(null);
+  const [copiedReqNumber, setCopiedReqNumber] = useState(null);
+  const [formTargetSiteId, setFormTargetSiteId] = useState('');
+  const [isBatchActionInProgress, setIsBatchActionInProgress] = useState(false);
+
+  const handleCopyPartNumber = async (pn) => {
+    if (!pn) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(pn);
+      }
+      setCopiedPartNumber(pn);
+      showToast?.(`Copied part number ${pn} to clipboard!`, 'info');
+      setTimeout(() => setCopiedPartNumber(null), 2000);
+    } catch (e) {}
+  };
+
+  const handleCopyReqNumber = async (reqNum) => {
+    if (!reqNum) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(reqNum);
+      }
+      setCopiedReqNumber(reqNum);
+      showToast?.(`Copied requisition #${reqNum} to clipboard!`, 'info');
+      setTimeout(() => setCopiedReqNumber(null), 2000);
+    } catch (e) {}
+  };
+
+  const handleCopySerial = async (sn) => {
+    if (!sn) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(sn);
+      }
+      setCopiedSerial(sn);
+      showToast?.(`Copied serial #${sn} to clipboard!`, 'info');
+      setTimeout(() => setCopiedSerial(null), 2000);
+    } catch (e) {}
+  };
 
   // Multi-Site All Stocks Tab State
   const [allStocksRegionTab, setAllStocksRegionTab] = useState(() => {
@@ -706,6 +764,23 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     return getUsedPartsForSite(selectedSiteId);
   }, [getUsedPartsForSite, selectedSiteId]);
 
+  // Request counts per status tab for filter pills
+  const requestTabCounts = useMemo(() => {
+    const relevant = isSuperadmin
+      ? (selectedSiteId && selectedSiteId !== 'ALL'
+          ? partsRequests.filter(r => r.site_id === selectedSiteId || r.site_code === activeSiteObj.code)
+          : partsRequests)
+      : partsRequests.filter(r => r.site_id === currentUser?.siteId || r.site_code === userSiteObj.code);
+
+    return {
+      all: relevant.length,
+      pending: relevant.filter(r => r.status === 'pending').length,
+      approved: relevant.filter(r => r.status === 'approved').length,
+      fulfilled: relevant.filter(r => r.status === 'fulfilled' || r.status === 'partially_fulfilled').length,
+      cancelled_rejected: relevant.filter(r => r.status === 'rejected' || r.status === 'cancelled').length
+    };
+  }, [partsRequests, isSuperadmin, selectedSiteId, activeSiteObj, currentUser, userSiteObj]);
+
   // Filtered Parts Requests (Only Superadmin sees all requests; Site staff see only their own)
   const filteredRequests = useMemo(() => {
     return partsRequests.filter(req => {
@@ -721,13 +796,39 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         if (!matchesSite) return false;
       }
 
-      // 2. Status filter
-      if (statusFilter !== 'ALL' && req.status !== statusFilter) return false;
+      // 1b. Table Branch Filter
+      if (requestBranchFilter !== 'ALL') {
+        const matchesBranch = req.site_id === requestBranchFilter || req.site_code === requestBranchFilter;
+        if (!matchesBranch) return false;
+      }
+
+      // 2. Status Tab Filter
+      if (requestStatusTab !== 'ALL') {
+        if (requestStatusTab === 'pending' && req.status !== 'pending') return false;
+        if (requestStatusTab === 'approved' && req.status !== 'approved') return false;
+        if (requestStatusTab === 'fulfilled' && (req.status !== 'fulfilled' && req.status !== 'partially_fulfilled')) return false;
+        if (requestStatusTab === 'cancelled_rejected' && (req.status !== 'rejected' && req.status !== 'cancelled')) return false;
+      }
 
       // 3. Priority filter
       if (priorityFilter !== 'ALL' && req.priority !== priorityFilter) return false;
 
-      // 4. Search query
+      // 4. Date Range filter
+      if (requestDateFilter !== 'ALL') {
+        const reqTime = new Date(req.created_at).getTime();
+        const now = Date.now();
+        if (requestDateFilter === 'today') {
+          const reqDay = new Date(req.created_at).toDateString();
+          const today = new Date().toDateString();
+          if (reqDay !== today) return false;
+        } else if (requestDateFilter === '7d' && (now - reqTime > 7 * 86400000)) {
+          return false;
+        } else if (requestDateFilter === '30d' && (now - reqTime > 30 * 86400000)) {
+          return false;
+        }
+      }
+
+      // 5. Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const num = String(req.request_number || '').toLowerCase();
@@ -735,12 +836,185 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         const desc = String(req.part_description || '').toLowerCase();
         const user = String(req.requested_by_name || '').toLowerCase();
         const reason = String(req.reason || '').toLowerCase();
-        return num.includes(q) || pn.includes(q) || desc.includes(q) || user.includes(q) || reason.includes(q);
+        const notes = String(req.notes || '').toLowerCase();
+        const tracking = String(req.tracking_number || req.fulfilled_shipment_id || '').toLowerCase();
+        return num.includes(q) || pn.includes(q) || desc.includes(q) || user.includes(q) || reason.includes(q) || notes.includes(q) || tracking.includes(q);
+      }
+
+      return true;
+    }).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+  }, [partsRequests, isSuperadmin, currentUser, userSiteObj, selectedSiteId, activeSiteObj, requestBranchFilter, requestStatusTab, priorityFilter, requestDateFilter, searchQuery]);
+
+  // Pagination for Parts Requests
+  const totalRequestPages = Math.max(1, Math.ceil(filteredRequests.length / requestPageSize));
+  const safeRequestPage = Math.min(Math.max(1, requestPage), totalRequestPages);
+  const paginatedRequests = useMemo(() => {
+    const start = (safeRequestPage - 1) * requestPageSize;
+    return filteredRequests.slice(start, start + requestPageSize);
+  }, [filteredRequests, safeRequestPage, requestPageSize]);
+
+  // Branch Stock Aging Metrics & Valuation Calculation
+  const branchStockAgingMetrics = useMemo(() => {
+    const units = siteStockData.units || [];
+    let deadCount = 0;
+    let nonMovingCount = 0;
+    let slowMovingCount = 0;
+    let activeStockCount = 0;
+    let totalVal = 0;
+    let dcStockCount = 0;
+    let mspiOwnedCount = 0;
+    let relocatedCount = 0;
+
+    units.forEach(u => {
+      if (u.status !== 'in_stock') return;
+      const days = typeof u.aging_days === 'number' ? u.aging_days : 0;
+      const val = u.unit_value || u.unitValue || u.partValue || 99;
+      totalVal += val;
+
+      const cl = String(u.stockType || u.classification || '').toUpperCase();
+      if (cl.includes('DC')) {
+        dcStockCount++;
+      } else if (cl.includes('RELOCAT')) {
+        relocatedCount++;
+      } else {
+        mspiOwnedCount++;
+      }
+
+      if (days >= 150 || u.aging_bracket === 'Dead Stock') {
+        deadCount++;
+      } else if (days >= 90) {
+        nonMovingCount++;
+      } else if (days >= 60) {
+        slowMovingCount++;
+      } else {
+        activeStockCount++;
+      }
+    });
+
+    const total = siteStockData.totalInStock || units.length || 1;
+    return {
+      totalValue: totalVal,
+      totalUnits: siteStockData.totalInStock || 0,
+      deadCount,
+      deadPercent: ((deadCount / total) * 100).toFixed(1),
+      nonMovingCount,
+      nonMovingPercent: ((nonMovingCount / total) * 100).toFixed(1),
+      slowMovingCount,
+      slowMovingPercent: ((slowMovingCount / total) * 100).toFixed(1),
+      activeStockCount,
+      activeStockPercent: ((activeStockCount / total) * 100).toFixed(1),
+      dcStockCount,
+      mspiOwnedCount,
+      relocatedCount
+    };
+  }, [siteStockData]);
+
+  // Serialized Physical Units filtering and pagination for Branch Stock
+  const filteredSerializedUnits = useMemo(() => {
+    const list = siteStockData.units || [];
+    return list.filter(u => {
+      // 1. Search Query
+      if (serializedSearchQuery.trim()) {
+        const q = serializedSearchQuery.toLowerCase().trim();
+        const sn = String(u.serial_number || u.serialNumber || '').toLowerCase();
+        const pn = String(u.part_number || u.partNumber || '').toLowerCase();
+        const desc = String(u.description || '').toLowerCase();
+        const branch = String(u.site_code || u.siteName || '').toLowerCase();
+        const owner = String(u.currentOwner || '').toLowerCase();
+        if (!sn.includes(q) && !pn.includes(q) && !desc.includes(q) && !branch.includes(q) && !owner.includes(q)) {
+          return false;
+        }
+      }
+
+      // 2. Aging Filter
+      if (serializedAgingFilter !== 'ALL') {
+        const days = typeof u.aging_days === 'number' ? u.aging_days : 0;
+        if (serializedAgingFilter === 'ACTIVE' && days >= 60) return false;
+        if (serializedAgingFilter === 'SLOW' && (days < 60 || days >= 90)) return false;
+        if (serializedAgingFilter === 'NON_MOVING' && (days < 90 || days >= 150)) return false;
+        if (serializedAgingFilter === 'DEAD' && days < 150 && u.aging_bracket !== 'Dead Stock') return false;
+      }
+
+      // 3. Classification Filter
+      if (serializedClassificationFilter !== 'ALL') {
+        const cl = String(u.stockType || u.classification || '').toUpperCase();
+        if (serializedClassificationFilter === 'DC_STOCK' && !cl.includes('DC')) return false;
+        if (serializedClassificationFilter === 'MSPI_OWNED' && (!cl.includes('MSPI') && !cl.includes('C/I'))) return false;
+        if (serializedClassificationFilter === 'RELOCATED' && !cl.includes('RELOCAT')) return false;
+      }
+
+      // 4. Transfer Movement Filter
+      if (serializedTransferFilter !== 'ALL') {
+        const hasHistory = Boolean(u.movementTrail || (u.movementHistory && u.movementHistory.length > 0) || u.transferCount > 0);
+        if (serializedTransferFilter === 'TRANSFERRED_ONLY' && !hasHistory) return false;
+        if (serializedTransferFilter === 'NO_TRANSFERS' && hasHistory) return false;
       }
 
       return true;
     });
-  }, [partsRequests, isSuperadmin, currentUser, userSiteObj, selectedSiteId, activeSiteObj, statusFilter, priorityFilter, searchQuery]);
+  }, [siteStockData.units, serializedSearchQuery, serializedAgingFilter, serializedClassificationFilter, serializedTransferFilter]);
+
+  const totalSerializedPages = Math.max(1, Math.ceil(filteredSerializedUnits.length / serializedPageSize));
+  const safeSerializedPage = Math.min(Math.max(1, serializedPage), totalSerializedPages);
+  const paginatedSerializedUnits = useMemo(() => {
+    const start = (safeSerializedPage - 1) * serializedPageSize;
+    return filteredSerializedUnits.slice(start, start + serializedPageSize);
+  }, [filteredSerializedUnits, safeSerializedPage, serializedPageSize]);
+
+  // Batch action handlers for Parts Requests
+  const handleToggleSelectAllPending = () => {
+    const pendingIds = paginatedRequests.filter(r => r.status === 'pending').map(r => r.id);
+    if (selectedRequestIds.length === pendingIds.length && pendingIds.every(id => selectedRequestIds.includes(id))) {
+      setSelectedRequestIds([]);
+    } else {
+      setSelectedRequestIds(pendingIds);
+    }
+  };
+
+  const handleToggleSelectRequest = (id) => {
+    setSelectedRequestIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const handleBatchApproveRequests = async () => {
+    if (selectedRequestIds.length === 0) return;
+    if (!window.confirm(`Approve ${selectedRequestIds.length} selected parts requests?`)) return;
+    setIsBatchActionInProgress(true);
+    try {
+      for (const id of selectedRequestIds) {
+        await updatePartsRequestStatus(id, 'approved', {
+          reviewedBy: currentUser?.fullName || 'DC Superadmin',
+          notes: 'Batch approved by Superadmin'
+        });
+      }
+      showToast?.(`Successfully approved ${selectedRequestIds.length} parts requests!`, 'success');
+      setSelectedRequestIds([]);
+    } catch (e) {
+      showToast?.('Batch approval encountered an issue: ' + e.message, 'error');
+    } finally {
+      setIsBatchActionInProgress(false);
+    }
+  };
+
+  const handleBatchDenyRequests = async () => {
+    if (selectedRequestIds.length === 0) return;
+    const reason = window.prompt(`Deny ${selectedRequestIds.length} selected requests. Please provide rejection reason:`, 'Branch buffer stock sufficient / out of scope');
+    if (reason === null) return;
+    setIsBatchActionInProgress(true);
+    try {
+      for (const id of selectedRequestIds) {
+        await updatePartsRequestStatus(id, 'rejected', {
+          reviewedBy: currentUser?.fullName || 'DC Superadmin',
+          notes: reason || 'Denied in batch review'
+        });
+      }
+      showToast?.(`Rejected ${selectedRequestIds.length} parts requests.`, 'info');
+      setSelectedRequestIds([]);
+    } catch (e) {
+      showToast?.('Batch denial error: ' + e.message, 'error');
+    } finally {
+      setIsBatchActionInProgress(false);
+    }
+  };
 
   // KPI Metrics Calculation
   const metrics = useMemo(() => {
@@ -829,15 +1103,19 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
   // Open Form with Pre-selected Part from Stock View (Appends or increments in multi-part request)
   const handleQuickRequestPart = (partNumber, sourceSiteName = null) => {
-    if (isSuperadmin) {
-      showToast('Superadmins cannot request parts. Only PMG branch users can request parts.', 'info');
-      return;
-    }
-
     const partObj = masterPartsCatalog.find(p => p.part_number?.toUpperCase() === partNumber?.toUpperCase());
     if (partObj && !isDisplayOrBatteryForIPhone13Plus(partObj)) {
       showToast('Parts replenishment is restricted strictly to Displays and Batteries for iPhone 13 and newer.', 'warning');
       return;
+    }
+
+    if (isSuperadmin) {
+      if (selectedSiteId && selectedSiteId !== 'ALL') {
+        setFormTargetSiteId(selectedSiteId);
+      } else {
+        const firstBranch = sites.find(s => !s.is_dc);
+        if (firstBranch) setFormTargetSiteId(firstBranch.id);
+      }
     }
 
     const partSearchText = partObj ? `${partObj.part_number} — ${partObj.description}` : partNumber;
@@ -872,10 +1150,6 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
   // Submit Multi-Part Replenishment Request Handler
   const handleSubmitNewRequest = async (e) => {
     e.preventDefault();
-    if (isSuperadmin) {
-      showToast('Superadmin accounts cannot submit replenishment requests. Only PMG branch users can request parts.', 'error');
-      return;
-    }
 
     const selectedRows = requestRows.filter(r => r.partNumber?.trim());
     if (selectedRows.length === 0) {
@@ -890,6 +1164,15 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         showToast(`Request blocked: "${r.partNumber}" is not an authorized iPhone 13+ Display or Battery.`, 'error');
         return;
       }
+    }
+
+    const effectiveTargetSiteId = isSuperadmin
+      ? (formTargetSiteId || (selectedSiteId !== 'ALL' ? selectedSiteId : (sites.find(s => !s.is_dc)?.id || '')))
+      : (currentUser?.siteId || userSiteObj.id);
+
+    if (!effectiveTargetSiteId) {
+      showToast('Please select a destination branch site for this replenishment requisition.', 'error');
+      return;
     }
 
     const items = selectedRows.map(r => {
@@ -910,7 +1193,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     try {
       const submitFn = typeof submitBatchPartsRequests === 'function' ? submitBatchPartsRequests : submitPartsRequest;
       const res = await submitFn({
-        siteId: currentUser?.siteId || selectedSiteId,
+        siteId: effectiveTargetSiteId,
         items,
         priority: formPriority,
         reason: formReason,
@@ -986,29 +1269,82 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     showToast(`Exported ${rows.length} request records to ${fileName}`, 'success');
   };
 
-  const handleExportStockOnHandToXlsx = () => {
-    if (stockRows.length === 0) {
-      showToast?.('No stock records to export for this branch', 'warning');
+  const handleExportSerializedStockToXlsx = () => {
+    const units = siteStockData.units || [];
+    if (units.length === 0) {
+      showToast?.(`No serialized units found for ${activeSiteObj.name}`, 'warning');
       return;
     }
 
-    const rows = stockRows.map(r => ({
-      'Branch Site': `${activeSiteObj.name} (${activeSiteObj.code})`,
-      'Part Number': r.partNumber,
-      'Description': r.description,
-      'Compatible Model': r.model,
-      'Category': r.category || 'General',
-      'Available On-Hand Stock': r.inStock || 0,
-      'Allocated Units': r.allocated || 0,
-      'In-Transit / Packed Units': r.packed || 0
+    const rows = units.map((u, idx) => ({
+      '#': idx + 1,
+      'Branch': u.site_code || activeSiteObj.code,
+      'Part Number': u.part_number || u.partNumber,
+      'Description': u.description,
+      'Serial Number': u.serial_number || u.serialNumber,
+      'Classification': u.stockType || u.classification || 'DC Stock',
+      'Aging Days': u.aging_days ?? u.agingDays ?? 0,
+      'Aging Status': u.status_label || u.aging_bracket || 'In Stock',
+      'Last Received': u.lastReceivedDate || u.received_at || '—',
+      'Current Owner': u.currentOwner || '—',
+      'Movement Trail': u.movementTrail || '—',
+      'Unit Value': u.unit_value || u.unitValue || 99
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Branch Stock');
-    const fileName = `Branch_Stock_${activeSiteObj.code || 'MDC'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.utils.book_append_sheet(wb, ws, 'Serialized Units');
+
+    const skuRows = stockRows.map(r => ({
+      'Branch': `${activeSiteObj.name} (${activeSiteObj.code})`,
+      'Part Number': r.partNumber,
+      'Description': r.description,
+      'Model': r.model,
+      'Category': r.category || 'General',
+      'In Stock': r.inStock || 0,
+      'Allocated': r.allocated || 0,
+      'In-Transit': r.packed || 0
+    }));
+    const wsSku = XLSX.utils.json_to_sheet(skuRows);
+    XLSX.utils.book_append_sheet(wb, wsSku, 'Catalog Summary');
+
+    const fileName = `Branch_Inventory_${activeSiteObj.code || 'MDC'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(wb, fileName);
-    showToast?.(`Exported ${rows.length} stock items to ${fileName}`, 'success');
+    showToast?.(`Exported ${rows.length} serialized units & ${skuRows.length} SKUs to ${fileName}`, 'success');
+  };
+
+  const handleExportDeadStockForBranch = () => {
+    const deadUnits = (siteStockData.units || []).filter(u => {
+      const days = typeof u.aging_days === 'number' ? u.aging_days : 0;
+      return days >= 150 || u.aging_bracket === 'Dead Stock';
+    });
+
+    if (deadUnits.length === 0) {
+      showToast?.(`No dead stock (>150 days) found for ${activeSiteObj.name}`, 'info');
+      return;
+    }
+
+    const rows = deadUnits.map((u, idx) => ({
+      '#': idx + 1,
+      'Branch': u.site_code || activeSiteObj.code,
+      'Part Number': u.part_number || u.partNumber,
+      'Description': u.description,
+      'Serial Number': u.serial_number || u.serialNumber,
+      'Classification': u.stockType || u.classification || 'DC Stock',
+      'Aging Days': u.aging_days ?? u.agingDays ?? 0,
+      'Aging Status': 'Dead Stock (>150D)',
+      'Last Received': u.lastReceivedDate || u.received_at || '—',
+      'Current Owner': u.currentOwner || `${u.site_code || activeSiteObj.code}_MSPI-OWNED`,
+      'Movement Trail': u.movementTrail || '—',
+      'Unit Value': u.unit_value || u.unitValue || 99
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dead Stock RMA');
+    const fileName = `Dead_Stock_RMA_${activeSiteObj.code || 'MDC'}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    showToast?.(`Exported ${rows.length} dead stock units to ${fileName}`, 'success');
   };
 
   // Available In-Stock serial numbers for the selected part in Mark as Used modal
@@ -1773,48 +2109,129 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       case 'stock_on_hand':
         return [
           {
-            id: 'stock-units',
-            label: 'Branch Stock On Hand',
-            value: siteStockData.totalInStock,
-            unit: 'units in stock',
-            subtext: `${stockCategoryCounts.total} unique part numbers in stock`,
-            icon: Package,
+            id: 'stock-value',
+            label: 'Branch Inventory Value',
+            value: `$${branchStockAgingMetrics.totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            unit: '',
+            subtext: `Across ${activeSiteObj.name}`,
+            icon: Boxes,
             accent: '#0284c7',
             iconBg: '#e0f2fe',
             iconColor: '#0284c7'
           },
           {
+            id: 'stock-units',
+            label: 'Total Units On-Hand',
+            value: (siteStockData.totalInStock || 0).toLocaleString(),
+            unit: '',
+            badge: `${stockCategoryCounts.total} SKUs`,
+            badgeBg: '#dbeafe',
+            badgeColor: '#1e40af',
+            subtext: 'Click to view on-hand stock',
+            icon: Package,
+            accent: '#059669',
+            iconBg: '#dcfce7',
+            iconColor: '#059669',
+            onClick: () => setStockSubTab('catalog')
+          },
+          {
+            id: 'stock-dead',
+            label: 'Dead Stock (> 150D)',
+            value: (branchStockAgingMetrics.deadCount || 0).toLocaleString(),
+            unit: '',
+            badge: `${branchStockAgingMetrics.deadPercent}%`,
+            badgeBg: '#fee2e2',
+            badgeColor: '#dc2626',
+            subtext: 'Action required (RMA pull-out)',
+            icon: AlertTriangle,
+            accent: '#dc2626',
+            iconBg: '#fee2e2',
+            iconColor: '#dc2626',
+            onClick: () => {
+              setStockSubTab('serialized');
+              setSerializedAgingFilter('DEAD');
+            }
+          },
+          {
+            id: 'stock-non-moving',
+            label: 'Non-Moving (90-149D)',
+            value: (branchStockAgingMetrics.nonMovingCount || 0).toLocaleString(),
+            unit: '',
+            badge: `${branchStockAgingMetrics.nonMovingPercent}%`,
+            badgeBg: '#ffedd5',
+            badgeColor: '#c2410c',
+            subtext: 'Pre-aging inventory tier',
+            icon: Clock,
+            accent: '#ea580c',
+            iconBg: '#ffedd5',
+            iconColor: '#ea580c',
+            onClick: () => {
+              setStockSubTab('serialized');
+              setSerializedAgingFilter('NON_MOVING');
+            }
+          },
+          {
+            id: 'stock-slow-moving',
+            label: 'Slow-Moving (60-89D)',
+            value: (branchStockAgingMetrics.slowMovingCount || 0).toLocaleString(),
+            unit: '',
+            badge: `${branchStockAgingMetrics.slowMovingPercent}%`,
+            badgeBg: '#fef3c7',
+            badgeColor: '#b45309',
+            subtext: 'Monitor branch rotation',
+            icon: TrendingDown,
+            accent: '#d97706',
+            iconBg: '#fef3c7',
+            iconColor: '#d97706',
+            onClick: () => {
+              setStockSubTab('serialized');
+              setSerializedAgingFilter('SLOW');
+            }
+          },
+          {
+            id: 'stock-active',
+            label: 'Active Stock (< 60D)',
+            value: (branchStockAgingMetrics.activeStockCount || 0).toLocaleString(),
+            unit: '',
+            badge: `${branchStockAgingMetrics.activeStockPercent}%`,
+            badgeBg: '#dcfce7',
+            badgeColor: '#15803d',
+            subtext: 'Healthy active rotation',
+            icon: CheckCircle2,
+            accent: '#10b981',
+            iconBg: '#dcfce7',
+            iconColor: '#059669',
+            onClick: () => {
+              setStockSubTab('serialized');
+              setSerializedAgingFilter('ACTIVE');
+            }
+          },
+          {
             id: 'stock-incoming',
             label: 'Incoming Shipments',
             value: incomingShipments.length,
-            unit: 'manifests in-transit',
-            subtext: `${incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} parts en route from DC`,
+            unit: 'manifests',
+            badge: `${incomingShipments.reduce((acc, s) => acc + (s.items?.length || 0), 0)} parts`,
+            badgeBg: '#fef3c7',
+            badgeColor: '#b45309',
+            subtext: 'En route from Central DC',
             icon: Truck,
             accent: '#f59e0b',
             iconBg: '#fef3c7',
-            iconColor: '#d97706'
+            iconColor: '#d97706',
+            onClick: () => setStockSubTab('incoming')
           },
           {
             id: 'stock-used',
             label: 'Parts Consumed',
-            value: liveUsedUnitsLog.length,
+            value: liveUsedUnitsLog.length.toLocaleString(),
             unit: 'lifetime units',
             subtext: 'Installed in customer repairs',
             icon: Wrench,
-            accent: '#10b981',
-            iconBg: '#dcfce7',
-            iconColor: '#059669'
-          },
-          {
-            id: 'stock-health',
-            label: 'Stock Health',
-            value: 'Verified',
-            unit: 'active status',
-            subtext: 'Granular serial tracking protected',
-            icon: ShieldCheck,
             accent: '#8b5cf6',
             iconBg: '#ede9fe',
-            iconColor: '#7c3aed'
+            iconColor: '#7c3aed',
+            onClick: () => handleTabChange('usage_history')
           }
         ];
       case 'all_stocks':
@@ -1913,7 +2330,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Clock,
             accent: '#f59e0b',
             iconBg: '#fef3c7',
-            iconColor: '#d97706'
+            iconColor: '#d97706',
+            badge: metrics.pending > 0 ? `${metrics.pending} pending` : 'All Clear',
+            badgeBg: metrics.pending > 0 ? '#fef3c7' : '#f0fdf4',
+            badgeColor: metrics.pending > 0 ? '#b45309' : '#15803d',
+            onClick: () => setRequestStatusTab('pending')
           },
           {
             id: 'req-approved',
@@ -1924,7 +2345,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: ShieldCheck,
             accent: '#8b5cf6',
             iconBg: '#ede9fe',
-            iconColor: '#7c3aed'
+            iconColor: '#7c3aed',
+            badge: `${metrics.approved} queued`,
+            badgeBg: '#ede9fe',
+            badgeColor: '#6b21a8',
+            onClick: () => setRequestStatusTab('approved')
           },
           {
             id: 'req-fulfilled',
@@ -1935,7 +2360,11 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: CheckCircle2,
             accent: '#10b981',
             iconBg: '#dcfce7',
-            iconColor: '#059669'
+            iconColor: '#059669',
+            badge: `${metrics.fulfilled} delivered`,
+            badgeBg: '#dcfce7',
+            badgeColor: '#15803d',
+            onClick: () => setRequestStatusTab('fulfilled')
           },
           {
             id: 'req-branch-stock',
@@ -1946,7 +2375,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             icon: Package,
             accent: '#0284c7',
             iconBg: '#e0f2fe',
-            iconColor: '#0284c7'
+            iconColor: '#0284c7',
+            onClick: () => handleTabChange('stock_on_hand')
           }
         ];
     }
@@ -1961,7 +2391,10 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
     regionStockTotals,
     metroManilaSites.length,
     provincialSites.length,
-    isSuperadmin
+    isSuperadmin,
+    branchStockAgingMetrics,
+    activeSiteObj.name,
+    handleTabChange
   ]);
 
   const HeaderIcon = viewHeaderMeta.icon;
@@ -2113,23 +2546,22 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                   type="button"
                   className="btn btn-secondary"
                   onClick={handleExportRequestsToXlsx}
-                  style={{ background: '#ffffff', color: '#047857', borderColor: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600 }}
+                  style={{ background: '#ffffff', color: '#047857', borderColor: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
                   title="Export parts requests to Excel"
                 >
                   <FileSpreadsheet size={14} color="#059669" />
                   <span>Export to Excel</span>
                 </button>
-                {!isSuperadmin && (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => setIsFormOpen(prev => !prev)}
-                    style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
-                  >
-                    {isFormOpen ? <X size={16} /> : <Plus size={16} />}
-                    <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setIsFormOpen(prev => !prev)}
+                  style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, borderRadius: '6px' }}
+                  title={isSuperadmin ? 'Create a replenishment requisition on behalf of a branch' : 'Submit a new parts replenishment request to DC'}
+                >
+                  {isFormOpen ? <X size={16} /> : <Plus size={16} />}
+                  <span>{isFormOpen ? 'Close Form' : 'New Request'}</span>
+                </button>
               </>
             )}
 
@@ -2138,12 +2570,22 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={handleExportStockOnHandToXlsx}
+                  onClick={handleExportSerializedStockToXlsx}
                   style={{ background: '#ffffff', color: '#047857', borderColor: '#a7f3d0', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
-                  title="Export current branch stock on hand to Excel"
+                  title="Export full serialized inventory and catalog summary to Excel"
                 >
                   <FileSpreadsheet size={14} color="#059669" />
                   <span>Export Excel</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExportDeadStockForBranch}
+                  style={{ background: '#fff1f2', color: '#dc2626', borderColor: '#fca5a5', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, borderRadius: '6px' }}
+                  title="Export Dead Stock (>150 days) for RMA pull-out"
+                >
+                  <Download size={14} color="#dc2626" />
+                  <span>Export Dead Stock</span>
                 </button>
                 <button
                   type="button"
@@ -2154,6 +2596,19 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 >
                   <Wrench size={14} />
                   <span>Record Part Used</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    handleTabChange('requests_table');
+                    setIsFormOpen(true);
+                  }}
+                  style={{ background: '#0284c7', borderColor: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12.5px', borderRadius: '6px', boxShadow: '0 1px 2px rgba(2, 132, 199, 0.2)' }}
+                  title="Create new parts replenishment request"
+                >
+                  <Plus size={14} />
+                  <span>New Request</span>
                 </button>
                 {isPmgUser && (
                   <button
@@ -2223,6 +2678,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             <div
               key={card.id}
               className="card"
+              onClick={card.onClick}
               style={{
                 padding: '16px 18px',
                 background: '#ffffff',
@@ -2233,6 +2689,7 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 flexDirection: 'column',
                 justifyContent: 'space-between',
                 gap: '10px',
+                cursor: card.onClick ? 'pointer' : 'default',
                 transition: 'transform 0.15s ease, box-shadow 0.15s ease'
               }}
               onMouseEnter={(e) => {
@@ -2253,9 +2710,25 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: '26px', fontWeight: 800, color: '#0f172a', lineHeight: 1.15, letterSpacing: '-0.02em' }}>
-                  {card.value}{' '}
-                  <span style={{ fontSize: '12.5px', fontWeight: 500, color: '#64748b' }}>{card.unit}</span>
+                <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '6px' }}>
+                  <span style={{ fontSize: '26px', fontWeight: 800, color: '#0f172a', lineHeight: 1.15, letterSpacing: '-0.02em' }}>
+                    {card.value}
+                  </span>
+                  {card.badge && (
+                    <span style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      padding: '2px 7px',
+                      borderRadius: '4px',
+                      background: card.badgeBg || '#f1f5f9',
+                      color: card.badgeColor || '#475569'
+                    }}>
+                      {card.badge}
+                    </span>
+                  )}
+                  {card.unit && (
+                    <span style={{ fontSize: '12.5px', fontWeight: 500, color: '#64748b' }}>{card.unit}</span>
+                  )}
                 </div>
                 <div style={{ fontSize: '11.5px', color: card.iconColor, marginTop: '5px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: card.iconColor }} />
@@ -2267,8 +2740,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
         })}
       </div>
 
-      {/* 3. New Parts Request Submission Form Modal / Collapsible Section (Strictly PMG Users) */}
-      {!isSuperadmin && isFormOpen && (
+      {/* 3. New Parts Request Submission Form Modal / Collapsible Section */}
+      {isFormOpen && (
         <div
           className="card"
           style={{
@@ -2286,9 +2759,26 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 Submit New Parts Replenishment Request to DC Superadmin
               </h3>
             </div>
-            <span style={{ fontSize: '12px', color: '#64748b' }}>
-              Requesting Branch: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
-            </span>
+            {isSuperadmin ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Building2 size={15} color="#0284c7" />
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>Requisition for Branch:</span>
+                <select
+                  className="form-select"
+                  value={formTargetSiteId || (selectedSiteId !== 'ALL' ? selectedSiteId : (sites.find(s => !s.is_dc)?.id || ''))}
+                  onChange={(e) => setFormTargetSiteId(e.target.value)}
+                  style={{ fontSize: '12.5px', padding: '4px 10px', height: '32px', borderRadius: '6px', minWidth: '200px', fontWeight: 600 }}
+                >
+                  {sites.filter(s => !s.is_dc).map(s => (
+                    <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span style={{ fontSize: '12px', color: '#64748b' }}>
+                Requesting Branch: <strong>{activeSiteObj.name} ({activeSiteObj.code})</strong>
+              </span>
+            )}
           </div>
 
           <form onSubmit={handleSubmitNewRequest}>
@@ -2761,23 +3251,96 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       {activeTab === 'requests_table' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)' }}>
           
-          {/* Filters Bar */}
-          <div style={{ padding: '14px 18px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '240px' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '340px' }}>
+          {/* Status Lifecycle Navigation Tabs */}
+          <div style={{
+            padding: '12px 18px',
+            background: '#ffffff',
+            borderBottom: '1px solid #e2e8f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '10px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {[
+                { id: 'ALL', label: 'All Requests', count: requestTabCounts.all, color: '#0284c7' },
+                { id: 'pending', label: 'Pending Review', count: requestTabCounts.pending, color: '#d97706', bg: '#fef3c7', activeBg: '#d97706', activeText: '#ffffff' },
+                { id: 'approved', label: 'Approved & Packing', count: requestTabCounts.approved, color: '#7c3aed', bg: '#ede9fe', activeBg: '#7c3aed', activeText: '#ffffff' },
+                { id: 'fulfilled', label: 'Fulfilled / Shipped', count: requestTabCounts.fulfilled, color: '#059669', bg: '#dcfce7', activeBg: '#059669', activeText: '#ffffff' },
+                { id: 'cancelled_rejected', label: 'Denied / Cancelled', count: requestTabCounts.cancelled_rejected, color: '#64748b', bg: '#f1f5f9', activeBg: '#64748b', activeText: '#ffffff' }
+              ].map(tab => {
+                const isActive = requestStatusTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setRequestStatusTab(tab.id);
+                      setRequestPage(1);
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: isActive ? 700 : 600,
+                      border: isActive ? `1px solid ${tab.color}` : '1px solid #e2e8f0',
+                      background: isActive ? (tab.activeBg || '#0284c7') : '#ffffff',
+                      color: isActive ? '#ffffff' : '#475569',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                      transition: 'all 0.15s ease',
+                      boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                    }}
+                  >
+                    <span>{tab.label}</span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        padding: '1px 6px',
+                        borderRadius: '999px',
+                        background: isActive ? 'rgba(255, 255, 255, 0.25)' : (tab.bg || '#f1f5f9'),
+                        color: isActive ? '#ffffff' : tab.color,
+                        fontWeight: 800
+                      }}
+                    >
+                      {tab.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ fontSize: '12px', color: '#64748b' }}>
+              Showing <strong>{filteredRequests.length > 0 ? (safeRequestPage - 1) * requestPageSize + 1 : 0}</strong> – <strong>{Math.min(safeRequestPage * requestPageSize, filteredRequests.length)}</strong> of <strong>{filteredRequests.length}</strong> request{filteredRequests.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+
+          {/* Filters & Tools Bar */}
+          <div style={{ padding: '12px 18px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: '260px', maxWidth: '420px' }}>
+              <div style={{ position: 'relative', width: '100%' }}>
                 <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                 <input
                   type="text"
                   className="form-input"
-                  style={{ paddingLeft: '32px', fontSize: '12.5px', borderRadius: '8px' }}
-                  placeholder="Filter requests by part #, requester, or ID..."
+                  style={{ paddingLeft: '32px', paddingRight: searchQuery ? '28px' : '10px', fontSize: '12.5px', height: '34px', borderRadius: '7px' }}
+                  placeholder="Filter by part #, request #, requester, or notes..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setRequestPage(1);
+                  }}
                 />
                 {searchQuery && (
                   <button
                     type="button"
-                    onClick={() => setSearchQuery('')}
+                    onClick={() => {
+                      setSearchQuery('');
+                      setRequestPage(1);
+                    }}
                     style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
                   >
                     <X size={13} />
@@ -2787,42 +3350,85 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              {/* Status Filter */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Status:</span>
-                <select
-                  className="form-select"
-                  style={{ fontSize: '12px', padding: '5px 10px', width: 'auto', borderRadius: '6px' }}
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="pending">Pending</option>
-                  <option value="approved">Approved</option>
-                  <option value="fulfilled">Fulfilled</option>
-                  <option value="partially_fulfilled">Partially Fulfilled</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
+              {/* Branch Filter (if Superadmin) */}
+              {isSuperadmin && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Branch:</span>
+                  <select
+                    className="form-select"
+                    style={{ fontSize: '12px', padding: '4px 8px', height: '32px', width: 'auto', borderRadius: '6px', maxWidth: '160px' }}
+                    value={requestBranchFilter}
+                    onChange={(e) => {
+                      setRequestBranchFilter(e.target.value);
+                      setRequestPage(1);
+                    }}
+                  >
+                    <option value="ALL">All Branches</option>
+                    {sites.filter(s => !s.is_dc).map(s => (
+                      <option key={s.id} value={s.id}>{s.code}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Priority Filter */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Priority:</span>
                 <select
                   className="form-select"
-                  style={{ fontSize: '12px', padding: '5px 10px', width: 'auto', borderRadius: '6px' }}
+                  style={{ fontSize: '12px', padding: '4px 8px', height: '32px', width: 'auto', borderRadius: '6px' }}
                   value={priorityFilter}
-                  onChange={(e) => setPriorityFilter(e.target.value)}
+                  onChange={(e) => {
+                    setPriorityFilter(e.target.value);
+                    setRequestPage(1);
+                  }}
                 >
                   <option value="ALL">All Priorities</option>
-                  <option value="normal">Normal</option>
-                  <option value="urgent">Urgent</option>
                   <option value="critical">Critical</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="normal">Normal</option>
                 </select>
               </div>
 
-              {/* Export to Excel Button */}
+              {/* Date Filter */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Period:</span>
+                <select
+                  className="form-select"
+                  style={{ fontSize: '12px', padding: '4px 8px', height: '32px', width: 'auto', borderRadius: '6px' }}
+                  value={requestDateFilter}
+                  onChange={(e) => {
+                    setRequestDateFilter(e.target.value);
+                    setRequestPage(1);
+                  }}
+                >
+                  <option value="ALL">All Time</option>
+                  <option value="today">Today</option>
+                  <option value="7d">Past 7 Days</option>
+                  <option value="30d">Past 30 Days</option>
+                </select>
+              </div>
+
+              {/* Page Size */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 600 }}>Page Size:</span>
+                <select
+                  className="form-select"
+                  style={{ fontSize: '12px', padding: '4px 8px', height: '32px', width: 'auto', borderRadius: '6px' }}
+                  value={requestPageSize}
+                  onChange={(e) => {
+                    setRequestPageSize(Number(e.target.value));
+                    setRequestPage(1);
+                  }}
+                >
+                  <option value={15}>15 / page</option>
+                  <option value={25}>25 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                </select>
+              </div>
+
+              {/* Export Button */}
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
@@ -2831,10 +3437,100 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 title="Export filtered parts requests to Excel"
               >
                 <FileSpreadsheet size={14} color="#059669" />
-                <span>Export to Excel</span>
+                <span>Export</span>
               </button>
             </div>
           </div>
+
+          {/* Superadmin Batch Actions Bar */}
+          {isSuperadmin && selectedRequestIds.length > 0 && (
+            <div
+              style={{
+                padding: '10px 18px',
+                background: '#e0f2fe',
+                borderBottom: '1px solid #bae6fd',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                  padding: '2px 8px',
+                  borderRadius: '999px'
+                }}>
+                  {selectedRequestIds.length} Selected
+                </span>
+                <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#0369a1' }}>
+                  Superadmin Batch Governance on pending branch requests
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={handleBatchApproveRequests}
+                  disabled={isBatchActionInProgress}
+                  style={{
+                    background: '#059669',
+                    fontSize: '11.5px',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontWeight: 700
+                  }}
+                >
+                  <Check size={13} />
+                  <span>Approve Selected ({selectedRequestIds.length})</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={handleBatchDenyRequests}
+                  disabled={isBatchActionInProgress}
+                  style={{
+                    color: '#dc2626',
+                    borderColor: '#fca5a5',
+                    background: '#fff1f2',
+                    fontSize: '11.5px',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    fontWeight: 700
+                  }}
+                >
+                  <X size={13} />
+                  <span>Deny Selected</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedRequestIds([])}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#64748b',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    textDecoration: 'underline'
+                  }}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Table Container */}
           <div className="table-container" style={{ overflowX: 'auto' }}>
@@ -2860,40 +3556,51 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                 <p style={{ margin: '0 auto 18px', fontSize: '13px', color: '#64748b', maxWidth: '420px', lineHeight: 1.5 }}>
                   {partsRequests.length === 0
                     ? (isSuperadmin
-                        ? 'No parts replenishment requests have been submitted by branch locations yet.'
+                        ? 'No parts replenishment requests have been submitted by branch locations yet. You can click below to create a requisition on behalf of any branch.'
                         : 'Your branch has not submitted any parts replenishment requests yet. Click below to submit your first requisition to Central DC.')
                     : 'No requests match your current search query or filter selection. Try adjusting your filters above.'}
                 </p>
-                {!isSuperadmin && (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => setIsFormOpen(true)}
-                    style={{ background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700, padding: '8px 18px', borderRadius: '6px' }}
-                  >
-                    <Plus size={15} />
-                    <span>Create New Request</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setIsFormOpen(true)}
+                  style={{ background: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 700, padding: '8px 18px', borderRadius: '6px' }}
+                >
+                  <Plus size={15} />
+                  <span>Create New Request</span>
+                </button>
               </div>
             ) : (
-              <table className="data-table" style={{ width: '100%' }}>
+              <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    <th style={{ width: '150px' }}>Request # &amp; Date</th>
-                    <th style={{ minWidth: '220px' }}>Part Details</th>
-                    <th style={{ textAlign: 'center', width: '100px' }}>Quantity</th>
-                    <th style={{ textAlign: 'center', width: '100px' }}>Priority</th>
-                    <th style={{ minWidth: '160px' }}>Requester &amp; Branch</th>
-                    <th style={{ minWidth: '220px' }}>Reason &amp; Admin Reply</th>
-                    <th style={{ textAlign: 'center', width: '120px' }}>Status</th>
-                    <th style={{ textAlign: 'center', minWidth: '130px' }}>Actions</th>
+                  <tr style={{ background: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+                    {isSuperadmin && (
+                      <th style={{ width: '40px', padding: '12px 10px', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={paginatedRequests.filter(r => r.status === 'pending').length > 0 && paginatedRequests.filter(r => r.status === 'pending').every(r => selectedRequestIds.includes(r.id))}
+                          onChange={handleToggleSelectAllPending}
+                          style={{ cursor: 'pointer', borderRadius: '4px' }}
+                          title="Select / deselect all pending requests on this page"
+                        />
+                      </th>
+                    )}
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', width: '160px' }}>Request # &amp; Date</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '220px' }}>Part Details &amp; Model</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '110px' }}>Quantity</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '100px' }}>Priority</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '180px' }}>Requester &amp; Branch</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '240px' }}>Reason &amp; Governance Reply</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '120px' }}>Status</th>
+                    <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#f8fafc', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', minWidth: '170px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRequests.map(req => {
+                  {paginatedRequests.map(req => {
                     const isOwnRequest = req.requested_by === currentUser?.id || req.requested_by_name === currentUser?.fullName;
                     const canCancel = req.status === 'pending' && (isOwnRequest || isSuperadmin);
+                    const isPending = req.status === 'pending';
+                    const isSelected = selectedRequestIds.includes(req.id);
 
                     const getStatusBadge = (st) => {
                       switch (st) {
@@ -2916,44 +3623,88 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                     };
                     const priorityInfo = getPriorityBadge(req.priority);
                     const PriorityIcon = priorityInfo.icon;
+                    const isCopiedReq = copiedReqNumber === req.request_number;
+                    const isCopiedPn = copiedPartNumber === req.part_number;
 
                     return (
-                      <tr key={req.id}>
-                        <td>
+                      <tr
+                        key={req.id}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          background: isSelected ? '#f0f9ff' : '#ffffff',
+                          transition: 'background-color 0.15s ease'
+                        }}
+                      >
+                        {isSuperadmin && (
+                          <td style={{ padding: '12px 10px', textAlign: 'center' }}>
+                            {isPending ? (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleSelectRequest(req.id)}
+                                style={{ cursor: 'pointer', borderRadius: '4px' }}
+                              />
+                            ) : (
+                              <span style={{ color: '#cbd5e1', fontSize: '11px' }}>—</span>
+                            )}
+                          </td>
+                        )}
+
+                        <td style={{ padding: '12px 14px' }}>
                           <div>
-                            <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
-                              {req.request_number}
-                            </strong>
-                            <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                              <Calendar size={11} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <strong style={{ fontSize: '13px', color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                                {req.request_number}
+                              </strong>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyReqNumber(req.request_number)}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: isCopiedReq ? '#15803d' : '#94a3b8' }}
+                                title="Copy request number"
+                              >
+                                {isCopiedReq ? <Check size={12} /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
+                              <Calendar size={11} color="#94a3b8" />
                               <span>{new Date(req.created_at).toLocaleDateString()}</span>
                             </div>
                           </div>
                         </td>
 
-                        <td>
+                        <td style={{ padding: '12px 14px' }}>
                           <div>
-                            <div style={{ fontWeight: 700, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
-                              {req.part_number}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                {req.part_number}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPartNumber(req.part_number)}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: isCopiedPn ? '#15803d' : '#94a3b8' }}
+                                title="Copy part number"
+                              >
+                                {isCopiedPn ? <Check size={12} /> : <Copy size={11} />}
+                              </button>
                             </div>
-                            <div style={{ fontSize: '12px', color: '#334155', marginTop: '1px' }}>
+                            <div style={{ fontSize: '12px', color: '#334155', marginTop: '2px', fontWeight: 500 }}>
                               {req.part_description || 'Service Replacement Part'}
                             </div>
                           </div>
                         </td>
 
-                        <td style={{ textAlign: 'center' }}>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                           <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
                             {req.quantity_requested}
                           </div>
                           {req.quantity_fulfilled > 0 && (
-                            <div style={{ fontSize: '10.5px', color: '#059669', fontWeight: 600 }}>
+                            <div style={{ fontSize: '10.5px', color: '#059669', fontWeight: 700, marginTop: '2px' }}>
                               {req.quantity_fulfilled} fulfilled
                             </div>
                           )}
                         </td>
 
-                        <td style={{ textAlign: 'center' }}>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                           <span
                             className="badge"
                             style={{
@@ -2963,7 +3714,8 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               fontSize: '10.5px',
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: '3px'
+                              gap: '3px',
+                              padding: '3px 8px'
                             }}
                           >
                             <PriorityIcon size={11} />
@@ -2971,24 +3723,27 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           </span>
                         </td>
 
-                        <td>
+                        <td style={{ padding: '12px 14px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0284c7', fontSize: '12px', fontWeight: 700 }}>
+                            <div style={{ width: '28px', height: '28px', borderRadius: '50%', background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0284c7', fontSize: '12px', fontWeight: 800, flexShrink: 0 }}>
                               {(req.requested_by_name || 'U')[0].toUpperCase()}
                             </div>
                             <div>
                               <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0f172a' }}>
                                 {req.requested_by_name}
                               </div>
-                              <div style={{ fontSize: '11px', color: '#64748b' }}>
-                                {req.site_code || activeSiteObj.code} • {req.site_name || activeSiteObj.name}
+                              <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '1px' }}>
+                                <span style={{ background: '#f1f5f9', padding: '1px 5px', borderRadius: '4px', fontWeight: 700, color: '#0f172a' }}>
+                                  {req.site_code || activeSiteObj.code}
+                                </span>
+                                <span>{req.site_name || activeSiteObj.name}</span>
                               </div>
                             </div>
                           </div>
                         </td>
 
-                        <td>
-                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155', marginBottom: req.notes ? '6px' : '0' }}>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
                             {req.reason || 'Branch Replenishment'}
                           </div>
                           {req.notes && (
@@ -2997,37 +3752,40 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               border: `1px solid ${req.status === 'rejected' ? '#fca5a5' : req.status === 'approved' ? '#86efac' : '#93c5fd'}`,
                               borderLeft: `4px solid ${req.status === 'rejected' ? '#dc2626' : req.status === 'approved' ? '#16a34a' : '#0284c7'}`,
                               borderRadius: '6px',
-                              padding: '6px 10px',
-                              marginTop: '4px',
-                              boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+                              padding: '5px 8px',
+                              marginTop: '4px'
                             }}>
                               <div style={{
-                                fontSize: '10.5px',
+                                fontSize: '10px',
                                 fontWeight: 800,
                                 color: req.status === 'rejected' ? '#b91c1c' : req.status === 'approved' ? '#15803d' : '#1d4ed8',
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '4px',
-                                marginBottom: '2px',
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.4px'
+                                textTransform: 'uppercase'
                               }}>
-                                <MessageSquare size={11} />
-                                <span>{req.reviewed_by_name ? `Superadmin Reply (${req.reviewed_by_name})` : 'Superadmin Reply / Note'}:</span>
+                                <MessageSquare size={10} />
+                                <span>{req.reviewed_by_name ? `Reply (${req.reviewed_by_name})` : 'Reply'}:</span>
                               </div>
                               <div style={{
-                                fontSize: '12px',
-                                fontWeight: 700,
+                                fontSize: '11.5px',
+                                fontWeight: 600,
                                 color: req.status === 'rejected' ? '#991b1b' : req.status === 'approved' ? '#166534' : '#1e40af',
-                                lineHeight: 1.35
+                                lineHeight: 1.3
                               }}>
                                 “{req.notes}”
                               </div>
                             </div>
                           )}
+                          {req.tracking_number && (
+                            <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#0369a1' }}>
+                              <Truck size={11} color="#0284c7" />
+                              <span>{req.carrier || 'Lite Express'}: <strong>#{req.tracking_number}</strong></span>
+                            </div>
+                          )}
                         </td>
 
-                        <td style={{ textAlign: 'center' }}>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
                           <span
                             className="badge"
                             style={{
@@ -3035,21 +3793,34 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                               color: statusInfo.text,
                               border: `1px solid ${statusInfo.border}`,
                               fontWeight: 700,
-                              fontSize: '11px'
+                              fontSize: '11px',
+                              padding: '3px 8px'
                             }}
                           >
                             {statusInfo.label}
                           </span>
                         </td>
 
-                        <td style={{ textAlign: 'center' }}>
-                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: '5px', flexWrap: 'wrap' }}>
                             
+                            {/* View Details Modal Trigger */}
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-secondary"
+                              style={{ fontSize: '11px', padding: '3px 8px', color: '#0369a1', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '5px' }}
+                              onClick={() => setSelectedRequestDetails(req)}
+                              title="Inspect complete requisition intelligence and fulfillment trail"
+                            >
+                              <span>Details</span>
+                            </button>
+
                             {/* Requester / Staff Cancel Action */}
                             {canCancel && (
                               <button
+                                type="button"
                                 className="btn btn-sm btn-secondary"
-                                style={{ fontSize: '11px', padding: '3px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fee2e2' }}
+                                style={{ fontSize: '11px', padding: '3px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fee2e2', borderRadius: '5px' }}
                                 onClick={() => {
                                   if (window.confirm(`Are you sure you want to cancel request ${req.request_number}?`)) {
                                     cancelPartsRequest(req.id, 'Cancelled by staff');
@@ -3057,7 +3828,6 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                                 }}
                                 title="Cancel this pending parts request"
                               >
-                                <X size={12} />
                                 <span>Cancel</span>
                               </button>
                             )}
@@ -3066,21 +3836,23 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                             {isSuperadmin && req.status === 'pending' && (
                               <>
                                 <button
+                                  type="button"
                                   className="btn btn-sm btn-primary"
-                                  style={{ fontSize: '11px', padding: '3px 8px', background: '#059669' }}
+                                  style={{ fontSize: '11px', padding: '3px 8px', background: '#059669', borderRadius: '5px' }}
                                   onClick={() => openActionModal(req, 'approved')}
                                   title="Approve parts request (Superadmin authority)"
                                 >
-                                  <Check size={12} />
+                                  <Check size={11} />
                                   <span>Approve</span>
                                 </button>
                                 <button
+                                  type="button"
                                   className="btn btn-sm btn-secondary"
-                                  style={{ fontSize: '11px', padding: '3px 8px', color: '#dc2626' }}
+                                  style={{ fontSize: '11px', padding: '3px 8px', color: '#dc2626', borderRadius: '5px' }}
                                   onClick={() => openActionModal(req, 'rejected')}
-                                  title="Deny / Reject parts request (Superadmin authority)"
+                                  title="Deny / Reject parts request"
                                 >
-                                  <X size={12} />
+                                  <X size={11} />
                                   <span>Deny</span>
                                 </button>
                               </>
@@ -3088,12 +3860,13 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
 
                             {isSuperadmin && req.status === 'approved' && (
                               <button
+                                type="button"
                                 className="btn btn-sm btn-primary"
-                                style={{ fontSize: '11px', padding: '3px 8px', background: '#0284c7' }}
+                                style={{ fontSize: '11px', padding: '3px 8px', background: '#0284c7', borderRadius: '5px' }}
                                 onClick={() => openActionModal(req, 'fulfilled')}
                                 title="Mark request as fulfilled / dispatched"
                               >
-                                <Package size={12} />
+                                <Package size={11} />
                                 <span>Fulfill</span>
                               </button>
                             )}
@@ -3106,6 +3879,94 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               </table>
             )}
           </div>
+
+          {/* Pagination Controls for Parts Requests */}
+          {totalRequestPages > 1 && (
+            <div style={{
+              padding: '12px 18px',
+              borderTop: '1px solid #e2e8f0',
+              background: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>
+                Page <strong>{safeRequestPage}</strong> of <strong>{totalRequestPages}</strong>
+              </span>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={safeRequestPage === 1}
+                  onClick={() => setRequestPage(1)}
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  title="First page"
+                >
+                  <ChevronsLeft size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={safeRequestPage === 1}
+                  onClick={() => setRequestPage(p => Math.max(1, p - 1))}
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  title="Previous page"
+                >
+                  <ChevronLeft size={13} />
+                </button>
+
+                {getPageNumbers(safeRequestPage, totalRequestPages).map((p, pIdx) => {
+                  if (p === '...') {
+                    return <span key={`dots-${pIdx}`} style={{ padding: '0 4px', color: '#94a3b8' }}>...</span>;
+                  }
+                  const isCurrent = p === safeRequestPage;
+                  return (
+                    <button
+                      key={`page-${p}`}
+                      type="button"
+                      onClick={() => setRequestPage(p)}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '4px',
+                        border: isCurrent ? '1px solid #0284c7' : '1px solid #e2e8f0',
+                        background: isCurrent ? '#0284c7' : '#ffffff',
+                        color: isCurrent ? '#ffffff' : '#475569',
+                        fontSize: '11.5px',
+                        fontWeight: isCurrent ? 700 : 500,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={safeRequestPage === totalRequestPages}
+                  onClick={() => setRequestPage(p => Math.min(totalRequestPages, p + 1))}
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  title="Next page"
+                >
+                  <ChevronRight size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={safeRequestPage === totalRequestPages}
+                  onClick={() => setRequestPage(totalRequestPages)}
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  title="Last page"
+                >
+                  <ChevronsRight size={13} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3114,8 +3975,226 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
       {activeTab === 'stock_on_hand' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           
-          {/* Incoming / In-Transit Shipments Card (Dedicated Card, Separated from Catalog) */}
-          {incomingShipments.length > 0 && (
+          {/* Sub-Tab Navigation Bar & Classification Breakdown */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px',
+              borderBottom: '2px solid #e2e8f0',
+              paddingBottom: '2px'
+            }}
+          >
+            {/* Left: View Mode Navigation Sub-Tabs */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setStockSubTab('catalog')}
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: '8px 8px 0 0',
+                  border: 'none',
+                  background: stockSubTab === 'catalog' ? '#0284c7' : 'transparent',
+                  color: stockSubTab === 'catalog' ? '#ffffff' : '#475569',
+                  fontWeight: stockSubTab === 'catalog' ? 700 : 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <Boxes size={15} />
+                <span>Catalog &amp; Device Summary</span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 7px',
+                    borderRadius: '999px',
+                    background: stockSubTab === 'catalog' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0',
+                    color: stockSubTab === 'catalog' ? '#ffffff' : '#475569',
+                    fontWeight: 700
+                  }}
+                >
+                  {stockRows.length} SKUs
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStockSubTab('serialized')}
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: '8px 8px 0 0',
+                  border: 'none',
+                  background: stockSubTab === 'serialized' ? '#0284c7' : 'transparent',
+                  color: stockSubTab === 'serialized' ? '#ffffff' : '#475569',
+                  fontWeight: stockSubTab === 'serialized' ? 700 : 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <Barcode size={15} />
+                <span>Serialized Stock Directory</span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 7px',
+                    borderRadius: '999px',
+                    background: stockSubTab === 'serialized' ? 'rgba(255, 255, 255, 0.25)' : '#e2e8f0',
+                    color: stockSubTab === 'serialized' ? '#ffffff' : '#475569',
+                    fontWeight: 700
+                  }}
+                >
+                  {filteredSerializedUnits.length} Units
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStockSubTab('incoming')}
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: '8px 8px 0 0',
+                  border: 'none',
+                  background: stockSubTab === 'incoming' ? '#0284c7' : 'transparent',
+                  color: stockSubTab === 'incoming' ? '#ffffff' : '#475569',
+                  fontWeight: stockSubTab === 'incoming' ? 700 : 600,
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <Truck size={15} />
+                <span>Incoming Dispatches</span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    padding: '2px 7px',
+                    borderRadius: '999px',
+                    background: stockSubTab === 'incoming' ? 'rgba(255, 255, 255, 0.25)' : (incomingShipments.length > 0 ? '#fef3c7' : '#e2e8f0'),
+                    color: stockSubTab === 'incoming' ? '#ffffff' : (incomingShipments.length > 0 ? '#b45309' : '#475569'),
+                    fontWeight: 700
+                  }}
+                >
+                  {incomingShipments.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Right: Branch Stock Ownership Classification Breakdown */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  padding: '3px 10px',
+                  borderRadius: '999px',
+                  background: '#eff6ff',
+                  color: '#1d4ed8',
+                  border: '1px solid #bfdbfe',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="Apple Genuine DC Stock"
+              >
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2563eb' }} />
+                <span>DC Stock: {branchStockAgingMetrics.dcStockCount || 0}</span>
+              </span>
+
+              <span
+                style={{
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  padding: '3px 10px',
+                  borderRadius: '999px',
+                  background: '#ecfdf5',
+                  color: '#047857',
+                  border: '1px solid #a7f3d0',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="MSPI Owned Branch Repaired Parts"
+              >
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#059669' }} />
+                <span>MSPI-Owned: {branchStockAgingMetrics.mspiOwnedCount || 0}</span>
+              </span>
+
+              <span
+                style={{
+                  fontSize: '11.5px',
+                  fontWeight: 700,
+                  padding: '3px 10px',
+                  borderRadius: '999px',
+                  background: '#faf5ff',
+                  color: '#7e22ce',
+                  border: '1px solid #e9d5ff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="Relocated across MobileCare ASP service network"
+              >
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#9333ea' }} />
+                <span>Relocated: {branchStockAgingMetrics.relocatedCount || 0}</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Sub-Tab 1: Catalog Prompt Banner if shipments are en route */}
+          {stockSubTab === 'catalog' && incomingShipments.length > 0 && (
+            <div
+              style={{
+                background: 'linear-gradient(90deg, #f0fdf4 0%, #f0f9ff 100%)',
+                border: '1px solid #bae6fd',
+                borderRadius: '10px',
+                padding: '12px 18px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#0284c7', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Truck size={17} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
+                    {incomingShipments.length} Incoming Shipment Manifest{incomingShipments.length > 1 ? 's' : ''} En Route
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#64748b' }}>
+                    Physical arrival verification required to activate parts in branch inventory.
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setStockSubTab('incoming')}
+                style={{ background: '#ffffff', color: '#0284c7', borderColor: '#bae6fd', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <span>View Incoming Shipments</span>
+                <ChevronRight size={13} />
+              </button>
+            </div>
+          )}
+
+          {/* Incoming Dispatches View (Sub-Tab: incoming) */}
+          {stockSubTab === 'incoming' && (
             <div
               className="card"
               style={{
@@ -3353,8 +4432,22 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
             </div>
           )}
 
-          {/* Main Inventory Catalog Card */}
-          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)', background: '#ffffff' }}>
+          {/* Empty state for Incoming Dispatches sub-tab if no shipments en route */}
+          {stockSubTab === 'incoming' && incomingShipments.length === 0 && (
+            <div className="card" style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#ffffff' }}>
+              <Truck size={42} color="#cbd5e1" style={{ marginBottom: '12px' }} />
+              <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px', fontWeight: 700 }}>
+                No Incoming Shipments En Route
+              </h4>
+              <p style={{ margin: 0, fontSize: '13px' }}>
+                There are currently no active delivery manifests or dispatched packages scheduled for {activeSiteObj.name}.
+              </p>
+            </div>
+          )}
+
+          {/* SUB-VIEW 1: Main Inventory Catalog Card */}
+          {stockSubTab === 'catalog' && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)', background: '#ffffff' }}>
             
             {/* Toolbar: Search, Category Filters, Status Filter */}
             <div style={{ padding: '14px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -3741,23 +4834,23 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               ) : (
                 <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: '160px' }}>
+                    <tr style={{ background: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '160px' }}>
                         Part Number
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: '240px' }}>
-                        Part Description
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '240px' }}>
+                        Part Description &amp; Compatibility
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '140px' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '140px' }}>
                         Available Stock
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '100px' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '100px' }}>
                         Allocated
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '110px' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '110px' }}>
                         In-Transit
                       </th>
-                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'center', width: '160px' }}>
+                      <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '180px' }}>
                         Actions
                       </th>
                     </tr>
@@ -3775,27 +4868,45 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                         )
                       );
 
-                      const renderRow = (row, isNested = false) => (
-                        <tr
-                          key={row.partNumber}
-                          style={{
-                            borderBottom: '1px solid #f1f5f9',
-                            transition: 'background-color 0.12s ease',
-                            backgroundColor: '#ffffff'
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#ffffff'; }}
-                        >
-                          <td style={{ padding: '12px 16px', paddingLeft: isNested ? '28px' : '16px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {isNested && (
-                                <span style={{ color: '#0284c7', fontSize: '12px', fontWeight: 700, userSelect: 'none' }}>↳</span>
-                              )}
-                              <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-                                {row.partNumber}
-                              </strong>
-                            </div>
-                          </td>
+                      const renderRow = (row, isNested = false) => {
+                        const isCopiedPn = copiedPartNumber === row.partNumber;
+                        return (
+                          <tr
+                            key={row.partNumber}
+                            style={{
+                              borderBottom: '1px solid #f1f5f9',
+                              transition: 'background-color 0.12s ease',
+                              backgroundColor: '#ffffff'
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#ffffff'; }}
+                          >
+                            <td style={{ padding: '12px 16px', paddingLeft: isNested ? '28px' : '16px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {isNested && (
+                                  <span style={{ color: '#0284c7', fontSize: '12px', fontWeight: 700, userSelect: 'none' }}>↳</span>
+                                )}
+                                <strong style={{ fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                  {row.partNumber}
+                                </strong>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyPartNumber(row.partNumber)}
+                                  style={{
+                                    border: 'none',
+                                    background: 'transparent',
+                                    cursor: 'pointer',
+                                    padding: '2px',
+                                    color: isCopiedPn ? '#15803d' : '#94a3b8',
+                                    display: 'inline-flex',
+                                    alignItems: 'center'
+                                  }}
+                                  title="Copy part number"
+                                >
+                                  {isCopiedPn ? <Check size={12} color="#15803d" /> : <Copy size={11} />}
+                                </button>
+                              </div>
+                            </td>
                           <td style={{ padding: '12px 16px', fontSize: '12.5px', color: '#1e293b', fontWeight: 500 }}>
                             <div style={{ fontWeight: 600 }}>{row.description}</div>
                             <div style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -4062,8 +5173,9 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
                           </td>
                         </tr>
                       );
+                    };
 
-                      if (stockViewMode === 'grouped') {
+                    if (stockViewMode === 'grouped') {
                         return groupedStockByDevice.map(group => {
                           const isCollapsed = Boolean(collapsedDevices[group.model]);
                           return (
@@ -4191,8 +5303,670 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
               )}
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* SUB-VIEW 2: Serialized Stock Directory (Matches All Stocks & Multi-Site standards) */}
+        {stockSubTab === 'serialized' && (
+          <div className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)', background: '#ffffff' }}>
+            
+            {/* Filter Toolbar */}
+            <div style={{ padding: '14px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                
+                {/* Search Bar */}
+                <div style={{ position: 'relative', flex: '1 1 300px', maxWidth: '440px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: serializedSearchQuery ? '#0284c7' : '#94a3b8', pointerEvents: 'none' }} />
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{
+                      width: '100%',
+                      paddingLeft: '34px',
+                      paddingRight: serializedSearchQuery ? '32px' : '12px',
+                      fontSize: '12.5px',
+                      height: '34px',
+                      borderRadius: '7px',
+                      border: '1px solid #cbd5e1',
+                      background: '#ffffff'
+                    }}
+                    placeholder="Search serial #, part #, description, branch code, or owner..."
+                    value={serializedSearchQuery}
+                    onChange={(e) => {
+                      setSerializedSearchQuery(e.target.value);
+                      setSerializedPage(1);
+                    }}
+                  />
+                  {serializedSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSerializedSearchQuery('');
+                        setSerializedPage(1);
+                      }}
+                      style={{ position: 'absolute', right: '9px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Dropdowns & Page Size */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  {/* Aging Bracket Dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Aging:</span>
+                    <select
+                      className="form-select"
+                      value={serializedAgingFilter}
+                      onChange={(e) => {
+                        setSerializedAgingFilter(e.target.value);
+                        setSerializedPage(1);
+                      }}
+                      style={{ fontSize: '12px', padding: '4px 10px', height: '34px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600, color: '#1e293b', background: '#ffffff', cursor: 'pointer' }}
+                    >
+                      <option value="ALL">All Aging Brackets</option>
+                      <option value="ACTIVE">Active Stock (&lt; 60D)</option>
+                      <option value="SLOW">Slow-Moving (60-89D)</option>
+                      <option value="NON_MOVING">Non-Moving (90-149D)</option>
+                      <option value="DEAD">Dead Stock (&gt; 150D)</option>
+                    </select>
+                  </div>
+
+                  {/* Stock Classification Dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Ownership:</span>
+                    <select
+                      className="form-select"
+                      value={serializedClassificationFilter}
+                      onChange={(e) => {
+                        setSerializedClassificationFilter(e.target.value);
+                        setSerializedPage(1);
+                      }}
+                      style={{ fontSize: '12px', padding: '4px 10px', height: '34px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600, color: '#1e293b', background: '#ffffff', cursor: 'pointer' }}
+                    >
+                      <option value="ALL">All Stock Types</option>
+                      <option value="DC_STOCK">DC Stock</option>
+                      <option value="MSPI_OWNED">MSPI-Owned / C/I REP</option>
+                      <option value="RELOCATED">Relocated</option>
+                    </select>
+                  </div>
+
+                  {/* Transfer Movement Dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Movement:</span>
+                    <select
+                      className="form-select"
+                      value={serializedTransferFilter}
+                      onChange={(e) => {
+                        setSerializedTransferFilter(e.target.value);
+                        setSerializedPage(1);
+                      }}
+                      style={{ fontSize: '12px', padding: '4px 10px', height: '34px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600, color: '#1e293b', background: '#ffffff', cursor: 'pointer' }}
+                    >
+                      <option value="ALL">All Movements</option>
+                      <option value="TRANSFERRED_ONLY">Transferred Only (≥1 Transfer)</option>
+                      <option value="NO_TRANSFERS">Never Transferred</option>
+                    </select>
+                  </div>
+
+                  {/* Page Size Selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>Page Size:</span>
+                    <select
+                      className="form-select"
+                      value={serializedPageSize}
+                      onChange={(e) => {
+                        setSerializedPageSize(Number(e.target.value));
+                        setSerializedPage(1);
+                      }}
+                      style={{ fontSize: '12px', padding: '4px 8px', height: '34px', borderRadius: '6px', border: '1px solid #cbd5e1', fontWeight: 600, color: '#1e293b', background: '#ffffff', cursor: 'pointer' }}
+                    >
+                      <option value={25}>25 rows / page</option>
+                      <option value={50}>50 rows / page</option>
+                      <option value={100}>100 rows / page</option>
+                      <option value={250}>250 rows / page</option>
+                    </select>
+                  </div>
+
+                  {/* Unit Count Indicator */}
+                  <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, padding: '6px 10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                    Showing <strong style={{ color: '#0f172a' }}>{paginatedSerializedUnits.length}</strong> of <strong style={{ color: '#0f172a' }}>{filteredSerializedUnits.length}</strong> units
+                  </div>
+
+                  {(serializedSearchQuery || serializedAgingFilter !== 'ALL' || serializedClassificationFilter !== 'ALL' || serializedTransferFilter !== 'ALL') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSerializedSearchQuery('');
+                        setSerializedAgingFilter('ALL');
+                        setSerializedClassificationFilter('ALL');
+                        setSerializedTransferFilter('ALL');
+                        setSerializedPage(1);
+                      }}
+                      style={{
+                        background: '#ffffff',
+                        border: '1px solid #fca5a5',
+                        borderRadius: '5px',
+                        color: '#dc2626',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '4px 8px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Table with Dark Header #0f172a */}
+            <div className="table-container" style={{ overflowX: 'auto' }}>
+              {filteredSerializedUnits.length === 0 ? (
+                <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b' }}>
+                  <Barcode size={42} color="#cbd5e1" style={{ marginBottom: '12px' }} />
+                  <h4 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '15px', fontWeight: 700 }}>
+                    No Serialized Physical Units Found
+                  </h4>
+                  <p style={{ margin: '0 0 16px', fontSize: '13px' }}>
+                    {serializedSearchQuery || serializedAgingFilter !== 'ALL' || serializedClassificationFilter !== 'ALL' || serializedTransferFilter !== 'ALL'
+                      ? 'Try clearing your search query or adjusting your aging and classification filters.'
+                      : `No verified serialized units are currently on-hand for ${activeSiteObj.name}.`}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      setSerializedSearchQuery('');
+                      setSerializedAgingFilter('ALL');
+                      setSerializedClassificationFilter('ALL');
+                      setSerializedTransferFilter('ALL');
+                      setSerializedPage(1);
+                    }}
+                  >
+                    Reset All Filters
+                  </button>
+                </div>
+              ) : (
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#0f172a', borderBottom: '1px solid #1e293b' }}>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', width: '48px', textAlign: 'center' }}>
+                        #
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '150px' }}>
+                        Part Number
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '220px' }}>
+                        Description
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '90px' }}>
+                        Branch
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '140px' }}>
+                        Classification
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '190px' }}>
+                        Serial Number
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', minWidth: '200px' }}>
+                        Movement History &amp; Owner
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', width: '115px' }}>
+                        Last Received
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '140px' }}>
+                        Aging &amp; Status
+                      </th>
+                      <th style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', width: '170px' }}>
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedSerializedUnits.map((u, idx) => {
+                      const rowNum = (safeSerializedPage - 1) * serializedPageSize + idx + 1;
+                      const partNumber = u.part_number || u.partNumber || '';
+                      const serialNumber = u.serial_number || u.serialNumber || '';
+                      const isCopiedPn = copiedPartNumber === partNumber;
+                      const isCopiedSn = copiedSerial === serialNumber;
+                      const days = typeof u.aging_days === 'number' ? u.aging_days : 0;
+                      const cl = String(u.stockType || u.classification || '').toUpperCase();
+                      const isDcStock = cl.includes('DC');
+                      const isRelocated = cl.includes('RELOCAT');
+
+                      // Serial details object for dossier modal
+                      const serialDetails = {
+                        serialNumber,
+                        partNumber,
+                        description: u.description || '',
+                        iphoneModel: u.model || u.iphone_model || resolveCanonicalIPhoneModel(u.description),
+                        siteId: u.site_id || u.siteId || activeSiteObj?.id,
+                        siteCode: u.site_code || u.siteCode || activeSiteObj?.code || 'DC',
+                        siteName: u.site_name || u.siteName || activeSiteObj?.name || 'Service Center',
+                        status: u.status || 'in_stock',
+                        statusBadgeLabel: 'In Stock at Branch',
+                        statusBadgeType: 'site',
+                        currentOwner: u.currentOwner || (u.site_code ? `${u.site_code}_MSPI-OWNED` : 'DC_STOCK'),
+                        movementHistory: u.movementHistory || [],
+                        movementTrail: u.movementTrail || '',
+                        transferCount: u.transferCount || 0,
+                        agingDays: days,
+                        agingBracket: u.aging_bracket,
+                        receivedDate: u.received_date || u.last_received || '—'
+                      };
+
+                      return (
+                        <tr
+                          key={`ser-unit-${serialNumber}-${idx}`}
+                          style={{ borderBottom: '1px solid #f1f5f9', backgroundColor: '#ffffff', transition: 'background-color 0.12s ease' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#ffffff'; }}
+                        >
+                          {/* Row # */}
+                          <td style={{ padding: '12px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+                            {rowNum}
+                          </td>
+
+                          {/* Part Number */}
+                          <td style={{ padding: '12px 14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontWeight: 800, fontSize: '13px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                                {partNumber}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPartNumber(partNumber)}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: isCopiedPn ? '#15803d' : '#94a3b8' }}
+                                title="Copy part number"
+                              >
+                                {isCopiedPn ? <Check size={12} color="#15803d" /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                          </td>
+
+                          {/* Description & Model */}
+                          <td style={{ padding: '12px 14px', fontSize: '12.5px', color: '#1e293b' }}>
+                            <div style={{ fontWeight: 600 }}>{u.description}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                              <span>Model: <strong>{u.model || u.iphone_model || resolveCanonicalIPhoneModel(u.description)}</strong></span>
+                            </div>
+                          </td>
+
+                          {/* Branch */}
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            <span
+                              style={{
+                                fontSize: '11px',
+                                fontWeight: 800,
+                                fontFamily: 'var(--font-mono)',
+                                padding: '2px 8px',
+                                borderRadius: '5px',
+                                background: '#f1f5f9',
+                                color: '#1e293b',
+                                border: '1px solid #e2e8f0'
+                              }}
+                            >
+                              {u.site_code || activeSiteObj?.code || 'DC'}
+                            </span>
+                          </td>
+
+                          {/* Classification */}
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            {isDcStock ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: '#eff6ff',
+                                  color: '#1d4ed8',
+                                  border: '1px solid #bfdbfe'
+                                }}
+                              >
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#2563eb' }} />
+                                <span>DC Stock</span>
+                              </span>
+                            ) : isRelocated ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: '#faf5ff',
+                                  color: '#7e22ce',
+                                  border: '1px solid #e9d5ff'
+                                }}
+                              >
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#9333ea' }} />
+                                <span>Relocated</span>
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '999px',
+                                  background: '#ecfdf5',
+                                  color: '#047857',
+                                  border: '1px solid #a7f3d0'
+                                }}
+                              >
+                                <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#059669' }} />
+                                <span>MSPI-Owned</span>
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Serial Number */}
+                          <td style={{ padding: '12px 14px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span
+                                onClick={() => setInspectedSerialDetails(serialDetails)}
+                                style={{
+                                  fontFamily: 'var(--font-mono)',
+                                  fontWeight: 700,
+                                  fontSize: '12px',
+                                  color: '#0f172a',
+                                  background: '#f8fafc',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #e2e8f0',
+                                  cursor: 'pointer'
+                                }}
+                                title="Click to view Serial Number Intelligence Dossier"
+                              >
+                                {serialNumber}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopySerial(serialNumber)}
+                                style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: isCopiedSn ? '#15803d' : '#94a3b8' }}
+                                title="Copy serial number"
+                              >
+                                {isCopiedSn ? <Check size={12} color="#15803d" /> : <Copy size={11} />}
+                              </button>
+                            </div>
+                          </td>
+
+                          {/* Movement History & Owner */}
+                          <td style={{ padding: '12px 14px', fontSize: '11.5px', color: '#475569' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => setMovementModalPart({
+                                  part_number: partNumber,
+                                  description: u.description,
+                                  iphone_model: u.model || u.iphone_model,
+                                  site_code: u.site_code || activeSiteObj?.code || 'DC',
+                                  site_name: u.site_name || activeSiteObj?.name || 'Distribution Center',
+                                  current_owner: u.currentOwner,
+                                  movement_history: u.movementHistory
+                                })}
+                                style={{
+                                  border: '1px solid #bae6fd',
+                                  background: '#f0f9ff',
+                                  color: '#0369a1',
+                                  borderRadius: '4px',
+                                  padding: '1px 6px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px'
+                                }}
+                                title="View complete site-to-site movement timeline"
+                              >
+                                <span>⇄ {u.movementTrail || (u.transferCount > 0 ? `${u.transferCount} transfers` : 'Direct DC')}</span>
+                              </button>
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
+                              Owner: <strong style={{ color: '#0f172a' }}>{u.currentOwner || `${u.site_code || 'VER'}_MSPI-OWNED`}</strong>
+                            </div>
+                          </td>
+
+                          {/* Last Received */}
+                          <td style={{ padding: '12px 14px', fontSize: '11.5px', color: '#475569', whiteSpace: 'nowrap' }}>
+                            {u.received_date || u.last_received || '—'}
+                          </td>
+
+                          {/* Aging & Status */}
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            {days >= 150 || u.aging_bracket === 'Dead Stock' ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#fef2f2',
+                                  color: '#dc2626',
+                                  border: '1px solid #fecaca',
+                                  fontWeight: 700,
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px'
+                                }}
+                                title="RMA pull-out required"
+                              >
+                                <AlertTriangle size={11} color="#dc2626" />
+                                <span>Dead Stock ({days}d)</span>
+                              </span>
+                            ) : days >= 90 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#fff7ed',
+                                  color: '#c2410c',
+                                  border: '1px solid #ffedd5',
+                                  fontWeight: 700,
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px'
+                                }}
+                              >
+                                <Clock size={11} color="#c2410c" />
+                                <span>Non-Moving ({days}d)</span>
+                              </span>
+                            ) : days >= 60 ? (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#fffbeb',
+                                  color: '#b45309',
+                                  border: '1px solid #fef3c7',
+                                  fontWeight: 700,
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px'
+                                }}
+                              >
+                                <TrendingDown size={11} color="#b45309" />
+                                <span>Slow ({days}d)</span>
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#ecfdf5',
+                                  color: '#047857',
+                                  border: '1px solid #a7f3d0',
+                                  fontWeight: 700,
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '999px'
+                                }}
+                              >
+                                <CheckCircle2 size={11} color="#059669" />
+                                <span>In Stock ({days}d)</span>
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '11px', padding: '3px 7px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '5px', fontWeight: 600 }}
+                                onClick={() => setInspectedSerialDetails(serialDetails)}
+                                title="View complete Serial Intelligence Dossier"
+                              >
+                                <span>Dossier</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '11px', padding: '3px 7px', color: '#0284c7', borderColor: '#bae6fd', background: '#f0f9ff', borderRadius: '5px', fontWeight: 600 }}
+                                onClick={() => setMovementModalPart({
+                                  part_number: partNumber,
+                                  description: u.description,
+                                  iphone_model: u.model || u.iphone_model,
+                                  site_code: u.site_code || activeSiteObj?.code || 'DC',
+                                  site_name: u.site_name || activeSiteObj?.name || 'Distribution Center',
+                                  current_owner: u.currentOwner,
+                                  movement_history: u.movementHistory
+                                })}
+                                title="View transfer movement trail"
+                              >
+                                <span>Trail</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ fontSize: '11px', padding: '3px 7px', color: '#059669', borderColor: '#86efac', background: '#f0fdf4', borderRadius: '5px', fontWeight: 700 }}
+                                onClick={() => openMarkUsedModal(partNumber, serialNumber)}
+                                title={`Record #${serialNumber} as consumed in repair`}
+                              >
+                                <span>Mark Used</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Windowed Pagination Bar */}
+            {totalSerializedPages > 1 && (
+              <div
+                style={{
+                  padding: '12px 20px',
+                  borderTop: '1px solid #e2e8f0',
+                  background: '#f8fafc',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ fontSize: '12px', color: '#64748b' }}>
+                  Showing <strong style={{ color: '#0f172a' }}>{(safeSerializedPage - 1) * serializedPageSize + 1}</strong> to{' '}
+                  <strong style={{ color: '#0f172a' }}>{Math.min(safeSerializedPage * serializedPageSize, filteredSerializedUnits.length)}</strong> of{' '}
+                  <strong style={{ color: '#0f172a' }}>{filteredSerializedUnits.length}</strong> serialized units
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={safeSerializedPage === 1}
+                    onClick={() => setSerializedPage(1)}
+                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                    title="First page"
+                  >
+                    <ChevronsLeft size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={safeSerializedPage === 1}
+                    onClick={() => setSerializedPage(prev => Math.max(1, prev - 1))}
+                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={13} />
+                  </button>
+
+                  {getPageNumbers(safeSerializedPage, totalSerializedPages).map((p, pIdx) => {
+                    if (p === '...') {
+                      return <span key={`ellipsis-${pIdx}`} style={{ padding: '0 4px', color: '#94a3b8', fontSize: '12px' }}>...</span>;
+                    }
+                    const isCurr = p === safeSerializedPage;
+                    return (
+                      <button
+                        key={`page-${p}`}
+                        type="button"
+                        onClick={() => setSerializedPage(p)}
+                        style={{
+                          minWidth: '28px',
+                          height: '28px',
+                          borderRadius: '5px',
+                          border: isCurr ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                          background: isCurr ? '#0284c7' : '#ffffff',
+                          color: isCurr ? '#ffffff' : '#475569',
+                          fontWeight: isCurr ? 700 : 500,
+                          fontSize: '11.5px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={safeSerializedPage === totalSerializedPages}
+                    onClick={() => setSerializedPage(prev => Math.min(totalSerializedPages, prev + 1))}
+                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                    title="Next page"
+                  >
+                    <ChevronRight size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={safeSerializedPage === totalSerializedPages}
+                    onClick={() => setSerializedPage(totalSerializedPages)}
+                    style={{ padding: '4px 8px', fontSize: '11px' }}
+                    title="Last page"
+                  >
+                    <ChevronsRight size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )}
 
       {/* 7. TAB 3: All Stocks & Multi-Site Inventory Visibility */}
       {activeTab === 'all_stocks' && showFixablyDashboard ? (
@@ -7052,6 +8826,403 @@ export default function RequestParts({ defaultTab = 'requests_table', initialVie
           onNavigateTab={handleTabChange}
         />
       )}
+
+      {/* 14. Parts Requisition Details Modal */}
+      {selectedRequestDetails && (() => {
+        const req = selectedRequestDetails;
+        const reqNumber = req.request_number || req.req_number || `REQ-${String(req.id).slice(0, 8).toUpperCase()}`;
+        const destSite = sites.find(s => s.id === req.site_id || s.code === req.site_code) || activeSiteObj;
+        const partPn = req.part_number || '';
+        const branchStockCount = siteStockData.partsSummary?.[partPn]?.inStock ?? 0;
+        const dcStockCount = dcStockSummary?.[partPn]?.inStock ?? 0;
+        const isCopiedReq = copiedReqNumber === reqNumber;
+        const isCopiedPn = copiedPartNumber === partPn;
+        const isCopiedWb = copiedWaybill === String(req.tracking_number || '').replace(/^#\s*/, '').trim();
+
+        const getStatusBadge = (st) => {
+          switch (st) {
+            case 'pending': return { bg: '#fef3c7', text: '#d97706', border: '#fde68a', label: 'PENDING REVIEW' };
+            case 'approved': return { bg: '#ede9fe', text: '#7c3aed', border: '#ddd6fe', label: 'APPROVED & PACKING' };
+            case 'fulfilled': return { bg: '#dcfce7', text: '#059669', border: '#bbf7d0', label: 'FULFILLED' };
+            case 'partially_fulfilled': return { bg: '#e0f2fe', text: '#0284c7', border: '#bae6fd', label: 'PARTIALLY FULFILLED' };
+            case 'rejected': return { bg: '#fee2e2', text: '#dc2626', border: '#fecaca', label: 'DENIED / REJECTED' };
+            case 'cancelled': return { bg: '#f1f5f9', text: '#64748b', border: '#e2e8f0', label: 'CANCELLED' };
+            default: return { bg: '#f1f5f9', text: '#64748b', border: '#e2e8f0', label: st?.toUpperCase() || 'UNKNOWN' };
+          }
+        };
+
+        const statusInfo = getStatusBadge(req.status);
+        const isUrgent = req.priority === 'urgent';
+        const isHigh = req.priority === 'high';
+
+        return (
+          <div
+            className="modal-backdrop"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10000,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(4px)',
+              padding: '16px'
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setSelectedRequestDetails(null);
+            }}
+          >
+            <div
+              className="modal-content"
+              style={{
+                width: '100%',
+                maxWidth: '680px',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+                padding: '24px',
+                borderRadius: '14px',
+                background: '#ffffff',
+                boxShadow: '0 20px 40px rgba(0, 0, 0, 0.25)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '18px'
+              }}
+            >
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                    <span
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        background: statusInfo.bg,
+                        color: statusInfo.text,
+                        border: `1px solid ${statusInfo.border}`
+                      }}
+                    >
+                      {statusInfo.label}
+                    </span>
+
+                    <span
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        background: isUrgent ? '#fee2e2' : isHigh ? '#fef3c7' : '#eff6ff',
+                        color: isUrgent ? '#dc2626' : isHigh ? '#b45309' : '#0284c7',
+                        border: `1px solid ${isUrgent ? '#fecaca' : isHigh ? '#fde68a' : '#bfdbfe'}`
+                      }}
+                    >
+                      {isUrgent ? <Flame size={12} color="#dc2626" /> : isHigh ? <AlertTriangle size={12} color="#d97706" /> : <Info size={12} color="#0284c7" />}
+                      <span>{(req.priority || 'NORMAL').toUpperCase()} PRIORITY</span>
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a', fontFamily: 'var(--font-mono)' }}>
+                      #{reqNumber}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyReqNumber(reqNumber)}
+                      style={{
+                        border: '1px solid #cbd5e1',
+                        background: isCopiedReq ? '#dcfce7' : '#f8fafc',
+                        color: isCopiedReq ? '#15803d' : '#64748b',
+                        borderRadius: '6px',
+                        padding: '3px 8px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontWeight: 600
+                      }}
+                      title="Copy requisition number"
+                    >
+                      {isCopiedReq ? <Check size={12} color="#15803d" /> : <Copy size={11} />}
+                      <span>{isCopiedReq ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#64748b' }}>
+                    Submitted on {formatTo12HourDateTime(req.created_at)}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedRequestDetails(null)}
+                  style={{
+                    border: 'none',
+                    background: '#f1f5f9',
+                    color: '#64748b',
+                    borderRadius: '8px',
+                    padding: '6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Close modal"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Grid 1: Requester & Destination Site */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Building2 size={13} color="#0284c7" />
+                    <span>Destination Branch</span>
+                  </div>
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a' }}>
+                    {destSite.name} ({destSite.code})
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                    {destSite.address || 'Authorized Service Provider Branch'}
+                  </div>
+                </div>
+
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <Package size={13} color="#059669" />
+                    <span>Requested By</span>
+                  </div>
+                  <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a' }}>
+                    {req.requested_by_name || 'Branch Specialist'}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                    Role: <strong style={{ color: '#334155' }}>{req.requested_by_role || 'Technician'}</strong>
+                    {req.requested_by_email && ` • ${req.requested_by_email}`}
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 2: Requested Part & Inventory Telemetry */}
+              <div style={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '14px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <strong style={{ fontSize: '15px', color: '#0284c7', fontFamily: 'var(--font-mono)' }}>
+                        {partPn}
+                      </strong>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyPartNumber(partPn)}
+                        style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, color: isCopiedPn ? '#15803d' : '#94a3b8' }}
+                        title="Copy part number"
+                      >
+                        {isCopiedPn ? <Check size={13} color="#15803d" /> : <Copy size={12} />}
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                      {req.description}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+                      Compatible Device: <strong style={{ color: '#1e293b' }}>{req.device_model || req.model || 'Universal Apple Device'}</strong>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Quantity Requested</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>
+                      {req.requested_quantity || req.quantity || 1} <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>unit(s)</span>
+                    </div>
+                    {req.fulfilled_quantity > 0 && (
+                      <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#059669' }}>
+                        Fulfilled: {req.fulfilled_quantity} unit(s)
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Stock Telemetry Comparison */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
+                  <div style={{ padding: '8px 12px', borderRadius: '6px', background: branchStockCount > 0 ? '#ecfdf5' : '#fef2f2', border: `1px solid ${branchStockCount > 0 ? '#a7f3d0' : '#fecaca'}` }}>
+                    <div style={{ fontSize: '10.5px', fontWeight: 700, color: branchStockCount > 0 ? '#065f46' : '#991b1b', textTransform: 'uppercase' }}>
+                      Branch Stock On-Hand
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: branchStockCount > 0 ? '#047857' : '#dc2626', marginTop: '2px' }}>
+                      {branchStockCount} unit{branchStockCount !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '8px 12px', borderRadius: '6px', background: dcStockCount > 0 ? '#eff6ff' : '#fffbeb', border: `1px solid ${dcStockCount > 0 ? '#bfdbfe' : '#fde68a'}` }}>
+                    <div style={{ fontSize: '10.5px', fontWeight: 700, color: dcStockCount > 0 ? '#1d4ed8' : '#b45309', textTransform: 'uppercase' }}>
+                      Central DC Available Stock
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: dcStockCount > 0 ? '#0284c7' : '#d97706', marginTop: '2px' }}>
+                      {dcStockCount} unit{dcStockCount !== 1 ? 's' : ''} available
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Justification Reason */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Requisition Justification &amp; Notes
+                </div>
+                <div style={{ fontSize: '13px', color: '#1e293b', fontWeight: 600 }}>
+                  {req.reason || 'Routine branch inventory replenishment'}
+                </div>
+                {req.notes && (
+                  <div style={{ fontSize: '12px', color: '#475569', marginTop: '4px', fontStyle: 'italic' }}>
+                    &ldquo;{req.notes}&rdquo;
+                  </div>
+                )}
+              </div>
+
+              {/* DC Governance & Fulfillment Notes (if present) */}
+              {(req.admin_reply || req.reviewed_by_name) && (
+                <div style={{
+                  background: req.status === 'rejected' ? '#fef2f2' : req.status === 'approved' ? '#f0fdf4' : '#f0f9ff',
+                  border: `1px solid ${req.status === 'rejected' ? '#fca5a5' : req.status === 'approved' ? '#86efac' : '#bae6fd'}`,
+                  borderRadius: '8px',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: req.status === 'rejected' ? '#991b1b' : req.status === 'approved' ? '#166534' : '#0369a1', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    DC Management Governance Review
+                  </div>
+                  {req.reviewed_by_name && (
+                    <div style={{ fontSize: '12px', color: '#475569', marginBottom: '4px' }}>
+                      Reviewed by: <strong style={{ color: '#0f172a' }}>{req.reviewed_by_name}</strong>
+                      {req.reviewed_at && ` on ${formatTo12HourDateTime(req.reviewed_at)}`}
+                    </div>
+                  )}
+                  {req.admin_reply && (
+                    <div style={{ fontSize: '12.5px', color: '#1e293b', fontWeight: 600 }}>
+                      Note: {req.admin_reply}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Linked Shipment & Courier Waybill Tracking (if dispatched) */}
+              {req.tracking_number && (
+                <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Truck size={16} color="#0284c7" />
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase' }}>
+                        Linked Dispatch Manifest
+                      </div>
+                      <div style={{ fontSize: '12.5px', fontWeight: 600, color: '#0f172a' }}>
+                        Carrier: {formatCourierWithMode(req.courier || req.carrier || 'Lite Express', req.shipping_mode)}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span
+                      onClick={() => handleCopyWaybill(req.tracking_number)}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontWeight: 700,
+                        fontSize: '12.5px',
+                        color: isCopiedWb ? '#15803d' : '#0284c7',
+                        background: '#ffffff',
+                        padding: '3px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #bae6fd',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      title="Copy Waybill tracking number"
+                    >
+                      #{req.tracking_number}
+                      {isCopiedWb ? <Check size={11} strokeWidth={2.5} color="#15803d" /> : <Copy size={10} color="#64748b" />}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons Footer */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', borderTop: '1px solid #f1f5f9', paddingTop: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {isSuperadmin && req.status === 'pending' && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          openActionModal(req, 'approved');
+                          setSelectedRequestDetails(null);
+                        }}
+                        style={{ background: '#059669', borderColor: '#059669', fontSize: '12.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        <Check size={13} />
+                        <span>Approve Requisition</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          openActionModal(req, 'rejected');
+                          setSelectedRequestDetails(null);
+                        }}
+                        style={{ color: '#dc2626', borderColor: '#fca5a5', background: '#fff1f2', fontSize: '12.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}
+                      >
+                        <X size={13} />
+                        <span>Deny Requisition</span>
+                      </button>
+                    </>
+                  )}
+
+                  {isSuperadmin && req.status === 'approved' && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        openActionModal(req, 'fulfilled');
+                        setSelectedRequestDetails(null);
+                      }}
+                      style={{ background: '#0284c7', borderColor: '#0284c7', fontSize: '12.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px' }}
+                    >
+                      <Package size={13} />
+                      <span>Fulfill &amp; Dispatch</span>
+                    </button>
+                  )}
+
+                  {req.status === 'pending' && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={async () => {
+                        await cancelPartsRequest(req.id);
+                        setSelectedRequestDetails(null);
+                        showToast?.('Requisition cancelled successfully', 'info');
+                      }}
+                      style={{ color: '#64748b', fontSize: '12px' }}
+                    >
+                      <span>Cancel Requisition</span>
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setSelectedRequestDetails(null)}
+                  style={{ fontSize: '12.5px', fontWeight: 600 }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
