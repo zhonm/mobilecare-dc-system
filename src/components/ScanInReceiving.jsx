@@ -39,7 +39,7 @@ import {
   downloadScanInTemplate
 } from '../utils/excelParser';
 import { resolvePartInfo, normalizeInventoryUnits, validateAppleSerialNumber } from '../utils/partResolver';
-import { formatTo12HourTime } from '../utils/dateUtils';
+import { formatPartDate } from '../utils/dateUtils';
 import { exportPmgBranchInventoryToExcel, exportDcCompleteStockInventoryToExcel } from '../utils/stockExportUtils';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
@@ -3241,8 +3241,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                   <th style={{ width: '100px' }}>Category</th>
                   <th style={{ width: '190px' }}>Serial Number</th>
                   <th style={{ width: '160px' }}>{isPmgUser ? 'Receiving Branch' : 'Assignment (Click to switch)'}</th>
-                  {!isPmgUser && <th style={{ width: '140px' }}>Intake Source</th>}
-                  <th style={{ width: '90px' }}>Timestamp</th>
+                  <th style={{ width: '115px', whiteSpace: 'nowrap' }}>Date Received</th>
                   <th style={{ width: '80px' }}>Status</th>
                   <th style={{ textAlign: 'right', width: '80px' }}>Actions</th>
                 </tr>
@@ -3382,23 +3381,8 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                           </button>
                         )}
                       </td>
-                      {!isPmgUser && (
-                        <td>
-                          {unit.isImported || (unit.received_by && unit.received_by.includes('Import')) ? (
-                            <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '10.5px' }}>
-                              <FileSpreadsheet size={11} style={{ display: 'inline', marginRight: '3px' }} />
-                              Spreadsheet Import
-                            </span>
-                          ) : (
-                            <span className="badge" style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', fontSize: '10.5px' }}>
-                              <Barcode size={11} style={{ display: 'inline', marginRight: '3px' }} />
-                              Barcode Scan
-                            </span>
-                          )}
-                        </td>
-                      )}
-                      <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {unit.received_at ? formatTo12HourTime(unit.received_at, false) : 'Recent'}
+                      <td className="font-mono" style={{ fontSize: '11.5px', color: '#475569', whiteSpace: 'nowrap' }}>
+                        {formatPartDate(unit)}
                       </td>
                       <td>
                         <span className="badge badge-success" style={{ fontSize: '10.5px', padding: '1px 6px' }}>In Stock</span>

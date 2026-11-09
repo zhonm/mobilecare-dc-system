@@ -6,7 +6,7 @@ import {
   exportDcCompleteStockInventoryToExcel,
   exportDcStockReceiptsToExcel
 } from '../utils/stockExportUtils';
-import { formatTo12HourTime } from '../utils/dateUtils';
+import { formatTo12HourTime, formatPartDate } from '../utils/dateUtils';
 import {
   BookmarkPlus,
   Package,
@@ -209,13 +209,17 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
 
       // Parse date key (YYYY-MM-DD)
       let dateKey = todayDateStr;
-      let timeStr = '12:00:00 PM';
-      if (u.received_at) {
+      let timeStr = '';
+      if (u.timeStr) {
+        timeStr = formatTo12HourTime(u.timeStr);
+      } else if (u.received_at) {
         try {
           const d = new Date(u.received_at);
           if (!isNaN(d.getTime())) {
-            dateKey = d.toISOString().split('T')[0];
-            timeStr = formatTo12HourTime(d);
+            dateKey = typeof u.received_at === 'string' && /^\d{4}-\d{2}-\d{2}/.test(u.received_at)
+              ? u.received_at.substring(0, 10)
+              : d.toISOString().split('T')[0];
+            timeStr = formatTo12HourTime(u.received_at);
           }
         } catch (e) {}
       }
@@ -1967,7 +1971,7 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                         <th>Description</th>
                         <th>Serial Number</th>
                         <th>Destination</th>
-                        <th>Time Received</th>
+                        <th>Date Received</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2011,8 +2015,8 @@ export default function IntakeRecords({ embeddedMode: _embeddedMode = false, onN
                                 </span>
                               )}
                             </td>
-                            <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                              {it.received_at ? formatTo12HourTime(it.received_at) : 'Recorded'}
+                            <td className="font-mono" style={{ fontSize: '11.5px', color: '#475569', whiteSpace: 'nowrap' }}>
+                              {formatPartDate(it)}
                             </td>
                           </tr>
                         );

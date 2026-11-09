@@ -62,7 +62,12 @@ import {
 } from '../utils/rawMasterlistScanner';
 import { parseUniversalExcel } from '../utils/excelParser';
 import { isPartMatchingCategoryFilter, getCategoryForPart } from '../utils/categoryFilter';
-import { filterActiveOutboundShipments, calculateActiveQueuePartsCount, getShipmentRiderName } from '../utils/shipmentHelpers';
+import {
+  filterActiveOutboundShipments,
+  calculateActiveQueuePartsCount,
+  getShipmentRiderName,
+  resolveItemStockingPrice
+} from '../utils/shipmentHelpers';
 import { filterAvailableDcInStockUnits } from '../utils/appContextHelpers';
 
 const USD_TO_PHP_RATE = 57;
@@ -175,6 +180,14 @@ export default function Dashboard() {
       sites
     });
   }, [inventoryUnits, activePackDraft, shipments, sites]);
+
+  // Total DC Warehouse Stock Valuation in USD (calculated directly using Apple stocking prices & parts catalog)
+  const totalDcStockValuationUSD = useMemo(() => {
+    return (availableInStockUnits || []).reduce((sum, u) => {
+      const price = resolveItemStockingPrice(u, parts);
+      return sum + (Number(price) || 0);
+    }, 0);
+  }, [availableInStockUnits, parts]);
 
   const { agingUnits, freshUnits } = useMemo(() => {
     const aging = [];
@@ -303,6 +316,7 @@ export default function Dashboard() {
           description,
           category_id: partObj?.category_id || u.category_id || u.category
         }, categories);
+        const stockPriceUSD = resolveItemStockingPrice(u, parts);
 
         map.set(pn, {
           part_number: pn,
@@ -311,6 +325,7 @@ export default function Dashboard() {
           category_name: catObj?.name || 'General',
           category_code: catObj?.code || 'GENERAL',
           category_id: catObj?.id || partObj?.category_id || 'cat-other',
+          stockPriceUSD,
           units: [],
           maxDaysInDc: days,
           agingCount: 0,
@@ -330,7 +345,14 @@ export default function Dashboard() {
       }
     });
 
-    let list = Array.from(map.values()).sort((a, b) => {
+    let list = Array.from(map.values()).map(entry => {
+      const totalValUSD = entry.stockPriceUSD * entry.units.length;
+      return {
+        ...entry,
+        totalValUSD,
+        totalValPHP: totalValUSD * USD_TO_PHP_RATE
+      };
+    }).sort((a, b) => {
       if (b.agingCount !== a.agingCount) return b.agingCount - a.agingCount;
       return b.units.length - a.units.length;
     });
@@ -360,6 +382,10 @@ export default function Dashboard() {
 
     return list;
   }, [availableInStockUnits, parts, categories, selectedCategories, activeSnapshotFilter, tableSearch]);
+
+  const filteredSnapshotValuationUSD = useMemo(() => {
+    return (groupedInventory || []).reduce((sum, item) => sum + (item.totalValUSD || 0), 0);
+  }, [groupedInventory]);
 
   const recentShipments = (activeShipments || []).slice(0, 6);
 
@@ -793,20 +819,58 @@ export default function Dashboard() {
               <Boxes size={20} />
             </div>
           </div>
-          <div className="kpi-value" style={{ color: '#0f172a', fontSize: '32px' }}>
-            {availableInStockUnits.length.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>units</span>
+          <div
+            className="kpi-value"
+            style={{
+              color: '#0f172a',
+              fontSize: '30px',
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '8px'
+            }}
+          >
+            <div>
+              {availableInStockUnits.length.toLocaleString()} <span style={{ fontSize: '15px', color: '#64748b', fontWeight: 500 }}>{availableInStockUnits.length === 1 ? 'unit' : 'units'}</span>
+            </div>
+            <div
+              style={{
+                fontSize: '20px',
+                fontWeight: 800,
+                color: '#047857',
+                fontFamily: 'var(--font-mono)',
+                letterSpacing: '-0.01em'
+              }}
+            >
+              ${totalDcStockValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600 }}>USD</span>
+            </div>
           </div>
           <div className="kpi-sub">
             {availableInStockUnits.length === 0 ? (
-              <span style={{ color: '#047857', fontWeight: 600 }}>Clean Pipeline (0 in DC)</span>
-            ) : agingUnits.length > 0 ? (
-              <span style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Operational awareness alert only: All parts records remain 100% permanent and intact.">
-                <Clock size={12} /> {agingUnits.length} Aging (≥4d in DC) • {freshUnits.length} Fresh
-              </span>
+              <span style={{ color: '#047857', fontWeight: 600 }}>Clean Pipeline (0 in DC • $0.00 USD)</span>
             ) : (
-              <span style={{ color: '#047857', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <CheckCircle2 size={12} /> All {availableInStockUnits.length} Units Fresh (&lt;4d in DC)
-              </span>
+              <>
+                <span style={{ color: '#047857', fontWeight: 700 }}>
+                  ${totalDcStockValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                </span>{' '}
+                <span style={{ color: '#64748b', fontWeight: 500 }}>
+                  (₱{(totalDcStockValuationUSD * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })})
+                </span>
+                {' '}•{' '}
+                {agingUnits.length > 0 ? (
+                  <span
+                    style={{ color: '#b45309', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                    title="Operational awareness alert only: All parts records remain 100% permanent and intact."
+                  >
+                    <Clock size={12} /> {agingUnits.length} Aging (≥4d in DC) • {freshUnits.length} Fresh
+                  </span>
+                ) : (
+                  <span style={{ color: '#047857', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <CheckCircle2 size={12} /> All {availableInStockUnits.length} Units Fresh (&lt;4d in DC)
+                  </span>
+                )}
+              </>
             )}
           </div>
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
@@ -2238,15 +2302,30 @@ export default function Dashboard() {
       <div className="card" style={{ padding: '22px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>DC Stock Inventory Snapshot</h3>
               <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
                 <Check size={11} style={{ display: 'inline', marginRight: '3px' }} />
                 Real-Time Synced
               </span>
+              <span
+                className="badge"
+                style={{
+                  background: '#f0fdf4',
+                  color: '#15803d',
+                  border: '1px solid #86efac',
+                  fontWeight: 700,
+                  fontSize: '11.5px',
+                  padding: '3px 8px'
+                }}
+              >
+                {activeSnapshotFilter !== 'ALL' || tableSearch.trim()
+                  ? `Filtered Value: $${filteredSnapshotValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`
+                  : `Total Valuation: $${totalDcStockValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`}
+              </span>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-              Aggregated stock counts by part SKU currently available in Distribution Center with aging visibility tracking (all inventory records remain 100% permanent and intact)
+              Aggregated stock counts and USD valuations by part SKU currently available in Distribution Center with aging visibility tracking (all inventory records remain 100% permanent and intact)
             </p>
           </div>
 
@@ -2357,12 +2436,14 @@ export default function Dashboard() {
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                   <th style={{ width: '50px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>#</th>
-                  <th style={{ width: '140px', padding: '10px 12px', whiteSpace: 'nowrap' }}>PART NUMBER</th>
+                  <th style={{ width: '130px', padding: '10px 12px', whiteSpace: 'nowrap' }}>PART NUMBER</th>
                   <th style={{ padding: '10px 12px' }}>DESCRIPTION</th>
-                  <th style={{ width: '130px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>CATEGORY</th>
+                  <th style={{ width: '120px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>CATEGORY</th>
+                  <th style={{ width: '125px', textAlign: 'right', padding: '10px 12px', whiteSpace: 'nowrap' }}>STOCK PRICE</th>
                   <th style={{ width: '110px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>IN-STOCK</th>
+                  <th style={{ width: '140px', textAlign: 'right', padding: '10px 12px', whiteSpace: 'nowrap' }}>TOTAL VALUE</th>
                   <th style={{ width: '160px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>DC AGING STATUS</th>
-                  <th style={{ width: '170px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>RECENT SERIAL</th>
+                  <th style={{ width: '160px', textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>RECENT SERIAL</th>
                 </tr>
               </thead>
               <tbody>
@@ -2395,55 +2476,92 @@ export default function Dashboard() {
                           {badge.name || item.category_name || item.category}
                         </span>
                       </td>
-                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>
-                        {item.units.length} units
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      {item.maxDaysInDc >= 4 ? (
-                        <span
-                          className="badge"
-                          style={{
-                            background: '#fffbeb',
-                            color: '#b45309',
-                            border: '1px solid #fde68a',
-                            fontWeight: 700,
-                            fontSize: '11px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging Notice)
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '12.5px' }}>
+                          ${item.stockPriceUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <div style={{ fontSize: '10.5px', color: '#64748b' }}>
+                          ₱{(item.stockPriceUSD * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <span className="badge badge-primary" style={{ fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                          {item.units.length} {item.units.length === 1 ? 'unit' : 'units'}
                         </span>
-                      ) : (
-                        <span
-                          className="badge"
-                          style={{
-                            background: '#ecfdf5',
-                            color: '#047857',
-                            border: '1px solid #a7f3d0',
-                            fontWeight: 600,
-                            fontSize: '11px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          <CheckCircle2 size={11} /> {item.maxDaysInDc}d in DC (Fresh)
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569', padding: '10px 12px', whiteSpace: 'nowrap' }}>
-                      {item.latest_serial || '—'}
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontWeight: 800, color: '#059669', fontSize: '12.5px' }}>
+                          ${item.totalValUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
+                        <div style={{ fontSize: '10.5px', color: '#64748b' }}>
+                          ₱{(item.totalValUSD * USD_TO_PHP_RATE).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        {item.maxDaysInDc >= 4 ? (
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#fffbeb',
+                              color: '#b45309',
+                              border: '1px solid #fde68a',
+                              fontWeight: 700,
+                              fontSize: '11px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <AlertTriangle size={11} /> {item.maxDaysInDc}d in DC (Aging Notice)
+                          </span>
+                        ) : (
+                          <span
+                            className="badge"
+                            style={{
+                              background: '#ecfdf5',
+                              color: '#047857',
+                              border: '1px solid #a7f3d0',
+                              fontWeight: 600,
+                              fontSize: '11px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <CheckCircle2 size={11} /> {item.maxDaysInDc}d in DC (Fresh)
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#475569', padding: '10px 12px', whiteSpace: 'nowrap' }}>
+                        {item.latest_serial || '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
+              <tfoot>
+                <tr style={{ background: '#f8fafc', borderTop: '2px solid #cbd5e1', fontWeight: 800 }}>
+                  <td colSpan={4} style={{ padding: '12px 14px', textAlign: 'right', color: '#334155', fontSize: '12px' }}>
+                    TOTAL PHYSICAL DC STOCK:
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                    —
+                  </td>
+                  <td style={{ textAlign: 'center', padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                    <span className="badge" style={{ background: '#0284c7', color: '#fff', fontWeight: 800, fontSize: '12px' }}>
+                      {groupedInventory.reduce((acc, it) => acc + it.units.length, 0).toLocaleString()} units
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '12px 14px', color: '#059669', fontFamily: 'var(--font-mono)', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                    ${filteredSnapshotValuationUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td colSpan={2} style={{ padding: '12px 14px', textAlign: 'center', color: '#64748b', fontSize: '11px' }}>
+                    {agingUnits.length > 0 ? `${agingUnits.length} Aging • ${freshUnits.length} Fresh` : `All Units Fresh`}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

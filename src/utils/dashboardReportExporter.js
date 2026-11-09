@@ -911,7 +911,7 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
-  ws.mergeCells('A1:G1');
+  ws.mergeCells('A1:I1');
   const tCell = ws.getCell('A1');
   tCell.value = 'MOBILE CARE SERVICES PHILS. INC. — Distribution Center Physical Stock Inventory Snapshot';
   tCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -919,13 +919,13 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
   tCell.alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(1).height = 28;
 
-  ws.mergeCells('A2:G2');
+  ws.mergeCells('A2:I2');
   ws.getCell('A2').value = `Active Filter: ${filter}  |  Search: ${search || 'None'}  |  Total SKUs: ${groupedInventory.length}  |  Generated: ${new Date().toLocaleString('en-US')}`;
   ws.getCell('A2').font = { name: 'Arial', size: 8.5, italic: true, color: { argb: 'FF64748B' } };
   ws.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(2).height = 18;
 
-  const headers = ['#', 'Part Number', 'Description', 'Category', 'DC In-Stock Units', 'Aging Status (4+ Days)', 'Recent Serial Number'];
+  const headers = ['#', 'Part Number', 'Description', 'Category', 'DC In-Stock Units', 'Stock Price (USD)', 'Total Value (USD)', 'Aging Status (4+ Days)', 'Recent Serial Number'];
   const headerRow = ws.addRow(headers);
   headerRow.height = 24;
   headerRow.eachCell((cell) => {
@@ -935,9 +935,13 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
   });
 
   let totalUnits = 0;
+  let totalValuation = 0;
   groupedInventory.forEach((item, idx) => {
     const unitsCount = item.units?.length || 0;
     totalUnits += unitsCount;
+    const priceUSD = Number(item.stockPriceUSD || item.priceUSD || 0);
+    const itemValUSD = Number(item.totalValUSD || (priceUSD * unitsCount) || 0);
+    totalValuation += itemValUSD;
     const agingLabel = item.maxDaysInDc >= 4 ? `Aging (${item.maxDaysInDc} days)` : `Fresh (${item.maxDaysInDc} days)`;
 
     const r = ws.addRow([
@@ -946,6 +950,8 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
       sanitizeForSpreadsheet(item.description || ''),
       sanitizeForSpreadsheet(resolveCategoryDisplayName(item)),
       unitsCount,
+      priceUSD > 0 ? `$${priceUSD.toFixed(2)}` : '—',
+      itemValUSD > 0 ? `$${itemValUSD.toFixed(2)}` : '—',
       agingLabel,
       sanitizeForSpreadsheet(item.latest_serial || '—')
     ]);
@@ -967,14 +973,17 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
     r.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
     r.getCell(5).alignment = { horizontal: 'center', vertical: 'middle' };
     r.getCell(5).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0284C7' } };
-    r.getCell(6).alignment = { horizontal: 'center', vertical: 'middle' };
+    r.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
+    r.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
+    r.getCell(7).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF059669' } };
+    r.getCell(8).alignment = { horizontal: 'center', vertical: 'middle' };
     if (item.maxDaysInDc >= 4) {
-      r.getCell(6).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFB45309' } };
+      r.getCell(8).font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFB45309' } };
     }
-    r.getCell(7).alignment = { horizontal: 'center', vertical: 'middle' };
+    r.getCell(9).alignment = { horizontal: 'center', vertical: 'middle' };
   });
 
-  const totRow = ws.addRow(['TOTAL', '', `${groupedInventory.length} SKUs`, '', totalUnits, '', '']);
+  const totRow = ws.addRow(['TOTAL', '', `${groupedInventory.length} SKUs`, '', totalUnits, '', `$${totalValuation.toFixed(2)}`, '', '']);
   totRow.height = 22;
   totRow.eachCell((cell) => {
     cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
@@ -986,6 +995,8 @@ export async function exportDcInventoryToExcel(groupedInventory = [], { filter =
     { width: 18 },
     { width: 38 },
     { width: 20 },
+    { width: 18 },
+    { width: 18 },
     { width: 20 },
     { width: 24 },
     { width: 26 }
@@ -1035,32 +1046,41 @@ export function exportDcInventoryToPDF(groupedInventory = [], { filter = 'ALL', 
   doc.setTextColor(100, 116, 139);
   doc.text(`Active Filter: ${filter}  |  Search: ${search || 'None'}  |  Total SKUs: ${groupedInventory.length}  |  Generated: ${new Date().toLocaleString('en-US')}`, margin + 6, 24);
 
-  const tableBody = groupedInventory.map((item, idx) => [
-    idx + 1,
-    item.part_number || '',
-    item.description || '',
-    resolveCategoryDisplayName(item),
-    `${item.units?.length || 0} units`,
-    item.maxDaysInDc >= 4 ? `Aging (${item.maxDaysInDc}d)` : `Fresh (${item.maxDaysInDc}d)`,
-    item.latest_serial || '—'
-  ]);
+  const tableBody = groupedInventory.map((item, idx) => {
+    const unitsCount = item.units?.length || 0;
+    const priceUSD = Number(item.stockPriceUSD || item.priceUSD || 0);
+    const itemValUSD = Number(item.totalValUSD || (priceUSD * unitsCount) || 0);
+    return [
+      idx + 1,
+      item.part_number || '',
+      item.description || '',
+      resolveCategoryDisplayName(item),
+      `${unitsCount} units`,
+      priceUSD > 0 ? `$${priceUSD.toFixed(2)}` : '—',
+      itemValUSD > 0 ? `$${itemValUSD.toFixed(2)}` : '—',
+      item.maxDaysInDc >= 4 ? `Aging (${item.maxDaysInDc}d)` : `Fresh (${item.maxDaysInDc}d)`,
+      item.latest_serial || '—'
+    ];
+  });
 
   autoTable(doc, {
     startY: 28,
-    head: [['#', 'PART NUMBER', 'DESCRIPTION', 'CATEGORY', 'IN-STOCK UNITS', 'DC AGING STATUS', 'RECENT SERIAL NUMBER']],
+    head: [['#', 'PART NUMBER', 'DESCRIPTION', 'CATEGORY', 'IN-STOCK', 'PRICE (USD)', 'TOTAL (USD)', 'DC AGING STATUS', 'RECENT SERIAL NUMBER']],
     body: tableBody,
     theme: 'grid',
-    headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8, halign: 'center' },
-    bodyStyles: { fontSize: 7.5, textColor: [15, 23, 42], cellPadding: 2.2 },
+    headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5, halign: 'center' },
+    bodyStyles: { fontSize: 7.2, textColor: [15, 23, 42], cellPadding: 2.2 },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
       0: { halign: 'center', cellWidth: 8 },
-      1: { halign: 'center', fontStyle: 'bold', cellWidth: 30 },
+      1: { halign: 'center', fontStyle: 'bold', cellWidth: 26 },
       2: { halign: 'left', cellWidth: 'auto' },
-      3: { halign: 'center', cellWidth: 28 },
-      4: { halign: 'center', fontStyle: 'bold', cellWidth: 28 },
-      5: { halign: 'center', cellWidth: 32 },
-      6: { halign: 'center', cellWidth: 36 }
+      3: { halign: 'center', cellWidth: 24 },
+      4: { halign: 'center', fontStyle: 'bold', cellWidth: 20 },
+      5: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
+      6: { halign: 'right', fontStyle: 'bold', cellWidth: 24 },
+      7: { halign: 'center', cellWidth: 28 },
+      8: { halign: 'center', cellWidth: 30 }
     },
     margin: { left: margin, right: margin, bottom: 14 }
   });

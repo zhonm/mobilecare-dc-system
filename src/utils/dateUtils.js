@@ -84,7 +84,17 @@ export function formatTo12HourTime(input, includeSeconds = true) {
     }
   }
 
-  // Try parsing as ISO date string or RFC date
+  // Check if string is a pure date string (YYYY-MM-DD or MM/DD/YYYY) without time
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(str)) {
+    return '';
+  }
+
+  // Check if string is ISO UTC midnight / zero time artifact (e.g. "2026-08-01T00:00:00Z" or "2026-08-01T08:00:00Z")
+  if (/T00:00:00(?:\.000)?Z?$/i.test(str) || /T08:00:00(?:\.000)?Z?$/i.test(str)) {
+    return '';
+  }
+
+  // Try parsing as ISO date string or RFC date with real time
   try {
     const d = new Date(str);
     if (!isNaN(d.getTime())) {
@@ -102,19 +112,39 @@ export function formatTo12HourTime(input, includeSeconds = true) {
 
 /**
  * Formats any date/time representation into standard 12-hour datetime (e.g. "Sep 9, 2026, 02:45:08 PM").
+ * If the input is date-only (or UTC midnight artifact), formats as clean date (e.g. "Sep 9, 2026")
+ * without generating a misleading "08:00 AM" timestamp.
  *
  * @param {string|number|Date} input - The date/time input to format
  * @param {boolean} [includeSeconds=true] - Whether to include seconds in output
- * @returns {string} Formatted 12-hour date & time string
+ * @returns {string} Formatted 12-hour date & time string or clean date
  */
 export function formatTo12HourDateTime(input, includeSeconds = true) {
   if (input === null || input === undefined || input === '') {
     return '';
   }
 
+  const str = typeof input === 'string' ? input.trim() : '';
+
+  // Check if string is pure date without time
+  const isDateOnly = str && (
+    /^\d{4}-\d{2}-\d{2}$/.test(str) ||
+    /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(str) ||
+    /T00:00:00(?:\.000)?Z?$/i.test(str) ||
+    /T08:00:00(?:\.000)?Z?$/i.test(str)
+  );
+
   try {
     const d = input instanceof Date ? input : new Date(input);
     if (isNaN(d.getTime())) return String(input);
+
+    if (isDateOnly) {
+      return d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    }
 
     return d.toLocaleString('en-US', {
       month: 'short',
@@ -129,3 +159,59 @@ export function formatTo12HourDateTime(input, includeSeconds = true) {
     return String(input);
   }
 }
+
+/**
+ * Smart Formatter for Part Intake Dates (Date Only)
+ * Extracts and displays ONLY the date (e.g., "2026-09-15"),
+ * strictly removing any time component (hours, minutes, seconds, AM/PM)
+ * to align with system-wide inventory date standards.
+ *
+ * @param {Object|string|number|Date} input - Part unit object or raw timestamp/date string
+ * @returns {string} Clean date string (e.g. "2026-09-15") or "Recent"
+ */
+export function formatPartDate(input) {
+  if (input === null || input === undefined || input === '') {
+    return 'Recent';
+  }
+
+  const isPlainObj = typeof input === 'object' && !(input instanceof Date);
+  const rawDate = isPlainObj
+    ? (input.received_at || input.dateReceived || input.lastReceivedDate || input.dateKey || input.created_at || input.timestamp)
+    : input;
+
+  if (!rawDate) {
+    return 'Recent';
+  }
+
+  if (typeof rawDate === 'string') {
+    const trimmed = rawDate.trim();
+    if (!trimmed) return 'Recent';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const isoDateMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoDateMatch) {
+      return isoDateMatch[1];
+    }
+    const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (slashMatch) {
+      const [, m, d, y] = slashMatch;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+  }
+
+  try {
+    const d = rawDate instanceof Date ? rawDate : new Date(rawDate);
+    if (!isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  } catch {}
+
+  return String(rawDate);
+}
+
+// Keep formatPartTimestamp as an alias to formatPartDate to guarantee date-only output everywhere
+export const formatPartTimestamp = formatPartDate;
