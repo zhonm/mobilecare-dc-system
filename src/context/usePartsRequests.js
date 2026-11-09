@@ -25,7 +25,8 @@ export function usePartsRequests({
   fixablySnapshot = null,
   broadcastCloudEvent,
   enqueueOfflineAction,
-  setCloudSyncStatus
+  setCloudSyncStatus,
+  logAuditEvent
 }) {
   const [partsRequests, setPartsRequests] = useState(() => {
     try {
@@ -202,6 +203,30 @@ export function usePartsRequests({
       persistPartsRequests(next);
       return next;
     });
+
+    if (typeof logAuditEvent === 'function') {
+      logAuditEvent({
+        action: 'PARTS_REQUEST_SUBMITTED',
+        category: 'REQUISITION',
+        entityType: 'Parts Request',
+        entityId: optimisticRequest.request_number,
+        entityLabel: `${targetPart?.part_number || partId} (${qty} units) for ${targetSite?.code || effectiveSiteId}`,
+        siteId: resolvedSiteId,
+        siteCode: targetSite?.code || 'SITE',
+        siteName: targetSite?.name || 'Branch Site',
+        details: {
+          requestNumber: optimisticRequest.request_number,
+          partNumber: targetPart?.part_number || partId,
+          partDescription: targetPart?.description || '',
+          quantityRequested: qty,
+          priority: cleanPriority,
+          reason: cleanReason,
+          notes: cleanNotes
+        },
+        user: currentUser,
+        status: 'PENDING'
+      });
+    }
 
     if (setCloudSyncStatus) setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
 
@@ -688,6 +713,32 @@ export function usePartsRequests({
           enqueueOfflineAction('PARTS_REQUEST_UPDATE', { id: target.id, ...updatePayload });
         }
       }
+    }
+
+    if (typeof logAuditEvent === 'function') {
+      const actionName = status === 'approved' ? 'PARTS_REQUEST_APPROVED' : status === 'rejected' ? 'PARTS_REQUEST_REJECTED' : `PARTS_REQUEST_${status.toUpperCase()}`;
+      logAuditEvent({
+        action: actionName,
+        category: 'REQUISITION',
+        entityType: 'Parts Request',
+        entityId: target.request_number || target.id,
+        entityLabel: `${target.part_number} (${target.quantity_requested} units) - ${status.toUpperCase()}`,
+        siteId: target.site_id,
+        siteCode: target.site_code,
+        siteName: target.site_name,
+        details: {
+          requestNumber: target.request_number,
+          partNumber: target.part_number,
+          partDescription: target.part_description,
+          status,
+          quantityRequested: target.quantity_requested,
+          quantityFulfilled: effectiveQtyFulfilled,
+          reviewer: effectiveReviewer,
+          notes
+        },
+        user: currentUser,
+        status: status.toUpperCase()
+      });
     }
 
     showToast?.(`Request ${target.request_number} updated to "${status.toUpperCase()}".`, 'success');
@@ -1604,8 +1655,32 @@ export function usePartsRequests({
       } catch (e) {}
     }
 
+    if (typeof logAuditEvent === 'function') {
+      const effectivePartNumber = targetPart?.part_number || targetUnit.part_number || partNumber || 'PART';
+      const effectiveTech = currentUser?.fullName || 'Certified Technician';
+      logAuditEvent({
+        action: 'PART_CONSUMED_REPAIR',
+        category: 'CONSUMPTION',
+        entityType: 'Inventory Unit',
+        entityId: cleanSerial,
+        entityLabel: `${effectivePartNumber} (${cleanSerial}) - WO #${cleanWorkOrder || 'N/A'}`,
+        siteId: targetSite?.id || siteId,
+        siteCode: targetSite?.code || 'BRANCH',
+        siteName: targetSite?.name || 'Branch Site',
+        details: {
+          serialNumber: cleanSerial,
+          partNumber: effectivePartNumber,
+          workOrderNumber: cleanWorkOrder,
+          technician: effectiveTech,
+          notes: cleanNotes
+        },
+        user: currentUser,
+        status: 'USED'
+      });
+    }
+
     return { success: true, unit: updatedUnit, usage: usageEntry };
-  }, [inventoryUnits, sites, currentUser, parts, setInventoryUnits, setRepairUsageRecords, showToast, broadcastCloudEvent]);
+  }, [inventoryUnits, sites, currentUser, parts, setInventoryUnits, setRepairUsageRecords, showToast, broadcastCloudEvent, logAuditEvent]);
 
   // 9. Unmark / Restore Part back to In-Stock (Undo)
   const unmarkUnitAsUsed = useCallback(async (serialNumber) => {

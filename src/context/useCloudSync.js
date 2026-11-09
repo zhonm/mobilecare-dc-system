@@ -100,6 +100,8 @@ export function useCloudSync({
   setUploadAuditLogs,
   deletionAuditLogs,
   setDeletionAuditLogs,
+  systemAuditLogs: _systemAuditLogs = [],
+  setSystemAuditLogs,
   logDeletionAudit,
   setAutoLogoutConfig,
   setSessionAuditLogs,
@@ -3358,6 +3360,33 @@ export function useCloudSync({
         }
       }
 
+      // 8c-2. Process Master System Activity Audit Registry
+      if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0 && typeof setSystemAuditLogs === 'function') {
+        const cloudSystemAuditDoc = dbSavedRecords.find(r => r.id === 'master_system_audit_logs_registry');
+        if (cloudSystemAuditDoc?.snapshot_data?.logs && Array.isArray(cloudSystemAuditDoc.snapshot_data.logs)) {
+          const cloudLogs = cloudSystemAuditDoc.snapshot_data.logs;
+          setSystemAuditLogs(prev => {
+            const existingMap = new Map((prev || []).map(l => [l.id, l]));
+            let hasNew = false;
+            cloudLogs.forEach(l => {
+              if (l && l.id && !existingMap.has(l.id)) {
+                existingMap.set(l.id, l);
+                hasNew = true;
+              }
+            });
+            if (!hasNew && prev && prev.length > 0) {
+              return prev;
+            }
+            const merged = Array.from(existingMap.values())
+              .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
+              .slice(0, 500);
+            try { localStorage.setItem('mdc_system_audit_logs', JSON.stringify(merged)); } catch (e) {}
+            dbStorage.setItem('mdc_system_audit_logs', merged);
+            return merged;
+          });
+        }
+      }
+
       // 8d. Process Master Fixably Multi-Site Inventory Snapshot Registry
       if (shouldFetch('saved_records') && dbSavedRecords && dbSavedRecords.length > 0) {
         const cloudFixablyDoc = dbSavedRecords.find(r => r.id === 'master_fixably_inventory_snapshot');
@@ -3504,7 +3533,7 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
-  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setIsInventoryLoaded, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSupervisorSettings, setFixablySnapshot, broadcastCloudEvent, _dcIntakeRecords, _fixablySnapshot, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
+  }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setIsInventoryLoaded, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSystemAuditLogs, setSupervisorSettings, setFixablySnapshot, broadcastCloudEvent, _dcIntakeRecords, _fixablySnapshot, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention
   const autoRefreshData = useCallback(async ({ silent = true, force = false, reason = 'auto', tables = null, isManual = false } = {}) => {

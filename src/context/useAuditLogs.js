@@ -9,6 +9,26 @@ export function useAuditLogs({
   broadcastCloudEvent,
   setScanLogs
 }) {
+  const currentUserRef = useRef(currentUser);
+  const broadcastCloudEventRef = useRef(broadcastCloudEvent);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+    broadcastCloudEventRef.current = broadcastCloudEvent;
+  });
+
+  // Master System Activity Audit Stream
+  const [systemAuditLogs, setSystemAuditLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_system_audit_logs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+
   const [uploadAuditLogs, setUploadAuditLogs] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_upload_audit_logs');
@@ -214,13 +234,103 @@ export function useAuditLogs({
     return newLog;
   };
 
-  const currentUserRef = useRef(currentUser);
-  const broadcastCloudEventRef = useRef(broadcastCloudEvent);
+  /**
+   * Universal Enterprise Audit Logger:
+   * Records every significant action across PMG users, Super Admins, and all roles.
+   */
+  const logAuditEvent = useCallback(async ({
+    action,
+    category = 'GENERAL',
+    entityType = 'System Record',
+    entityId = '',
+    entityLabel = '',
+    siteId = null,
+    siteCode = null,
+    siteName = null,
+    details = {},
+    user = null,
+    status = 'SUCCESS'
+  }) => {
+    const activeUser = user || currentUserRef.current;
+    const nowIso = new Date().toISOString();
+    const resolvedRole = activeUser?.role || 'admin';
+    const newLog = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 7)}`,
+      timestamp: nowIso,
+      action: String(action || 'SYSTEM_ACTION').toUpperCase(),
+      category: String(category || 'GENERAL').toUpperCase(),
+      entity_type: entityType,
+      entity_id: String(entityId || ''),
+      entity_label: String(entityLabel || entityId || entityType),
+      user_id: activeUser?.id || 'usr-system',
+      user_name: activeUser?.fullName || activeUser?.name || 'System User',
+      user_email: activeUser?.email || '',
+      user_role: resolvedRole.toLowerCase(),
+      user_position: activeUser?.rolePosition || getDefaultRolePosition(resolvedRole) || 'Specialist',
+      site_id: siteId || activeUser?.siteId || activeUser?.site_id || 'site-dc',
+      site_code: siteCode || activeUser?.siteCode || (activeUser?.siteId ? 'BRANCH' : 'DC-MDC'),
+      site_name: siteName || null,
+      status: status || 'SUCCESS',
+      details: details || {}
+    };
 
-  useEffect(() => {
-    currentUserRef.current = currentUser;
-    broadcastCloudEventRef.current = broadcastCloudEvent;
-  });
+    setSystemAuditLogs(prev => {
+      const updated = [newLog, ...(prev || [])].slice(0, 500);
+      try {
+        localStorage.setItem('mdc_system_audit_logs', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_system_audit_logs', updated);
+      return updated;
+    });
+
+    if (supabase) {
+      try {
+        await supabase.from('audit_logs').insert([{
+          action: newLog.action,
+          entity_type: newLog.entity_type,
+          entity_id: newLog.entity_id,
+          user_id: newLog.user_id,
+          user_name: newLog.user_name,
+          user_email: newLog.user_email,
+          metadata: newLog,
+          created_at: newLog.timestamp
+        }]);
+
+        try {
+          const { data: regDoc } = await supabase
+            .from('saved_records')
+            .select('snapshot_data')
+            .eq('id', 'master_system_audit_logs_registry')
+            .maybeSingle();
+          const existingLogs = Array.isArray(regDoc?.snapshot_data?.logs) ? regDoc.snapshot_data.logs : [];
+          const mergedLogs = [newLog, ...existingLogs.filter(l => l.id !== newLog.id)].slice(0, 500);
+
+          await supabase.from('saved_records').upsert({
+            id: 'master_system_audit_logs_registry',
+            record_type: 'system_audit_registry',
+            period_label: 'Master System Activity Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: `Master system activity audit records (${mergedLogs.length} entries)`,
+            saved_by_name: newLog.user_name,
+            snapshot_data: {
+              logs: mergedLogs,
+              lastUpdated: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' });
+        } catch (regErr) {
+          console.warn('Could not upsert master_system_audit_logs_registry:', regErr);
+        }
+      } catch (err) {}
+    }
+
+    if (typeof broadcastCloudEventRef.current === 'function') {
+      broadcastCloudEventRef.current('AUDIT_EVENT_LOGGED', { log: newLog });
+    }
+
+    return newLog;
+  }, []);
 
   const logSessionAudit = useCallback(async ({
     action = 'AUTO_LOGOUT',
@@ -304,6 +414,7 @@ export function useAuditLogs({
    */
   const deleteAllAuditLogs = async () => {
     // 1. Clear Local State
+    setSystemAuditLogs([]);
     setUploadAuditLogs([]);
     setDeletionAuditLogs([]);
     setSessionAuditLogs([]);
@@ -313,6 +424,7 @@ export function useAuditLogs({
 
     // 2. Clear Local Storage
     try {
+      localStorage.setItem('mdc_system_audit_logs', '[]');
       localStorage.setItem('mdc_upload_audit_logs', '[]');
       localStorage.setItem('mdc_deletion_audit_logs', '[]');
       localStorage.setItem('mdc_scan_logs', '[]');
@@ -323,6 +435,7 @@ export function useAuditLogs({
 
     // 3. Clear IndexedDB
     try {
+      await dbStorage.setItem('mdc_system_audit_logs', []);
       await dbStorage.setItem('mdc_upload_audit_logs', []);
       await dbStorage.setItem('mdc_deletion_audit_logs', []);
       await dbStorage.setItem('mdc_scan_logs', []);
@@ -350,6 +463,17 @@ export function useAuditLogs({
       try {
         // Reset audit registries in saved_records with empty array snapshot
         await supabase.from('saved_records').upsert([
+          {
+            id: 'master_system_audit_logs_registry',
+            record_type: 'system_audit_registry',
+            period_label: 'Master System Activity Audit Registry',
+            period_year: new Date().getFullYear(),
+            period_month: new Date().getMonth() + 1,
+            notes: 'Master system activity audit records (0 entries)',
+            saved_by_name: currentUser?.fullName || 'Superadmin',
+            snapshot_data: { logs: [], lastUpdated: new Date().toISOString() },
+            updated_at: new Date().toISOString()
+          },
           {
             id: 'master_upload_audit_logs_registry',
             record_type: 'upload_audit_registry',
@@ -405,6 +529,9 @@ export function useAuditLogs({
   };
 
   return {
+    systemAuditLogs,
+    setSystemAuditLogs,
+    logAuditEvent,
     uploadAuditLogs,
     setUploadAuditLogs,
     deletionAuditLogs,

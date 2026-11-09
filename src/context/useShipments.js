@@ -19,7 +19,8 @@ export function useShipments({
   inventoryUnits = [],
   setInventoryUnits,
   enqueueOfflineAction,
-  setCloudSyncStatus
+  setCloudSyncStatus,
+  logAuditEvent
 }) {
   const [shipments, setShipments] = useState(() => {
     try {
@@ -1530,6 +1531,29 @@ export function useShipments({
       }
     }
 
+    if (typeof logAuditEvent === 'function') {
+      logAuditEvent({
+        action: 'SHIPMENT_DISPATCHED',
+        category: 'LOGISTICS',
+        entityType: 'Outbound Shipment',
+        entityId: updatedShipment.invoice_ref || updatedShipment.shipment_number || updatedShipment.id,
+        entityLabel: `Manifest ${updatedShipment.invoice_ref || updatedShipment.shipment_number} dispatched to ${destCode} (${updatedShipment.items?.length || 0} parts)`,
+        siteId: updatedShipment.site_id,
+        siteCode: destCode,
+        siteName: updatedShipment.site_name || destCode,
+        details: {
+          manifestNumber: updatedShipment.invoice_ref || updatedShipment.shipment_number,
+          carrier: cleanCarrier,
+          trackingNumber: cleanTrk,
+          riderName: cleanRider,
+          partsCount: updatedShipment.items?.length || 0,
+          destinationSite: destCode
+        },
+        user: currentUser,
+        status: 'IN_TRANSIT'
+      });
+    }
+
     return { success: true, shipment: updatedShipment };
   };
 
@@ -1619,6 +1643,28 @@ export function useShipments({
           console.warn('Auto fulfill parts request note:', reqErr.message);
         }
       }
+    }
+
+    if (typeof logAuditEvent === 'function') {
+      logAuditEvent({
+        action: 'SHIPMENT_RECEIVED_CONFIRMED',
+        category: 'LOGISTICS',
+        entityType: 'Outbound Shipment',
+        entityId: updatedShipment.invoice_ref || updatedShipment.shipment_number || updatedShipment.id,
+        entityLabel: `Manifest ${updatedShipment.invoice_ref || updatedShipment.shipment_number} confirmed at ${updatedShipment.site_code} by ${cleanReceiver}`,
+        siteId: updatedShipment.site_id,
+        siteCode: updatedShipment.site_code,
+        siteName: updatedShipment.site_name || updatedShipment.site_code,
+        details: {
+          manifestNumber: updatedShipment.invoice_ref || updatedShipment.shipment_number,
+          receiver: cleanReceiver,
+          condition: cleanCondition,
+          partsCount: updatedShipment.items?.length || 0,
+          receivingNotes: cleanNotes
+        },
+        user: currentUser,
+        status: 'RECEIVED'
+      });
     }
 
     showToast?.(`Confirmed Site Package! Package ${updatedShipment.invoice_ref || updatedShipment.shipment_number} parts are now ACTIVE & IN STOCK at branch.`, 'success');

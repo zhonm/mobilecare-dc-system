@@ -39,7 +39,8 @@ export function useInventory({
   getShipments,
   setShipments,
   setCloudSyncStatus,
-  logDeletionAudit
+  logDeletionAudit,
+  logAuditEvent
 }) {
   const sites = propSites && propSites.length > 0 ? propSites : _sites;
   const [inventoryUnits, setInventoryUnits] = useState(() => {
@@ -233,7 +234,52 @@ export function useInventory({
       error_message: errorMessage,
       created_at: new Date().toISOString()
     };
-    setScanLogs(prev => [logEntry, ...(prev || []).slice(0, 199)]);
+    setScanLogs(prev => {
+      const updated = [logEntry, ...(prev || []).slice(0, 299)];
+      try {
+        localStorage.setItem('mdc_scan_logs', JSON.stringify(updated));
+        dbStorage.setItem('mdc_scan_logs', updated);
+      } catch (e) {}
+      return updated;
+    });
+
+    // Mirror to Supabase scan_logs table if accessible
+    if (supabase) {
+      supabase.from('scan_logs').insert([{
+        scan_type: scanType,
+        part_number: partNumber,
+        serial_number: serialNumber,
+        user_name: currentUser?.fullName || 'Staff',
+        is_valid: isValid,
+        error_message: errorMessage,
+        created_at: logEntry.created_at
+      }]).then(({ error }) => {
+        if (error) console.warn('Supabase scan_logs insert note:', error.message);
+      }).catch(() => {});
+    }
+
+    // Forward to Universal Audit Stream
+    if (typeof logAuditEvent === 'function') {
+      logAuditEvent({
+        action: isValid ? `SCAN_${scanType}` : `SCAN_${scanType}_REJECTED`,
+        category: 'HARDWARE_SCAN',
+        entityType: 'Barcode Scan',
+        entityId: serialNumber || partNumber,
+        entityLabel: `${partNumber || 'PART'} - ${serialNumber || 'N/A'}${errorMessage ? ` (${errorMessage})` : ''}`,
+        siteId: currentUser?.siteId || 'site-dc',
+        siteCode: currentUser?.siteCode || (currentUser?.siteId ? 'BRANCH' : 'DC-MDC'),
+        siteName: currentUser?.siteName || (currentUser?.siteId ? 'Branch' : 'Distribution Center'),
+        details: {
+          scanType,
+          partNumber,
+          serialNumber,
+          isValid,
+          errorMessage
+        },
+        user: currentUser,
+        status: isValid ? 'SUCCESS' : 'FAILED'
+      });
+    }
   };
 
   const unmarkDeletedSerials = async (serialsToKeep, options = {}) => {
@@ -1894,10 +1940,43 @@ export function useInventory({
       });
     }
 
+    if (newLogs.length > 0) {
+      setScanLogs(prev => {
+        const updated = [...newLogs.slice(0, 100), ...(prev || [])].slice(0, 300);
+        try {
+          localStorage.setItem('mdc_scan_logs', JSON.stringify(updated));
+          dbStorage.setItem('mdc_scan_logs', updated);
+        } catch (e) {}
+        return updated;
+      });
+    }
+
     barcodeAudio.playSuccess();
     const destMsg = isMultiSite
       ? `across branch sites`
       : `into ${isDcDest ? 'DC Stock' : (targetSiteName || 'branch stock')}`;
+
+    if (typeof logAuditEvent === 'function') {
+      logAuditEvent({
+        action: isMultiSite ? 'MULTI_SITE_INVENTORY_IMPORT' : 'BATCH_SCAN_INTAKE',
+        category: 'INVENTORY',
+        entityType: 'Inventory Unit Batch',
+        entityId: `BATCH-${Date.now()}`,
+        entityLabel: `${newUnits.length} parts received ${destMsg}`,
+        siteId: resolvedSiteId,
+        siteCode: resolvedSiteCode,
+        siteName: targetSiteName || resolvedSiteCode,
+        details: {
+          count: newUnits.length,
+          isMultiSite,
+          destination: destMsg,
+          sampleSerials: newUnits.slice(0, 5).map(u => u.serial_number)
+        },
+        user: currentUser,
+        status: 'COMPLETED'
+      });
+    }
+
     showToast(`Successfully imported ${newUnits.length} parts ${destMsg}!`, 'success');
     return { success: true, count: newUnits.length, units: newUnits };
   };

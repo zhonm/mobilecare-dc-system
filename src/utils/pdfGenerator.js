@@ -2556,6 +2556,7 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
   doc.text('MOBILE CARE SERVICES PHILS. INC.', titleX, 16);
 
   let reportTitle = 'Master Ingestion & File Upload Audit Report';
+  if (auditType === 'master') reportTitle = 'Master System Activity & Universal Audit Trail Report';
   if (auditType === 'deletions') reportTitle = 'Data Deletions & Purge Audit Trail Report';
   if (auditType === 'scan_logs') reportTitle = 'Hardware Barcode Scanner Event Audit Report';
   if (auditType === 'serial_tracer') reportTitle = 'Serialized Unit Custody Chain Trace Report';
@@ -2592,7 +2593,59 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
 
   startY += 16;
 
-  if (auditType === 'uploads') {
+  if (auditType === 'master') {
+    const tableHeaders = [
+      '#',
+      'Date & Time',
+      'Action & Category',
+      'Operator & Role',
+      'Entity & Identification',
+      'Location / Branch',
+      'Status'
+    ];
+
+    const tableRows = data.map((d, i) => [
+      i + 1,
+      new Date(d.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
+      `${d.action}\n[${d.category || 'SYSTEM'}]`,
+      `${d.user?.fullName || d.userName || 'System'}\n${(d.user?.role || d.userRole || 'STAFF').toUpperCase()}`,
+      `${d.entityId || 'N/A'}\n${d.entityLabel || ''}`,
+      `${d.siteCode || 'DC-MDC'}\n${d.siteName || 'Distribution Center'}`,
+      d.status || 'LOGGED'
+    ]);
+
+    autoTable(doc, {
+      startY,
+      head: [tableHeaders],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: 255,
+        fontSize: 7.5,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      styles: {
+        fontSize: 7,
+        cellPadding: 2.2,
+        valign: 'middle',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1
+      },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 10 },
+        1: { cellWidth: 32 },
+        2: { cellWidth: 44, fontStyle: 'bold' },
+        3: { cellWidth: 42 },
+        4: { cellWidth: 62 },
+        5: { cellWidth: 45 },
+        6: { halign: 'center', cellWidth: 25, fontStyle: 'bold' }
+      },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: margin, right: margin }
+    });
+  } else if (auditType === 'uploads') {
     const tableHeaders = [
       '#',
       'Date & Time',

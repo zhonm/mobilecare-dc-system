@@ -457,7 +457,8 @@ export function AppProvider({ children }) {
     getShipments: () => shipmentsDomain.shipments,
     setShipments: (...args) => shipmentsDomain.setShipments(...args),
     setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
-    logDeletionAudit: auditLogs.logDeletionAudit
+    logDeletionAudit: auditLogs.logDeletionAudit,
+    logAuditEvent: auditLogs.logAuditEvent
   });
 
   // 9. Shipments Domain
@@ -469,6 +470,7 @@ export function AppProvider({ children }) {
     showToast,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     logDeletionAudit: auditLogs.logDeletionAudit,
+    logAuditEvent: auditLogs.logAuditEvent,
     inventoryUnits: inventory.inventoryUnits,
     setInventoryUnits: inventory.setInventoryUnits,
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
@@ -489,7 +491,8 @@ export function AppProvider({ children }) {
     fixablySnapshot,
     broadcastCloudEvent: (...args) => cloudSync.broadcastCloudEvent(...args),
     enqueueOfflineAction: (...args) => cloudSync.enqueueOfflineAction(...args),
-    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args)
+    setCloudSyncStatus: (...args) => cloudSync.setCloudSyncStatus(...args),
+    logAuditEvent: auditLogs.logAuditEvent
   });
 
   const autoLogoutRef = useRef(null);
@@ -567,6 +570,9 @@ export function AppProvider({ children }) {
     setDcIntakeRecords: intakeRecords.setDcIntakeRecords,
     partsRequests: partsRequestsDomain.partsRequests,
     setPartsRequests: partsRequestsDomain.setPartsRequests,
+    systemAuditLogs: auditLogs.systemAuditLogs,
+    setSystemAuditLogs: auditLogs.setSystemAuditLogs,
+    logAuditEvent: auditLogs.logAuditEvent,
     uploadAuditLogs: auditLogs.uploadAuditLogs,
     setUploadAuditLogs: auditLogs.setUploadAuditLogs,
     deletionAuditLogs: auditLogs.deletionAuditLogs,
@@ -737,6 +743,9 @@ export function AppProvider({ children }) {
         setUploadAuditLogs: auditLogs.setUploadAuditLogs,
         deletionAuditLogs: auditLogs.deletionAuditLogs,
         setDeletionAuditLogs: auditLogs.setDeletionAuditLogs,
+        systemAuditLogs: auditLogs.systemAuditLogs,
+        setSystemAuditLogs: auditLogs.setSystemAuditLogs,
+        logAuditEvent: auditLogs.logAuditEvent,
         logDeletionAudit: auditLogs.logDeletionAudit,
         deleteAllAuditLogs: auditLogs.deleteAllAuditLogs,
         importStockTransfersReport: periodRecords.importStockTransfersReport,

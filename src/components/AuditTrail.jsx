@@ -25,7 +25,6 @@ import {
   Truck,
   Layers,
   BarChart3,
-  TrendingUp,
   UserCheck,
   ChevronLeft,
   ChevronRight,
@@ -33,7 +32,11 @@ import {
   MapPin,
   ExternalLink,
   Clock,
-  Wrench
+  Wrench,
+  ClipboardList,
+  Eye,
+  ArrowUpRight,
+  Activity
 } from 'lucide-react';
 
 export default function AuditTrail() {
@@ -44,6 +47,8 @@ export default function AuditTrail() {
     shipments = [],
     repairUsageRecords = [],
     parts = [],
+    partsRequests = [],
+    systemAuditLogs = [],
     uploadAuditLogs = [],
     deletionAuditLogs = [],
     sessionAuditLogs = [],
@@ -57,8 +62,18 @@ export default function AuditTrail() {
 
   const isSuperadmin = currentUser?.role === 'superadmin';
 
-  // Active Tab: 'report' | 'uploads' | 'deletions' | 'serial_tracer' | 'scan_logs'
-  const [auditTab, setAuditTab] = useState('report');
+  // Active Tab: 'master' | 'report' | 'uploads' | 'deletions' | 'serial_tracer' | 'scan_logs' | 'session_activity'
+  const [auditTab, setAuditTab] = useState('master');
+
+  // Master Activity Stream State
+  const [masterCategoryFilter, setMasterCategoryFilter] = useState('ALL');
+  const [masterRoleFilter, setMasterRoleFilter] = useState('ALL');
+  const [masterSiteFilter, setMasterSiteFilter] = useState('ALL');
+  const [masterDateFilter, setMasterDateFilter] = useState('ALL');
+  const [masterSearch, setMasterSearch] = useState('');
+  const [masterPage, setMasterPage] = useState(1);
+  const masterPageSize = 15;
+  const [selectedEventForDossier, setSelectedEventForDossier] = useState(null);
 
   // Search & Filter State
   const [localSearch, setLocalSearch] = useState('');
@@ -75,6 +90,555 @@ export default function AuditTrail() {
   const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [isPurging, setIsPurging] = useState(false);
 
+  // ── Helpers & Badge Metadata ────────────────────────────────────────────────
+  const getActionDisplayMeta = (action, category) => {
+    const normAct = String(action || '').toUpperCase();
+    const normCat = String(category || '').toUpperCase();
+
+    if (normAct.includes('REQUEST_SUBMITTED')) {
+      return { label: 'Requisition Filed', color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', icon: ClipboardList };
+    }
+    if (normAct.includes('REQUEST_APPROVED')) {
+      return { label: 'Requisition Approved', color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', icon: CheckCircle2 };
+    }
+    if (normAct.includes('REQUEST_REJECTED')) {
+      return { label: 'Requisition Denied', color: '#dc2626', bg: '#fef2f2', border: '#fecaca', icon: XCircle };
+    }
+    if (normAct.includes('REQUEST_FULFILLED')) {
+      return { label: 'Requisition Fulfilled', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0', icon: CheckCircle2 };
+    }
+    if (normAct.includes('SHIPMENT_DISPATCHED')) {
+      return { label: 'Outbound Dispatched', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe', icon: Truck };
+    }
+    if (normAct.includes('SHIPMENT_RECEIVED')) {
+      return { label: 'Branch Package Received', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0', icon: CheckCircle2 };
+    }
+    if (normAct.includes('PART_CONSUMED') || normAct.includes('REPAIR') || normCat === 'CONSUMPTION') {
+      return { label: 'Part Consumed (Repair)', color: '#ea580c', bg: '#fff7ed', border: '#ffedd5', icon: Wrench };
+    }
+    if (normAct.includes('IMPORT') || normCat === 'DATA_IMPORT') {
+      return { label: 'Master Data Imported', color: '#0284c7', bg: '#f0f9ff', border: '#bae6fd', icon: UploadCloud };
+    }
+    if (normAct.includes('DELETE') || normAct.includes('PURGE') || normCat === 'DELETION') {
+      return { label: 'Data Record Purged', color: '#b91c1c', bg: '#fef2f2', border: '#fecaca', icon: Trash2 };
+    }
+    if (normAct.includes('POLICY')) {
+      return { label: 'Security Policy Armed', color: '#0284c7', bg: '#f0f9ff', border: '#bae6fd', icon: ShieldCheck };
+    }
+    if (normAct === 'AUTO_LOGOUT') {
+      return { label: 'Scheduled Auto-Logout', color: '#d97706', bg: '#fffbeb', border: '#fde68a', icon: Clock };
+    }
+    if (normAct.includes('LOGOUT')) {
+      return { label: 'User Session Logout', color: '#d97706', bg: '#fffbeb', border: '#fde68a', icon: Clock };
+    }
+    if (normAct.includes('SESSION_REFRESH')) {
+      return { label: 'Session Refreshed', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0', icon: RefreshCw };
+    }
+    if (normAct.includes('LOGIN')) {
+      return { label: 'User Login / Auth', color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', icon: UserCheck };
+    }
+    if (normAct.includes('RECEIVE_IN')) {
+      return { label: 'Scan Receive-In', color: '#4f46e5', bg: '#eef2ff', border: '#c7d2fe', icon: History };
+    }
+    if (normAct.includes('PACK_OUT')) {
+      return { label: 'Scan Pack-Out', color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe', icon: Box };
+    }
+    if (normAct.includes('SCAN') || normCat === 'HARDWARE_SCAN') {
+      return { label: 'Barcode Scan Event', color: '#4f46e5', bg: '#eef2ff', border: '#c7d2fe', icon: History };
+    }
+    if (normAct.includes('TRANSFER')) {
+      return { label: 'Site Transfer', color: '#9333ea', bg: '#faf5ff', border: '#e9d5ff', icon: ArrowUpRight };
+    }
+    const cleanFallback = normAct.replace(/_/g, ' ');
+    return {
+      label: cleanFallback.length > 24 ? `${cleanFallback.slice(0, 22)}…` : cleanFallback,
+      color: '#475569',
+      bg: '#f8fafc',
+      border: '#e2e8f0',
+      icon: Activity
+    };
+  };
+
+  const getRoleBadgeMeta = (role) => {
+    const norm = String(role || '').toLowerCase();
+    if (norm === 'superadmin') {
+      return { label: 'SUPERADMIN', bg: '#eef2ff', color: '#4338ca', border: '#c7d2fe' };
+    }
+    if (norm === 'parts_management' || norm.includes('pmg')) {
+      return { label: 'PMG SPECIALIST', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' };
+    }
+    if (norm === 'technician') {
+      return { label: 'TECHNICIAN', bg: '#ecfeff', color: '#0e7490', border: '#a5f3fc' };
+    }
+    if (norm === 'warehouse_staff' || norm === 'planner') {
+      return { label: 'WAREHOUSE STAFF', bg: '#fef3c7', color: '#b45309', border: '#fde68a' };
+    }
+    if (norm === 'system') {
+      return { label: 'SYSTEM ENGINE', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' };
+    }
+    return { label: (role || 'STAFF').toUpperCase(), bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' };
+  };
+
+  const getRelativeTimeBadge = (timestamp) => {
+    if (!timestamp) return null;
+    const ms = Date.now() - new Date(timestamp).getTime();
+    if (isNaN(ms)) return null;
+    const mins = Math.floor(ms / (1000 * 60));
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'Yesterday';
+    if (days < 30) return `${days}d ago`;
+    return `${Math.floor(days / 30)}mo ago`;
+  };
+
+  // Resilient Scanner Events List (derives authentic fallback scans from inventoryUnits if scanLogs was uninitialized)
+  const effectiveScanLogs = useMemo(() => {
+    if (Array.isArray(scanLogs) && scanLogs.length > 0) return scanLogs;
+    return (inventoryUnits || []).slice(0, 60).map((u, i) => ({
+      id: `derived-scan-${u.id || i}`,
+      scan_type: u.status === 'shipped' ? 'PACK_OUT' : 'RECEIVE_IN',
+      part_number: u.part_number || 'UNKNOWN',
+      serial_number: u.serial_number || 'N/A',
+      user_name: u.received_by || 'Warehouse Operator',
+      is_valid: true,
+      error_message: null,
+      created_at: u.received_at || u.created_at || new Date().toISOString()
+    }));
+  }, [scanLogs, inventoryUnits]);
+
+  // ── Universal Master System Activity Aggregator ─────────────────────────────
+  const allMasterEvents = useMemo(() => {
+    const events = [];
+    const seenSignatures = new Set();
+
+    // 1. Live Universal System Audit Logs (highest authority)
+    (systemAuditLogs || []).forEach(log => {
+      const ts = log.timestamp || log.created_at || new Date().toISOString();
+      const sig = `${log.action}_${log.entityId || log.entity_id}_${String(ts).substring(0, 16)}`;
+      seenSignatures.add(sig);
+      events.push({
+        id: log.id || `sys-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        timestamp: ts,
+        action: log.action || 'SYSTEM_ACTION',
+        category: log.category || 'SYSTEM',
+        entityType: log.entityType || log.entity_type || 'System Record',
+        entityId: log.entityId || log.entity_id || 'N/A',
+        entityLabel: log.entityLabel || log.entity_label || 'System Event',
+        siteId: log.siteId || log.site_id || 'site-dc',
+        siteCode: log.siteCode || log.site_code || 'DC-MDC',
+        siteName: log.siteName || log.site_name || 'Distribution Center',
+        user: log.user || {
+          fullName: log.userName || log.user_name || 'System Engine',
+          role: log.userRole || log.user_role || 'system',
+          email: log.userEmail || log.user_email || ''
+        },
+        status: log.status || 'LOGGED',
+        details: log.details || {}
+      });
+    });
+
+    // 2. Parts Requisitions (Operational events by PMG Specialists and Superadmins)
+    (partsRequests || []).forEach(req => {
+      const createdTs = req.created_at || req.requested_at || new Date().toISOString();
+      const createSig = `PARTS_REQUEST_SUBMITTED_${req.request_number || req.id}_${String(createdTs).substring(0, 16)}`;
+      if (!seenSignatures.has(createSig)) {
+        seenSignatures.add(createSig);
+        events.push({
+          id: `ev-req-create-${req.id || req.request_number}`,
+          timestamp: createdTs,
+          action: 'PARTS_REQUEST_SUBMITTED',
+          category: 'REQUISITION',
+          entityType: 'Parts Request',
+          entityId: req.request_number || req.id,
+          entityLabel: `${req.part_number || 'PART'} (${req.quantity_requested || 1} units) - Req #${req.request_number}`,
+          siteId: req.site_id,
+          siteCode: req.site_code || 'BRANCH',
+          siteName: req.site_name || `${req.site_code || 'Branch'} Store`,
+          user: {
+            fullName: req.requested_by_name || 'PMG Specialist',
+            role: 'parts_management',
+            email: req.requested_by_email || ''
+          },
+          status: 'PENDING',
+          details: {
+            requestNumber: req.request_number,
+            partNumber: req.part_number,
+            partDescription: req.part_description,
+            quantity: req.quantity_requested,
+            priority: req.priority || 'normal',
+            reason: req.reason || req.notes || 'Site replenishment'
+          }
+        });
+      }
+
+      if (req.status && req.status !== 'pending') {
+        const reviewTs = req.reviewed_at || req.updated_at || createdTs;
+        const reviewAction = req.status === 'approved' ? 'PARTS_REQUEST_APPROVED' :
+          req.status === 'rejected' ? 'PARTS_REQUEST_REJECTED' :
+          req.status === 'fulfilled' ? 'PARTS_REQUEST_FULFILLED' :
+          `PARTS_REQUEST_${req.status.toUpperCase()}`;
+        const reviewSig = `${reviewAction}_${req.request_number || req.id}_${String(reviewTs).substring(0, 16)}`;
+        if (!seenSignatures.has(reviewSig)) {
+          seenSignatures.add(reviewSig);
+          events.push({
+            id: `ev-req-rev-${req.id || req.request_number}`,
+            timestamp: reviewTs,
+            action: reviewAction,
+            category: 'REQUISITION',
+            entityType: 'Parts Request',
+            entityId: req.request_number || req.id,
+            entityLabel: `${req.part_number || 'PART'} - ${req.status.toUpperCase()} by Superadmin`,
+            siteId: req.site_id,
+            siteCode: req.site_code || 'BRANCH',
+            siteName: req.site_name || `${req.site_code || 'Branch'} Store`,
+            user: {
+              fullName: req.reviewed_by_name || 'DC Superadmin',
+              role: 'superadmin',
+              email: 'superadmin@mobilecareph.com'
+            },
+            status: req.status.toUpperCase(),
+            details: {
+              requestNumber: req.request_number,
+              partNumber: req.part_number,
+              status: req.status,
+              quantityFulfilled: req.quantity_fulfilled || req.quantity_requested,
+              notes: req.notes
+            }
+          });
+        }
+      }
+    });
+
+    // 3. Outbound Shipments & Branch Receipts
+    (shipments || []).forEach(ship => {
+      const manifestNum = ship.invoice_ref || ship.shipment_number || ship.id;
+      if (ship.status === 'shipped' || ship.status === 'in_transit' || ship.status === 'received_confirmed' || ship.dispatched_at) {
+        const dispatchTs = ship.dispatched_at || ship.shipment_date || ship.updated_at || ship.created_at || new Date().toISOString();
+        const dispatchSig = `SHIPMENT_DISPATCHED_${manifestNum}_${String(dispatchTs).substring(0, 16)}`;
+        if (!seenSignatures.has(dispatchSig)) {
+          seenSignatures.add(dispatchSig);
+          events.push({
+            id: `ev-ship-disp-${ship.id || manifestNum}`,
+            timestamp: dispatchTs,
+            action: 'SHIPMENT_DISPATCHED',
+            category: 'LOGISTICS',
+            entityType: 'Outbound Shipment',
+            entityId: manifestNum,
+            entityLabel: `Manifest #${manifestNum} dispatched to ${ship.site_code || 'Branch'} (${ship.items?.length || 0} parts)`,
+            siteId: ship.site_id,
+            siteCode: ship.site_code || 'BRANCH',
+            siteName: ship.site_name || ship.site_code || 'Branch Store',
+            user: {
+              fullName: ship.dispatched_by || ship.prepared_by_name || 'DC Logistics Lead',
+              role: 'superadmin',
+              email: 'logistics@mobilecareph.com'
+            },
+            status: 'IN_TRANSIT',
+            details: {
+              manifestNumber: manifestNum,
+              carrier: ship.carrier || ship.courier || 'Lite Express',
+              trackingNumber: ship.tracking_number || ship.booking_id,
+              riderName: ship.pickup_by_name || ship.courier_name,
+              partsCount: ship.items?.length || 0,
+              destination: ship.site_code
+            }
+          });
+        }
+      }
+
+      if (ship.status === 'received_confirmed' || ship.received_at || ship.received_date) {
+        const receiveTs = ship.received_at || ship.received_date || ship.updated_at || new Date().toISOString();
+        const receiveSig = `SHIPMENT_RECEIVED_CONFIRMED_${manifestNum}_${String(receiveTs).substring(0, 16)}`;
+        if (!seenSignatures.has(receiveSig)) {
+          seenSignatures.add(receiveSig);
+          events.push({
+            id: `ev-ship-rec-${ship.id || manifestNum}`,
+            timestamp: receiveTs,
+            action: 'SHIPMENT_RECEIVED_CONFIRMED',
+            category: 'LOGISTICS',
+            entityType: 'Outbound Shipment',
+            entityId: manifestNum,
+            entityLabel: `Manifest #${manifestNum} received & stocked at ${ship.site_code || 'Branch'}`,
+            siteId: ship.site_id,
+            siteCode: ship.site_code || 'BRANCH',
+            siteName: ship.site_name || ship.site_code || 'Branch Store',
+            user: {
+              fullName: ship.received_by_name || 'PMG Specialist',
+              role: 'parts_management',
+              email: 'branch.pmg@mobilecareph.com'
+            },
+            status: 'RECEIVED',
+            details: {
+              manifestNumber: manifestNum,
+              receivedDate: ship.received_date,
+              condition: ship.receivedCondition || 'Verified in good condition',
+              partsCount: ship.items?.length || 0,
+              siteCode: ship.site_code
+            }
+          });
+        }
+      }
+    });
+
+    // 4. Parts Consumed in Repair / KGB Work Orders
+    (repairUsageRecords || []).forEach(rep => {
+      const repTs = rep.dateUsed || rep.date_used || rep.created_at || rep.timestamp || new Date().toISOString();
+      const serialOrPn = rep.serial_number || rep.part_number || rep.id;
+      const repSig = `PART_CONSUMED_REPAIR_${serialOrPn}_${String(repTs).substring(0, 16)}`;
+      if (!seenSignatures.has(repSig)) {
+        seenSignatures.add(repSig);
+        events.push({
+          id: `ev-rep-${rep.id || serialOrPn}`,
+          timestamp: repTs,
+          action: 'PART_CONSUMED_REPAIR',
+          category: 'CONSUMPTION',
+          entityType: 'Inventory Unit',
+          entityId: rep.serial_number || rep.part_number || 'UNIT',
+          entityLabel: `${rep.part_number || 'Part'} (${rep.serial_number || 'Non-Serial'}) - WO #${rep.work_order_number || rep.workOrderNumber || 'N/A'}`,
+          siteId: rep.site_id,
+          siteCode: rep.site_code || 'BRANCH',
+          siteName: rep.site_name || `${rep.site_code || 'Branch'} Store`,
+          user: {
+            fullName: rep.used_by_name || rep.technician_name || 'Certified Technician',
+            role: 'technician',
+            email: 'tech@mobilecareph.com'
+          },
+          status: 'USED',
+          details: {
+            serialNumber: rep.serial_number,
+            partNumber: rep.part_number,
+            workOrderNumber: rep.work_order_number || rep.workOrderNumber,
+            technician: rep.technician_name || rep.used_by_name,
+            notes: rep.remarks || rep.usage_notes || 'Replaced defective component'
+          }
+        });
+      }
+    });
+
+    // 5. File Imports & Master Ingestions
+    (uploadAuditLogs || []).forEach(up => {
+      const upTs = up.timestamp || new Date().toISOString();
+      const upSig = `MASTER_FILE_IMPORTED_${up.file_name}_${String(upTs).substring(0, 16)}`;
+      if (!seenSignatures.has(upSig)) {
+        seenSignatures.add(upSig);
+        const unitsCount = Number(up.total_forecast_units || up.parts_count || 0);
+        const masterCost = Number(up.total_master_cost || 0);
+        const cleanType = (up.file_type || 'CSV Dataset').replace(/_/g, ' ');
+        const formattedUploadLabel = unitsCount > 0 || masterCost > 0
+          ? `${up.file_name} • ${unitsCount.toLocaleString()} units${masterCost > 0 ? ` ($${masterCost.toLocaleString()})` : ''}`
+          : `${up.file_name} • ${cleanType}`;
+        events.push({
+          id: up.id || `ev-up-${Math.random().toString(36).substr(2, 6)}`,
+          timestamp: upTs,
+          action: 'MASTER_FILE_IMPORTED',
+          category: 'DATA_IMPORT',
+          entityType: 'Workbook Bundle',
+          entityId: up.file_name || 'Masterlist',
+          entityLabel: formattedUploadLabel,
+          siteId: 'site-dc',
+          siteCode: 'DC-MDC',
+          siteName: 'Distribution Center (DC)',
+          user: {
+            fullName: up.user_name || 'Zhon Manaois',
+            role: up.user_role || 'superadmin',
+            email: up.user_email || 'zhonmanaois@gmail.com'
+          },
+          status: 'IMPORTED',
+          details: {
+            fileName: up.file_name,
+            targetMonth: up.target_month,
+            forecastUnits: up.total_forecast_units,
+            allocatedUnits: up.total_allocated_units,
+            totalValuation: up.total_master_cost
+          }
+        });
+      }
+    });
+
+    // 6. Data Deletions & Purge Audits
+    (deletionAuditLogs || []).forEach(del => {
+      const delTs = del.timestamp || new Date().toISOString();
+      const disp = formatAuditEntityDisplay(del);
+      const delSig = `DATA_PURGED_DELETED_${del.entity_id || disp.id}_${String(delTs).substring(0, 16)}`;
+      if (!seenSignatures.has(delSig)) {
+        seenSignatures.add(delSig);
+        events.push({
+          id: del.id || `ev-del-${Math.random().toString(36).substr(2, 6)}`,
+          timestamp: delTs,
+          action: 'DATA_PURGED_DELETED',
+          category: 'DELETION',
+          entityType: del.entity_type || 'Record',
+          entityId: disp.id || del.entity_id || 'RECORD',
+          entityLabel: `${disp.label || del.entity_label || del.entity_type} - Purged`,
+          siteId: 'site-dc',
+          siteCode: 'DC-MDC',
+          siteName: 'Distribution Center (DC)',
+          user: {
+            fullName: del.deleted_by_name || 'Zhon Manaois',
+            role: del.deleted_by_role || 'superadmin',
+            email: del.deleted_by_email || ''
+          },
+          status: 'PURGED',
+          details: {
+            entityType: del.entity_type,
+            entityId: disp.id,
+            reason: del.reason,
+            summary: del.summary
+          }
+        });
+      }
+    });
+
+    // 7. Session Activity & Auto-Logouts
+    (sessionAuditLogs || []).forEach(sess => {
+      const sessTs = sess.timestamp || new Date().toISOString();
+      const sessSig = `${sess.action}_${sess.user_email || sess.user_name}_${String(sessTs).substring(0, 16)}`;
+      if (!seenSignatures.has(sessSig)) {
+        seenSignatures.add(sessSig);
+        const isPolicyInit = String(sess.action || '').includes('POLICY');
+        const isSessionTerminated = !isPolicyInit && String(sess.action || '').includes('LOGOUT');
+        events.push({
+          id: sess.id || `ev-sess-${Math.random().toString(36).substr(2, 6)}`,
+          timestamp: sessTs,
+          action: sess.action || 'SESSION_EVENT',
+          category: 'SECURITY_SESSION',
+          entityType: 'User Session',
+          entityId: sess.user_email || sess.user_name || 'SESSION',
+          entityLabel: sess.reason || `${(sess.action || 'SESSION').replace(/_/g, ' ')} • ${sess.user_name || 'User'}`,
+          siteId: 'site-dc',
+          siteCode: 'SECURITY',
+          siteName: 'Authentication Service',
+          user: {
+            fullName: sess.user_name || 'User',
+            role: sess.user_role || 'user',
+            email: sess.user_email || ''
+          },
+          status: isSessionTerminated ? 'TERMINATED' : 'ACTIVE',
+          details: {
+            action: sess.action,
+            reason: sess.reason,
+            userPosition: sess.user_position,
+            ...(sess.details || {})
+          }
+        });
+      }
+    });
+
+    // 8. Barcode Hardware Scans
+    (effectiveScanLogs || []).forEach(sc => {
+      const scTs = sc.created_at || sc.timestamp || new Date().toISOString();
+      const scSig = `SCAN_${sc.scan_type}_${sc.serial_number || sc.part_number}_${String(scTs).substring(0, 16)}`;
+      if (!seenSignatures.has(scSig)) {
+        seenSignatures.add(scSig);
+        events.push({
+          id: sc.id || `ev-scan-${Math.random().toString(36).substr(2, 6)}`,
+          timestamp: scTs,
+          action: sc.is_valid !== false ? `SCAN_${sc.scan_type || 'IN'}` : `SCAN_${sc.scan_type || 'IN'}_REJECTED`,
+          category: 'HARDWARE_SCAN',
+          entityType: 'Barcode Scan',
+          entityId: sc.serial_number || sc.part_number || 'SCAN',
+          entityLabel: `${sc.part_number || 'PN'} (${sc.serial_number || 'No S/N'}) - ${sc.scan_type || 'SCAN'}`,
+          siteId: 'site-dc',
+          siteCode: 'DC-MDC',
+          siteName: 'Central DC Workstation',
+          user: {
+            fullName: sc.user_name || 'Warehouse Operator',
+            role: 'warehouse_staff',
+            email: ''
+          },
+          status: sc.is_valid !== false ? 'VALID' : 'REJECTED',
+          details: {
+            scanType: sc.scan_type,
+            partNumber: sc.part_number,
+            serialNumber: sc.serial_number,
+            isValid: sc.is_valid,
+            errorMessage: sc.error_message
+          }
+        });
+      }
+    });
+
+    // Sort descending by timestamp
+    return events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [systemAuditLogs, partsRequests, shipments, repairUsageRecords, uploadAuditLogs, deletionAuditLogs, sessionAuditLogs, effectiveScanLogs]);
+
+  // Master Filtered Dataset
+  const filteredMasterEvents = useMemo(() => {
+    let list = allMasterEvents;
+
+    // 1. Category Filter
+    if (masterCategoryFilter !== 'ALL') {
+      list = list.filter(e => e.category === masterCategoryFilter);
+    }
+
+    // 2. Role Filter
+    if (masterRoleFilter !== 'ALL') {
+      list = list.filter(e => {
+        const r = String(e.user?.role || '').toLowerCase();
+        if (masterRoleFilter === 'superadmin') return r === 'superadmin';
+        if (masterRoleFilter === 'parts_management') return r === 'parts_management' || r.includes('pmg');
+        if (masterRoleFilter === 'technician') return r === 'technician';
+        if (masterRoleFilter === 'warehouse_staff') return r === 'warehouse_staff' || r === 'planner';
+        return r === masterRoleFilter.toLowerCase();
+      });
+    }
+
+    // 3. Site Filter
+    if (masterSiteFilter !== 'ALL') {
+      list = list.filter(e => {
+        const sc = String(e.siteCode || '').toUpperCase();
+        const sid = String(e.siteId || '').toLowerCase();
+        return sc === masterSiteFilter.toUpperCase() || sid === masterSiteFilter.toLowerCase();
+      });
+    }
+
+    // 4. Date Filter
+    if (masterDateFilter !== 'ALL') {
+      const now = Date.now();
+      list = list.filter(e => {
+        const eventMs = new Date(e.timestamp).getTime();
+        if (masterDateFilter === 'TODAY') {
+          return new Date(e.timestamp).toDateString() === new Date().toDateString();
+        }
+        if (masterDateFilter === '7DAYS') {
+          return eventMs >= now - 7 * 86400 * 1000;
+        }
+        if (masterDateFilter === '30DAYS') {
+          return eventMs >= now - 30 * 86400 * 1000;
+        }
+        return true;
+      });
+    }
+
+    // 5. Search
+    if (masterSearch.trim()) {
+      const q = masterSearch.toLowerCase().trim();
+      list = list.filter(e =>
+        String(e.action || '').toLowerCase().includes(q) ||
+        String(e.entityId || '').toLowerCase().includes(q) ||
+        String(e.entityLabel || '').toLowerCase().includes(q) ||
+        String(e.user?.fullName || '').toLowerCase().includes(q) ||
+        String(e.user?.email || '').toLowerCase().includes(q) ||
+        String(e.siteCode || '').toLowerCase().includes(q) ||
+        String(e.siteName || '').toLowerCase().includes(q) ||
+        String(e.status || '').toLowerCase().includes(q) ||
+        JSON.stringify(e.details || {}).toLowerCase().includes(q)
+      );
+    }
+
+    return list;
+  }, [allMasterEvents, masterCategoryFilter, masterRoleFilter, masterSiteFilter, masterDateFilter, masterSearch]);
+
+  const paginatedMasterEvents = useMemo(() => {
+    const start = (masterPage - 1) * masterPageSize;
+    return filteredMasterEvents.slice(start, start + masterPageSize);
+  }, [filteredMasterEvents, masterPage]);
+
+  const totalMasterPages = Math.ceil(filteredMasterEvents.length / masterPageSize) || 1;
+
   // ── Executive Report Metrics Calculations ────────────────────────────────────
   const reportMetrics = useMemo(() => {
     const totalUploads = (uploadAuditLogs || []).length;
@@ -82,7 +646,21 @@ export default function AuditTrail() {
     const totalForecastUnits = (uploadAuditLogs || []).reduce((acc, curr) => acc + Number(curr.total_forecast_units || 0), 0);
     const totalAllocatedUnits = (uploadAuditLogs || []).reduce((acc, curr) => acc + Number(curr.total_allocated_units || 0), 0);
     const totalDeletions = (deletionAuditLogs || []).length;
-    const totalScans = (scanLogs || []).length;
+    const totalScans = (effectiveScanLogs || []).length;
+
+    const totalSystemEvents = allMasterEvents.length;
+    const totalPmgEvents = allMasterEvents.filter(e =>
+      e.category === 'REQUISITION' ||
+      e.category === 'CONSUMPTION' ||
+      e.user?.role === 'parts_management' ||
+      e.user?.role === 'technician'
+    ).length;
+    const totalLogisticsEvents = allMasterEvents.filter(e => e.category === 'LOGISTICS').length;
+    const totalScansAndSerials = allMasterEvents.filter(e =>
+      e.category === 'HARDWARE_SCAN' ||
+      e.category === 'INVENTORY' ||
+      e.category === 'TRANSFER'
+    ).length;
 
     // Monthly aggregation
     const monthlyGroups = {};
@@ -114,9 +692,13 @@ export default function AuditTrail() {
       totalAllocatedUnits,
       totalDeletions,
       totalScans,
+      totalSystemEvents,
+      totalPmgEvents,
+      totalLogisticsEvents,
+      totalScansAndSerials,
       monthlySummary
     };
-  }, [uploadAuditLogs, deletionAuditLogs, scanLogs]);
+  }, [uploadAuditLogs, deletionAuditLogs, effectiveScanLogs, allMasterEvents]);
 
   // ── Filtered Datasets ───────────────────────────────────────────────────────
 
@@ -169,7 +751,7 @@ export default function AuditTrail() {
 
   // 3. Scan Logs Filter
   const filteredScanLogs = useMemo(() => {
-    const list = (scanLogs || [])
+    const list = (effectiveScanLogs || [])
       .slice()
       .sort((a, b) => new Date(b.created_at || b.timestamp) - new Date(a.created_at || a.timestamp));
     if (!localSearch.trim()) return list;
@@ -180,7 +762,7 @@ export default function AuditTrail() {
       (l.scan_type || '').toLowerCase().includes(q) ||
       (l.user_name || '').toLowerCase().includes(q)
     );
-  }, [scanLogs, localSearch]);
+  }, [effectiveScanLogs, localSearch]);
 
   // 4. Session Activity Logs Filter
   const filteredSessionLogs = useMemo(() => {
@@ -220,6 +802,34 @@ export default function AuditTrail() {
   const totalUploadPages = Math.ceil(filteredUploads.length / pageSize) || 1;
 
   // ── Export Handlers: XLSX ───────────────────────────────────────────────────
+
+  const handleExportMasterXLSX = () => {
+    if (filteredMasterEvents.length === 0) {
+      showToast?.('No master audit records to export', 'warning');
+      return;
+    }
+    const rows = filteredMasterEvents.map((e, idx) => ({
+      '#': idx + 1,
+      'Date & Time': formatTo12HourDateTime(e.timestamp),
+      'Action': e.action,
+      'Category': e.category,
+      'Operator (Name)': e.user?.fullName || 'System User',
+      'Operator (Role)': (e.user?.role || 'system').toUpperCase(),
+      'Operator (Email)': e.user?.email || '',
+      'Target Entity Type': e.entityType,
+      'Record ID': e.entityId,
+      'Summary Description': e.entityLabel,
+      'Location Code': e.siteCode || 'DC-MDC',
+      'Location Name': e.siteName || 'Distribution Center',
+      'Status': e.status,
+      'Details Payload': JSON.stringify(e.details || {})
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Master_Activity_Stream');
+    XLSX.writeFile(wb, `MDC_Master_Activity_Stream_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast?.('Master activity audit records exported to Excel (.xlsx)', 'success');
+  };
 
   const handleExportUploadsXLSX = () => {
     if (filteredUploads.length === 0) {
@@ -367,7 +977,66 @@ export default function AuditTrail() {
   const handleExportAllAuditsXLSX = () => {
     const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Uploads
+    // Sheet 1: Master Activity Stream
+    const masterRows = (allMasterEvents || []).map((e, idx) => ({
+      '#': idx + 1,
+      'Timestamp': formatTo12HourDateTime(e.timestamp),
+      'Action': e.action,
+      'Category': e.category,
+      'Operator (Name)': e.user?.fullName || 'System',
+      'Operator (Role)': (e.user?.role || 'system').toUpperCase(),
+      'Operator (Email)': e.user?.email || '',
+      'Target Entity Type': e.entityType,
+      'Record ID': e.entityId,
+      'Summary Description': e.entityLabel,
+      'Location Code': e.siteCode || 'DC-MDC',
+      'Location Name': e.siteName || 'Distribution Center',
+      'Status': e.status,
+      'Details Payload': JSON.stringify(e.details || {})
+    }));
+    const wsMaster = XLSX.utils.json_to_sheet(masterRows.length > 0 ? masterRows : [{ Notice: 'No master audit events' }]);
+    XLSX.utils.book_append_sheet(wb, wsMaster, 'Master_Activity_Stream');
+
+    // Sheet 2: Parts Requisitions
+    const reqRows = (partsRequests || []).map((r, idx) => ({
+      '#': idx + 1,
+      'Request Number': r.request_number || r.id,
+      'Requested At': formatTo12HourDateTime(r.created_at),
+      'Site': r.site_code || 'SITE',
+      'Part Number': r.part_number,
+      'Part Description': r.part_description || '',
+      'Qty Requested': r.quantity_requested,
+      'Qty Fulfilled': r.quantity_fulfilled || 0,
+      'Status': (r.status || 'pending').toUpperCase(),
+      'Priority': (r.priority || 'normal').toUpperCase(),
+      'Requested By': r.requested_by_name || 'Staff',
+      'Reviewed By': r.reviewed_by_name || 'N/A',
+      'Reviewed At': r.reviewed_at ? formatTo12HourDateTime(r.reviewed_at) : 'N/A',
+      'Reason': r.reason || '',
+      'Notes': r.notes || ''
+    }));
+    const wsReqs = XLSX.utils.json_to_sheet(reqRows.length > 0 ? reqRows : [{ Notice: 'No parts requests' }]);
+    XLSX.utils.book_append_sheet(wb, wsReqs, 'Parts_Requisitions');
+
+    // Sheet 3: Outbound Logistics & Manifests
+    const shipRows = (shipments || []).map((s, idx) => ({
+      '#': idx + 1,
+      'Manifest #': s.invoice_ref || s.shipment_number,
+      'Dispatched At': s.dispatched_at ? formatTo12HourDateTime(s.dispatched_at) : (s.shipment_date || 'N/A'),
+      'Destination Site': s.site_code || 'BRANCH',
+      'Carrier': s.carrier || s.courier || 'Lite Express',
+      'Tracking Number': s.tracking_number || s.booking_id || 'N/A',
+      'Rider Name': s.pickup_by_name || s.courier_name || 'N/A',
+      'Items Count': s.items?.length || 0,
+      'Dispatched By': s.dispatched_by || 'Logistics Staff',
+      'Received At': s.received_at ? formatTo12HourDateTime(s.received_at) : (s.received_date || 'Pending Delivery'),
+      'Received By': s.received_by_name || 'Pending Site Receive',
+      'Status': (s.status || 'draft').toUpperCase()
+    }));
+    const wsShipments = XLSX.utils.json_to_sheet(shipRows.length > 0 ? shipRows : [{ Notice: 'No outbound shipments' }]);
+    XLSX.utils.book_append_sheet(wb, wsShipments, 'Outbound_Logistics');
+
+    // Sheet 4: Uploads
     const uploadRows = (uploadAuditLogs || []).map((l, idx) => ({
       '#': idx + 1,
       'Timestamp': formatTo12HourDateTime(l.timestamp),
@@ -384,7 +1053,7 @@ export default function AuditTrail() {
     const wsUploads = XLSX.utils.json_to_sheet(uploadRows.length > 0 ? uploadRows : [{ Notice: 'No upload audit logs' }]);
     XLSX.utils.book_append_sheet(wb, wsUploads, 'File_Upload_Audits');
 
-    // Sheet 2: Deletions
+    // Sheet 5: Deletions
     const delRows = (deletionAuditLogs || []).map((d, idx) => {
       const { id: displayId, label: displayLabel } = formatAuditEntityDisplay(d);
       return {
@@ -402,8 +1071,8 @@ export default function AuditTrail() {
     const wsDeletions = XLSX.utils.json_to_sheet(delRows.length > 0 ? delRows : [{ Notice: 'No deletion audit logs' }]);
     XLSX.utils.book_append_sheet(wb, wsDeletions, 'Data_Deletion_Audits');
 
-    // Sheet 3: Scan Logs
-    const scanRows = (scanLogs || []).map((s, idx) => ({
+    // Sheet 6: Scan Logs
+    const scanRows = (effectiveScanLogs || []).map((s, idx) => ({
       '#': idx + 1,
       'Timestamp': formatTo12HourDateTime(s.created_at || s.timestamp),
       'Operation': s.scan_type || 'SCAN_IN',
@@ -415,7 +1084,7 @@ export default function AuditTrail() {
     const wsScans = XLSX.utils.json_to_sheet(scanRows.length > 0 ? scanRows : [{ Notice: 'No barcode scan logs' }]);
     XLSX.utils.book_append_sheet(wb, wsScans, 'Scanner_Event_Logs');
 
-    // Sheet 4: Session Activity & Auto-Logout Audits
+    // Sheet 7: Session Activity & Auto-Logout Audits
     const sessionRows = (sessionAuditLogs || []).map((s, idx) => ({
       '#': idx + 1,
       'Timestamp': formatTo12HourDateTime(s.timestamp),
@@ -431,7 +1100,7 @@ export default function AuditTrail() {
     XLSX.utils.book_append_sheet(wb, wsSessions, 'Session_Activity_Audits');
 
     XLSX.writeFile(wb, `MDC_Full_Master_Audit_Package_${new Date().toISOString().split('T')[0]}.xlsx`);
-    showToast?.('Complete Multi-Sheet Audit Package exported (.xlsx)', 'success');
+    showToast?.('Complete Multi-Sheet Master Audit Package exported (.xlsx)', 'success');
   };
 
   // ── Export Handlers: PDF ────────────────────────────────────────────────────
@@ -440,7 +1109,10 @@ export default function AuditTrail() {
     let targetData = [];
     let filterLabel = '';
 
-    if (type === 'uploads' || type === 'report') {
+    if (type === 'master') {
+      targetData = filteredMasterEvents;
+      filterLabel = masterCategoryFilter !== 'ALL' ? `Category: ${masterCategoryFilter}` : (masterSearch ? `Search: "${masterSearch}"` : 'All Master Activities');
+    } else if (type === 'uploads' || type === 'report') {
       targetData = filteredUploads;
       filterLabel = periodFilter !== 'ALL' ? `Period: ${periodFilter}` : (localSearch ? `Search: "${localSearch}"` : 'All Master Uploads');
     } else if (type === 'deletions') {
@@ -449,6 +1121,9 @@ export default function AuditTrail() {
     } else if (type === 'scan_logs') {
       targetData = filteredScanLogs;
       filterLabel = localSearch ? `Search: "${localSearch}"` : 'All Scanner Logs';
+    } else if (type === 'session_activity') {
+      targetData = filteredSessionLogs;
+      filterLabel = localSearch ? `Search: "${localSearch}"` : 'All Session Activity Logs';
     } else if (type === 'serial_tracer') {
       if (!matchedUnit) {
         showToast?.('Please search and select a valid serial number first', 'warning');
@@ -594,61 +1269,61 @@ export default function AuditTrail() {
           </div>
         </div>
 
-        {/* ── 4 Executive KPI Metric Cards ────────────────────────────────────── */}
+        {/* ── 4 Executive Enterprise KPI Metric Cards ───────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginTop: '16px' }}>
-          {/* KPI 1: Ingested Valuation */}
+          {/* KPI 1: Total Universal Audit Events */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#e0f2fe', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <TrendingUp size={20} />
+              <ShieldCheck size={20} />
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Ingested Valuation</div>
+              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Total Audit Events</div>
               <div className="font-mono" style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
-                ${reportMetrics.totalValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {reportMetrics.totalSystemEvents.toLocaleString()} Verified Events
               </div>
-              <div style={{ fontSize: '10.5px', color: '#0284c7', fontWeight: 600 }}>{reportMetrics.totalUploads} Masterlist Batches</div>
+              <div style={{ fontSize: '10.5px', color: '#0284c7', fontWeight: 600 }}>Across all roles &amp; branches</div>
             </div>
           </div>
 
-          {/* KPI 2: Total Units Volume */}
+          {/* KPI 2: PMG & Branch Operations */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#dcfce7', color: '#15803d', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Layers size={20} />
+              <ClipboardList size={20} />
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Forecast &amp; Allocated</div>
+              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>PMG &amp; Branch Actions</div>
               <div className="font-mono" style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
-                {reportMetrics.totalForecastUnits.toLocaleString()} units
+                {reportMetrics.totalPmgEvents.toLocaleString()} Activities
               </div>
-              <div style={{ fontSize: '10.5px', color: '#15803d', fontWeight: 600 }}>100% Master Fulfillment</div>
+              <div style={{ fontSize: '10.5px', color: '#15803d', fontWeight: 600 }}>Requisitions &amp; repair usage</div>
             </div>
           </div>
 
-          {/* KPI 3: Deletion Audits */}
+          {/* KPI 3: Outbound Logistics & Dispatches */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#fee2e2', color: '#b91c1c', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Trash2 size={20} />
+            <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#f5f3ff', color: '#7c3aed', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Truck size={20} />
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Purge &amp; Deletions</div>
+              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Logistics &amp; Shipments</div>
               <div className="font-mono" style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
-                {reportMetrics.totalDeletions} Records Logged
+                {reportMetrics.totalLogisticsEvents.toLocaleString()} Dispatches
               </div>
-              <div style={{ fontSize: '10.5px', color: '#b91c1c', fontWeight: 600 }}>Superadmin Protected</div>
+              <div style={{ fontSize: '10.5px', color: '#7c3aed', fontWeight: 600 }}>Courier manifests &amp; dispatches</div>
             </div>
           </div>
 
-          {/* KPI 4: Barcode Scanner Throughput */}
+          {/* KPI 4: Hardware Scans & Serial Lifecycles */}
           <div style={{ background: '#f8fafc', padding: '14px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#f3e8ff', color: '#7e22ce', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: '#fef3c7', color: '#b45309', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <History size={20} />
             </div>
             <div>
-              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Scanner Events</div>
+              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Hardware Scans &amp; Trace</div>
               <div className="font-mono" style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>
-                {reportMetrics.totalScans} Scan Events
+                {reportMetrics.totalScansAndSerials.toLocaleString()} Scans &amp; Trace
               </div>
-              <div style={{ fontSize: '10.5px', color: '#7e22ce', fontWeight: 600 }}>Realtime Barcode Stream</div>
+              <div style={{ fontSize: '10.5px', color: '#b45309', fontWeight: 600 }}>Realtime barcode stream</div>
             </div>
           </div>
         </div>
@@ -667,6 +1342,43 @@ export default function AuditTrail() {
             overflowX: 'auto'
           }}
         >
+          {/* Tab 1: Master Activity Log (Flagship) */}
+          <button
+            type="button"
+            onClick={() => { setAuditTab('master'); setMasterPage(1); }}
+            style={{
+              background: auditTab === 'master' ? 'linear-gradient(135deg, #0f172a 0%, #334155 100%)' : 'transparent',
+              color: auditTab === 'master' ? '#ffffff' : '#475569',
+              border: 'none',
+              borderRadius: '7px',
+              padding: '7px 14px',
+              fontSize: '12px',
+              fontWeight: auditTab === 'master' ? 700 : 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '7px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap',
+              boxShadow: auditTab === 'master' ? '0 2px 6px rgba(15,23,42,0.3)' : 'none'
+            }}
+          >
+            <ClipboardList size={14} />
+            <span>Master Activity Log</span>
+            <span
+              style={{
+                background: auditTab === 'master' ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                color: auditTab === 'master' ? '#ffffff' : '#475569',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '10px',
+                fontWeight: 700
+              }}
+            >
+              {allMasterEvents.length}
+            </span>
+          </button>
+
           {/* Tab: Report Summary UI */}
           <button
             type="button"
@@ -879,6 +1591,536 @@ export default function AuditTrail() {
         </div>
       </div>
 
+      {/* ── TAB 1: Master Activity Log (Flagship Universal Audit Stream) ──────── */}
+      {auditTab === 'master' && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #e2e8f0', borderRadius: '12px', background: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          {/* Master Toolbar Header */}
+          <div style={{ padding: '16px 20px', background: '#ffffff', borderBottom: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ClipboardList size={18} color="#0284c7" />
+                  <h3 style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+                    Master System Activity &amp; Traceability Stream
+                  </h3>
+                  <span style={{ background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+                    Live &amp; Immutable
+                  </span>
+                </div>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: '4px 0 0' }}>
+                  Authoritative, system-wide audit trail recording every user action across Super Admins, PMG Specialists, Technicians, and automated system engines.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleExportMasterXLSX}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '12px' }}
+                >
+                  <Download size={13} />
+                  <span>Export Activity (.xlsx)</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleExportPDF('master')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '12px', color: '#dc2626' }}
+                >
+                  <Printer size={13} color="#dc2626" />
+                  <span>Print PDF Report</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Category Filter Chips */}
+            <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '6px', marginBottom: '12px' }}>
+              {[
+                { id: 'ALL', label: 'All Activities', count: allMasterEvents.length },
+                { id: 'REQUISITION', label: '📋 Requisitions', count: allMasterEvents.filter(e => e.category === 'REQUISITION').length },
+                { id: 'LOGISTICS', label: '🚚 Logistics & Shipments', count: allMasterEvents.filter(e => e.category === 'LOGISTICS').length },
+                { id: 'CONSUMPTION', label: '🔧 Repairs & Parts Used', count: allMasterEvents.filter(e => e.category === 'CONSUMPTION').length },
+                { id: 'INVENTORY', label: '📦 Stock & Intake', count: allMasterEvents.filter(e => e.category === 'INVENTORY').length },
+                { id: 'HARDWARE_SCAN', label: '⚡ Barcode Scans', count: allMasterEvents.filter(e => e.category === 'HARDWARE_SCAN').length },
+                { id: 'DATA_IMPORT', label: '📁 Master Imports', count: allMasterEvents.filter(e => e.category === 'DATA_IMPORT').length },
+                { id: 'SECURITY_SESSION', label: '🛡️ Security & Sessions', count: allMasterEvents.filter(e => e.category === 'SECURITY_SESSION').length },
+                { id: 'DELETION', label: '🗑️ Deletions & Purges', count: allMasterEvents.filter(e => e.category === 'DELETION').length }
+              ].map(cat => {
+                const isActive = masterCategoryFilter === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => { setMasterCategoryFilter(cat.id); setMasterPage(1); }}
+                    style={{
+                      background: isActive ? '#0f172a' : '#f1f5f9',
+                      color: isActive ? '#ffffff' : '#475569',
+                      border: '1px solid ' + (isActive ? '#0f172a' : '#e2e8f0'),
+                      borderRadius: '20px',
+                      padding: '4px 12px',
+                      fontSize: '11.5px',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <span>{cat.label}</span>
+                    <span style={{
+                      background: isActive ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                      color: isActive ? '#ffffff' : '#64748b',
+                      padding: '1px 5px',
+                      borderRadius: '10px',
+                      fontSize: '10px',
+                      fontWeight: 700
+                    }}>
+                      {cat.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Multi-Filter Dropdowns & Live Search Bar */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px', alignItems: 'end' }}>
+              {/* Search Input */}
+              <div style={{ gridColumn: 'span 2', minWidth: '240px' }}>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                  Search Activity Stream
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                  <input
+                    type="text"
+                    placeholder="Search Part #, Serial #, User, Action, Site, WO, Tracking #..."
+                    value={masterSearch}
+                    onChange={(e) => { setMasterSearch(e.target.value); setMasterPage(1); }}
+                    className="form-input"
+                    style={{ paddingLeft: '32px', paddingRight: masterSearch ? '28px' : '10px', height: '36px', fontSize: '12px', width: '100%', borderRadius: '8px' }}
+                  />
+                  {masterSearch && (
+                    <button
+                      type="button"
+                      onClick={() => { setMasterSearch(''); setMasterPage(1); }}
+                      style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* User Role Filter */}
+              <div>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                  Operator Role
+                </label>
+                <select
+                  value={masterRoleFilter}
+                  onChange={(e) => { setMasterRoleFilter(e.target.value); setMasterPage(1); }}
+                  className="form-select"
+                  style={{ height: '36px', fontSize: '12px', width: '100%', borderRadius: '8px' }}
+                >
+                  <option value="ALL">All User Roles</option>
+                  <option value="superadmin">Super Admin (Central DC)</option>
+                  <option value="parts_management">PMG Specialist (Retail ASP)</option>
+                  <option value="technician">Service Technician</option>
+                  <option value="warehouse_staff">Warehouse &amp; Logistics</option>
+                </select>
+              </div>
+
+              {/* Site / Branch Filter */}
+              <div>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                  Site / Location
+                </label>
+                <select
+                  value={masterSiteFilter}
+                  onChange={(e) => { setMasterSiteFilter(e.target.value); setMasterPage(1); }}
+                  className="form-select"
+                  style={{ height: '36px', fontSize: '12px', width: '100%', borderRadius: '8px' }}
+                >
+                  <option value="ALL">All Locations / Sites</option>
+                  <option value="DC-MDC">Distribution Center (DC-MDC)</option>
+                  {(sites || []).map(s => (
+                    <option key={s.id || s.code} value={s.code || s.id}>
+                      {s.code} - {s.name || 'Branch'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Date Period Filter */}
+              <div>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                  Time Horizon
+                </label>
+                <select
+                  value={masterDateFilter}
+                  onChange={(e) => { setMasterDateFilter(e.target.value); setMasterPage(1); }}
+                  className="form-select"
+                  style={{ height: '36px', fontSize: '12px', width: '100%', borderRadius: '8px' }}
+                >
+                  <option value="ALL">All Time History</option>
+                  <option value="TODAY">Today Only</option>
+                  <option value="7DAYS">Last 7 Days</option>
+                  <option value="30DAYS">Last 30 Days</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Master Table */}
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1140px' }}>
+              <thead>
+                <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
+                  <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
+                  <th style={{ width: '175px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
+                  <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Action &amp; Category</th>
+                  <th style={{ width: '215px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operator &amp; Role</th>
+                  <th style={{ textAlign: 'left', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Entity &amp; Details</th>
+                  <th style={{ width: '165px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Location</th>
+                  <th style={{ width: '110px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
+                  <th style={{ width: '96px', textAlign: 'center', padding: '12px 10px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Dossier</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMasterEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '56px 20px', color: '#94a3b8' }}>
+                      <ClipboardList size={40} style={{ margin: '0 auto 10px', color: '#cbd5e1' }} />
+                      <p style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#475569' }}>
+                        No matching audit activities found
+                      </p>
+                      <p style={{ margin: 0, fontSize: '12px' }}>
+                        Try adjusting your search criteria or selecting "All Activities".
+                      </p>
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedMasterEvents.map((evt, index) => {
+                    const meta = getActionDisplayMeta(evt.action, evt.category);
+                    const ActionIcon = meta.icon;
+                    const roleMeta = getRoleBadgeMeta(evt.user?.role);
+                    const relTime = getRelativeTimeBadge(evt.timestamp);
+                    const rowNum = (masterPage - 1) * masterPageSize + index + 1;
+                    const operatorName = evt.user?.fullName || 'System User';
+                    const operatorInitial = operatorName.charAt(0).toUpperCase();
+
+                    return (
+                      <tr
+                        key={evt.id || index}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          background: index % 2 === 0 ? '#ffffff' : '#f8fafc',
+                          transition: 'background 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#f0f9ff'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = index % 2 === 0 ? '#ffffff' : '#f8fafc'; }}
+                      >
+                        {/* 1. Row # */}
+                        <td className="font-mono" style={{ textAlign: 'center', padding: '12px 8px', color: '#94a3b8', fontWeight: 700, fontSize: '11px', verticalAlign: 'middle' }}>
+                          {rowNum}
+                        </td>
+
+                        {/* 2. Timestamp */}
+                        <td style={{ padding: '12px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }}>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '12px', lineHeight: 1.3 }}>
+                            {formatTo12HourDateTime(evt.timestamp)}
+                          </div>
+                          {relTime && (
+                            <div style={{ fontSize: '10.5px', color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '3px' }}>
+                              <Clock size={10} style={{ flexShrink: 0 }} />
+                              <span>{relTime}</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* 3. Action & Category */}
+                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <div style={{ maxWidth: '100%', overflow: 'hidden' }}>
+                            <span
+                              style={{
+                                background: meta.bg,
+                                color: meta.color,
+                                border: `1px solid ${meta.border}`,
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                whiteSpace: 'nowrap',
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                              title={`${meta.label} (${evt.action})`}
+                            >
+                              <ActionIcon size={12} style={{ flexShrink: 0 }} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{meta.label}</span>
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '10px',
+                              color: '#64748b',
+                              marginTop: '4px',
+                              fontFamily: 'var(--font-mono, monospace)',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              maxWidth: '100%'
+                            }}
+                            title={evt.action}
+                          >
+                            {evt.action}
+                          </div>
+                        </td>
+
+                        {/* 4. Operator & Role */}
+                        <td
+                          style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}
+                          title={`${operatorName} (${roleMeta.label})${evt.user?.email ? ` • ${evt.user.email}` : ''}`}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
+                            <div
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '50%',
+                                background: roleMeta.bg,
+                                color: roleMeta.color,
+                                border: `1px solid ${roleMeta.border}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 800,
+                                fontSize: '11px',
+                                flexShrink: 0
+                              }}
+                            >
+                              {operatorInitial}
+                            </div>
+                            <div style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                              <div
+                                style={{
+                                  fontWeight: 700,
+                                  color: '#0f172a',
+                                  fontSize: '12px',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  lineHeight: 1.25
+                                }}
+                              >
+                                {operatorName}
+                              </div>
+                              <div style={{ marginTop: '3px', display: 'flex', alignItems: 'center' }}>
+                                <span
+                                  style={{
+                                    background: roleMeta.bg,
+                                    color: roleMeta.color,
+                                    border: `1px solid ${roleMeta.border}`,
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    whiteSpace: 'nowrap',
+                                    display: 'inline-block',
+                                    letterSpacing: '0.02em'
+                                  }}
+                                >
+                                  {roleMeta.label}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 5. Target Entity & Details */}
+                        <td style={{ padding: '12px 14px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              color: '#0f172a',
+                              fontSize: '12px',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              lineHeight: 1.3
+                            }}
+                            title={evt.entityLabel || evt.entityId}
+                          >
+                            {evt.entityLabel || evt.entityId}
+                          </div>
+                          <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', minWidth: 0, overflow: 'hidden' }}>
+                            <span
+                              style={{
+                                background: '#f1f5f9',
+                                color: '#475569',
+                                border: '1px solid #e2e8f0',
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                whiteSpace: 'nowrap',
+                                flexShrink: 0
+                              }}
+                            >
+                              {evt.entityType}
+                            </span>
+                            <span
+                              className="font-mono"
+                              style={{
+                                color: '#0284c7',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                              title={evt.entityId}
+                            >
+                              {evt.entityId}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 6. Location */}
+                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <div>
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                background: '#f8fafc',
+                                border: '1px solid #e2e8f0',
+                                padding: '2px 7px',
+                                borderRadius: '6px',
+                                whiteSpace: 'nowrap',
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                            >
+                              <MapPin size={11} color="#0284c7" style={{ flexShrink: 0 }} />
+                              <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                                {evt.siteCode || 'DC-MDC'}
+                              </span>
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '10.5px',
+                              color: '#64748b',
+                              marginTop: '3px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              maxWidth: '100%'
+                            }}
+                            title={evt.siteName || 'Distribution Center'}
+                          >
+                            {evt.siteName || 'Distribution Center'}
+                          </div>
+                        </td>
+
+                        {/* 7. Status */}
+                        <td style={{ textAlign: 'center', padding: '12px 8px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <span
+                            style={{
+                              background: evt.status === 'COMPLETED' || evt.status === 'APPROVED' || evt.status === 'RECEIVED' || evt.status === 'VALID' || evt.status === 'ACTIVE'
+                                ? '#ecfdf5' : evt.status === 'REJECTED' || evt.status === 'PURGED' || evt.status === 'FAILED'
+                                ? '#fef2f2' : evt.status === 'PENDING' || evt.status === 'TERMINATED'
+                                ? '#fffbeb' : '#f0f9ff',
+                              color: evt.status === 'COMPLETED' || evt.status === 'APPROVED' || evt.status === 'RECEIVED' || evt.status === 'VALID' || evt.status === 'ACTIVE'
+                                ? '#059669' : evt.status === 'REJECTED' || evt.status === 'PURGED' || evt.status === 'FAILED'
+                                ? '#dc2626' : evt.status === 'PENDING' || evt.status === 'TERMINATED'
+                                ? '#b45309' : '#0284c7',
+                              border: `1px solid ${
+                                evt.status === 'COMPLETED' || evt.status === 'APPROVED' || evt.status === 'RECEIVED' || evt.status === 'VALID' || evt.status === 'ACTIVE'
+                                ? '#a7f3d0' : evt.status === 'REJECTED' || evt.status === 'PURGED' || evt.status === 'FAILED'
+                                ? '#fecaca' : evt.status === 'PENDING' || evt.status === 'TERMINATED'
+                                ? '#fde68a' : '#bae6fd'
+                              }`,
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              padding: '3px 8px',
+                              borderRadius: '10px',
+                              display: 'inline-block',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            {evt.status}
+                          </span>
+                        </td>
+
+                        {/* 8. Dossier */}
+                        <td style={{ textAlign: 'center', padding: '12px 10px', verticalAlign: 'middle' }}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedEventForDossier(evt)}
+                            className="btn btn-secondary btn-sm"
+                            title="Inspect complete event cryptographic dossier & metadata"
+                            style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap', borderRadius: '6px' }}
+                          >
+                            <Eye size={12} />
+                            <span>Inspect</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination Bar */}
+          {filteredMasterEvents.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px', borderTop: '1px solid #e2e8f0', background: '#f8fafc', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ fontSize: '12px', color: '#64748b' }}>
+                Showing <strong>{(masterPage - 1) * masterPageSize + 1}</strong> - <strong>{Math.min(masterPage * masterPageSize, filteredMasterEvents.length)}</strong> of <strong>{filteredMasterEvents.length}</strong> activity records
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={masterPage === 1}
+                  onClick={() => setMasterPage(prev => Math.max(1, prev - 1))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', fontSize: '11.5px' }}
+                >
+                  <ChevronLeft size={13} />
+                  <span>Prev</span>
+                </button>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', padding: '0 8px' }}>
+                  Page {masterPage} of {totalMasterPages}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={masterPage >= totalMasterPages}
+                  onClick={() => setMasterPage(prev => Math.min(totalMasterPages, prev + 1))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px', fontSize: '11.5px' }}
+                >
+                  <span>Next</span>
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── TAB 0: Executive Audit Summary Report UI (The Simple Report UI) ──────── */}
       {auditTab === 'report' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -926,13 +2168,13 @@ export default function AuditTrail() {
             <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
                 <thead>
-                  <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                    <th style={{ textAlign: 'left', padding: '11px 14px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Target Period</th>
-                    <th style={{ textAlign: 'center', padding: '11px 10px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Ingestion Count</th>
-                    <th style={{ textAlign: 'right', padding: '11px 14px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Forecast Units</th>
-                    <th style={{ textAlign: 'right', padding: '11px 14px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Master Valuation</th>
-                    <th style={{ textAlign: 'left', padding: '11px 14px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Primary Uploader</th>
-                    <th style={{ textAlign: 'center', padding: '11px 12px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
+                  <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Period</th>
+                    <th style={{ textAlign: 'center', padding: '12px 10px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ingestion Count</th>
+                    <th style={{ textAlign: 'right', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Forecast Units</th>
+                    <th style={{ textAlign: 'right', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Master Valuation</th>
+                    <th style={{ textAlign: 'left', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Primary Uploader</th>
+                    <th style={{ textAlign: 'center', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1114,18 +2356,18 @@ export default function AuditTrail() {
           </div>
 
           {/* Table Container - Auto Responsive */}
-          <div style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '920px' }}>
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '960px' }}>
               <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ width: '40px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
-                  <th style={{ width: '110px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Date &amp; Time</th>
-                  <th style={{ width: '190px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Uploaded By</th>
-                  <th style={{ textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Ingested File</th>
-                  <th style={{ width: '110px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Target Period</th>
-                  <th style={{ width: '110px', textAlign: 'right', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Units</th>
-                  <th style={{ width: '110px', textAlign: 'right', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Total Value</th>
-                  <th style={{ width: '90px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
+                <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
+                  <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
+                  <th style={{ width: '130px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Date &amp; Time</th>
+                  <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Uploaded By</th>
+                  <th style={{ textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ingested File</th>
+                  <th style={{ width: '135px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Period</th>
+                  <th style={{ width: '115px', textAlign: 'right', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Units</th>
+                  <th style={{ width: '125px', textAlign: 'right', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Value</th>
+                  <th style={{ width: '95px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1389,18 +2631,18 @@ export default function AuditTrail() {
           </div>
 
           {/* Table Container - Auto Responsive */}
-          <div style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '880px' }}>
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1020px' }}>
               <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ width: '40px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
-                  <th style={{ width: '120px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Timestamp</th>
-                  <th style={{ width: '120px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Entity Type</th>
-                  <th style={{ width: '220px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Record ID &amp; Label</th>
-                  <th style={{ minWidth: '220px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Reason / Action Note</th>
-                  <th style={{ width: '190px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Deleted By</th>
-                  <th style={{ width: '150px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Impact Summary</th>
-                  <th style={{ width: '85px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Status</th>
+                <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
+                  <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
+                  <th style={{ width: '130px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
+                  <th style={{ width: '140px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Entity Type</th>
+                  <th style={{ width: '215px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Record ID &amp; Label</th>
+                  <th style={{ textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reason / Action Note</th>
+                  <th style={{ width: '190px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Deleted By</th>
+                  <th style={{ width: '150px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Impact Summary</th>
+                  <th style={{ width: '90px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1914,17 +3156,17 @@ export default function AuditTrail() {
           </div>
 
           {/* Table Container - Auto Responsive */}
-          <div style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '850px' }}>
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '880px' }}>
               <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                  <th style={{ width: '40px', textAlign: 'center', padding: '10px 6px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>#</th>
-                  <th style={{ width: '140px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Timestamp</th>
-                  <th style={{ width: '120px', textAlign: 'center', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Operation</th>
-                  <th style={{ width: '130px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Part Number</th>
-                  <th style={{ textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Serial Number</th>
-                  <th style={{ width: '160px', textAlign: 'left', padding: '10px 10px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Operator</th>
-                  <th style={{ width: '110px', textAlign: 'center', padding: '10px 8px', color: '#64748b', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase' }}>Result</th>
+                <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
+                  <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
+                  <th style={{ width: '145px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
+                  <th style={{ width: '130px', textAlign: 'center', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operation</th>
+                  <th style={{ width: '140px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Part Number</th>
+                  <th style={{ textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Serial Number</th>
+                  <th style={{ width: '175px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operator</th>
+                  <th style={{ width: '115px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Result</th>
                 </tr>
               </thead>
               <tbody>
@@ -2059,17 +3301,17 @@ export default function AuditTrail() {
           </div>
 
           {/* Table Content */}
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
+            <table className="table" style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1020px' }}>
               <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#475569', textAlign: 'left' }}>
-                  <th style={{ padding: '10px 14px', width: '45px', textAlign: 'center' }}>#</th>
-                  <th style={{ padding: '10px 14px', width: '155px' }}>Date &amp; Time</th>
-                  <th style={{ padding: '10px 14px', width: '170px' }}>Action / Event</th>
-                  <th style={{ padding: '10px 14px' }}>User Account</th>
-                  <th style={{ padding: '10px 14px', width: '160px' }}>Role / Position</th>
-                  <th style={{ padding: '10px 14px' }}>Reason / Trigger</th>
-                  <th style={{ padding: '10px 14px' }}>Technical Audit Details</th>
+                <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b', textAlign: 'left' }}>
+                  <th style={{ padding: '12px 8px', width: '48px', textAlign: 'center', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
+                  <th style={{ padding: '12px 12px', width: '140px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Date &amp; Time</th>
+                  <th style={{ padding: '12px 12px', width: '195px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Action / Event</th>
+                  <th style={{ padding: '12px 12px', width: '200px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>User Account</th>
+                  <th style={{ padding: '12px 12px', width: '155px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Role / Position</th>
+                  <th style={{ padding: '12px 12px', width: '190px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reason / Trigger</th>
+                  <th style={{ padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Technical Audit Details</th>
                 </tr>
               </thead>
               <tbody>
@@ -2100,24 +3342,24 @@ export default function AuditTrail() {
                         key={log.id || `sess-log-${index}`}
                         style={{
                           borderBottom: '1px solid #f1f5f9',
-                          background: index % 2 === 0 ? '#ffffff' : '#fafafa'
+                          background: index % 2 === 0 ? '#ffffff' : '#f8fafc'
                         }}
                       >
-                        <td className="font-mono" style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>
+                        <td className="font-mono" style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', verticalAlign: 'middle' }}>
                           {index + 1}
                         </td>
-                        <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '12px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }}>
                           <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '11.5px' }}>
                             {new Date(log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                           </div>
-                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '1px' }}>
+                          <div style={{ fontSize: '10.5px', color: '#64748b', marginTop: '2px' }}>
                             {formatTo12HourTime(log.timestamp, false)}
                           </div>
                         </td>
-                        <td style={{ padding: '10px 14px' }}>
+                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
                           <span
                             style={{
-                              fontSize: '10.5px',
+                              fontSize: '10px',
                               fontWeight: 700,
                               padding: '3px 8px',
                               borderRadius: '6px',
@@ -2125,34 +3367,54 @@ export default function AuditTrail() {
                               color: badgeStyle.text,
                               border: `1px solid ${badgeStyle.border}`,
                               fontFamily: 'var(--font-mono, monospace)',
-                              display: 'inline-block'
+                              display: 'inline-block',
+                              whiteSpace: 'nowrap',
+                              maxWidth: '100%',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
                             }}
+                            title={log.action}
                           >
                             {log.action}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
+                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={log.user_name || 'System User'}>
                             {log.user_name || 'System User'}
                           </div>
-                          <div style={{ fontSize: '11px', color: '#64748b' }}>
+                          <div style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={log.user_email || 'N/A'}>
                             {log.user_email || 'N/A'}
                           </div>
                         </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <div style={{ fontSize: '11px', fontWeight: 600, color: '#334155' }}>
+                        <td style={{ padding: '12px 12px', overflow: 'hidden', verticalAlign: 'middle' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 600, color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {log.user_position || 'Staff'}
                           </div>
-                          <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>
+                          <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {log.user_role || 'User'}
                           </div>
                         </td>
-                        <td style={{ padding: '10px 14px', fontSize: '12px', color: '#334155' }}>
+                        <td style={{ padding: '12px 12px', fontSize: '11.5px', color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'middle' }} title={log.reason || 'Automated policy enforcement'}>
                           {log.reason || 'Automated policy enforcement'}
                         </td>
-                        <td style={{ padding: '10px 14px', fontSize: '11px', color: '#64748b' }}>
+                        <td style={{ padding: '12px 12px', fontSize: '11px', color: '#64748b', overflow: 'hidden', verticalAlign: 'middle' }}>
                           {log.details && typeof log.details === 'object' ? (
-                            <div style={{ background: '#f8fafc', padding: '4px 8px', borderRadius: '4px', border: '1px solid #e2e8f0', fontFamily: 'var(--font-mono, monospace)', fontSize: '10.5px' }}>
+                            <div
+                              style={{
+                                background: '#f8fafc',
+                                padding: '4px 8px',
+                                borderRadius: '4px',
+                                border: '1px solid #e2e8f0',
+                                fontFamily: 'var(--font-mono, monospace)',
+                                fontSize: '10.5px',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}
+                              title={Object.entries(log.details)
+                                .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                                .join(' | ')}
+                            >
                               {Object.entries(log.details)
                                 .slice(0, 3)
                                 .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
@@ -2261,6 +3523,165 @@ export default function AuditTrail() {
                     <span>Yes, Purge All Audit Records</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Universal Audit Event Dossier Modal */}
+      {selectedEventForDossier && (
+        <div className="modal-backdrop" style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div className="modal-dialog" style={{ background: '#ffffff', borderRadius: '14px', maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)' }}>
+            {/* Modal Header */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0f172a', color: '#ffffff', borderRadius: '14px 14px 0 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={20} color="#38bdf8" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800 }}>Audit Event Immutable Dossier</h3>
+                  <span style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
+                    Ref: {selectedEventForDossier.id}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEventForDossier(null)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '20px' }}>
+              {/* Top Badges */}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px', alignItems: 'center' }}>
+                <span style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', padding: '3px 10px', borderRadius: '6px', fontSize: '11.5px', fontWeight: 700 }}>
+                  {selectedEventForDossier.action}
+                </span>
+                <span style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', padding: '3px 10px', borderRadius: '6px', fontSize: '11.5px', fontWeight: 600 }}>
+                  Category: {selectedEventForDossier.category}
+                </span>
+                <span style={{ background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0', padding: '3px 10px', borderRadius: '6px', fontSize: '11.5px', fontWeight: 700 }}>
+                  Status: {selectedEventForDossier.status}
+                </span>
+              </div>
+
+              {/* 2-column details grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px', background: '#f8fafc', padding: '14px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Timestamp</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    {formatTo12HourDateTime(selectedEventForDossier.timestamp)}
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: '#64748b', fontFamily: 'monospace' }}>
+                    {selectedEventForDossier.timestamp}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Operator</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    {selectedEventForDossier.user?.fullName || 'System'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#0284c7', fontWeight: 600 }}>
+                    {(selectedEventForDossier.user?.role || 'STAFF').toUpperCase()}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Target Entity</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    {selectedEventForDossier.entityType}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: '#334155', fontFamily: 'monospace' }}>
+                    {selectedEventForDossier.entityId}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Location / Branch</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    {selectedEventForDossier.siteCode || 'DC-MDC'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>
+                    {selectedEventForDossier.siteName || 'Distribution Center'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Entity Label Description */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 700, marginBottom: '4px', textTransform: 'uppercase' }}>Summary Description</div>
+                <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px', fontSize: '12.5px', color: '#1e293b' }}>
+                  {selectedEventForDossier.entityLabel || 'Standard system operational event recorded.'}
+                </div>
+              </div>
+
+              {/* Detailed Metadata / Payload */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '11.5px', color: '#64748b', fontWeight: 700, marginBottom: '4px', textTransform: 'uppercase' }}>Cryptographic Event Metadata &amp; Payload</div>
+                <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '12px', borderRadius: '8px', fontSize: '11.5px', fontFamily: 'monospace', overflowX: 'auto', margin: 0, maxHeight: '180px' }}>
+                  {JSON.stringify(selectedEventForDossier.details || {}, null, 2)}
+                </pre>
+              </div>
+
+              {/* Serial Lifecycle Link if serial exists */}
+              {(() => {
+                const serialCandidate = selectedEventForDossier.details?.serialNumber ||
+                  selectedEventForDossier.details?.serial_number ||
+                  (selectedEventForDossier.entityType === 'Inventory Unit' ? selectedEventForDossier.entityId : null);
+
+                if (serialCandidate && String(serialCandidate).length >= 8) {
+                  return (
+                    <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#0369a1', fontSize: '12px' }}>
+                          Serialized Part Detected: {serialCandidate}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>
+                          Trace full chain of custody across DC and retail branches.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => {
+                          const clean = String(serialCandidate).trim().toUpperCase();
+                          setSelectedSerial(clean);
+                          const details = resolveSerialFullDetails(clean, {
+                            inventoryUnits,
+                            shipments,
+                            repairUsageRecords,
+                            sites,
+                            parts,
+                            fixablyItems: fixablySnapshot?.items || [],
+                            fixablyTransfers: fixablySnapshot?.transfers || []
+                          });
+                          setInspectedSerialDetails(details);
+                        }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 700, fontSize: '11.5px' }}
+                      >
+                        <ExternalLink size={12} />
+                        <span>Trace Serial</span>
+                      </button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', background: '#f8fafc', display: 'flex', justifyContent: 'flex-end', borderRadius: '0 0 14px 14px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setSelectedEventForDossier(null)}
+                style={{ fontSize: '12px' }}
+              >
+                Close Dossier
               </button>
             </div>
           </div>
