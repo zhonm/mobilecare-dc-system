@@ -260,7 +260,7 @@ export default function FixablyInventoryDashboard({
       const match = sites.find(s => s.id === initialSelectedSiteId || s.code === initialSelectedSiteId);
       if (match) return match.code.replace(/^(ASP|APP)\s+/, '');
     }
-    return 'BHS';
+    return '';
   });
   const [segmentedTab, setSegmentedTab] = useState('dead_stock'); // 'dead_stock' | 'non_moving' | 'slow_moving' | 'active_stock' | 'investigation' | 'part_aggregations' | 'all_stock'
   const [expandedPartPn, setExpandedPartPn] = useState(null);
@@ -1521,12 +1521,13 @@ export default function FixablyInventoryDashboard({
 
   // Current Site Data for Multi-Site Page
   const currentSiteData = useMemo(() => {
-    if (!snapshot?.sites) return null;
+    if (!snapshot?.sites || !selectedSiteCode) return null;
     const target = selectedSiteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '');
+    if (!target) return null;
     return snapshot.sites.find(s => {
       const clean = s.siteCode.toUpperCase().replace(/^(ASP|APP)\s+/, '');
       return clean === target || (clean === 'ANX' && target === 'THE ANNEX') || (clean === 'THE ANNEX' && target === 'ANX');
-    }) || snapshot.sites[0] || null;
+    }) || null;
   }, [snapshot, selectedSiteCode]);
 
   // Filtered part aggregations for the currently viewed site based on branchFilterQuery
@@ -4690,9 +4691,28 @@ export default function FixablyInventoryDashboard({
                         }
                       }
 
-                      // If not explicitly highlighted, check if serial matches
-                      if (matchingSerials.length > 0) {
-                        handleSelectSerial(matchingSerials[0]);
+                      // If not explicitly highlighted, check if the query looks like a part number or matches catalog
+                      const rawQuery = String(partSearchInput || '').trim();
+                      const isPartNumberFormat = /^[0-9]{3}-/i.test(rawQuery) || filteredPartCatalog.some(p =>
+                        p.partNumber.toUpperCase() === rawQuery.toUpperCase() ||
+                        p.partNumber.replace(/[^A-Z0-9]/g, '') === rawQuery.toUpperCase().replace(/[^A-Z0-9]/g, '')
+                      );
+
+                      if (isPartNumberFormat && filteredPartCatalog.length > 0) {
+                        const exactPn = filteredPartCatalog.find(p => p.partNumber.toUpperCase() === rawQuery.toUpperCase()) || filteredPartCatalog[0];
+                        setSelectedSerialUnit(null);
+                        setPartSearchInput(exactPn.partNumber);
+                        setPartSearchQuery(exactPn.partNumber);
+                        setIsPartDropdownOpen(false);
+                        return;
+                      }
+
+                      // Check exact serial match
+                      const exactSerial = matchingSerials.find(u =>
+                        String(u.serialNumber || '').trim().toUpperCase() === rawQuery.toUpperCase()
+                      );
+                      if (exactSerial) {
+                        handleSelectSerial(exactSerial);
                         return;
                       }
 
@@ -4705,9 +4725,14 @@ export default function FixablyInventoryDashboard({
                         return;
                       }
 
-                      if (partSearchInput.trim()) {
+                      if (matchingSerials.length > 0 && !isPartNumberFormat) {
+                        handleSelectSerial(matchingSerials[0]);
+                        return;
+                      }
+
+                      if (rawQuery) {
                         setSelectedSerialUnit(null);
-                        setPartSearchQuery(partSearchInput.trim());
+                        setPartSearchQuery(rawQuery);
                         setIsPartDropdownOpen(false);
                       }
                     } else if (e.key === 'Escape') {
@@ -5123,7 +5148,7 @@ export default function FixablyInventoryDashboard({
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
                     {partStockBySite.sitesWithStock.map(site => {
-                      const isCurrentSelected = selectedSiteCode.toUpperCase() === site.cleanCode.toUpperCase();
+                      const isCurrentSelected = Boolean(selectedSiteCode && selectedSiteCode.toUpperCase() === site.cleanCode.toUpperCase());
 
                       return (
                         <div
@@ -5214,8 +5239,8 @@ export default function FixablyInventoryDashboard({
                 type="button"
                 onClick={() => {
                   setSelectedRegion('metro_manila');
-                  if (metroManilaSitesList.length > 0 && !metroManilaSitesList.some(s => s.siteCode.includes(selectedSiteCode))) {
-                    setSelectedSiteCode(metroManilaSitesList[0].siteCode.replace(/^(ASP|APP)\s+/, ''));
+                  if (selectedSiteCode && metroManilaSitesList.length > 0 && !metroManilaSitesList.some(s => s.siteCode.replace(/^(ASP|APP)\s+/, '').toUpperCase() === selectedSiteCode.toUpperCase())) {
+                    setSelectedSiteCode('');
                   }
                 }}
                 style={{
@@ -5250,8 +5275,8 @@ export default function FixablyInventoryDashboard({
                 type="button"
                 onClick={() => {
                   setSelectedRegion('provincial');
-                  if (provincialSitesList.length > 0 && !provincialSitesList.some(s => s.siteCode.includes(selectedSiteCode))) {
-                    setSelectedSiteCode(provincialSitesList[0].siteCode.replace(/^(ASP|APP)\s+/, ''));
+                  if (selectedSiteCode && provincialSitesList.length > 0 && !provincialSitesList.some(s => s.siteCode.replace(/^(ASP|APP)\s+/, '').toUpperCase() === selectedSiteCode.toUpperCase())) {
+                    setSelectedSiteCode('');
                   }
                 }}
                 style={{
@@ -5292,7 +5317,7 @@ export default function FixablyInventoryDashboard({
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {(selectedRegion === 'metro_manila' ? metroManilaSitesList : provincialSitesList).map(site => {
                   const cleanCode = site.siteCode.replace(/^(ASP|APP)\s+/, '');
-                  const isSelected = selectedSiteCode.toUpperCase() === cleanCode.toUpperCase();
+                  const isSelected = Boolean(selectedSiteCode && selectedSiteCode.toUpperCase() === cleanCode.toUpperCase());
                   const isSiteAssignedToUser = isSiteMatchingUser(site);
                   const showSiteHealthMetrics = isSuperadmin || isSiteAssignedToUser;
                   const deadCount = showSiteHealthMetrics ? (site.metrics?.dcStock?.dead + site.metrics?.mspiOwned?.dead || 0) : 0;
@@ -5384,6 +5409,35 @@ export default function FixablyInventoryDashboard({
             </div>
 
           </div>
+
+          {/* No Branch Site Selected Placeholder */}
+          {!currentSiteData && (
+            <div
+              className="card"
+              style={{
+                padding: '36px 20px',
+                textAlign: 'center',
+                background: '#ffffff',
+                border: '1.5px dashed #cbd5e1',
+                borderRadius: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}
+            >
+              <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: '#f0f9ff', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Building2 size={24} />
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                No Branch Site Selected
+              </div>
+              <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', maxWidth: '480px' }}>
+                Select an authorized branch site above or click <strong>View Stock →</strong> on any search result to inspect branch inventory aging, health metrics, and active on-hand units.
+              </p>
+            </div>
+          )}
 
           {/* Selected Site Detail Banner */}
           {currentSiteData && (
@@ -5597,6 +5651,34 @@ export default function FixablyInventoryDashboard({
                     >
                       <Trash2 size={13} color="#94a3b8" />
                       <span>Clear Site</span>
+                    </button>
+                  )}
+
+                  {isSuperadmin && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        setSelectedSiteCode('');
+                        showToast?.('Closed branch view', 'info');
+                      }}
+                      style={{
+                        fontSize: '11.5px',
+                        padding: '8px 10px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontWeight: 700,
+                        color: '#475569',
+                        border: '1px solid #cbd5e1',
+                        background: '#f1f5f9',
+                        borderRadius: '6px',
+                        cursor: 'pointer'
+                      }}
+                      title="Deselect site and return to all-sites view"
+                    >
+                      <X size={13} color="#64748b" />
+                      <span>Close View</span>
                     </button>
                   )}
                 </div>
