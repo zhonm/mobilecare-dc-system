@@ -936,8 +936,8 @@ export default function FixablyInventoryDashboard({
       // Cloud Persistence & Realtime Broadcast: Sync compact snapshot (<2.5MB) to Supabase Cloud
       await syncSnapshotToCloud(reconciled);
 
-      // Synchronize with application active stock (inventoryUnits)
-      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function') {
+      // Synchronize with application active stock (inventoryUnits) only when stock or transfer files are part of this intake
+      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function' && (stockText || transferText)) {
         setParseProgress({ stage: 'Synchronizing transferred & active stock with application database...', percent: 90 });
         try {
           const validUnits = reconciled.items.map(it => ({

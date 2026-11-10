@@ -89,8 +89,12 @@ export function formatTo12HourTime(input, includeSeconds = true) {
     return '';
   }
 
-  // Check if string is ISO UTC midnight / zero time artifact (e.g. "2026-08-01T00:00:00Z" or "2026-08-01T08:00:00Z")
-  if (/T00:00:00(?:\.000)?Z?$/i.test(str) || /T08:00:00(?:\.000)?Z?$/i.test(str)) {
+  // Check if string is ISO UTC midnight / zero time artifact (e.g. "2026-08-01T00:00:00Z", "2026-11-07T00:00:00+00:00", or "2026-08-01T08:00:00Z")
+  if (
+    /[T ]00:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(str) ||
+    /[T ]08:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(str) ||
+    /[T ]12:00:00\.000(?:Z|[+-]00(?::?00)?)?$/i.test(str)
+  ) {
     return '';
   }
 
@@ -126,12 +130,13 @@ export function formatTo12HourDateTime(input, includeSeconds = true) {
 
   const str = typeof input === 'string' ? input.trim() : '';
 
-  // Check if string is pure date without time
+  // Check if string is pure date without time or UTC midnight / synthetic time artifact
   const isDateOnly = str && (
     /^\d{4}-\d{2}-\d{2}$/.test(str) ||
     /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(str) ||
-    /T00:00:00(?:\.000)?Z?$/i.test(str) ||
-    /T08:00:00(?:\.000)?Z?$/i.test(str)
+    /[T ]00:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(str) ||
+    /[T ]08:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(str) ||
+    /[T ]12:00:00\.000(?:Z|[+-]00(?::?00)?)?$/i.test(str)
   );
 
   try {
@@ -139,22 +144,29 @@ export function formatTo12HourDateTime(input, includeSeconds = true) {
     if (isNaN(d.getTime())) return String(input);
 
     if (isDateOnly) {
-      return d.toLocaleDateString('en-US', {
+      const isoDateMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      const cleanDateObj = isoDateMatch
+        ? new Date(parseInt(isoDateMatch[1], 10), parseInt(isoDateMatch[2], 10) - 1, parseInt(isoDateMatch[3], 10))
+        : d;
+      return cleanDateObj.toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric'
       });
     }
 
-    return d.toLocaleString('en-US', {
+    const datePart = d.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
-      year: 'numeric',
+      year: 'numeric'
+    });
+    const timePart = d.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
       ...(includeSeconds ? { second: '2-digit' } : {}),
       hour12: true
     });
+    return `${datePart}, ${timePart}`;
   } catch (e) {
     return String(input);
   }

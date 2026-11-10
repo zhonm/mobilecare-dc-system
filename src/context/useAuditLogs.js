@@ -39,7 +39,7 @@ export function useAuditLogs({
       return [
         {
           id: 'log-september-2026-masterlist',
-          timestamp: new Date().toISOString(),
+          timestamp: '2026-09-01T09:00:00.000Z',
           action_type: 'FILE_IMPORT_APPLIED',
           file_name: 'Battery & Display (Allocation) - September 2026.xlsx',
           file_type: 'WORKBOOK_BUNDLE',
@@ -87,7 +87,7 @@ export function useAuditLogs({
       return [
         {
           id: 'del-audit-init-01',
-          timestamp: new Date().toISOString(),
+          timestamp: '2026-08-20T14:30:00.000Z',
           action: 'DELETE',
           entity_type: 'DC Intake Record',
           entity_id: 'MDC202600001',

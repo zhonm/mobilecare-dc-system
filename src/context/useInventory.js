@@ -1786,10 +1786,13 @@ export function useInventory({
         scan_type: 'RECEIVE_IN_BATCH',
         part_number: cleanPN,
         serial_number: cleanSerial,
+        site_id: itemSiteId,
+        site_code: itemSiteCode,
+        site_name: itemSiteName,
         user_name: currentUser?.fullName || 'Warehouse Staff (Import)',
         is_valid: true,
         error_message: null,
-        created_at: new Date().toISOString()
+        created_at: processedUnit.received_at || item.dateReceived || item.lastReceivedDate || item.received_at || nowIso
       });
     }
 

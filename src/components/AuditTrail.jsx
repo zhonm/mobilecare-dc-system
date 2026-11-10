@@ -5,6 +5,7 @@ import { generateAuditTrailPDF } from '../utils/pdfGenerator';
 import { resolveSerialFullDetails } from '../utils/serialTracker';
 import { formatTo12HourTime, formatTo12HourDateTime } from '../utils/dateUtils';
 import { formatAuditEntityDisplay } from '../utils/appContextHelpers';
+import { resolveSiteBranchCode } from '../utils/shipmentHelpers';
 import SerialDossierModal from './SerialDossierModal';
 import {
   History,
@@ -116,6 +117,9 @@ export default function AuditTrail() {
     if (normAct.includes('PART_CONSUMED') || normAct.includes('REPAIR') || normCat === 'CONSUMPTION') {
       return { label: 'Part Consumed (Repair)', color: '#ea580c', bg: '#fff7ed', border: '#ffedd5', icon: Wrench };
     }
+    if (normAct === 'MULTI_SITE_INVENTORY_IMPORT' || normAct === 'BATCH_SCAN_INTAKE' || normCat === 'INVENTORY') {
+      return { label: 'Batch Stock Intake', color: '#0d9488', bg: '#f0fdfa', border: '#99f6e4', icon: Layers };
+    }
     if (normAct.includes('IMPORT') || normCat === 'DATA_IMPORT') {
       return { label: 'Master Data Imported', color: '#0284c7', bg: '#f0f9ff', border: '#bae6fd', icon: UploadCloud };
     }
@@ -194,39 +198,175 @@ export default function AuditTrail() {
     return `${Math.floor(days / 30)}mo ago`;
   };
 
-  // Resilient Scanner Events List (derives authentic fallback scans from inventoryUnits if scanLogs was uninitialized)
+  // Fast lookup map for resolving unit intake timestamps and branch locations by serial number
+  const unitBySerialMap = useMemo(() => {
+    const map = new Map();
+    const registerUnit = (u) => {
+      if (!u) return;
+      const sn = String(u.serial_number || u.serialNumber || u.raw_serial || '').trim().toUpperCase();
+      if (!sn) return;
+      const existing = map.get(sn);
+      const recvAt = u.received_at || u.dateReceived || u.lastReceivedDate || u.latest_transfer_date || u.created_at || existing?.received_at || null;
+      const sCode = u.site_code || u.siteCode || existing?.site_code || null;
+      const sId = u.current_site_id || u.site_id || u.siteId || existing?.site_id || null;
+      const matchedSite = (sites || []).find(s =>
+        (sId && String(s.id).toLowerCase() === String(sId).toLowerCase()) ||
+        (sCode && String(s.code).toUpperCase() === String(sCode).toUpperCase())
+      );
+      const cleanSiteCode = matchedSite?.code || (sCode ? String(sCode).replace(/_MSPI-Owned$/i, '').trim() : null);
+      const cleanSiteName = matchedSite?.name || u.site_name || u.siteName || existing?.site_name || (cleanSiteCode ? `${cleanSiteCode} Branch` : null);
+      map.set(sn, {
+        ...existing,
+        ...u,
+        received_at: recvAt,
+        site_id: matchedSite?.id || sId || 'site-dc',
+        site_code: cleanSiteCode || 'DC-MDC',
+        site_name: cleanSiteName || 'Central DC Workstation'
+      });
+    };
+    (fixablySnapshot?.items || []).forEach(registerUnit);
+    (inventoryUnits || []).forEach(registerUnit);
+    return map;
+  }, [inventoryUnits, fixablySnapshot, sites]);
+
+  // Resilient Scanner Events List (resolves authentic per-unit intake dates for batch-imported scans and deduplicates repeated imports)
   const effectiveScanLogs = useMemo(() => {
-    if (Array.isArray(scanLogs) && scanLogs.length > 0) return scanLogs;
+    if (Array.isArray(scanLogs) && scanLogs.length > 0) {
+      const tsCounts = new Map();
+      scanLogs.forEach(sc => {
+        const tsKey = String(sc.created_at || sc.timestamp || '').substring(0, 19);
+        if (tsKey) tsCounts.set(tsKey, (tsCounts.get(tsKey) || 0) + 1);
+      });
+
+      const seenScanKeys = new Set();
+      const resolved = [];
+      scanLogs.forEach(sc => {
+        const sn = String(sc.serial_number || '').trim().toUpperCase();
+        const pn = String(sc.part_number || '').trim().toUpperCase();
+        const scanType = sc.scan_type || 'RECEIVE_IN';
+        const dedupKey = sn ? `${scanType}_${sn}` : `${scanType}_${pn}_${sc.id}`;
+        if (seenScanKeys.has(dedupKey)) return;
+        seenScanKeys.add(dedupKey);
+
+        const rawTs = sc.created_at || sc.timestamp || '';
+        const tsKey = String(rawTs).substring(0, 19);
+        const isBatchStamped = scanType === 'RECEIVE_IN_BATCH' || (tsKey && (tsCounts.get(tsKey) || 0) > 1);
+        const matchedUnit = sn ? unitBySerialMap.get(sn) : null;
+        const unitRecvAt = matchedUnit?.received_at || null;
+        const effectiveTs = (isBatchStamped && unitRecvAt) ? unitRecvAt : (rawTs || unitRecvAt || new Date().toISOString());
+
+        resolved.push({
+          ...sc,
+          created_at: effectiveTs,
+          batch_created_at: rawTs || effectiveTs,
+          site_id: sc.site_id || matchedUnit?.site_id || 'site-dc',
+          site_code: sc.site_code || matchedUnit?.site_code || 'DC-MDC',
+          site_name: sc.site_name || matchedUnit?.site_name || 'Central DC Workstation'
+        });
+      });
+      return resolved;
+    }
     return (inventoryUnits || []).slice(0, 60).map((u, i) => ({
       id: `derived-scan-${u.id || i}`,
       scan_type: u.status === 'shipped' ? 'PACK_OUT' : 'RECEIVE_IN',
       part_number: u.part_number || 'UNKNOWN',
       serial_number: u.serial_number || 'N/A',
+      site_id: u.current_site_id || u.site_id || 'site-dc',
+      site_code: u.site_code || 'DC-MDC',
+      site_name: u.site_name || 'Central DC Workstation',
       user_name: u.received_by || 'Warehouse Operator',
       is_valid: true,
       error_message: null,
       created_at: u.received_at || u.created_at || new Date().toISOString()
     }));
-  }, [scanLogs, inventoryUnits]);
+  }, [scanLogs, inventoryUnits, unitBySerialMap]);
 
   // ── Universal Master System Activity Aggregator ─────────────────────────────
   const allMasterEvents = useMemo(() => {
     const events = [];
     const seenSignatures = new Set();
 
+    const hasRealClockTime = (val) => {
+      if (!val || typeof val !== 'string') return false;
+      const s = val.trim();
+      if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s) || /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s)) return false;
+      if (/[T ]00:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(s)) return false;
+      if (/[T ]08:00:00(?:\.\d+)?(?:Z|[+-]00(?::?00)?)?$/i.test(s)) return false;
+      if (/[T ]12:00:00\.000(?:Z|[+-]00(?::?00)?)?$/i.test(s)) return false;
+      return !isNaN(new Date(s).getTime());
+    };
+
+    const extractDatePrefix = (val) => {
+      if (!val || typeof val !== 'string') return '';
+      const m = val.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+      return m ? m[1] : '';
+    };
+
+    const combineDateWithClockTime = (datePrefix, isoWithTime) => {
+      if (!datePrefix || !hasRealClockTime(isoWithTime)) return null;
+      const s = String(isoWithTime).trim();
+      const m = s.match(/^\d{4}-\d{2}-\d{2}([T ].*)$/);
+      return m ? `${datePrefix}${m[1]}` : null;
+    };
+
+    // Collect upload timestamps & raw batch scan loop timestamps to prevent duplicate/colliding import timestamps
+    const uploadEpochList = (uploadAuditLogs || [])
+      .map(up => new Date(up.timestamp || 0).getTime())
+      .filter(ms => !isNaN(ms) && ms > 0);
+
+    const rawBatchScanTimes = Array.from(
+      new Set(
+        (scanLogs || [])
+          .filter(sc => sc.scan_type === 'RECEIVE_IN_BATCH' && (sc.created_at || sc.timestamp))
+          .map(sc => sc.created_at || sc.timestamp)
+      )
+    );
+
+    // Pre-sort systemAuditLogs chronologically (oldest first) so the original batch import is kept when deduplicating repeated labels
+    const sortedSystemLogs = [...(systemAuditLogs || [])].sort(
+      (a, b) => new Date(a.timestamp || a.created_at || 0).getTime() - new Date(b.timestamp || b.created_at || 0).getTime()
+    );
+    const seenBatchImportLabels = new Set();
+
     // 1. Live Universal System Audit Logs (highest authority)
-    (systemAuditLogs || []).forEach(log => {
-      const ts = log.timestamp || log.created_at || new Date().toISOString();
-      const sig = `${log.action}_${log.entityId || log.entity_id}_${String(ts).substring(0, 16)}`;
+    sortedSystemLogs.forEach(log => {
+      let ts = log.timestamp || log.created_at || new Date().toISOString();
+      const act = String(log.action || 'SYSTEM_ACTION').toUpperCase();
+      const label = String(log.entityLabel || log.entity_label || 'System Event').trim();
+
+      if (act === 'MULTI_SITE_INVENTORY_IMPORT' || act === 'BATCH_SCAN_INTAKE') {
+        const labelKey = `${act}_${label}`;
+        if (seenBatchImportLabels.has(labelKey)) {
+          return;
+        }
+        seenBatchImportLabels.add(labelKey);
+
+        // If this batch intake log was recorded at the exact same second as a MASTER_FILE_IMPORTED log,
+        // anchor it to the actual batch scan loop start timestamp (e.g. 09:15:21 AM vs 09:15:35 AM)
+        const logMs = new Date(ts).getTime();
+        const collidesWithUpload = uploadEpochList.some(uMs => Math.abs(uMs - logMs) <= 5000);
+        if (collidesWithUpload) {
+          const matchingBatchStart = rawBatchScanTimes.find(bTs => {
+            const bMs = new Date(bTs).getTime();
+            return !isNaN(bMs) && bMs < logMs && (logMs - bMs) <= 120000;
+          });
+          if (matchingBatchStart) {
+            ts = matchingBatchStart;
+          }
+        }
+      }
+
+      const sig = `${act}_${log.entityId || log.entity_id}_${String(ts).substring(0, 16)}`;
+      if (seenSignatures.has(sig)) return;
       seenSignatures.add(sig);
       events.push({
         id: log.id || `sys-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         timestamp: ts,
-        action: log.action || 'SYSTEM_ACTION',
+        action: act,
         category: log.category || 'SYSTEM',
         entityType: log.entityType || log.entity_type || 'System Record',
         entityId: log.entityId || log.entity_id || 'N/A',
-        entityLabel: log.entityLabel || log.entity_label || 'System Event',
+        entityLabel: label,
         siteId: log.siteId || log.site_id || 'site-dc',
         siteCode: log.siteCode || log.site_code || 'DC-MDC',
         siteName: log.siteName || log.site_name || 'Distribution Center',
@@ -315,8 +455,27 @@ export default function AuditTrail() {
     // 3. Outbound Shipments & Branch Receipts
     (shipments || []).forEach(ship => {
       const manifestNum = ship.invoice_ref || ship.shipment_number || ship.id;
+      const matchedSite = (sites || []).find(
+        s =>
+          (ship.destination_site_id && s.id === ship.destination_site_id) ||
+          (ship.site_id && s.id === ship.site_id) ||
+          (ship.site_code && String(s.code || '').toUpperCase() === String(ship.site_code).toUpperCase())
+      );
+      const resolvedBranchCode = resolveSiteBranchCode(matchedSite, ship) || ship.site_code || 'BRANCH';
+      const resolvedBranchName = matchedSite?.name || ship.destination_site_name || ship.site_name || resolvedBranchCode || 'Branch Store';
+
       if (ship.status === 'shipped' || ship.status === 'in_transit' || ship.status === 'received_confirmed' || ship.dispatched_at) {
-        const dispatchTs = ship.dispatched_at || ship.shipment_date || ship.updated_at || ship.created_at || new Date().toISOString();
+        const shipDateKey = extractDatePrefix(ship.dispatched_at || ship.shipment_date || ship.pickup_date);
+        const createdHasSameDateTime = hasRealClockTime(ship.created_at) && (!shipDateKey || extractDatePrefix(ship.created_at) === shipDateKey);
+        const dispatchTs = (hasRealClockTime(ship.dispatched_at) ? ship.dispatched_at : null) ||
+          (createdHasSameDateTime ? ship.created_at : null) ||
+          combineDateWithClockTime(shipDateKey, ship.created_at) ||
+          (hasRealClockTime(ship.created_at) ? ship.created_at : null) ||
+          ship.dispatched_at ||
+          ship.shipment_date ||
+          ship.updated_at ||
+          ship.created_at ||
+          new Date().toISOString();
         const dispatchSig = `SHIPMENT_DISPATCHED_${manifestNum}_${String(dispatchTs).substring(0, 16)}`;
         if (!seenSignatures.has(dispatchSig)) {
           seenSignatures.add(dispatchSig);
@@ -327,10 +486,10 @@ export default function AuditTrail() {
             category: 'LOGISTICS',
             entityType: 'Outbound Shipment',
             entityId: manifestNum,
-            entityLabel: `Manifest #${manifestNum} dispatched to ${ship.site_code || 'Branch'} (${ship.items?.length || 0} parts)`,
-            siteId: ship.site_id,
-            siteCode: ship.site_code || 'BRANCH',
-            siteName: ship.site_name || ship.site_code || 'Branch Store',
+            entityLabel: `Manifest #${manifestNum} dispatched to ${resolvedBranchCode} (${ship.items?.length || 0} parts)`,
+            siteId: ship.destination_site_id || ship.site_id || matchedSite?.id,
+            siteCode: resolvedBranchCode,
+            siteName: resolvedBranchName,
             user: {
               fullName: ship.dispatched_by || ship.prepared_by_name || 'DC Logistics Lead',
               role: 'superadmin',
@@ -343,14 +502,23 @@ export default function AuditTrail() {
               trackingNumber: ship.tracking_number || ship.booking_id,
               riderName: ship.pickup_by_name || ship.courier_name,
               partsCount: ship.items?.length || 0,
-              destination: ship.site_code
+              destination: resolvedBranchCode
             }
           });
         }
       }
 
       if (ship.status === 'received_confirmed' || ship.received_at || ship.received_date) {
-        const receiveTs = ship.received_at || ship.received_date || ship.updated_at || new Date().toISOString();
+        const recvDateKey = extractDatePrefix(ship.received_date || ship.received_at);
+        const updatedHasSameDateTime = hasRealClockTime(ship.updated_at) && (!recvDateKey || extractDatePrefix(ship.updated_at) === recvDateKey);
+        const receiveTs = (hasRealClockTime(ship.received_at) ? ship.received_at : null) ||
+          (updatedHasSameDateTime ? ship.updated_at : null) ||
+          combineDateWithClockTime(recvDateKey, ship.updated_at) ||
+          (hasRealClockTime(ship.updated_at) ? ship.updated_at : null) ||
+          ship.received_at ||
+          ship.received_date ||
+          ship.updated_at ||
+          new Date().toISOString();
         const receiveSig = `SHIPMENT_RECEIVED_CONFIRMED_${manifestNum}_${String(receiveTs).substring(0, 16)}`;
         if (!seenSignatures.has(receiveSig)) {
           seenSignatures.add(receiveSig);
@@ -361,10 +529,10 @@ export default function AuditTrail() {
             category: 'LOGISTICS',
             entityType: 'Outbound Shipment',
             entityId: manifestNum,
-            entityLabel: `Manifest #${manifestNum} received & stocked at ${ship.site_code || 'Branch'}`,
-            siteId: ship.site_id,
-            siteCode: ship.site_code || 'BRANCH',
-            siteName: ship.site_name || ship.site_code || 'Branch Store',
+            entityLabel: `Manifest #${manifestNum} received & stocked at ${resolvedBranchCode}`,
+            siteId: ship.destination_site_id || ship.site_id || matchedSite?.id,
+            siteCode: resolvedBranchCode,
+            siteName: resolvedBranchName,
             user: {
               fullName: ship.received_by_name || 'PMG Specialist',
               role: 'parts_management',
@@ -376,7 +544,7 @@ export default function AuditTrail() {
               receivedDate: ship.received_date,
               condition: ship.receivedCondition || 'Verified in good condition',
               partsCount: ship.items?.length || 0,
-              siteCode: ship.site_code
+              siteCode: resolvedBranchCode
             }
           });
         }
@@ -527,23 +695,52 @@ export default function AuditTrail() {
       }
     });
 
-    // 8. Barcode Hardware Scans
+    // 8. Barcode Hardware Scans (consolidate RECEIVE_IN_BATCH by branch & receipt date so bulk CSV imports don't flood the stream with identical timestamps)
+    const batchScanGroups = new Map();
     (effectiveScanLogs || []).forEach(sc => {
       const scTs = sc.created_at || sc.timestamp || new Date().toISOString();
-      const scSig = `SCAN_${sc.scan_type}_${sc.serial_number || sc.part_number}_${String(scTs).substring(0, 16)}`;
+      const scanType = String(sc.scan_type || 'IN').toUpperCase();
+      const scSiteId = sc.site_id || 'site-dc';
+      const scSiteCode = sc.site_code || 'DC-MDC';
+      const scSiteName = sc.site_name || 'Central DC Workstation';
+
+      if (scanType === 'RECEIVE_IN_BATCH') {
+        const dateKey = extractDatePrefix(scTs) || String(scTs).substring(0, 16);
+        const groupKey = `${scSiteCode}_${dateKey}`;
+        if (!batchScanGroups.has(groupKey)) {
+          batchScanGroups.set(groupKey, {
+            id: sc.id || `ev-scan-batch-${scSiteCode}-${dateKey}`,
+            timestamp: combineDateWithClockTime(extractDatePrefix(scTs), sc.batch_created_at) || scTs,
+            siteId: scSiteId,
+            siteCode: scSiteCode,
+            siteName: scSiteName,
+            userName: sc.user_name || 'Warehouse Operator',
+            count: 0,
+            serials: [],
+            parts: new Set()
+          });
+        }
+        const grp = batchScanGroups.get(groupKey);
+        grp.count += 1;
+        if (sc.serial_number) grp.serials.push(sc.serial_number);
+        if (sc.part_number) grp.parts.add(sc.part_number);
+        return;
+      }
+
+      const scSig = `SCAN_${scanType}_${sc.serial_number || sc.part_number}_${String(scTs).substring(0, 16)}`;
       if (!seenSignatures.has(scSig)) {
         seenSignatures.add(scSig);
         events.push({
           id: sc.id || `ev-scan-${Math.random().toString(36).substr(2, 6)}`,
           timestamp: scTs,
-          action: sc.is_valid !== false ? `SCAN_${sc.scan_type || 'IN'}` : `SCAN_${sc.scan_type || 'IN'}_REJECTED`,
+          action: sc.is_valid !== false ? `SCAN_${scanType}` : `SCAN_${scanType}_REJECTED`,
           category: 'HARDWARE_SCAN',
           entityType: 'Barcode Scan',
           entityId: sc.serial_number || sc.part_number || 'SCAN',
-          entityLabel: `${sc.part_number || 'PN'} (${sc.serial_number || 'No S/N'}) - ${sc.scan_type || 'SCAN'}`,
-          siteId: 'site-dc',
-          siteCode: 'DC-MDC',
-          siteName: 'Central DC Workstation',
+          entityLabel: `${sc.part_number || 'PN'} (${sc.serial_number || 'No S/N'}) - ${scanType}`,
+          siteId: scSiteId,
+          siteCode: scSiteCode,
+          siteName: scSiteName,
           user: {
             fullName: sc.user_name || 'Warehouse Operator',
             role: 'warehouse_staff',
@@ -551,7 +748,7 @@ export default function AuditTrail() {
           },
           status: sc.is_valid !== false ? 'VALID' : 'REJECTED',
           details: {
-            scanType: sc.scan_type,
+            scanType,
             partNumber: sc.part_number,
             serialNumber: sc.serial_number,
             isValid: sc.is_valid,
@@ -561,9 +758,53 @@ export default function AuditTrail() {
       }
     });
 
+    let batchGroupIdx = 0;
+    batchScanGroups.forEach((grp, groupKey) => {
+      let groupTs = grp.timestamp;
+      const baseMs = new Date(groupTs).getTime();
+      if (!isNaN(baseMs) && batchGroupIdx > 0 && hasRealClockTime(groupTs)) {
+        groupTs = new Date(baseMs - batchGroupIdx * 1000).toISOString();
+      }
+      batchGroupIdx += 1;
+
+      const batchSig = `SCAN_RECEIVE_IN_BATCH_${groupKey}`;
+      if (!seenSignatures.has(batchSig)) {
+        seenSignatures.add(batchSig);
+        const partsArr = Array.from(grp.parts);
+        events.push({
+          id: grp.id,
+          timestamp: groupTs,
+          action: 'SCAN_RECEIVE_IN_BATCH',
+          category: 'HARDWARE_SCAN',
+          entityType: 'Batch Barcode Scan',
+          entityId: grp.serials[0] || partsArr[0] || `BATCH-${grp.siteCode}`,
+          entityLabel: grp.count === 1
+            ? `${partsArr[0] || 'PN'} (${grp.serials[0] || 'No S/N'}) - RECEIVE_IN_BATCH`
+            : `Batch Scan Receive-In at ${grp.siteCode} (${grp.count} serialized units • ${partsArr.length} SKUs)`,
+          siteId: grp.siteId,
+          siteCode: grp.siteCode,
+          siteName: grp.siteName,
+          user: {
+            fullName: grp.userName,
+            role: 'warehouse_staff',
+            email: ''
+          },
+          status: 'VALID',
+          details: {
+            scanType: 'RECEIVE_IN_BATCH',
+            unitsScanned: grp.count,
+            distinctParts: partsArr.length,
+            samplePartNumbers: partsArr.slice(0, 15).join(', '),
+            sampleSerialNumbers: grp.serials.slice(0, 25).join(', '),
+            isValid: true
+          }
+        });
+      }
+    });
+
     // Sort descending by timestamp
     return events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [systemAuditLogs, partsRequests, shipments, repairUsageRecords, uploadAuditLogs, deletionAuditLogs, sessionAuditLogs, effectiveScanLogs]);
+  }, [systemAuditLogs, partsRequests, shipments, sites, repairUsageRecords, uploadAuditLogs, deletionAuditLogs, sessionAuditLogs, effectiveScanLogs, scanLogs]);
 
   // Master Filtered Dataset
   const filteredMasterEvents = useMemo(() => {
@@ -1777,11 +2018,11 @@ export default function AuditTrail() {
 
           {/* Master Table */}
           <div className="table-scroll-wrapper" style={{ overflowX: 'auto', width: '100%' }}>
-            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1140px' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '12px', minWidth: '1175px' }}>
               <thead>
                 <tr style={{ background: '#0f172a', color: '#f8fafc', borderBottom: '1px solid #1e293b' }}>
                   <th style={{ width: '48px', textAlign: 'center', padding: '12px 8px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>#</th>
-                  <th style={{ width: '175px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
+                  <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Timestamp</th>
                   <th style={{ width: '210px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Action &amp; Category</th>
                   <th style={{ width: '215px', textAlign: 'left', padding: '12px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Operator &amp; Role</th>
                   <th style={{ textAlign: 'left', padding: '12px 14px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Entity &amp; Details</th>
@@ -1830,7 +2071,10 @@ export default function AuditTrail() {
                         </td>
 
                         {/* 2. Timestamp */}
-                        <td style={{ padding: '12px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }}>
+                        <td
+                          style={{ padding: '12px 12px', whiteSpace: 'nowrap', verticalAlign: 'middle' }}
+                          title={formatTo12HourDateTime(evt.timestamp)}
+                        >
                           <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '12px', lineHeight: 1.3 }}>
                             {formatTo12HourDateTime(evt.timestamp)}
                           </div>
