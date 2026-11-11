@@ -1,6 +1,11 @@
 import { supabase } from '../supabase/client.js';
 import dbStorage from '../utils/dbStorage.js';
-import { DEFAULT_DC_SHIPPING_COSTS, ingestDcMonitoringFile } from '../utils/dcStockMonitoringEngine.js';
+import {
+  DEFAULT_DC_SHIPPING_COSTS,
+  ORDER_REPORT_BASELINE,
+  alignShippingCostsWithOrderReports,
+  ingestDcMonitoringFile
+} from '../utils/dcStockMonitoringEngine.js';
 import { queuedSavedRecordsUpsert } from '../utils/savedRecordsQueue.js';
 
 const IDB_DATASETS_KEY = 'mdc_dc_monitoring_datasets_v1';
@@ -290,14 +295,25 @@ export async function loadDcMonitoringState() {
   const validationLogs = datasetBundle?.validationLogs || storedMeta?.validationLogs || {};
   const slotMeta = datasetBundle?.slotMeta || synthesizeSlotMeta(datasets, validationLogs, storedMeta);
 
+  const rawShipping = Array.isArray(ledgerBundle?.shippingCosts) && ledgerBundle.shippingCosts.length > 0
+    ? ledgerBundle.shippingCosts
+    : DEFAULT_DC_SHIPPING_COSTS;
+  const includeHistorical = ledgerBundle?.includeHistorical === true;
+  const shippingCosts = alignShippingCostsWithOrderReports(rawShipping, ORDER_REPORT_BASELINE, {
+    includeHistorical
+  });
+  const orderReportOrders = Array.isArray(ledgerBundle?.orderReportOrders) && ledgerBundle.orderReportOrders.length > 0
+    ? ledgerBundle.orderReportOrders
+    : (ORDER_REPORT_BASELINE?.orders || []);
+
   return {
     datasets,
     validationLogs,
     slotMeta,
     clearedAt: datasetBundle?.clearedAt || storedMeta?.clearedAt || null,
-    shippingCosts: Array.isArray(ledgerBundle?.shippingCosts) && ledgerBundle.shippingCosts.length > 0
-      ? ledgerBundle.shippingCosts
-      : DEFAULT_DC_SHIPPING_COSTS,
+    shippingCosts,
+    orderReportOrders,
+    includeHistorical,
     remarksMap: ledgerBundle?.remarksMap && typeof ledgerBundle.remarksMap === 'object'
       ? ledgerBundle.remarksMap
       : {},
@@ -590,12 +606,17 @@ export async function syncDcMonitoringFromCloud(options = {}) {
 
       if (force || cloudLedgerTs > localLedgerTs) {
         const snap = cloudLedgerRow.snapshot_data;
-        nextShippingCosts = Array.isArray(snap.shippingCosts) && snap.shippingCosts.length > 0
+        const rawCosts = Array.isArray(snap.shippingCosts) && snap.shippingCosts.length > 0
           ? snap.shippingCosts
           : DEFAULT_DC_SHIPPING_COSTS;
+        nextShippingCosts = alignShippingCostsWithOrderReports(rawCosts);
+        const nextOrderReportOrders = Array.isArray(snap.orderReportOrders) && snap.orderReportOrders.length > 0
+          ? snap.orderReportOrders
+          : (currentLocal.orderReportOrders || ORDER_REPORT_BASELINE?.orders || []);
         nextRemarksMap = snap.remarksMap && typeof snap.remarksMap === 'object' ? snap.remarksMap : {};
         await dbStorage.setItem(IDB_LEDGER_KEY, {
           shippingCosts: nextShippingCosts,
+          orderReportOrders: nextOrderReportOrders,
           remarksMap: nextRemarksMap,
           updatedBy: cloudLedgerRow.saved_by_name || snap.updatedBy || 'Cloud Sync',
           updatedAt: cloudLedgerRow.updated_at
@@ -829,14 +850,24 @@ export async function syncDcMonitoringFromCloud(options = {}) {
 export async function saveDcMonitoringLedger({
   shippingCosts = [],
   remarksMap = {},
+  orderReportOrders = null,
+  includeHistorical = null,
   userName = 'System User',
   broadcastCloudEvent = null,
   senderId = 'local'
 }) {
   const nowIso = new Date().toISOString();
+  const shouldIncludeHist = includeHistorical !== null
+    ? includeHistorical
+    : shippingCosts.some(c => !['august', 'september', 'october'].includes(String(c.month).toLowerCase()));
+  const alignedCosts = alignShippingCostsWithOrderReports(shippingCosts, ORDER_REPORT_BASELINE, {
+    includeHistorical: shouldIncludeHist
+  });
   const payload = {
-    shippingCosts,
+    shippingCosts: alignedCosts,
+    includeHistorical: shouldIncludeHist,
     remarksMap,
+    ...(orderReportOrders ? { orderReportOrders } : {}),
     updatedBy: userName,
     updatedAt: nowIso
   };
@@ -897,10 +928,16 @@ export async function fetchCloudDcMonitoringLedger(localUpdatedAt = null) {
     const localTs = parseTimestampMs(localUpdatedAt);
     if (cloudTs && localTs && cloudTs <= localTs) return null;
 
+    const rawCosts = Array.isArray(newest.snapshot_data.shippingCosts) && newest.snapshot_data.shippingCosts.length > 0
+      ? newest.snapshot_data.shippingCosts
+      : DEFAULT_DC_SHIPPING_COSTS;
+    const alignedCosts = alignShippingCostsWithOrderReports(rawCosts);
+
     const payload = {
-      shippingCosts: Array.isArray(newest.snapshot_data.shippingCosts) && newest.snapshot_data.shippingCosts.length > 0
-        ? newest.snapshot_data.shippingCosts
-        : DEFAULT_DC_SHIPPING_COSTS,
+      shippingCosts: alignedCosts,
+      orderReportOrders: Array.isArray(newest.snapshot_data.orderReportOrders)
+        ? newest.snapshot_data.orderReportOrders
+        : (ORDER_REPORT_BASELINE?.orders || []),
       remarksMap: newest.snapshot_data.remarksMap || {},
       updatedBy: newest.saved_by_name || newest.snapshot_data.updatedBy || 'Cloud Sync',
       updatedAt: newest.updated_at

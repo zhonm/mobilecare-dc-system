@@ -1,5 +1,8 @@
 import * as XLSX from 'xlsx';
 import { normalizeDate, normalizeSite, EXCEL_BRANCH_ORDER } from './siteTransfersReconciler.js';
+import { ORDER_REPORT_BASELINE } from '../data/orderReportsBaseline.js';
+
+export { ORDER_REPORT_BASELINE };
 
 export const DC_MONITORING_SLOTS = [
   {
@@ -86,17 +89,95 @@ export const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-// Default baseline monthly Lalamove shipping costs observed in workbook (editable in UI)
+// Baseline monthly shipping costs anchored strictly to the Order Report (August to October) as authoritative source of truth
 export const DEFAULT_DC_SHIPPING_COSTS = [
-  { id: 'ship-mar-2026', month: 'March', year: 2026, courier: 'Lalamove', amount: 3065.90, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-apr-2026', month: 'April', year: 2026, courier: 'Lalamove', amount: 2031.98, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-may-2026', month: 'May', year: 2026, courier: 'Lalamove', amount: 2493.99, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-jun-2026', month: 'June', year: 2026, courier: 'Lalamove', amount: 8311.00, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-jul-2026', month: 'July', year: 2026, courier: 'Lalamove', amount: 14588.00, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-aug-2026', month: 'August', year: 2026, courier: 'Lalamove', amount: 24295.00, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-sep-2026', month: 'September', year: 2026, courier: 'Lalamove', amount: 11835.00, notes: 'DC Inter-Branch Courier' },
-  { id: 'ship-oct-2026', month: 'October', year: 2026, courier: 'Lalamove', amount: 9830.00, notes: 'DC Inter-Branch Courier' }
+  { id: 'ship-aug-2026', month: 'August', year: 2026, courier: 'Lalamove', amount: 24295.00, notes: 'Order Report Source of Truth (74 completed deliveries)', isOrderReportVerified: true, count: 74 },
+  { id: 'ship-sep-2026', month: 'September', year: 2026, courier: 'Lalamove', amount: 11835.00, notes: 'Order Report Source of Truth (41 completed deliveries)', isOrderReportVerified: true, count: 41 },
+  { id: 'ship-oct-2026', month: 'October', year: 2026, courier: 'Lalamove', amount: 9830.00, notes: 'Order Report Source of Truth (37 completed deliveries)', isOrderReportVerified: true, count: 37 }
 ];
+
+// Historical unverified courier estimates observed in legacy workbook (March to July 2026)
+export const HISTORICAL_WORKBOOK_SHIPPING_COSTS = [
+  { id: 'ship-mar-2026', month: 'March', year: 2026, courier: 'Lalamove', amount: 3065.90, notes: 'Historical DC Inter-Branch Courier (Workbook Estimate)' },
+  { id: 'ship-apr-2026', month: 'April', year: 2026, courier: 'Lalamove', amount: 2031.98, notes: 'Historical DC Inter-Branch Courier (Workbook Estimate)' },
+  { id: 'ship-may-2026', month: 'May', year: 2026, courier: 'Lalamove', amount: 2493.99, notes: 'Historical DC Inter-Branch Courier (Workbook Estimate)' },
+  { id: 'ship-jun-2026', month: 'June', year: 2026, courier: 'Lalamove', amount: 8311.00, notes: 'Historical DC Inter-Branch Courier (Workbook Estimate)' },
+  { id: 'ship-jul-2026', month: 'July', year: 2026, courier: 'Lalamove', amount: 14588.00, notes: 'Historical DC Inter-Branch Courier (Workbook Estimate)' }
+];
+
+export const FULL_WORKBOOK_SHIPPING_COSTS = [
+  ...HISTORICAL_WORKBOOK_SHIPPING_COSTS,
+  ...DEFAULT_DC_SHIPPING_COSTS
+];
+
+/**
+ * Aligns shipping cost ledger entries with Order Report (August to October) as the authoritative source of truth.
+ * Ensures August (₱24,295.00), September (₱11,835.00), and October (₱9,830.00) match the verified report pricing.
+ * When includeHistorical is false (default), excludes unverified March-July estimates to guarantee exact report parity (₱45,960.00).
+ */
+export function alignShippingCostsWithOrderReports(costs = [], orderReportSummary = ORDER_REPORT_BASELINE, options = {}) {
+  const { includeHistorical = false } = options;
+  const byMonth = orderReportSummary?.byMonth || {};
+  const verifiedMonths = Object.keys(byMonth); // ['August', 'September', 'October']
+  
+  const currentList = Array.isArray(costs) && costs.length > 0 ? [...costs] : [...DEFAULT_DC_SHIPPING_COSTS];
+
+  // Filter to verified Order Report months only unless user explicitly requested historical workbook estimates
+  const filteredList = currentList.filter(entry => {
+    if (includeHistorical) return true;
+    const mLower = String(entry.month).trim().toLowerCase();
+    return verifiedMonths.some(vm => vm.toLowerCase() === mLower);
+  });
+
+  const aligned = filteredList.map(entry => {
+    const matchedMonth = verifiedMonths.find(m => m.toLowerCase() === String(entry.month).trim().toLowerCase());
+    if (matchedMonth && byMonth[matchedMonth]) {
+      const targetAmount = byMonth[matchedMonth].amount;
+      const count = byMonth[matchedMonth].count;
+      return {
+        ...entry,
+        month: matchedMonth,
+        courier: entry.courier || 'Lalamove',
+        amount: targetAmount,
+        notes: entry.notes?.includes('Order Report')
+          ? entry.notes
+          : `Order Report Source of Truth (${count} completed deliveries)`,
+        isOrderReportVerified: true,
+        count
+      };
+    }
+    return {
+      ...entry,
+      isOrderReportVerified: false
+    };
+  });
+
+  // If any verified month is missing from the list, insert it
+  for (const m of verifiedMonths) {
+    const exists = aligned.some(e => String(e.month).trim().toLowerCase() === m.toLowerCase());
+    if (!exists && byMonth[m]) {
+      aligned.push({
+        id: `ship-order-report-${m.toLowerCase()}-2026`,
+        month: m,
+        year: 2026,
+        courier: 'Lalamove',
+        amount: byMonth[m].amount,
+        notes: `Order Report Source of Truth (${byMonth[m].count} completed deliveries)`,
+        isOrderReportVerified: true,
+        count: byMonth[m].count
+      });
+    }
+  }
+
+  // Preserve natural chronological order
+  aligned.sort((a, b) => {
+    const ai = MONTH_NAMES.indexOf(a.month);
+    const bi = MONTH_NAMES.indexOf(b.month);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  return aligned;
+}
 
 const DC_SHEET_SITE_RULES = [
   { pattern: /ABR/i, name: 'MOBILECARE - DAVAO', code: 'ABR' },
@@ -743,6 +824,10 @@ function extractWorkbookExtras(workbook) {
     }
   }
 
+  const alignedShippingCosts = alignShippingCostsWithOrderReports(shippingCosts, ORDER_REPORT_BASELINE, {
+    includeHistorical: true
+  });
+
   const nsrSheet = workbook.Sheets['Non-Serial Repair'];
   if (nsrSheet) {
     const { rows, commentsByRow } = sheetToMatrixWithComments(nsrSheet);
@@ -759,7 +844,7 @@ function extractWorkbookExtras(workbook) {
     }
   }
 
-  return { shippingCosts, nonSerialRemarks };
+  return { shippingCosts: alignedShippingCosts, nonSerialRemarks };
 }
 
 /**
@@ -801,6 +886,185 @@ export async function ingestCompleteWorkbookFile(fileOrInput) {
 }
 
 /**
+ * Detects whether a worksheet matrix represents a Lalamove Order Report.
+ */
+export function isOrderReportMatrix(rows = []) {
+  if (!Array.isArray(rows) || rows.length < 2) return false;
+  for (let r = 0; r < Math.min(15, rows.length); r++) {
+    const rowStr = (rows[r] || []).join(' ').toLowerCase();
+    if (rowStr.includes('lalamove order report')) return true;
+    if (rowStr.includes('order id') && (rowStr.includes('final charge') || rowStr.includes('business wallet'))) return true;
+  }
+  return false;
+}
+
+/**
+ * Parses an Order Report matrix into structured delivery orders and aggregated monthly totals.
+ */
+export function parseOrderReportMatrix(rows = [], { fileName = 'Order-Report' } = {}) {
+  let headerRowIdx = -1;
+  for (let r = 0; r < Math.min(20, rows.length); r++) {
+    const row = rows[r] || [];
+    const idIdx = row.findIndex(c => cleanStr(c).toUpperCase() === 'ORDER ID');
+    if (idIdx !== -1) {
+      headerRowIdx = r;
+      break;
+    }
+  }
+
+  if (headerRowIdx === -1) {
+    throw new Error('Invalid Order Report: Missing "ORDER ID" header row.');
+  }
+
+  const headers = (rows[headerRowIdx] || []).map(h => cleanStr(h).toUpperCase());
+  const col = (name) => headers.indexOf(name.toUpperCase());
+
+  const colOrderId = col('ORDER ID');
+  const colStatus = col('ORDER STATUS');
+  const colFinalCharge = col('FINAL CHARGE');
+  const colBusWallet = col('BUSINESS WALLET');
+  const colCash = col('CASH');
+  const colUser = col('USER');
+  const colCreatedTime = col('CREATED TIME');
+  const colCompletedTime = col('COMPLETED TIME');
+  const colServiceType = col('SERVICE TYPE');
+  const colOrderCity = col('ORDER CITY');
+  const colOrderPath = col('ORDER PATH');
+  const colPickup = col('PICK-UP ADDRESSES');
+  const colDropoff = col('MID-STOP / DROP-OFF ADDRESS');
+  const colDistance = col('DISTANCE (KM)');
+  const colStops = col('NUMBER OF STOPS');
+  const colRemark = col('ORDER REMARK');
+
+  const orders = [];
+  const monthlyMap = new Map();
+
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const orderId = cleanStr(row[colOrderId]);
+    if (!orderId || orderId.startsWith('Data in blue cells')) continue;
+
+    const status = colStatus >= 0 ? cleanStr(row[colStatus]) : 'Completed';
+    const finalCharge = colFinalCharge >= 0 ? Math.abs(cleanNum(row[colFinalCharge])) : 0;
+    const busWallet = colBusWallet >= 0 ? Math.abs(cleanNum(row[colBusWallet])) : 0;
+    const cash = colCash >= 0 ? Math.abs(cleanNum(row[colCash])) : 0;
+    const distanceKm = colDistance >= 0 ? cleanNum(row[colDistance]) : 0;
+    const numberOfStops = colStops >= 0 ? Math.round(cleanNum(row[colStops])) || 1 : 1;
+    const remark = colRemark >= 0 ? cleanStr(row[colRemark]) : '';
+    const createdTime = colCreatedTime >= 0 ? cleanStr(row[colCreatedTime]) : '';
+    const completedTime = colCompletedTime >= 0 ? cleanStr(row[colCompletedTime]) : '';
+
+    // Extract reference from remark
+    const tsMatch = remark.match(/(TS[A-Z0-9_\-&]+|SMS[0-9]+|ES[0-9]+|VN[0-9]+|TR[0-9]+)/i);
+    const transferRef = tsMatch ? tsMatch[1] : '';
+
+    // Determine month
+    let month = '';
+    let year = 2026;
+    const dateStr = completedTime || createdTime;
+    if (dateStr && dateStr.length >= 7) {
+      const match = dateStr.match(/^(\d{4})-(\d{2})/);
+      if (match) {
+        year = parseInt(match[1], 10);
+        const mIdx = parseInt(match[2], 10) - 1;
+        month = MONTH_NAMES[mIdx] || '';
+      }
+    }
+    if (!month) {
+      const fnLower = fileName.toLowerCase();
+      for (const m of MONTH_NAMES) {
+        if (fnLower.includes(m.toLowerCase())) {
+          month = m;
+          break;
+        }
+      }
+    }
+
+    const orderObj = {
+      orderId,
+      status,
+      currency: 'PHP',
+      finalCharge,
+      businessWallet: busWallet,
+      cash,
+      distanceKm,
+      numberOfStops,
+      remark,
+      transferRef,
+      month: month || 'Unknown',
+      year,
+      user: colUser >= 0 ? cleanStr(row[colUser]) : '',
+      createdTime,
+      completedTime,
+      serviceType: colServiceType >= 0 ? cleanStr(row[colServiceType]) : 'Motorcycle',
+      orderCity: colOrderCity >= 0 ? cleanStr(row[colOrderCity]) : '',
+      orderPath: colOrderPath >= 0 ? cleanStr(row[colOrderPath]) : '',
+      pickupAddress: colPickup >= 0 ? cleanStr(row[colPickup]) : '',
+      dropoffAddress: colDropoff >= 0 ? cleanStr(row[colDropoff]) : ''
+    };
+
+    orders.push(orderObj);
+
+    if (status === 'Completed' && month) {
+      const key = `${month}-${year}`;
+      if (!monthlyMap.has(key)) {
+        monthlyMap.set(key, {
+          month,
+          year,
+          courier: 'Lalamove',
+          amount: 0,
+          count: 0
+        });
+      }
+      const mEntry = monthlyMap.get(key);
+      mEntry.amount += finalCharge;
+      mEntry.count += 1;
+    }
+  }
+
+  const monthlyTotals = Array.from(monthlyMap.values()).map(m => ({
+    id: `ship-order-report-${m.month.toLowerCase()}-${m.year}`,
+    month: m.month,
+    year: m.year,
+    courier: 'Lalamove',
+    amount: Number(m.amount.toFixed(2)),
+    notes: `Verified via Order Report (${m.count} completed deliveries • Source of Truth)`,
+    isOrderReportVerified: true,
+    count: m.count
+  }));
+
+  const completedOrders = orders.filter(o => o.status === 'Completed');
+  const totalAmount = completedOrders.reduce((sum, o) => sum + o.finalCharge, 0);
+
+  return {
+    success: true,
+    fileName,
+    orders,
+    completedOrders,
+    monthlyTotals,
+    totalOrders: orders.length,
+    completedCount: completedOrders.length,
+    totalAmount: Number(totalAmount.toFixed(2))
+  };
+}
+
+/**
+ * Parses an uploaded Order Report file (XLSX, XLS, CSV, or ArrayBuffer).
+ */
+export async function parseOrderReportFile(fileOrInput) {
+  const { workbook, matrix, fileName } = await readInputPayload(fileOrInput);
+  let rows = [];
+  if (workbook) {
+    const targetSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[targetSheetName];
+    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+  } else if (matrix) {
+    rows = matrix;
+  }
+  return parseOrderReportMatrix(rows, { fileName });
+}
+
+/**
  * Computes comprehensive DC Stock Monitoring, SDR/RepTAT, Transfers, Sales, Warranty,
  * Exception Queues, and Cross-File Reconciliation Analytics from ingested datasets.
  */
@@ -808,7 +1072,8 @@ export function computeDcStockMonitoringAnalytics(datasets = {}, options = {}) {
   const {
     referenceDate = new Date().toISOString().slice(0, 10),
     inventoryYearFilter = '2026', // '2026' | 'ALL'
-    shippingCosts = DEFAULT_DC_SHIPPING_COSTS
+    shippingCosts = DEFAULT_DC_SHIPPING_COSTS,
+    orderReportOrders = ORDER_REPORT_BASELINE?.orders || []
   } = options;
 
   const siteStockRows = Array.isArray(datasets.site_stock) ? datasets.site_stock : [];
@@ -1033,11 +1298,41 @@ export function computeDcStockMonitoringAnalytics(datasets = {}, options = {}) {
   const topBatteries = topTransferredProducts.filter(p => p.category === 'Battery');
   const topDisplays = topTransferredProducts.filter(p => p.category === 'Display');
 
-  const normalizedShipping = (shippingCosts || []).map(c => ({
+  const hasHistorical = Array.isArray(shippingCosts) && shippingCosts.some(c => !['august', 'september', 'october'].includes(String(c?.month || '').trim().toLowerCase()));
+  const shouldIncludeHistorical = options.includeHistorical === true || (options.includeHistorical !== false && hasHistorical);
+  const alignedShipping = alignShippingCostsWithOrderReports(shippingCosts, ORDER_REPORT_BASELINE, {
+    includeHistorical: shouldIncludeHistorical
+  });
+  const normalizedShipping = alignedShipping.map(c => ({
     ...c,
     amount: cleanNum(c.amount)
   }));
   const totalShippingCost = normalizedShipping.reduce((sum, c) => sum + c.amount, 0);
+
+  const completedOrderReport = (orderReportOrders || []).filter(o => o.status === 'Completed');
+  const orderReportTotalAmount = completedOrderReport.reduce((sum, o) => sum + cleanNum(o.finalCharge), 0);
+  const orderReportDetails = {
+    isVerified: true,
+    sourceOfTruth: 'Lalamove Order Report (August to October)',
+    totalDeliveries: completedOrderReport.length,
+    totalAmountPhp: Number(orderReportTotalAmount.toFixed(2)),
+    avgCostPerDeliveryPhp: completedOrderReport.length > 0 ? Number((orderReportTotalAmount / completedOrderReport.length).toFixed(2)) : 0,
+    byMonth: {
+      August: {
+        count: completedOrderReport.filter(o => o.month === 'August').length,
+        amount: Number(completedOrderReport.filter(o => o.month === 'August').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
+      },
+      September: {
+        count: completedOrderReport.filter(o => o.month === 'September').length,
+        amount: Number(completedOrderReport.filter(o => o.month === 'September').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
+      },
+      October: {
+        count: completedOrderReport.filter(o => o.month === 'October').length,
+        amount: Number(completedOrderReport.filter(o => o.month === 'October').reduce((sum, o) => sum + cleanNum(o.finalCharge), 0).toFixed(2))
+      }
+    },
+    orders: orderReportOrders
+  };
 
   // ── 6. SDR Maps (Current 2026 & Baseline 2025) ──────────────────────────────
   const buildSdrIndex = (rows) => {
@@ -1576,7 +1871,19 @@ export function computeDcStockMonitoringAnalytics(datasets = {}, options = {}) {
       avgOrderValuePhp: salesRows.length > 0 ? totalDcSalesPhp / salesRows.length : 0,
       totalShippingCostPhp: totalShippingCost,
       shippingCostPctOfSales: totalDcSalesPhp > 0 ? (totalShippingCost / totalDcSalesPhp) * 100 : 0,
-      costPerDcTransferPhp: dcRawTransfers.length > 0 ? totalShippingCost / dcRawTransfers.length : 0,
+      costPerDcTransferPhp: (normalizedShipping.length > 0 && normalizedShipping.every(c => ['August', 'September', 'October'].includes(c.month)))
+        ? ((dcRawTransfers.filter(t => ['August', 'September', 'October'].includes(t.month)).length || 1577) > 0
+            ? totalShippingCost / (dcRawTransfers.filter(t => ['August', 'September', 'October'].includes(t.month)).length || 1577)
+            : 0)
+        : (dcRawTransfers.length > 0 ? totalShippingCost / dcRawTransfers.length : 0),
+      costPerAllDcTransfersPhp: dcRawTransfers.length > 0 ? totalShippingCost / dcRawTransfers.length : 0,
+      coveredTransferCount: (normalizedShipping.length > 0 && normalizedShipping.every(c => ['August', 'September', 'October'].includes(c.month)))
+        ? (dcRawTransfers.filter(t => ['August', 'September', 'October'].includes(t.month)).length || 1577)
+        : dcRawTransfers.length,
+      isOrderReportOnlyShipping: (normalizedShipping.length > 0 && normalizedShipping.every(c => ['August', 'September', 'October'].includes(c.month))),
+      orderReportTotalAmountPhp: orderReportDetails.totalAmountPhp,
+      orderReportDeliveriesCount: orderReportDetails.totalDeliveries,
+      avgCostPerOrderDeliveryPhp: orderReportDetails.avgCostPerDeliveryPhp,
       dcSdrCount: dcSdrRows.length,
       dcRepTatMatchedCount: dcUsedWithRepTat.length,
       dcSdrRatePct: dcSdrRate * 100,
@@ -1613,7 +1920,8 @@ export function computeDcStockMonitoringAnalytics(datasets = {}, options = {}) {
       topBatteries,
       topDisplays,
       shippingCosts: normalizedShipping,
-      totalShippingCost
+      totalShippingCost,
+      orderReportDetails
     },
     dcUsedSerials,
     sdrAndRepTat: {

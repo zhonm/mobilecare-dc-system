@@ -19,12 +19,14 @@ export default function IngestionCenterPanel({
   validationLogs = {},
   onUploadSlotFile,
   onUploadCompleteWorkbook,
+  onUploadOrderReport,
   onPullFromAllStocks,
   onClearAll,
   isProcessing = false
 }) {
   const [dragTarget, setDragTarget] = useState(null);
   const workbookInputRef = useRef(null);
+  const orderReportInputRef = useRef(null);
   const slotInputRefs = useRef({});
 
   const handleDrop = (e, slotId = 'workbook') => {
@@ -32,7 +34,9 @@ export default function IngestionCenterPanel({
     setDragTarget(null);
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
-    if (slotId === 'workbook') {
+    if (file.name && /order[-_]report/i.test(file.name) && onUploadOrderReport) {
+      onUploadOrderReport(file);
+    } else if (slotId === 'workbook') {
       onUploadCompleteWorkbook(file);
     } else {
       onUploadSlotFile(slotId, file);
@@ -104,6 +108,28 @@ export default function IngestionCenterPanel({
             >
               <FileSpreadsheet size={16} />
               {isProcessing ? 'Processing...' : 'Import Complete Workbook (.xlsx)'}
+            </button>
+
+            <input
+              ref={orderReportInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f && onUploadOrderReport) onUploadOrderReport(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={isProcessing}
+              onClick={() => orderReportInputRef.current?.click()}
+              title="Upload Lalamove Order Report (August to October) to update DC delivery shipment costs"
+            >
+              <ShieldCheck size={15} />
+              Ingest Order Report (.xlsx)
             </button>
 
             <button

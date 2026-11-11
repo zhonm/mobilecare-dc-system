@@ -19,7 +19,10 @@ import {
   DC_MONITORING_SLOTS,
   ingestDcMonitoringFile,
   ingestCompleteWorkbookFile,
-  computeDcStockMonitoringAnalytics
+  computeDcStockMonitoringAnalytics,
+  parseOrderReportFile,
+  alignShippingCostsWithOrderReports,
+  ORDER_REPORT_BASELINE
 } from '../utils/dcStockMonitoringEngine';
 import {
   exportDcMonitoringToExcel,
@@ -62,6 +65,7 @@ export default function DcStockMonitoring() {
   const [datasets, setDatasets] = useState({});
   const [validationLogs, setValidationLogs] = useState({});
   const [shippingCosts, setShippingCosts] = useState([]);
+  const [orderReportOrders, setOrderReportOrders] = useState(() => ORDER_REPORT_BASELINE?.orders || []);
   const [remarksMap, setRemarksMap] = useState({});
   const [inventoryYearFilter, setInventoryYearFilter] = useState('2026');
   const [referenceDate, setReferenceDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -73,6 +77,7 @@ export default function DcStockMonitoring() {
     setDatasets(state.datasets || {});
     setValidationLogs(state.validationLogs || {});
     if (Array.isArray(state.shippingCosts)) setShippingCosts(state.shippingCosts);
+    if (Array.isArray(state.orderReportOrders)) setOrderReportOrders(state.orderReportOrders);
     if (state.remarksMap) setRemarksMap(state.remarksMap);
     const syncedCount = Object.values(state.datasets || {}).filter(v => Array.isArray(v) && v.length > 0).length;
     if (switchFromIngestionIfLoaded && syncedCount > 0) {
@@ -147,6 +152,7 @@ export default function DcStockMonitoring() {
       setDatasets(local.datasets || {});
       setValidationLogs(local.validationLogs || {});
       setShippingCosts(local.shippingCosts || []);
+      setOrderReportOrders(local.orderReportOrders || ORDER_REPORT_BASELINE?.orders || []);
       setRemarksMap(local.remarksMap || {});
 
       const loadedCountLocal = Object.values(local.datasets || {}).filter(a => Array.isArray(a) && a.length > 0).length;
@@ -211,9 +217,10 @@ export default function DcStockMonitoring() {
     computeDcStockMonitoringAnalytics(datasets, {
       referenceDate,
       inventoryYearFilter,
-      shippingCosts
+      shippingCosts,
+      orderReportOrders
     })
-  ), [datasets, referenceDate, inventoryYearFilter, shippingCosts]);
+  ), [datasets, referenceDate, inventoryYearFilter, shippingCosts, orderReportOrders]);
 
   const handleUploadSlotFile = async (slotId, file) => {
     setIsProcessing(true);
@@ -278,7 +285,8 @@ export default function DcStockMonitoring() {
       let ledgerChanged = false;
 
       if (result.extras?.shippingCosts?.length > 0) {
-        updatedCosts = result.extras.shippingCosts;
+        // Enforce Order Report (August to October) as authoritative source of truth
+        updatedCosts = alignShippingCostsWithOrderReports(result.extras.shippingCosts);
         setShippingCosts(updatedCosts);
         ledgerChanged = true;
       }
@@ -290,6 +298,7 @@ export default function DcStockMonitoring() {
       if (ledgerChanged) {
         await saveDcMonitoringLedger({
           shippingCosts: updatedCosts,
+          orderReportOrders,
           remarksMap: updatedRemarks,
           userName: currentUserName,
           broadcastCloudEvent,
@@ -354,16 +363,73 @@ export default function DcStockMonitoring() {
     }
   };
 
-  const handleSaveShippingCosts = async (nextCosts) => {
+  const handleSaveShippingCosts = async (nextCosts, { orderReportOrders: nextOrders = null } = {}) => {
     setShippingCosts(nextCosts);
+    if (nextOrders) setOrderReportOrders(nextOrders);
     await saveDcMonitoringLedger({
       shippingCosts: nextCosts,
+      orderReportOrders: nextOrders || orderReportOrders,
       remarksMap,
       userName: currentUserName,
       broadcastCloudEvent,
       senderId
     });
     showToast?.('Shipping cost ledger saved & synced to Cloud', 'success');
+  };
+
+  const handleUploadOrderReport = async (file) => {
+    setIsProcessing(true);
+    try {
+      const parsed = await parseOrderReportFile(file);
+      if (!parsed.success || parsed.completedCount === 0) {
+        showToast?.('No completed delivery orders found in the uploaded Order Report.', 'warning');
+        return;
+      }
+
+      // Merge monthly totals into shipping costs
+      const currentCosts = [...shippingCosts];
+      parsed.monthlyTotals.forEach(mTotal => {
+        const existingIdx = currentCosts.findIndex(c => String(c.month).toLowerCase() === mTotal.month.toLowerCase());
+        if (existingIdx !== -1) {
+          currentCosts[existingIdx] = {
+            ...currentCosts[existingIdx],
+            amount: mTotal.amount,
+            notes: mTotal.notes,
+            isOrderReportVerified: true
+          };
+        } else {
+          currentCosts.push(mTotal);
+        }
+      });
+
+      const nextCosts = alignShippingCostsWithOrderReports(currentCosts);
+
+      // Merge order items by orderId
+      const existingOrders = Array.isArray(orderReportOrders) ? orderReportOrders : [];
+      const orderIdMap = new Map();
+      existingOrders.forEach(o => orderIdMap.set(o.orderId, o));
+      parsed.orders.forEach(o => orderIdMap.set(o.orderId, o));
+      const nextOrders = Array.from(orderIdMap.values());
+
+      setShippingCosts(nextCosts);
+      setOrderReportOrders(nextOrders);
+
+      await saveDcMonitoringLedger({
+        shippingCosts: nextCosts,
+        orderReportOrders: nextOrders,
+        remarksMap,
+        userName: currentUserName,
+        broadcastCloudEvent,
+        senderId
+      });
+
+      const monthsStr = parsed.monthlyTotals.map(m => `${m.month} (₱${m.amount.toLocaleString()})`).join(', ');
+      showToast?.(`Ingested ${parsed.completedCount} Order Report deliveries: ${monthsStr} as Source of Truth`, 'success');
+    } catch (err) {
+      showToast?.(`Order Report error: ${err?.message || err}`, 'error');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleSaveRemark = async (key, remarkText) => {
@@ -393,7 +459,7 @@ export default function DcStockMonitoring() {
     { id: 'ingestion', label: `Ingestion (${loadedCount}/${DC_MONITORING_SLOTS.length})`, icon: UploadCloud },
     { id: 'sdr-reptat', label: 'SDR & RepTAT Breakdown', icon: Zap },
     { id: 'site-stocks', label: 'Site Stocks & Used Serials', icon: Layers },
-    { id: 'transfers-shipping', label: 'DC Transfers & Shipping ROI', icon: Truck },
+    { id: 'transfers-shipping', label: 'DC Outbound Transfers', icon: Truck },
     { id: 'sales-warranty', label: 'Sales (DC) & Warranty', icon: DollarSign },
     { id: 'exceptions', label: 'Exceptions & Audit Queues', icon: AlertTriangle }
   ];
@@ -504,6 +570,7 @@ export default function DcStockMonitoring() {
               validationLogs={validationLogs}
               onUploadSlotFile={handleUploadSlotFile}
               onUploadCompleteWorkbook={handleUploadCompleteWorkbook}
+              onUploadOrderReport={handleUploadOrderReport}
               onPullFromAllStocks={handlePullFromAllStocks}
               onClearAll={handleClearAll}
               isProcessing={isProcessing}
@@ -519,7 +586,11 @@ export default function DcStockMonitoring() {
             <SiteStocksAgingPanel analytics={analytics} />
           )}
           {activeSubTab === 'transfers-shipping' && (
-            <TransfersShippingPanel analytics={analytics} onSaveShippingCosts={handleSaveShippingCosts} />
+            <TransfersShippingPanel
+              analytics={analytics}
+              onSaveShippingCosts={handleSaveShippingCosts}
+              onUploadOrderReport={handleUploadOrderReport}
+            />
           )}
           {activeSubTab === 'sales-warranty' && (
             <SalesWarrantyPanel analytics={analytics} />

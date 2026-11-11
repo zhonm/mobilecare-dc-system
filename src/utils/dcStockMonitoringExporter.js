@@ -170,6 +170,27 @@ export async function buildDcMonitoringExcelBuffer(analytics, remarksMap = {}) {
     'FF7C3AED'
   );
 
+  if (transfers.orderReportDetails?.orders?.length > 0) {
+    addStyledTableSheet(
+      wb,
+      'Order Report Deliveries',
+      ['Order ID', 'Month', 'Year', 'Status', 'Final Charge (PHP)', 'Completed Time', 'Route / Path', 'Distance (KM)', 'Remark / TS Ref', 'Service Type'],
+      transfers.orderReportDetails.orders.map(o => [
+        o.orderId,
+        o.month,
+        o.year,
+        o.status,
+        o.finalCharge,
+        o.completedTime || o.createdTime,
+        o.orderPath,
+        o.distanceKm,
+        o.remark,
+        o.serviceType
+      ]),
+      'FF059669'
+    );
+  }
+
   // Sheet 6: Exceptions & Investigation Queues
   addStyledTableSheet(
     wb,

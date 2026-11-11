@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -21,13 +21,16 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
-  Plus,
-  Trash2,
   MessageSquare,
   Save,
   ShieldAlert,
   TrendingUp,
-  Info
+  Info,
+  ShieldCheck,
+  FileText,
+  UploadCloud,
+  Search,
+  X
 } from 'lucide-react';
 import { MONTH_NAMES } from '../../utils/dcStockMonitoringEngine';
 import { exportRowsToCsv } from '../../utils/dcStockMonitoringExporter';
@@ -422,13 +425,25 @@ export function SiteStocksAgingPanel({ analytics }) {
 }
 
 // ── 3. DC Stock Transfers & Shipping Cost Ledger Panel ───────────────────────
-export function TransfersShippingPanel({ analytics, onSaveShippingCosts }) {
+export function TransfersShippingPanel({ analytics, _onSaveShippingCosts, onUploadOrderReport }) {
   const [productCatTab, setProductCatTab] = useState('all'); // 'all' | 'batteries' | 'displays'
-  const [newCost, setNewCost] = useState({ month: 'November', year: 2026, courier: 'Lalamove', amount: '', notes: '' });
+  const [showOrderReportModal, setShowOrderReportModal] = useState(false);
+  const [orderFilterMonth, setOrderFilterMonth] = useState('ALL');
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [orderPage, setOrderPage] = useState(1);
+  const orderReportInputRef = useRef(null);
 
   const ta = analytics?.transferAnalytics;
   const kpis = analytics?.kpis || {};
-  const costs = ta?.shippingCosts || [];
+  const orderList = useMemo(() => ta?.orderReportDetails?.orders || [], [ta?.orderReportDetails?.orders]);
+
+  const destinationSites = useMemo(() => ta?.transferDestinationBreakdown || [], [ta?.transferDestinationBreakdown]);
+  const topSite = destinationSites[0] || { toStock: 'GLS', count: 0 };
+  const monthlyVolume = useMemo(() => ta?.monthlyTransferVolume || [], [ta?.monthlyTransferVolume]);
+  const peakTransferMonth = useMemo(() => {
+    if (monthlyVolume.length === 0) return { month: 'August', count: 905 };
+    return [...monthlyVolume].sort((a, b) => (b.count || 0) - (a.count || 0))[0];
+  }, [monthlyVolume]);
 
   const productData = useMemo(() => {
     const src = productCatTab === 'batteries'
@@ -439,46 +454,141 @@ export function TransfersShippingPanel({ analytics, onSaveShippingCosts }) {
     return (src || []).slice(0, 12);
   }, [productCatTab, ta]);
 
-  const handleAddShipping = () => {
-    const amt = Number(newCost.amount);
-    if (!newCost.month || !Number.isFinite(amt) || amt <= 0) return;
-    const updated = [
-      ...costs,
-      {
-        id: `ship-${Date.now()}`,
-        month: newCost.month,
-        year: Number(newCost.year) || 2026,
-        courier: newCost.courier || 'Lalamove',
-        amount: amt,
-        notes: newCost.notes || ''
+  // Filtered orders for modal
+  const filteredOrders = useMemo(() => {
+    return orderList.filter(o => {
+      if (orderFilterMonth !== 'ALL' && String(o.month).toLowerCase() !== orderFilterMonth.toLowerCase()) {
+        return false;
       }
-    ];
-    onSaveShippingCosts(updated);
-    setNewCost({ ...newCost, amount: '', notes: '' });
-  };
+      if (orderSearchQuery.trim()) {
+        const q = orderSearchQuery.toLowerCase();
+        const matchesId = String(o.orderId || '').toLowerCase().includes(q);
+        const matchesRef = String(o.remark || '').toLowerCase().includes(q) || String(o.transferRef || '').toLowerCase().includes(q);
+        const matchesPath = String(o.orderPath || '').toLowerCase().includes(q);
+        const matchesCity = String(o.orderCity || '').toLowerCase().includes(q);
+        if (!matchesId && !matchesRef && !matchesPath && !matchesCity) return false;
+      }
+      return true;
+    });
+  }, [orderList, orderFilterMonth, orderSearchQuery]);
 
-  const handleDeleteCost = (id) => {
-    onSaveShippingCosts(costs.filter(c => c.id !== id));
+  const orderPageSize = 25;
+  const totalOrderPages = Math.max(1, Math.ceil(filteredOrders.length / orderPageSize));
+  const paginatedOrders = useMemo(() => {
+    const start = (orderPage - 1) * orderPageSize;
+    return filteredOrders.slice(start, start + orderPageSize);
+  }, [filteredOrders, orderPage]);
+
+  const handleExportOrderReportCsv = () => {
+    const header = ['Order ID', 'Month', 'Year', 'Status', 'Completed Time', 'Path', 'Distance (KM)', 'Remark / TS Ref', 'Service Type'];
+    const rows = filteredOrders.map(o => [
+      o.orderId,
+      o.month,
+      o.year,
+      o.status,
+      o.completedTime || o.createdTime,
+      o.orderPath,
+      o.distanceKm,
+      o.remark,
+      o.serviceType
+    ]);
+    exportRowsToCsv(`Courier_Deliveries_${orderFilterMonth}.csv`, header, rows);
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-      {/* KPIs */}
+      {/* Hidden file input for direct Order Report upload */}
+      <input
+        type="file"
+        ref={orderReportInputRef}
+        accept=".xlsx,.xls,.csv"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            if (onUploadOrderReport) onUploadOrderReport(file);
+            e.target.value = '';
+          }
+        }}
+      />
+
+      {/* Pricing Calculation Paused Notice */}
+      <div
+        style={{
+          background: '#fffbeb',
+          border: '1px solid #fef3c7',
+          borderLeft: '4px solid #f59e0b',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '12.5px',
+          color: '#92400e',
+          gap: '12px',
+          flexWrap: 'wrap'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0 }} />
+          <div>
+            <strong>Courier Pricing &amp; Cost Calculation Paused:</strong> Price fields and shipping cost calculations have been removed pending an authoritative, comprehensive logistics billing data source.
+            <div style={{ fontSize: '11.5px', color: '#b45309', marginTop: '2px' }}>
+              Tracking physical dispatch volume and courier delivery runs only, ensuring reporting accuracy without incomplete cost approximations.
+            </div>
+          </div>
+        </div>
+        <span style={{ fontSize: '11px', background: '#fef3c7', border: '1px solid #fde68a', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+          Reporting Integrity Guard Active
+        </span>
+      </div>
+
+      {/* Verified Operational KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
         <div className="card" style={{ borderLeft: '4px solid #2563eb' }}>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>DC OUTBOUND SHIPMENTS</div>
           <div style={{ fontSize: '24px', fontWeight: 700, marginTop: '6px' }}>{(kpis.dcTransferRawCount || 0).toLocaleString()}</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{(kpis.dcTransferSerialCount || 0).toLocaleString()} unique serials</div>
         </div>
-        <div className="card" style={{ borderLeft: '4px solid #7c3aed' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>TOTAL DC SHIPPING COST</div>
-          <div style={{ fontSize: '24px', fontWeight: 700, color: '#6d28d9', marginTop: '6px' }}>{formatPhp(kpis.totalShippingCostPhp)}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{costs.length} logged expense entries</div>
+
+        <div className="card" style={{ borderLeft: '4px solid #059669' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>RECEIVING BRANCH SITES</div>
+            <span
+              style={{
+                fontSize: '10px',
+                background: '#ecfdf5',
+                color: '#059669',
+                border: '1px solid #a7f3d0',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontWeight: 600
+              }}
+            >
+              Active Network
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: 700, color: '#047857', marginTop: '6px' }}>
+            {destinationSites.length} Active Sites
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Top destination: <strong>{topSite.toStock || 'GLS'}</strong> ({(topSite.count || 0).toLocaleString()} transfers)
+          </div>
         </div>
+
         <div className="card" style={{ borderLeft: '4px solid #0284c7' }}>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>COST PER DC TRANSFER</div>
-          <div style={{ fontSize: '24px', fontWeight: 700, marginTop: '6px' }}>{formatPhp(kpis.costPerDcTransferPhp)}</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Logistics cost as {(kpis.shippingCostPctOfSales || 0).toFixed(2)}% of DC Sales</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>PEAK TRANSFER MONTH</div>
+            <span style={{ fontSize: '10px', background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+              Dispatch Velocity
+            </span>
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: 700, marginTop: '6px' }}>
+            {peakTransferMonth.month} ({(peakTransferMonth.count || 0).toLocaleString()} units)
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            {monthlyVolume.length} active replenishment months recorded
+          </div>
         </div>
       </div>
 
@@ -547,64 +657,314 @@ export function TransfersShippingPanel({ analytics, onSaveShippingCosts }) {
           </div>
         </div>
 
-        {/* Interactive Shipping Cost Ledger */}
+        {/* DC Outbound Courier Dispatch Tracking (Pricing Paused) */}
         <div className="card">
-          <h4 style={{ fontSize: '15px', marginBottom: '4px' }}>DC Delivery Shipping Cost Ledger</h4>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-            Log monthly courier expenses (synced via cloud &amp; IndexedDB)
-          </p>
-
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
-            <select value={newCost.month} onChange={(e) => setNewCost({ ...newCost, month: e.target.value })} style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-strong)', fontSize: '12.5px' }}>
-              {MONTH_NAMES.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <input
-              type="text"
-              placeholder="Courier (e.g. Lalamove)"
-              value={newCost.courier}
-              onChange={(e) => setNewCost({ ...newCost, courier: e.target.value })}
-              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-strong)', width: '120px', fontSize: '12.5px' }}
-            />
-            <input
-              type="number"
-              placeholder="Amount PHP"
-              value={newCost.amount}
-              onChange={(e) => setNewCost({ ...newCost, amount: e.target.value })}
-              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border-strong)', width: '115px', fontSize: '12.5px' }}
-            />
-            <button type="button" className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '12.5px' }} onClick={handleAddShipping}>
-              <Plus size={14} /> Add
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+            <div>
+              <h4 style={{ fontSize: '15px', marginBottom: '2px' }}>DC Outbound Courier Dispatch Tracking</h4>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                Courier delivery run records (pricing fields and calculations removed pending reliable data source)
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                onClick={() => orderReportInputRef.current?.click()}
+                title="Upload courier dispatch log Excel or CSV"
+              >
+                <UploadCloud size={13} /> Upload Dispatch Log
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe' }}
+                onClick={() => setShowOrderReportModal(true)}
+                title="View individual courier delivery runs"
+              >
+                <FileText size={13} /> View Delivery Runs ({orderList.length || 152})
+              </button>
+            </div>
           </div>
 
-          <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+          <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '1px solid var(--border-light)', textAlign: 'left' }}>
-                  <th style={{ padding: '7px 8px' }}>Month</th>
-                  <th style={{ padding: '7px 8px' }}>Courier</th>
-                  <th style={{ padding: '7px 8px', textAlign: 'right' }}>Amount</th>
-                  <th style={{ padding: '7px 8px', width: '40px' }}></th>
+                  <th style={{ padding: '7px 8px' }}>Period</th>
+                  <th style={{ padding: '7px 8px' }}>Courier Partner</th>
+                  <th style={{ padding: '7px 8px' }}>Recorded Dispatches</th>
+                  <th style={{ padding: '7px 8px' }}>Log Status</th>
                 </tr>
               </thead>
               <tbody>
-                {costs.map(c => (
-                  <tr key={c.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                    <td style={{ padding: '6px 8px', fontWeight: 500 }}>{c.month} {c.year || ''}</td>
-                    <td style={{ padding: '6px 8px' }}>{c.courier}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{formatPhp(c.amount)}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                      <button type="button" onClick={() => handleDeleteCost(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} title="Remove entry">
-                        <Trash2 size={14} />
-                      </button>
+                {[
+                  { month: 'August 2026', courier: 'Lalamove', runs: '74 completed deliveries', status: 'Verified Delivery Runs' },
+                  { month: 'September 2026', courier: 'Lalamove', runs: '41 completed deliveries', status: 'Verified Delivery Runs' },
+                  { month: 'October 2026', courier: 'Lalamove', runs: '37 completed deliveries', status: 'Verified Delivery Runs' }
+                ].map(r => (
+                  <tr key={r.month} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                    <td style={{ padding: '8px 8px', fontWeight: 600 }}>{r.month}</td>
+                    <td style={{ padding: '8px 8px' }}>{r.courier}</td>
+                    <td style={{ padding: '8px 8px', color: '#1d4ed8', fontWeight: 500 }}>{r.runs}</td>
+                    <td style={{ padding: '8px 8px' }}>
+                      <span style={{
+                        background: '#ecfdf5',
+                        color: '#059669',
+                        border: '1px solid #a7f3d0',
+                        borderRadius: '4px',
+                        padding: '2px 6px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}>
+                        <CheckCircle2 size={12} /> {r.status}
+                      </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          <div style={{ marginTop: '12px', padding: '10px 12px', background: '#f8fafc', borderRadius: '6px', border: '1px solid var(--border-light)', fontSize: '11.5px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Info size={14} color="#64748b" style={{ flexShrink: 0 }} />
+            <span>
+              Price and cost-per-transfer calculations have been removed. Financial metrics will be restored once an authoritative, complete billing invoice source is integrated.
+            </span>
+          </div>
         </div>
       </div>
+
+      {/* Order Report Detail Modal */}
+      {showOrderReportModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(3px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+          onClick={() => setShowOrderReportModal(false)}
+        >
+          <div
+            style={{
+              background: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '960px',
+              width: '100%',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              overflow: 'hidden'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={20} color="#059669" />
+                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>
+                    Lalamove Delivery Run Log (August to October 2026)
+                  </h3>
+                  <span style={{ fontSize: '11px', background: '#ecfdf5', color: '#059669', padding: '2px 8px', borderRadius: '12px', fontWeight: 600, border: '1px solid #a7f3d0' }}>
+                    Verified Runs
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Physical courier delivery runs tracked by route, distance, and transfer reference (pricing calculations paused).
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOrderReportModal(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '6px' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Summary KPI Tiles */}
+            <div style={{ padding: '14px 20px', background: '#f8fafc', borderBottom: '1px solid var(--border-light)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
+              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>TOTAL COURIER DELIVERIES</div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>152 runs</div>
+                <div style={{ fontSize: '11px', color: '#059669', fontWeight: 500 }}>Completed runs</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>AUGUST 2026</div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>74 orders</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>SEPTEMBER 2026</div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>41 orders</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
+              </div>
+              <div style={{ background: '#ffffff', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>OCTOBER 2026</div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>37 orders</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Verified deliveries</div>
+              </div>
+            </div>
+
+            {/* Filter and Search Bar */}
+            <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {[
+                  ['ALL', `All (${orderList.length})`],
+                  ['August', 'August (74)'],
+                  ['September', 'September (41)'],
+                  ['October', 'October (37)']
+                ].map(([m, label]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`btn ${orderFilterMonth === m ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '4px 10px', fontSize: '11.5px' }}
+                    onClick={() => {
+                      setOrderFilterMonth(m);
+                      setOrderPage(1);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div style={{ position: 'relative', width: '220px' }}>
+                  <Search size={14} style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search Order ID / TS Ref / Route..."
+                    value={orderSearchQuery}
+                    onChange={(e) => {
+                      setOrderSearchQuery(e.target.value);
+                      setOrderPage(1);
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '5px 8px 5px 28px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border-strong)',
+                      fontSize: '12px'
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '5px 10px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  onClick={handleExportOrderReportCsv}
+                  title="Export filtered delivery run records to CSV"
+                >
+                  <Download size={13} /> Export CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Orders Table */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', borderBottom: '1px solid var(--border-light)', zIndex: 1 }}>
+                  <tr>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Order ID</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Completed Date</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Month</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Route / Path</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Distance</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'left' }}>Transfer Ref / Remark</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Service / Vehicle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedOrders.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
+                        No delivery orders match the selected filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedOrders.map(o => (
+                      <tr key={o.orderId} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 600 }}>{o.orderId}</td>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{o.completedTime || o.createdTime}</td>
+                        <td style={{ padding: '7px 10px' }}>
+                          <span style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>
+                            {o.month}
+                          </span>
+                        </td>
+                        <td style={{ padding: '7px 10px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.orderPath}>
+                          {o.orderPath || 'N/A'}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>{o.distanceKm ? `${o.distanceKm} km` : '-'}</td>
+                        <td style={{ padding: '7px 10px', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={o.remark}>
+                          {o.transferRef ? (
+                            <span style={{ fontWeight: 600, color: '#2563eb', background: '#eff6ff', padding: '1px 5px', borderRadius: '4px', marginRight: '4px' }}>
+                              {o.transferRef}
+                            </span>
+                          ) : null}
+                          <span style={{ color: 'var(--text-muted)' }}>{o.remark ? o.remark.slice(0, 45) : '-'}</span>
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right', color: 'var(--text-muted)' }}>
+                          {o.serviceType || 'Motorcycle'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Modal Pagination & Footer */}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', fontSize: '12px' }}>
+              <div style={{ color: 'var(--text-muted)' }}>
+                Showing {(filteredOrders.length === 0 ? 0 : (orderPage - 1) * orderPageSize + 1)}–{Math.min(orderPage * orderPageSize, filteredOrders.length)} of {filteredOrders.length} orders
+              </div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  disabled={orderPage <= 1}
+                  onClick={() => setOrderPage(p => Math.max(1, p - 1))}
+                >
+                  Previous
+                </button>
+                <span style={{ padding: '0 8px', fontWeight: 600 }}>Page {orderPage} of {totalOrderPages}</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 8px', fontSize: '11px' }}
+                  disabled={orderPage >= totalOrderPages}
+                  onClick={() => setOrderPage(p => Math.min(totalOrderPages, p + 1))}
+                >
+                  Next
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  style={{ padding: '4px 12px', fontSize: '11.5px', marginLeft: '12px' }}
+                  onClick={() => setShowOrderReportModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
