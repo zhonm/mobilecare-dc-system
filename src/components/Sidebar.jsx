@@ -26,7 +26,8 @@ import {
   Package,
   Building2,
   HardDrive,
-  MessageSquare
+  MessageSquare,
+  Activity
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -184,6 +185,7 @@ export default function Sidebar() {
 
     // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
+    { id: 'dc-stock-monitoring', label: 'DC Monitoring & SDR', icon: Activity, section: 'Reports & Traceability' },
     { id: 'site-transfers-fifo', label: 'Site Transfers & FIFO Audit', icon: GitCompare, section: 'Reports & Traceability' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Reports & Traceability' },
     { id: 'drive-hub', label: 'Drive Document Hub', icon: HardDrive, section: 'Reports & Traceability' },

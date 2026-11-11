@@ -9,7 +9,9 @@ import {
   getDefaultRolePosition,
   LEGACY_MOCK_EMAILS,
   LEGACY_MOCK_IDS,
-  sortUsersDeterministically
+  sortUsersDeterministically,
+  DEFAULT_GRANTED_ADMIN_MODULES,
+  encodePermittedPagesForStorage
 } from '../constants/roles';
 import { isUUID, toValidUUID, isDcSite, resolveSite } from '../utils/appContextHelpers';
 
@@ -218,7 +220,8 @@ export function useUserManagement({
         const userId = profileIdByEmail.get(email) || ((u.id && isUUID(u.id)) ? u.id : toValidUUID(u.id || email));
         const role = u.role || 'user';
         const perms = u.permittedPages || (role === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[role] || ROLE_PRESETS.user));
-        return isUUID(userId) ? perms.map(pageId => ({ user_id: userId, page_id: pageId })) : [];
+        const encodedPerms = encodePermittedPagesForStorage(role, perms);
+        return isUUID(userId) ? encodedPerms.map(pageId => ({ user_id: userId, page_id: pageId })) : [];
       });
 
       for (let start = 0; start < permissionRows.length; start += 250) {
@@ -391,7 +394,8 @@ export function useUserManagement({
         }
 
         if (defaultPages && defaultPages.length > 0 && isUUID(resolvedUserId) && !provisionSuccess) {
-          const permRows = defaultPages.map(pageId => ({
+          const encodedDefaultPages = encodePermittedPagesForStorage(role, defaultPages);
+          const permRows = encodedDefaultPages.map(pageId => ({
             user_id: resolvedUserId,
             page_id: pageId
           }));
@@ -454,11 +458,17 @@ export function useUserManagement({
     const newPerms = hasPage
       ? targetUser.permittedPages.filter(p => p !== pageId)
       : [...(targetUser.permittedPages || []), pageId];
+    const nextRevokedDefaultModules = targetUser.role === 'admin' && DEFAULT_GRANTED_ADMIN_MODULES.includes(pageId)
+      ? (hasPage
+          ? Array.from(new Set([...(targetUser.revokedDefaultModules || []), pageId]))
+          : (targetUser.revokedDefaultModules || []).filter(m => m !== pageId))
+      : (targetUser.revokedDefaultModules || []);
 
     const nextUsersList = usersList.map(user => {
       if (user.id === userId) {
         return {
           ...user,
+          revokedDefaultModules: nextRevokedDefaultModules,
           permittedPages: newPerms
         };
       }
@@ -493,11 +503,25 @@ export function useUserManagement({
               .eq('user_id', effectiveProfId)
               .eq('page_id', pageId);
             if (delErr) throw delErr;
+            if (targetUser.role === 'admin' && DEFAULT_GRANTED_ADMIN_MODULES.includes(pageId)) {
+              const { error: revErr } = await supabase
+                .from('user_page_permissions')
+                .upsert({ user_id: effectiveProfId, page_id: `!${pageId}` }, { onConflict: 'user_id,page_id' });
+              if (revErr) throw revErr;
+            }
           } else {
             const { error: upErr } = await supabase
               .from('user_page_permissions')
               .upsert({ user_id: effectiveProfId, page_id: pageId }, { onConflict: 'user_id,page_id' });
             if (upErr) throw upErr;
+            if (targetUser.role === 'admin' && DEFAULT_GRANTED_ADMIN_MODULES.includes(pageId)) {
+              const { error: clrErr } = await supabase
+                .from('user_page_permissions')
+                .delete()
+                .eq('user_id', effectiveProfId)
+                .eq('page_id', `!${pageId}`);
+              if (clrErr) throw clrErr;
+            }
           }
         }
         if (setCloudSyncStatus) setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
@@ -523,6 +547,9 @@ export function useUserManagement({
         return {
           ...user,
           role: presetRole,
+          revokedDefaultModules: presetRole === 'admin'
+            ? DEFAULT_GRANTED_ADMIN_MODULES.filter(m => !pages.includes(m))
+            : [],
           permittedPages: pages
         };
       }
@@ -561,7 +588,8 @@ export function useUserManagement({
             .delete()
             .eq('user_id', effectiveProfId);
 
-          const rows = pages.map(pg => ({ user_id: effectiveProfId, page_id: pg }));
+          const encodedPresetPages = encodePermittedPagesForStorage(presetRole, pages);
+          const rows = encodedPresetPages.map(pg => ({ user_id: effectiveProfId, page_id: pg }));
           if (rows.length > 0) {
             const { error: permErr } = await supabase.from('user_page_permissions').upsert(rows, { onConflict: 'user_id,page_id' });
             if (permErr) throw permErr;
@@ -718,6 +746,9 @@ export function useUserManagement({
       rolePosition: resolvedPosition,
       siteId: resolvedRole === 'parts_management' ? (siteId || target.siteId) : (siteId || target.siteId || 'site-dc'),
       needsSiteAssignment: false,
+      revokedDefaultModules: resolvedRole === 'admin'
+        ? DEFAULT_GRANTED_ADMIN_MODULES.filter(m => !(finalPermittedPages || []).includes(m))
+        : [],
       permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : finalPermittedPages
     };
 
@@ -875,7 +906,8 @@ export function useUserManagement({
         // Update permissions in user_page_permissions table
         if (finalPermittedPages && isUUID(effectiveProfId)) {
           await supabase.from('user_page_permissions').delete().eq('user_id', effectiveProfId);
-          const permRows = finalPermittedPages.map(pageId => ({
+          const encodedPages = encodePermittedPagesForStorage(resolvedRole, finalPermittedPages);
+          const permRows = encodedPages.map(pageId => ({
             user_id: effectiveProfId,
             page_id: pageId
           }));

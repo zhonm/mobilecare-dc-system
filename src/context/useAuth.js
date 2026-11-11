@@ -10,7 +10,13 @@ import {
   loginRateLimiter
 } from '../utils/security';
 import { isAllowedCompanyEmail, matchUserByEmail } from '../utils/userMatcher';
-import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition } from '../constants/roles';
+import {
+  INITIAL_USERS,
+  ROLE_PRESETS,
+  getDefaultRolePosition,
+  resolveEffectivePermittedPages,
+  extractRevokedDefaultModules
+} from '../constants/roles';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { isUUID } from '../utils/appContextHelpers';
 import {
@@ -35,6 +41,12 @@ export function useAuth({
       if (savedUser && typeof savedUser === 'object' && savedUser.email) {
         if (savedUser.role === 'parts_management') {
           savedUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback'];
+        } else if (savedUser.role === 'admin') {
+          savedUser.permittedPages = resolveEffectivePermittedPages(
+            'admin',
+            savedUser.permittedPages,
+            savedUser.revokedDefaultModules || []
+          );
         }
         return savedUser;
       }
@@ -104,9 +116,9 @@ export function useAuth({
 
               const resolvedRole = dbProf.role || 'user';
               const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-              const perms = (dbPerms && dbPerms.length > 0)
-                ? dbPerms.map(p => p.page_id)
-                : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+              const rawDbPerms = (dbPerms || []).map(p => p.page_id);
+              const revokedDefaultModules = extractRevokedDefaultModules(rawDbPerms);
+              const perms = resolveEffectivePermittedPages(resolvedRole, rawDbPerms, revokedDefaultModules);
 
               const hasSet = Boolean(dbProf.has_set_password);
               const isDeleted = dbProf.is_deleted === true ||
@@ -141,7 +153,8 @@ export function useAuth({
                 hasSetPassword: true,
                 passwordHash: null,
                 isActive: true,
-                permittedPages: perms
+                permittedPages: perms,
+                revokedDefaultModules
               };
 
               persistUserSession(recoveredUser);
@@ -197,6 +210,12 @@ export function useAuth({
 
           if (dbUser.role === 'parts_management') {
             dbUser.permittedPages = ROLE_PRESETS.parts_management || ['request-parts', 'scan-in', 'multi-site', 'feedback'];
+          } else if (dbUser.role === 'admin') {
+            dbUser.permittedPages = resolveEffectivePermittedPages(
+              'admin',
+              dbUser.permittedPages,
+              dbUser.revokedDefaultModules || []
+            );
           }
           persistUserSession(dbUser);
           setCurrentUser(dbUser);
@@ -480,9 +499,8 @@ export function useAuth({
             const resolvedRole = creds.role || 'user';
             const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
             const rawPerms = creds.permitted_pages || creds.permittedPages;
-            const perms = (rawPerms && rawPerms.length > 0)
-              ? rawPerms
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const revokedDefaultModules = extractRevokedDefaultModules(rawPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawPerms, revokedDefaultModules);
 
             const hasPasswordSet = (creds.has_set_password !== undefined)
               ? Boolean(creds.has_set_password)
@@ -498,7 +516,8 @@ export function useAuth({
               hasSetPassword: hasPasswordSet,
               passwordHash: null,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
           }
         } catch (rpcEx) {
@@ -538,9 +557,9 @@ export function useAuth({
 
             const resolvedRole = dbProf.role || 'user';
             const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-            const perms = (dbPerms && dbPerms.length > 0)
-              ? dbPerms.map(p => p.page_id)
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const rawDbPerms = (dbPerms || []).map(p => p.page_id);
+            const revokedDefaultModules = extractRevokedDefaultModules(rawDbPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawDbPerms, revokedDefaultModules);
 
             const hasPasswordSet = Boolean(dbProf.has_set_password);
 
@@ -554,7 +573,8 @@ export function useAuth({
               hasSetPassword: hasPasswordSet,
               passwordHash: null,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
           }
         }
@@ -580,8 +600,15 @@ export function useAuth({
           if (matchedFromReg && !regDeleted.includes(email) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
             deletedSet.delete(email);
             if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
+            const regRole = matchedFromReg.role || 'user';
+            const regRevoked = Array.from(new Set([
+              ...extractRevokedDefaultModules(matchedFromReg.permittedPages),
+              ...(matchedFromReg.revokedDefaultModules || [])
+            ]));
             user = {
               ...matchedFromReg,
+              permittedPages: resolveEffectivePermittedPages(regRole, matchedFromReg.permittedPages, regRevoked),
+              revokedDefaultModules: regRevoked,
               hasSetPassword: Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash),
               passwordHash: matchedFromReg.passwordHash || null,
               isActive: matchedFromReg.isActive ?? true
@@ -711,9 +738,8 @@ export function useAuth({
             const resolvedRole = creds.role || 'user';
             const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
             const rawPerms = creds.permitted_pages || creds.permittedPages;
-            const perms = (rawPerms && rawPerms.length > 0)
-              ? rawPerms
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const revokedDefaultModules = extractRevokedDefaultModules(rawPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawPerms, revokedDefaultModules);
 
             const hasPasswordSet = (creds.has_set_password !== undefined)
               ? Boolean(creds.has_set_password)
@@ -729,7 +755,8 @@ export function useAuth({
               hasSetPassword: hasPasswordSet,
               passwordHash: null,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
 
             if (creds.is_valid) {
@@ -773,9 +800,9 @@ export function useAuth({
 
             const resolvedRole = dbProf.role || 'user';
             const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-            const perms = (dbPerms && dbPerms.length > 0)
-              ? dbPerms.map(p => p.page_id)
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const rawDbPerms = (dbPerms || []).map(p => p.page_id);
+            const revokedDefaultModules = extractRevokedDefaultModules(rawDbPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawDbPerms, revokedDefaultModules);
 
             user = {
               id: dbProf.id,
@@ -787,7 +814,8 @@ export function useAuth({
               hasSetPassword: Boolean(dbProf.has_set_password),
               passwordHash: null,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
           }
         }
@@ -813,8 +841,15 @@ export function useAuth({
           if (matchedFromReg && !regDeleted.includes(cleanEmail) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
             deletedSet.delete(cleanEmail);
             if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
+            const regRole = matchedFromReg.role || 'user';
+            const regRevoked = Array.from(new Set([
+              ...extractRevokedDefaultModules(matchedFromReg.permittedPages),
+              ...(matchedFromReg.revokedDefaultModules || [])
+            ]));
             user = {
               ...matchedFromReg,
+              permittedPages: resolveEffectivePermittedPages(regRole, matchedFromReg.permittedPages, regRevoked),
+              revokedDefaultModules: regRevoked,
               hasSetPassword: Boolean(matchedFromReg.hasSetPassword || matchedFromReg.passwordHash),
               passwordHash: matchedFromReg.passwordHash || null,
               isActive: matchedFromReg.isActive ?? true
@@ -1005,9 +1040,8 @@ export function useAuth({
             const resolvedRole = creds.role || 'user';
             const resolvedPosition = creds.role_position || creds.rolePosition || getDefaultRolePosition(resolvedRole);
             const rawPerms = creds.permitted_pages || creds.permittedPages;
-            const perms = (rawPerms && rawPerms.length > 0)
-              ? rawPerms
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const revokedDefaultModules = extractRevokedDefaultModules(rawPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawPerms, revokedDefaultModules);
 
             user = {
               id: userId,
@@ -1018,7 +1052,8 @@ export function useAuth({
               siteId: creds.site_id || creds.siteId || 'site-dc',
               hasSetPassword: true,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
           }
         } catch (rpcEx) {
@@ -1047,9 +1082,9 @@ export function useAuth({
 
             const resolvedRole = dbProf.role || 'user';
             const resolvedPosition = dbProf.role_position || getDefaultRolePosition(resolvedRole);
-            const perms = (dbPerms && dbPerms.length > 0)
-              ? dbPerms.map(p => p.page_id)
-              : (resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user));
+            const rawDbPerms = (dbPerms || []).map(p => p.page_id);
+            const revokedDefaultModules = extractRevokedDefaultModules(rawDbPerms);
+            const perms = resolveEffectivePermittedPages(resolvedRole, rawDbPerms, revokedDefaultModules);
 
             user = {
               id: dbProf.id,
@@ -1060,7 +1095,8 @@ export function useAuth({
               siteId: dbProf.site_id || 'site-dc',
               hasSetPassword: true,
               isActive: true,
-              permittedPages: perms
+              permittedPages: perms,
+              revokedDefaultModules
             };
           }
         }
@@ -1084,7 +1120,16 @@ export function useAuth({
           if (matchedFromReg && !regDeleted.includes(cleanEmail) && !regDeleted.includes(matchedFromReg.id?.toLowerCase())) {
             deletedSet.delete(cleanEmail);
             if (matchedFromReg.id) deletedSet.delete(String(matchedFromReg.id).toLowerCase());
-            user = matchedFromReg;
+            const regRole = matchedFromReg.role || 'user';
+            const regRevoked = Array.from(new Set([
+              ...extractRevokedDefaultModules(matchedFromReg.permittedPages),
+              ...(matchedFromReg.revokedDefaultModules || [])
+            ]));
+            user = {
+              ...matchedFromReg,
+              permittedPages: resolveEffectivePermittedPages(regRole, matchedFromReg.permittedPages, regRevoked),
+              revokedDefaultModules: regRevoked
+            };
           }
         }
       } catch (e) {}

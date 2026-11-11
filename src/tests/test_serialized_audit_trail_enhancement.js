@@ -115,7 +115,7 @@ runTest('AuditTrail.jsx resolves batch scan timestamps to unit received_at and c
 // Test 11: FixablyInventoryDashboard.jsx only invokes batchAddScanInUnits when stock/transfer CSV is uploaded
 runTest('FixablyInventoryDashboard.jsx guards batchAddScanInUnits during KGB-only uploads', () => {
   const src = fs.readFileSync(path.join(projectRoot, 'src/components/FixablyInventoryDashboard.jsx'), 'utf8');
-  assert(src.includes("typeof batchAddScanInUnits === 'function' && (stockText || transferText)"), 'Must not trigger duplicate batchAddScanInUnits when only KGB CSV is uploaded');
+  assert(src.includes("typeof batchAddScanInUnits === 'function' && (siteStockText || transferText)"), 'Must not trigger duplicate batchAddScanInUnits when only KGB CSV is uploaded');
 });
 
 console.log('\n====================================================');

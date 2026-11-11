@@ -1,13 +1,83 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback', 'drive-hub'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback'],
-  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'orders', 'audit', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback', 'drive-hub'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'dc-stock-monitoring', 'orders', 'audit', 'feedback'],
   parts_management: ['request-parts', 'scan-in', 'multi-site', 'feedback'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'request-parts', 'multi-site', 'feedback'],
-  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'forecast-reports', 'feedback'],
-  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'forecast-reports', 'audit', 'feedback']
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'request-parts', 'multi-site', 'feedback'],
+  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'feedback'],
+  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'feedback']
 };
+
+/**
+ * Modules that newly rolled out for all existing admin accounts unless
+ * explicitly revoked via a `!<pageId>` sentinel in user_page_permissions.
+ */
+export const DEFAULT_GRANTED_ADMIN_MODULES = ['dc-stock-monitoring'];
+
+/**
+ * Extracts explicit revocation markers (`!pageId`) stored alongside permitted pages.
+ * @param {string[]} rawPages
+ * @returns {string[]}
+ */
+export function extractRevokedDefaultModules(rawPages = []) {
+  if (!Array.isArray(rawPages)) return [];
+  return Array.from(new Set(
+    rawPages
+      .filter(p => typeof p === 'string' && p.startsWith('!') && p.length > 1)
+      .map(p => p.slice(1))
+  ));
+}
+
+/**
+ * Resolves effective permitted pages for a role while upgrading legacy admin
+ * permission lists to include newly introduced default modules unless revoked.
+ * @param {string} role
+ * @param {string[]|null|undefined} rawPages
+ * @param {string[]} explicitRevocations
+ * @returns {string[]}
+ */
+export function resolveEffectivePermittedPages(role, rawPages, explicitRevocations = []) {
+  if (role === 'superadmin') return [...ROLE_PRESETS.superadmin];
+  const fallback = ROLE_PRESETS[role] || ROLE_PRESETS.user;
+  if (!Array.isArray(rawPages) || rawPages.length === 0) {
+    return [...fallback];
+  }
+
+  const revokedSet = new Set([
+    ...extractRevokedDefaultModules(rawPages),
+    ...(Array.isArray(explicitRevocations) ? explicitRevocations : [])
+  ]);
+  const cleanPages = rawPages.filter(p => typeof p === 'string' && !p.startsWith('!'));
+
+  if (role === 'admin') {
+    for (const pageId of DEFAULT_GRANTED_ADMIN_MODULES) {
+      if (!cleanPages.includes(pageId) && !revokedSet.has(pageId)) {
+        cleanPages.push(pageId);
+      }
+    }
+  }
+
+  return Array.from(new Set(cleanPages));
+}
+
+/**
+ * Encodes permitted pages for persistence in Supabase/registry so intentional
+ * revocations of default admin modules are preserved across future hydration.
+ * @param {string} role
+ * @param {string[]} cleanPages
+ * @returns {string[]}
+ */
+export function encodePermittedPagesForStorage(role, cleanPages = []) {
+  const unique = Array.from(new Set((cleanPages || []).filter(p => typeof p === 'string' && !p.startsWith('!'))));
+  if (role !== 'admin') return unique;
+  for (const pageId of DEFAULT_GRANTED_ADMIN_MODULES) {
+    if (!unique.includes(pageId)) {
+      unique.push(`!${pageId}`);
+    }
+  }
+  return unique;
+}
 
 export const ROLE_OPTIONS = [
   {

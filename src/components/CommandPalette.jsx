@@ -28,7 +28,8 @@ import {
   Globe,
   Building2,
   GitCompare,
-  BarChart3
+  BarChart3,
+  Activity
 } from 'lucide-react';
 
 const PAGE_ICONS = {
@@ -46,6 +47,7 @@ const PAGE_ICONS = {
   'all-stocks': Globe,
   'multi-site': Building2,
   reports: FileSpreadsheet,
+  'dc-stock-monitoring': Activity,
   'site-transfers-fifo': GitCompare,
   'forecast-reports': BarChart3,
   audit: History,
@@ -190,6 +192,20 @@ export default function CommandPalette({ isOpen, onClose }) {
           setActiveTab('request-parts');
           if (setPmgSubTab) setPmgSubTab('usage_history');
           setTimeout(() => window.dispatchEvent(new CustomEvent('mdc:open-mark-used')), 50);
+          handleClose();
+        }
+      });
+    }
+
+    if (canAccess('dc-stock-monitoring')) {
+      quickActions.push({
+        id: 'action-dc-stock-monitoring',
+        title: 'DC Stock Monitoring & SDR Analytics',
+        subtitle: 'Open Reconciled Inventory, RepTAT Breakdown, Sales (DC) & Exceptions',
+        icon: Activity,
+        keywords: 'dc stock monitoring sdr reptat same day repair sales warranty doa gpr',
+        action: () => {
+          setActiveTab('dc-stock-monitoring');
           handleClose();
         }
       });

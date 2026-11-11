@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense } from 'react';
+import { Component, lazy as reactLazy, Suspense } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import Login from './components/Login';
 import CreatePassword from './components/CreatePassword';
@@ -9,8 +9,12 @@ import Header from './components/Header';
 import CommandPalette from './components/CommandPalette';
 import UnauthorizedAccess from './components/UnauthorizedAccess';
 import MobileNoticeModal from './components/MobileNoticeModal';
-import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, Loader2, RefreshCw } from 'lucide-react';
+import { lazyWithRetry, isModuleLoadError, handleChunkLoadError, CHUNK_RELOAD_GUARD_KEY } from './utils/chunkLoadRecovery';
 import './App.css';
+
+// Resilient code-splitting: auto-retries transient network drops and synchronizes new deployments
+const lazy = (importer) => reactLazy(() => lazyWithRetry(importer));
 
 // Route-based code splitting: Lazy load heavy modules to optimize initial bundle size & load speed
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -22,6 +26,7 @@ const AllocationMatrix = lazy(() => import('./components/AllocationMatrix'));
 const ScanOutPacking = lazy(() => import('./components/ScanOutPacking'));
 const Shipments = lazy(() => import('./components/Shipments'));
 const SiteTransfersFifoReport = lazy(() => import('./components/SiteTransfersFifoReport'));
+const DcStockMonitoring = lazy(() => import('./components/DcStockMonitoring'));
 const ForecastingReports = lazy(() => import('./components/ForecastingReports'));
 const AuditTrail = lazy(() => import('./components/AuditTrail'));
 const SettingsCatalog = lazy(() => import('./components/SettingsCatalog'));
@@ -123,6 +128,8 @@ function MainApp() {
       case 'reports':
       case 'site-transfers-fifo':
         return <SiteTransfersFifoReport />;
+      case 'dc-stock-monitoring':
+        return <DcStockMonitoring />;
       case 'forecast-reports':
         return <ForecastingReports />;
       case 'audit':
@@ -176,7 +183,7 @@ function MainApp() {
   );
 }
 
-// Error Boundary to prevent blank white screens
+// Error Boundary to prevent blank white screens and auto-recover from stale chunks / inactive tab errors
 class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -189,30 +196,52 @@ class ErrorBoundary extends Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[React Error Boundary]', error, errorInfo);
+    // If a module/chunk import fails (e.g. after prolonged inactivity or new deploy), auto-reload
+    if (isModuleLoadError(error)) {
+      handleChunkLoadError(error);
+    }
   }
 
   render() {
     if (this.state.hasError) {
+      const isChunkError = isModuleLoadError(this.state.error);
       return (
         <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a', color: '#f8fafc', padding: '24px', fontFamily: 'system-ui, sans-serif' }}>
           <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: '12px', padding: '32px', maxWidth: '520px', textAlign: 'center', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#fee2e2', color: '#dc2626', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
-              <AlertCircle size={24} />
+            <div style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              background: isChunkError ? '#e0f2fe' : '#fee2e2',
+              color: isChunkError ? '#0284c7' : '#dc2626',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '16px'
+            }}>
+              {isChunkError ? <RefreshCw size={24} /> : <AlertCircle size={24} />}
             </div>
-            <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#f8fafc', marginBottom: '8px' }}>Something went wrong</h2>
+            <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#f8fafc', marginBottom: '8px' }}>
+              {isChunkError ? 'System Update Available' : 'Something went wrong'}
+            </h2>
             <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px', lineHeight: 1.5 }}>
-              {this.state.error?.message || 'An unexpected rendering error occurred.'}
+              {isChunkError
+                ? 'A new system update was published or your connection was interrupted while inactive. Please reload to sync the latest version.'
+                : (this.state.error?.message || 'An unexpected rendering error occurred.')}
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button
                 type="button"
                 onClick={() => {
                   this.setState({ hasError: false, error: null });
+                  try {
+                    sessionStorage.removeItem(CHUNK_RELOAD_GUARD_KEY);
+                  } catch {}
                   window.location.reload();
                 }}
                 style={{ background: '#0284c7', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
               >
-                Reload Application
+                {isChunkError ? 'Update & Reload Application' : 'Reload Application'}
               </button>
             </div>
           </div>

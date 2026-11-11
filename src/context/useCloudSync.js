@@ -24,7 +24,15 @@ import {
   saveInventoryToLocalStorage,
   readInventoryFromLocalStorage
 } from '../utils/appContextHelpers';
-import { INITIAL_USERS, ROLE_PRESETS, getDefaultRolePosition, LEGACY_MOCK_EMAILS, LEGACY_MOCK_IDS, sortUsersDeterministically } from '../constants/roles';
+import {
+  INITIAL_USERS,
+  getDefaultRolePosition,
+  LEGACY_MOCK_EMAILS,
+  LEGACY_MOCK_IDS,
+  sortUsersDeterministically,
+  resolveEffectivePermittedPages,
+  extractRevokedDefaultModules
+} from '../constants/roles';
 import { LIVE_MASTER_RECORD_ID } from '../constants/config';
 import {
   generateAllocationsFromForecasts,
@@ -198,7 +206,9 @@ export function useCloudSync({
       'PART_TRANSFERRED',
       'PART_TRANSFER_RECORDED',
       'FIXABLY_SNAPSHOT_UPDATED',
-      'FIXABLY_SNAPSHOT_CLEARED'
+      'FIXABLY_SNAPSHOT_CLEARED',
+      'DC_MONITORING_UPDATED',
+      'DC_MONITORING_CLEARED'
     ].includes(eventType);
 
     if (supabase) {
@@ -1295,9 +1305,8 @@ export function useCloudSync({
                   hasSetPassword: isPasswordSet,
                   passwordHash: passHash,
                   isActive: p.is_active ?? true,
-                  permittedPages: role === 'superadmin'
-                    ? ROLE_PRESETS.superadmin
-                    : (customPerms && customPerms.length > 0 ? customPerms : (ROLE_PRESETS[role] || ROLE_PRESETS.user))
+                  permittedPages: resolveEffectivePermittedPages(role, customPerms),
+                  revokedDefaultModules: extractRevokedDefaultModules(customPerms)
                 });
               }
             });
@@ -4143,6 +4152,14 @@ export function useCloudSync({
               if (Date.now() - lastLocalTime >= 3000) {
                 autoRefreshData({ force: false, silent: true, isManual: false, reason: 'Local Broadcast [MASTER_DATA_UPDATED]', tables: ['saved_records'] });
               }
+            } else if (ev.data.type === 'DC_MONITORING_UPDATED' || ev.data.type === 'DC_MONITORING_CLEARED') {
+              try {
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('mdc:dc_monitoring_cloud_signal', {
+                    detail: { type: ev.data.type, payload: ev.data.payload || {}, source: 'broadcast_channel' }
+                  }));
+                }
+              } catch (e) {}
             } else if (ev.data.type === 'SITE_SAVED' || ev.data.type === 'SITE_DELETED') {
               if (supabase && setSites) {
                 supabase.from('sites').select('*').order('code', { ascending: true }).then(({ data: dbSites }) => {
@@ -4345,7 +4362,8 @@ export function useCloudSync({
               'STOCK_TRANSFERS_UPDATED', 'STOCK_TRANSFERS_CLEARED', 'STOCK_UPDATED', 'UNITS_IMPORTED',
               'INTAKE_SAVED', 'INTAKE_DELETED', 'PURCHASE_ORDERS_UPDATED', 'STOCK_UNITS_CLEARED', 'DRAFT_CLEARED',
               'SUPERVISOR_SETTINGS_UPDATED', 'SITE_PARTS_CLEARED', 'PART_MARKED_AS_USED', 'PART_RESTORED_TO_STOCK',
-              'PART_MARKED_OUTTAKE', 'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED'
+              'PART_MARKED_OUTTAKE', 'PART_OUTTAKE_RECORDED', 'PART_TRANSFERRED', 'PART_TRANSFER_RECORDED',
+              'DC_MONITORING_UPDATED', 'DC_MONITORING_CLEARED'
             ].includes(bType);
 
             if (!isAlreadyHandledLocally && payload?.payload?.table) {
@@ -4494,6 +4512,15 @@ export function useCloudSync({
               } catch (e) {}
               dbStorage.removeItem('mdc_fixably_snapshot');
               autoRefreshData({ force: true, silent: true, isManual: false, reason: 'WebSocket Broadcast [FIXABLY_SNAPSHOT_CLEARED]', tables: ['saved_records'] });
+            } else if (bType === 'DC_MONITORING_UPDATED' || bType === 'DC_MONITORING_CLEARED') {
+              const sender = payload?.payload?.senderId || payload?.senderId;
+              const curId = String(currentUser?.id || '').trim();
+              const isSelf = Boolean(curId && (sender === curId || sender === currentUser?.email));
+              if (!isSelf && typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('mdc:dc_monitoring_cloud_signal', {
+                  detail: { type: bType, payload: bPayload || {}, senderId: sender, source: 'alerts_channel' }
+                }));
+              }
             }
           });
 

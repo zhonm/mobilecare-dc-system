@@ -937,7 +937,7 @@ export default function FixablyInventoryDashboard({
       await syncSnapshotToCloud(reconciled);
 
       // Synchronize with application active stock (inventoryUnits) only when stock or transfer files are part of this intake
-      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function' && (stockText || transferText)) {
+      if (syncWithAppInventory && typeof batchAddScanInUnits === 'function' && (siteStockText || transferText)) {
         setParseProgress({ stage: 'Synchronizing transferred & active stock with application database...', percent: 90 });
         try {
           const validUnits = reconciled.items.map(it => ({
