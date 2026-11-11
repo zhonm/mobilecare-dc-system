@@ -32,8 +32,7 @@ import {
   syncDcMonitoringFromCloud,
   pullAvailableFixablySlotsFromAllStocks,
   clearAllDcMonitoringData,
-  subscribeDcMonitoringSync,
-  DC_MONITORING_CLOUD_META_DOC_ID
+  subscribeDcMonitoringSync
 } from '../services/dcMonitoringStorageService';
 import IngestionCenterPanel from './dc-monitoring/IngestionCenterPanel';
 import SdrRepTatPanel from './dc-monitoring/SdrRepTatPanel';
@@ -197,29 +196,6 @@ export default function DcStockMonitoring() {
       document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     }
 
-    let pgChannel = null;
-    if (supabase) {
-      try {
-        pgChannel = supabase
-          .channel('dc-monitoring-saved-records-meta')
-          .on(
-            'postgres_changes',
-            {
-              event: '*',
-              schema: 'public',
-              table: 'saved_records',
-              filter: `id=eq.${DC_MONITORING_CLOUD_META_DOC_ID}`
-            },
-            () => {
-              runCloudSync({ silent: true });
-            }
-          )
-          .subscribe();
-      } catch (e) {
-        console.warn('DC Monitoring realtime subscription note:', e);
-      }
-    }
-
     return () => {
       isMountedRef.current = false;
       unsubLocalBroadcast();
@@ -227,9 +203,6 @@ export default function DcStockMonitoring() {
         window.removeEventListener('mdc:dc_monitoring_cloud_signal', handleCloudSignal);
         window.removeEventListener('focus', handleVisibilityOrFocus);
         document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-      }
-      if (pgChannel && supabase) {
-        supabase.removeChannel(pgChannel);
       }
     };
   }, [hydrateFromStorage, runCloudSync, showToast]);

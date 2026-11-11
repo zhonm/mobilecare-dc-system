@@ -89,6 +89,35 @@ export function getSlotChunkDocId(slotId, chunkIndex) {
 }
 
 /**
+ * Computes a deterministic content fingerprint across all serialized fields of a slot's rows
+ * so identical re-uploads (e.g., unchanged historical sheets) skip redundant cloud egress.
+ */
+export function computeSlotContentHash(slotId, records = []) {
+  if (!Array.isArray(records) || records.length === 0) return '';
+  const cols = DC_SLOT_CLOUD_COLUMNS[slotId] || Object.keys(records[0] || {});
+  let hash = 2166136261;
+
+  const mixString = (val) => {
+    const str = String(val ?? '');
+    for (let j = 0; j < str.length; j++) {
+      hash ^= str.charCodeAt(j);
+      hash = Math.imul(hash, 16777619);
+    }
+  };
+
+  mixString(`${slotId}:${records.length}:`);
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    for (let c = 0; c < cols.length; c++) {
+      mixString(rec?.[cols[c]]);
+      hash ^= 124;
+      hash = Math.imul(hash, 16777619);
+    }
+  }
+  return `${records.length}-${(hash >>> 0).toString(36)}`;
+}
+
+/**
  * Compacts normalized slot records into bounded columnar chunks for safe Supabase JSONB persistence.
  * Zero fields are lost relative to parseSlotMatrix outputs.
  */
@@ -400,6 +429,19 @@ export async function pushDcMonitoringSlotsToCloud(slotIds = [], datasets = {}, 
       const prevChunkCount = Number(mergedCloudSlots[slotId]?.chunkCount || 0);
 
       if (rows.length > 0) {
+        const contentHash = computeSlotContentHash(slotId, rows);
+        const existingCloudSlot = mergedCloudSlots[slotId];
+        if (
+          existingCloudSlot &&
+          !existingCloudSlot.cleared &&
+          existingCloudSlot.contentHash &&
+          existingCloudSlot.contentHash === contentHash &&
+          Number(existingCloudSlot.parsedCount || 0) === rows.length &&
+          Number(existingCloudSlot.chunkCount || 0) > 0
+        ) {
+          continue;
+        }
+
         const chunks = buildSlotChunksForCloud(slotId, rows, slotUpdatedAt);
         for (const chunk of chunks) {
           const { error } = await queuedSavedRecordsUpsert({
@@ -431,6 +473,7 @@ export async function pushDcMonitoringSlotsToCloud(slotIds = [], datasets = {}, 
           updatedAt: slotUpdatedAt,
           updatedBy: userName,
           parsedCount: rows.length,
+          contentHash,
           fileName: validationLogs?.[slotId]?.fileName || slotMeta?.[slotId]?.fileName || '',
           chunkCount: chunks.length,
           cleared: false,
@@ -438,6 +481,16 @@ export async function pushDcMonitoringSlotsToCloud(slotIds = [], datasets = {}, 
         };
         pushedSlots.push(slotId);
       }
+    }
+
+    if (pushedSlots.length === 0) {
+      return {
+        cloudSynced: true,
+        pushedSlots: [],
+        skippedUnchanged: true,
+        updatedAt: cloudMeta.updatedAt || nowIso,
+        meta: cloudMeta
+      };
     }
 
     const totalParsedRows = DC_MONITORING_ALL_SLOT_IDS.reduce((sum, s) => {
@@ -596,6 +649,7 @@ export async function syncDcMonitoringFromCloud(options = {}) {
     const slotsToPull = [];
     const slotsToAutoPush = [];
     let prunedStaleLocal = false;
+    let alignedLocalMeta = false;
 
     for (const slotId of DC_MONITORING_ALL_SLOT_IDS) {
       const cSlot = cloudSlots[slotId];
@@ -608,8 +662,14 @@ export async function syncDcMonitoringFromCloud(options = {}) {
       const cTs = parseTimestampMs(cSlot?.updatedAt);
       const lTs = parseTimestampMs(lSlot?.updatedAt);
       const effectiveCloudTs = Math.max(cTs, cloudClearedMs);
+      const matchesCloudSnapshot = Boolean(
+        lHasData &&
+        cHasData &&
+        lTs === cTs &&
+        lRows.length === Number(cSlot?.parsedCount || 0)
+      );
 
-      if (cHasData && (force || !lHasData || cTs > lTs)) {
+      if (cHasData && (!lHasData || cTs > lTs || (force && !matchesCloudSnapshot))) {
         slotsToPull.push(slotId);
       } else if (!cHasData && lHasData && effectiveCloudTs > lTs) {
         delete localDatasets[slotId];
@@ -617,6 +677,19 @@ export async function syncDcMonitoringFromCloud(options = {}) {
         delete localSlotMeta[slotId];
         prunedStaleLocal = true;
       } else if (canPushToCloud && lHasData && lTs > effectiveCloudTs) {
+        if (cSlot?.contentHash && computeSlotContentHash(slotId, lRows) === cSlot.contentHash) {
+          // Content matches cloud byte-for-byte; align local timestamp instead of re-uploading
+          localSlotMeta[slotId] = {
+            ...(localSlotMeta[slotId] || {}),
+            updatedAt: cSlot.updatedAt,
+            updatedBy: cSlot.updatedBy || localSlotMeta[slotId]?.updatedBy || userName,
+            parsedCount: lRows.length,
+            contentHash: cSlot.contentHash,
+            cleared: false
+          };
+          alignedLocalMeta = true;
+          continue;
+        }
         slotsToAutoPush.push(slotId);
       }
     }
@@ -675,6 +748,7 @@ export async function syncDcMonitoringFromCloud(options = {}) {
             updatedAt: cSlot.updatedAt,
             updatedBy: cSlot.updatedBy || cloudMeta?.updatedBy || 'Cloud Sync',
             parsedCount: hydrated.length,
+            contentHash: cSlot.contentHash || '',
             fileName: cSlot.fileName || localLogs[slotId]?.fileName || '',
             cleared: false
           };
@@ -686,14 +760,14 @@ export async function syncDcMonitoringFromCloud(options = {}) {
         }
       }
 
-      if (pulledSlots.length > 0 || prunedStaleLocal) {
+      if (pulledSlots.length > 0 || prunedStaleLocal || alignedLocalMeta) {
         await saveDcMonitoringDatasets(localDatasets, localLogs, {
           skipCloud: true,
           slotMetaOverride: localSlotMeta,
           userName: syncedBy || userName
         });
       }
-    } else if (prunedStaleLocal) {
+    } else if (prunedStaleLocal || alignedLocalMeta) {
       await saveDcMonitoringDatasets(localDatasets, localLogs, {
         skipCloud: true,
         slotMetaOverride: localSlotMeta,

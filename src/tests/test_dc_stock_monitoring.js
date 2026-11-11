@@ -24,7 +24,8 @@ import {
 import {
   DC_MONITORING_ALL_SLOT_IDS,
   buildSlotChunksForCloud,
-  hydrateSlotChunksFromCloud
+  hydrateSlotChunksFromCloud,
+  computeSlotContentHash
 } from '../services/dcMonitoringStorageService.js';
 
 async function runTests() {
@@ -231,8 +232,19 @@ async function runTests() {
   assert.ok(userMgmtSrc.includes('encodePermittedPagesForStorage'), 'useUserManagement must encode explicit admin revocations');
   assert.ok(dcPageSrc.includes('syncDcMonitoringFromCloud'), 'DcStockMonitoring must run cloud sync');
   assert.ok(dcPageSrc.includes('mdc:dc_monitoring_cloud_signal'), 'DcStockMonitoring must react to global Realtime alerts');
-  assert.ok(dcPageSrc.includes('postgres_changes'), 'DcStockMonitoring must subscribe to saved_records postgres_changes');
-  console.log('  ✓ PASS: Multi-admin Realtime & cloud sync wiring verified');
+  assert.ok(!dcPageSrc.includes("table: 'saved_records'"), 'DcStockMonitoring must NOT open redundant postgres_changes channel on excluded saved_records table');
+
+  // Content hash determinism & change detection for egress-safe uploads
+  const siteStockHash1 = computeSlotContentHash('site_stock', wbResult.datasets.site_stock);
+  const siteStockHash2 = computeSlotContentHash('site_stock', wbResult.datasets.site_stock);
+  const modifiedSiteStock = [
+    { ...wbResult.datasets.site_stock[0], quantity: (wbResult.datasets.site_stock[0]?.quantity || 0) + 1 },
+    ...wbResult.datasets.site_stock.slice(1)
+  ];
+  const siteStockHashModified = computeSlotContentHash('site_stock', modifiedSiteStock);
+  assert.strictEqual(siteStockHash1, siteStockHash2, 'Identical datasets must produce matching content hashes');
+  assert.notStrictEqual(siteStockHash1, siteStockHashModified, 'Modified dataset must produce distinct content hash');
+  console.log('  ✓ PASS: Multi-admin Realtime, Free-Tier egress dedup & cloud sync wiring verified');
 }
 
 runTests().catch((err) => {
