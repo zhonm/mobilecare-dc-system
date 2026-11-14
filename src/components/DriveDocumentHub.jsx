@@ -16,7 +16,8 @@ import {
   X,
   FileCheck,
   ShieldCheck,
-  FolderOpen
+  FolderOpen,
+  Wrench
 } from 'lucide-react';
 import {
   isGoogleDriveConfigured,
@@ -34,6 +35,7 @@ const DOC_CATEGORIES = [
   { id: 'all', label: 'All Documents', icon: FolderOpen, folderKey: null },
   { id: 'shipments', label: 'Packing Lists & Manifests', icon: FileText, folderKey: 'shipments' },
   { id: 'pmg_signed_pl', label: 'Signed Delivery Receipts', icon: FileCheck, folderKey: 'pmg_signed_pl' },
+  { id: 'ct_packing_lists', label: 'CT Receiving & Packing Lists', icon: Wrench, folderKey: 'ct_packing_lists' },
   { id: 'allocation', label: 'Allocation & Forecasts', icon: FileSpreadsheet, folderKey: 'allocation' },
   { id: 'backups', label: 'System Backups', icon: Database, folderKey: 'backups' }
 ];
@@ -96,19 +98,21 @@ export default function DriveDocumentHub() {
     try {
       if (targetCatId === 'all') {
         // Parallel fetch across key folders
-        const [shipmentFiles, signedFiles, backupFiles, allocFiles] = await Promise.all([
+        const [shipmentFiles, signedFiles, ctPlFiles, backupFiles, allocFiles] = await Promise.all([
           listFilesInDriveFolder('shipments', 40).catch(() => []),
           listFilesInDriveFolder('pmg_signed_pl', 40).catch(() => []),
+          listFilesInDriveFolder('ct_packing_lists', 40).catch(() => []),
           listFilesInDriveFolder('backups', 20).catch(() => []),
           listFilesInDriveFolder('allocation', 20).catch(() => [])
         ]);
 
         const taggedShipments = shipmentFiles.map(f => ({ ...f, docCategory: 'shipments' }));
         const taggedSigned = signedFiles.map(f => ({ ...f, docCategory: 'pmg_signed_pl' }));
+        const taggedCtPl = ctPlFiles.map(f => ({ ...f, docCategory: 'ct_packing_lists' }));
         const taggedBackups = backupFiles.map(f => ({ ...f, docCategory: 'backups' }));
         const taggedAlloc = allocFiles.map(f => ({ ...f, docCategory: 'allocation' }));
 
-        const merged = [...taggedShipments, ...taggedSigned, ...taggedBackups, ...taggedAlloc]
+        const merged = [...taggedShipments, ...taggedSigned, ...taggedCtPl, ...taggedBackups, ...taggedAlloc]
           .sort((a, b) => new Date(b.createdTime || 0) - new Date(a.createdTime || 0));
 
         setFiles(merged);
@@ -517,14 +521,22 @@ export default function DriveDocumentHub() {
                             </span>
                           )}
                           <span style={{
-                            background: file.docCategory === 'pmg_signed_pl' ? '#dcfce7' : '#eff6ff',
-                            color: file.docCategory === 'pmg_signed_pl' ? '#15803d' : '#1d4ed8',
+                            background: file.docCategory === 'pmg_signed_pl'
+                              ? '#dcfce7'
+                              : (file.docCategory === 'ct_packing_lists' ? '#e0f2fe' : '#eff6ff'),
+                            color: file.docCategory === 'pmg_signed_pl'
+                              ? '#15803d'
+                              : (file.docCategory === 'ct_packing_lists' ? '#0369a1' : '#1d4ed8'),
                             padding: '2px 8px',
                             borderRadius: '4px',
                             fontSize: '11px',
                             fontWeight: 600
                           }}>
-                            {file.docCategory === 'pmg_signed_pl' ? 'Signed Receipt' : (file.docCategory === 'shipments' ? 'Packing List' : 'Archive')}
+                            {file.docCategory === 'pmg_signed_pl'
+                              ? 'Signed Receipt'
+                              : (file.docCategory === 'ct_packing_lists'
+                                ? 'CT Packing List'
+                                : (file.docCategory === 'shipments' ? 'Packing List' : 'Archive'))}
                           </span>
                         </div>
                       </td>

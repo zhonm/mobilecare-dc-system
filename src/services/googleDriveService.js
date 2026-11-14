@@ -91,6 +91,11 @@ export const GOOGLE_SERVICE_ACCOUNT_KEY = {
   }
 };
 
+export const DRIVE_FOLDER_NAMES = {
+  pmg_signed_pl: 'SIGNED-DC- MSPI- PACKING LIST',
+  ct_packing_lists: 'Consumables & Tools Receiving Packing Lists'
+};
+
 // Shared Drive & Folder Configurations
 export const GOOGLE_DRIVE_CONFIG = {
   sharedDriveId: import.meta?.env?.VITE_GOOGLE_DRIVE_SHARED_DRIVE_ID || '0AEWZPge3zfLtUk9PVA',
@@ -101,7 +106,8 @@ export const GOOGLE_DRIVE_CONFIG = {
     backups: import.meta?.env?.VITE_GOOGLE_DRIVE_BACKUPS_FOLDER_ID || '1Lc0DxynivRqC_jWUvzv0S19U8YquIRkY',
     allocation: import.meta?.env?.VITE_GOOGLE_DRIVE_ALLOCATION_FOLDER_ID || '16FSYolhBC1LENl3JXz89l5E0NRgLXjhX',
     forecasting: import.meta?.env?.VITE_GOOGLE_DRIVE_FORECASTING_FOLDER_ID || '1VI7qpWMPwH0oR8niHnpoijtVQWge-IVr',
-    pmg_signed_pl: import.meta?.env?.VITE_GOOGLE_DRIVE_PMG_SIGNED_PL_FOLDER_ID || '1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW'
+    pmg_signed_pl: import.meta?.env?.VITE_GOOGLE_DRIVE_PMG_SIGNED_PL_FOLDER_ID || '1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW',
+    ct_packing_lists: import.meta?.env?.VITE_GOOGLE_DRIVE_CT_PACKING_LISTS_FOLDER_ID || ''
   },
   get clientEmail() {
     return (
@@ -391,6 +397,71 @@ export async function getOrCreateFolder(parentFolderId, folderName, customAccess
   }
 }
 
+const verifiedFolderNamesCache = new Set();
+
+/**
+ * Ensures an existing Google Drive folder has the expected display name (idempotent).
+ * Used to keep "SIGNED-DC- MSPI- PACKING LIST" aligned in Google Drive.
+ */
+export async function ensureDriveFolderName(folderId, desiredName, customAccessToken = null) {
+  if (!folderId || !desiredName) return false;
+  const cacheKey = `${folderId}:${desiredName}`;
+  if (verifiedFolderNamesCache.has(cacheKey)) return true;
+
+  try {
+    const token = customAccessToken || await getGoogleDriveAccessToken();
+    const metaRes = await fetchDrive(
+      `https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name&supportsAllDrives=true`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!metaRes.ok) return false;
+    const meta = await metaRes.json();
+    if (meta?.name === desiredName) {
+      verifiedFolderNamesCache.add(cacheKey);
+      return true;
+    }
+
+    const patchRes = await fetchDrive(
+      `https://www.googleapis.com/drive/v3/files/${folderId}?supportsAllDrives=true&fields=id,name`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: desiredName })
+      }
+    );
+    if (patchRes.ok) {
+      verifiedFolderNamesCache.add(cacheKey);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves a named root folder ID from GOOGLE_DRIVE_CONFIG or auto-creates it in the Shared Drive.
+ */
+export async function resolveNamedRootFolderId(folderType = 'shipments', customAccessToken = null) {
+  const configured = GOOGLE_DRIVE_CONFIG.folders[folderType];
+  if (configured) {
+    if (folderType === 'pmg_signed_pl') {
+      ensureDriveFolderName(configured, DRIVE_FOLDER_NAMES.pmg_signed_pl, customAccessToken).catch(() => {});
+    }
+    return configured;
+  }
+  const folderName = DRIVE_FOLDER_NAMES[folderType];
+  if (folderName && GOOGLE_DRIVE_CONFIG.sharedDriveId) {
+    const resolvedId = await getOrCreateFolder(GOOGLE_DRIVE_CONFIG.sharedDriveId, folderName, customAccessToken);
+    GOOGLE_DRIVE_CONFIG.folders[folderType] = resolvedId;
+    return resolvedId;
+  }
+  return GOOGLE_DRIVE_CONFIG.sharedDriveId;
+}
+
 /**
  * Resolves or automatically creates a date subfolder (e.g. "2026-10-01") inside the designated parent folder.
  * If the date folder already exists, returns its ID.
@@ -491,7 +562,7 @@ export async function uploadResumableToGoogleDrive({
 }) {
   try {
     const accessToken = await getGoogleDriveAccessToken();
-    const designatedFolder = folderId || GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
+    const designatedFolder = folderId || await resolveNamedRootFolderId(folderType, accessToken);
 
     let targetFolder = designatedFolder;
     let resolvedDateFolderName = null;
@@ -669,7 +740,7 @@ export async function uploadToGoogleDrive({
     }
 
     const accessToken = await getGoogleDriveAccessToken();
-    const designatedFolder = folderId || GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
+    const designatedFolder = folderId || await resolveNamedRootFolderId(folderType, accessToken);
 
     let targetFolder = designatedFolder;
     let resolvedDateFolderName = null;
@@ -783,7 +854,7 @@ export async function downloadJsonFromGoogleDrive(fileId) {
 export async function listFilesInDriveFolder(folderType = 'shipments', pageSize = 50) {
   try {
     const accessToken = await getGoogleDriveAccessToken();
-    const folderId = GOOGLE_DRIVE_CONFIG.folders[folderType] || GOOGLE_DRIVE_CONFIG.sharedDriveId;
+    const folderId = await resolveNamedRootFolderId(folderType, accessToken);
 
     // Discover any subfolders inside the designated folder (up to 2 levels deep)
     const subQuery = `mimeType = 'application/vnd.google-apps.folder' and '${folderId}' in parents and trashed = false`;
@@ -863,7 +934,7 @@ export async function searchDriveFiles({
       }
     }
 
-    const targetFolder = folderId || (folderType ? GOOGLE_DRIVE_CONFIG.folders[folderType] : null);
+    const targetFolder = folderId || (folderType ? await resolveNamedRootFolderId(folderType, accessToken) : null);
     if (targetFolder) {
       clauses.push(`'${targetFolder}' in parents`);
     }

@@ -11,7 +11,7 @@ console.log('Test 1: Verify PMG Signed PL root folder ID configuration');
 assert.strictEqual(
   GOOGLE_DRIVE_CONFIG.folders.pmg_signed_pl,
   '1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW',
-  'Folder ID for pmg_signed_pl should match DC- MSPI- PACKING LIST folder ID'
+  'Folder ID for pmg_signed_pl should match SIGNED-DC- MSPI- PACKING LIST folder ID'
 );
 console.log('  ✓ PASS: pmg_signed_pl folder ID is correctly set to 1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW');
 

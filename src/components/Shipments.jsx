@@ -3550,7 +3550,7 @@ export default function Shipments() {
                                 background: '#f0fdf4'
                               }}
                             >
-                              Folder: <strong>DC- MSPI- PACKING LIST / {sh.signed_pl_site_folder}</strong>
+                              Folder: <strong>SIGNED-DC- MSPI- PACKING LIST / {sh.signed_pl_site_folder}</strong>
                             </span>
                           )}
                         </div>

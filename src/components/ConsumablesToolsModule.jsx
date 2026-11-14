@@ -30,8 +30,10 @@ import {
 import { barcodeAudio } from '../utils/barcodeAudio';
 import {
   generateConsumablesToolsPackingListPDF,
+  generateConsumablesToolsPackingListPdfBytes,
   printConsumablesToolsPackingListDirect
 } from '../utils/pdfGenerator';
+import { uploadCtPackingListToDrive } from '../services/driveAutoSyncService';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import ToolLabelPrintModal from './ToolLabelPrintModal';
 
@@ -58,6 +60,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     consumeCtStock,
     createCtShipment,
     confirmCtDelivery,
+    attachCtShipmentDocument,
     importPriorityCsvText
   } = useApp();
 
@@ -156,6 +159,8 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const autoPackTimerRef = useRef(null);
   const [deliveryModalShipment, setDeliveryModalShipment] = useState(null);
   const [deliveryReceiverName, setDeliveryReceiverName] = useState('');
+  const [deliveryPlFile, setDeliveryPlFile] = useState(null);
+  const [isUploadingDeliveryPl, setIsUploadingDeliveryPl] = useState(false);
   const [downloadChoiceShipment, setDownloadChoiceShipment] = useState(null);
   const [detailsShipment, setDetailsShipment] = useState(null);
 
@@ -869,6 +874,34 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
       setPackScanInput('');
       setPackSerialInput('');
       setPackScanFeedback(null);
+
+      // Auto-archive generated CT Packing List PDF to Google Drive ("Consumables & Tools Receiving Packing Lists")
+      if (res.shipment) {
+        (async () => {
+          try {
+            const pdfBytes = await generateConsumablesToolsPackingListPdfBytes(res.shipment, {
+              toAddress: getSiteAddressForPdf(res.shipment.to_site_code)
+            });
+            if (pdfBytes) {
+              const driveRes = await uploadCtPackingListToDrive({
+                file: pdfBytes,
+                shipment: res.shipment,
+                docKind: 'ct_packing_list'
+              });
+              if (driveRes.success && driveRes.fileId) {
+                attachCtShipmentDocument?.(res.shipment.id, {
+                  drive_pl_file_id: driveRes.fileId,
+                  drive_pl_web_view_link: driveRes.webViewLink || null,
+                  drive_pl_filename: driveRes.filename || null,
+                  drive_pl_site_folder: driveRes.siteFolder || null
+                });
+              }
+            }
+          } catch {
+            // Non-blocking Google Drive auto-archive
+          }
+        })();
+      }
     }
   };
 
@@ -2196,6 +2229,18 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                                   <Printer size={12} />
                                   <span>Print</span>
                                 </button>
+                                {(shp.signed_pl_web_view_link || shp.drive_pl_web_view_link) && (
+                                  <a
+                                    href={shp.signed_pl_web_view_link || shp.drive_pl_web_view_link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ padding: '3px 8px', fontSize: '11px', textDecoration: 'none' }}
+                                    title={shp.signed_pl_filename || shp.drive_pl_filename || 'Open stored Packing List in Google Drive'}
+                                  >
+                                    Drive PL
+                                  </a>
+                                )}
                                 {shp.status !== 'delivered' && (
                                   <button
                                     type="button"
@@ -2354,13 +2399,39 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
               <button type="button" onClick={() => setDeliveryModalShipment(null)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}><X size={18} /></button>
             </div>
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
+                let driveDocMeta = null;
+                if (deliveryPlFile) {
+                  setIsUploadingDeliveryPl(true);
+                  const driveRes = await uploadCtPackingListToDrive({
+                    file: deliveryPlFile,
+                    shipment: deliveryModalShipment,
+                    docKind: 'ct_receiving_packing_list'
+                  });
+                  setIsUploadingDeliveryPl(false);
+                  if (driveRes.success && driveRes.fileId) {
+                    driveDocMeta = {
+                      signed_pl_file_id: driveRes.fileId,
+                      signed_pl_web_view_link: driveRes.webViewLink || null,
+                      signed_pl_filename: driveRes.filename || null,
+                      signed_pl_site_folder: driveRes.siteFolder || null
+                    };
+                    showToast?.(
+                      `Stored receiving PL in Google Drive (${driveRes.folderName} / ${driveRes.siteFolder})`,
+                      'success'
+                    );
+                  } else if (driveRes.error && driveRes.error !== 'Google Drive not configured') {
+                    showToast?.(`Drive upload note: ${driveRes.error}`, 'warning');
+                  }
+                }
                 confirmCtDelivery({
                   shipmentId: deliveryModalShipment.id,
                   receivedByName: deliveryReceiverName.trim() || currentUser?.fullName || 'Branch Staff',
-                  signatureName: deliveryReceiverName.trim()
+                  signatureName: deliveryReceiverName.trim(),
+                  driveDocMeta
                 });
+                setDeliveryPlFile(null);
                 setDeliveryModalShipment(null);
               }}
             >
@@ -2372,10 +2443,24 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                   <label className="form-label">Received By (Name / Signature) *</label>
                   <input type="text" className="form-control" value={deliveryReceiverName} onChange={(e) => setDeliveryReceiverName(e.target.value)} required />
                 </div>
+                <div>
+                  <label className="form-label">Receiving / Signed Packing List File (Optional)</label>
+                  <input
+                    type="file"
+                    accept=".pdf,image/*"
+                    className="form-control"
+                    onChange={(e) => setDeliveryPlFile(e.target.files?.[0] || null)}
+                  />
+                  <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+                    Stored automatically in Google Drive: <strong>Consumables &amp; Tools Receiving Packing Lists / {deliveryModalShipment.to_site_code}</strong>
+                  </div>
+                </div>
               </div>
               <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', padding: '12px 16px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setDeliveryModalShipment(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Confirm Delivery</button>
+                <button type="button" className="btn btn-secondary" onClick={() => { setDeliveryPlFile(null); setDeliveryModalShipment(null); }} disabled={isUploadingDeliveryPl}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={isUploadingDeliveryPl}>
+                  {isUploadingDeliveryPl ? 'Uploading PL...' : 'Confirm Delivery'}
+                </button>
               </div>
             </form>
           </div>

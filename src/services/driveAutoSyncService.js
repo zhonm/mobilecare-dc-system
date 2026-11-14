@@ -6,7 +6,16 @@
  * 2. Forecasting & Master Allocation XLSX workbooks upon Masterlist Ingestion.
  */
 
-import { uploadToGoogleDrive, getOrCreateFolder, GOOGLE_DRIVE_CONFIG, listFilesInDriveFolder, isGoogleDriveConfigured } from './googleDriveService.js';
+import {
+  uploadToGoogleDrive,
+  getOrCreateFolder,
+  resolveNamedRootFolderId,
+  ensureDriveFolderName,
+  DRIVE_FOLDER_NAMES,
+  GOOGLE_DRIVE_CONFIG,
+  listFilesInDriveFolder,
+  isGoogleDriveConfigured
+} from './googleDriveService.js';
 import { generatePackingListPDF } from '../utils/pdfGenerator.js';
 import { exportForecastToExcel, exportAllocationToExcel } from '../utils/excelParser.js';
 
@@ -393,7 +402,7 @@ export function resolvePmgSiteFolderName(siteOrCode) {
 }
 
 /**
- * Uploads a PMG Signed Packing List to Google Drive inside 'DC- MSPI- PACKING LIST' / [SITE]
+ * Uploads a PMG Signed Packing List to Google Drive inside 'SIGNED-DC- MSPI- PACKING LIST' / [SITE]
  * 
  * @param {Object} params
  * @param {File|Blob|ArrayBuffer|string} params.file - The uploaded signed PL file (PDF, image, etc.)
@@ -409,11 +418,12 @@ export async function uploadPmgSignedPackingListToDrive({
 }) {
   try {
     const rootFolderId = GOOGLE_DRIVE_CONFIG.folders.pmg_signed_pl || '1ltAwtMav9hGaJTvEJpVqnv72_S41ODaW';
+    await ensureDriveFolderName(rootFolderId, DRIVE_FOLDER_NAMES.pmg_signed_pl);
 
     // 1. Resolve site folder name (e.g. "LIMA")
     const siteFolderName = resolvePmgSiteFolderName(site || shipment?.site_name || shipment?.site_id);
 
-    // 2. Get or create site subfolder inside "DC- MSPI- PACKING LIST"
+    // 2. Get or create site subfolder inside "SIGNED-DC- MSPI- PACKING LIST"
     const siteFolderId = await getOrCreateFolder(rootFolderId, siteFolderName);
 
     // 3. Format timestamp and filename
@@ -461,6 +471,91 @@ export async function uploadPmgSignedPackingListToDrive({
     };
   } catch (err) {
     console.error('[Google Drive] uploadPmgSignedPackingListToDrive error:', err);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+/**
+ * Uploads a Consumables & Tools Receiving / Packing List file to the dedicated
+ * Google Drive folder ("Consumables & Tools Receiving Packing Lists" / [SITE]).
+ *
+ * @param {Object} params
+ * @param {File|Blob|ArrayBuffer|Uint8Array|string} params.file
+ * @param {Object} [params.shipment]
+ * @param {string} [params.siteCode]
+ * @param {string} [params.packingListNumber]
+ * @param {'ct_packing_list'|'ct_receiving_packing_list'|'ct_signed_packing_list'} [params.docKind]
+ * @returns {Promise<{ success: boolean, fileId?: string, webViewLink?: string, filename?: string, siteFolder?: string, error?: string }>}
+ */
+export async function uploadCtPackingListToDrive({
+  file,
+  shipment = null,
+  siteCode = '',
+  packingListNumber = '',
+  docKind = 'ct_packing_list'
+}) {
+  try {
+    const configured = await isGoogleDriveConfigured();
+    if (!configured) {
+      return { success: false, error: 'Google Drive not configured' };
+    }
+
+    const rootFolderId = await resolveNamedRootFolderId('ct_packing_lists');
+    const rawSite = String(siteCode || shipment?.to_site_code || shipment?.site_code || 'DC-MDC').trim().toUpperCase();
+    const siteFolderName = rawSite.replace(/[/\\:*?"<>|]/g, '_') || 'DC-MDC';
+    const siteFolderId = await getOrCreateFolder(rootFolderId, siteFolderName);
+
+    const timestampStr = getFormattedSaveTimestamp();
+    const plRef = String(
+      packingListNumber || shipment?.packing_list_number || shipment?.shipment_number || 'CT-PL'
+    ).replace(/[/\\:*?"<>|]/g, '_');
+
+    let ext = 'pdf';
+    let mimeType = 'application/pdf';
+    if (file && typeof file === 'object' && !(file instanceof Uint8Array) && !(file instanceof ArrayBuffer)) {
+      if (file.name && file.name.includes('.')) {
+        ext = file.name.split('.').pop().toLowerCase();
+      }
+      mimeType = file.type || (ext === 'pdf' ? 'application/pdf' : (ext === 'png' ? 'image/png' : 'image/jpeg'));
+    }
+
+    const prefix = docKind === 'ct_receiving_packing_list' || docKind === 'ct_signed_packing_list'
+      ? 'CT_Receiving_Signed_PL'
+      : 'CT_PackingList';
+    const filename = `${prefix}_${plRef}_${timestampStr}.${ext}`;
+
+    const result = await uploadToGoogleDrive({
+      name: filename,
+      mimeType,
+      data: file,
+      folderId: siteFolderId,
+      useDateFolder: false,
+      appProperties: {
+        system: 'MDC-DC',
+        docType: docKind,
+        packingListNumber: plRef,
+        siteFolder: siteFolderName,
+        shipmentId: String(shipment?.id || '')
+      }
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to upload Consumables & Tools Packing List to Google Drive');
+    }
+
+    return {
+      success: true,
+      fileId: result.fileId,
+      webViewLink: result.webViewLink,
+      filename,
+      siteFolder: siteFolderName,
+      folderName: DRIVE_FOLDER_NAMES.ct_packing_lists
+    };
+  } catch (err) {
+    console.error('[Google Drive] uploadCtPackingListToDrive error:', err);
     return {
       success: false,
       error: err.message

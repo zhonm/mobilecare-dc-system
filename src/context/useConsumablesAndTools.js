@@ -1132,7 +1132,13 @@ export function useConsumablesAndTools({
     return res;
   }, [resolveActor, unifiedCatalog, ctStock, ctToolAssets, ctShipments, appendMovements, commitAndSyncState, recordAudit, showToast]);
 
-  const confirmCtDelivery = useCallback(({ shipmentId, receivedByName, signatureName = '', notes = '' }) => {
+  const confirmCtDelivery = useCallback(({
+    shipmentId,
+    receivedByName,
+    signatureName = '',
+    notes = '',
+    driveDocMeta = null
+  }) => {
     const actor = resolveActor();
     const target = ctShipments.find(s => s.id === shipmentId);
     const res = confirmConsumablesToolsDelivery({
@@ -1149,12 +1155,15 @@ export function useConsumablesAndTools({
       showToast?.(res.message, 'error');
       return res;
     }
+    const updatedShipment = driveDocMeta
+      ? { ...res.updatedShipment, ...driveDocMeta }
+      : res.updatedShipment;
     setCtStock(res.nextStockRows);
     persistDual(LS_KEYS.stock, res.nextStockRows);
     setCtToolAssets(res.nextToolAssets);
     persistDual(LS_KEYS.toolAssets, res.nextToolAssets);
     const nextShipments = latestStateRef.current.shipments.map(s =>
-      s.id === res.updatedShipment.id ? res.updatedShipment : s
+      s.id === updatedShipment.id ? updatedShipment : s
     );
     setCtShipments(nextShipments);
     persistDual(LS_KEYS.shipments, nextShipments);
@@ -1175,6 +1184,20 @@ export function useConsumablesAndTools({
     showToast?.(`Delivery confirmed for ${res.updatedShipment.packing_list_number}`, 'success');
     return res;
   }, [resolveActor, ctShipments, ctStock, ctToolAssets, appendMovements, commitAndSyncState, recordAudit, showToast]);
+
+  const attachCtShipmentDocument = useCallback((shipmentId, docMeta = {}) => {
+    if (!shipmentId || !docMeta || typeof docMeta !== 'object') return;
+    const actor = resolveActor();
+    const nextShipments = latestStateRef.current.shipments.map(s =>
+      s.id === shipmentId ? { ...s, ...docMeta } : s
+    );
+    setCtShipments(nextShipments);
+    persistDual(LS_KEYS.shipments, nextShipments);
+    commitAndSyncState(
+      { shipments: nextShipments },
+      { reason: 'ct_shipment_document_attached', actorName: actor.name }
+    );
+  }, [resolveActor, commitAndSyncState]);
 
   const importPriorityCsvText = useCallback((csvText) => {
     const actor = resolveActor();
@@ -1217,6 +1240,7 @@ export function useConsumablesAndTools({
     consumeCtStock,
     createCtShipment,
     confirmCtDelivery,
+    attachCtShipmentDocument,
     importPriorityCsvText
   };
 }

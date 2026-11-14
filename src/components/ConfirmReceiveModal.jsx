@@ -160,10 +160,10 @@ export default function ConfirmReceiveModal({
     }
 
     setIsSubmitting(true);
-    setUploadProgressMsg(`Uploading signed PL to Google Drive (DC- MSPI- PACKING LIST / ${siteFolderName})...`);
+    setUploadProgressMsg(`Uploading signed PL to Google Drive (SIGNED-DC- MSPI- PACKING LIST / ${siteFolderName})...`);
 
     try {
-      // 1. Upload Signed PL to Google Drive under "DC- MSPI- PACKING LIST" / [SITE]
+      // 1. Upload Signed PL to Google Drive under "SIGNED-DC- MSPI- PACKING LIST" / [SITE]
       let driveResult = null;
       try {
         driveResult = await uploadPmgSignedPackingListToDrive({
@@ -215,7 +215,7 @@ export default function ConfirmReceiveModal({
       });
 
       if (driveResult?.success) {
-        showToast?.(`Receipt confirmed! Signed PL stored in Google Drive under DC- MSPI- PACKING LIST / ${driveResult.siteFolder}`, 'success');
+        showToast?.(`Receipt confirmed! Signed PL stored in Google Drive under SIGNED-DC- MSPI- PACKING LIST / ${driveResult.siteFolder}`, 'success');
       } else {
         showToast?.('Receipt confirmed & branch stock updated! Signed PL is queued in offline storage and will auto-sync to Drive once reconnected.', 'info');
       }
@@ -455,7 +455,7 @@ export default function ConfirmReceiveModal({
                 <span>Upload Signed Packing List (Required) <span style={{ color: '#dc2626' }}>*</span></span>
               </div>
               <p style={{ fontSize: '12px', color: signedFile ? '#15803d' : '#78350f', margin: '0 0 12px 0' }}>
-                Re-upload the signed PL document to complete package confirmation. It will be stored in Google Drive: <strong>DC- MSPI- PACKING LIST / {siteFolderName}</strong>.
+                Re-upload the signed PL document to complete package confirmation. It will be stored in Google Drive: <strong>SIGNED-DC- MSPI- PACKING LIST / {siteFolderName}</strong>.
               </p>
 
               <input
@@ -512,7 +512,7 @@ export default function ConfirmReceiveModal({
                         <span>{formatFileSize(signedFile.size)}</span>
                         <span>•</span>
                         <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                          <FolderCheck size={12} /> Target: DC- MSPI- PACKING LIST / {siteFolderName}
+                          <FolderCheck size={12} /> Target: SIGNED-DC- MSPI- PACKING LIST / {siteFolderName}
                         </span>
                       </div>
                     </div>
