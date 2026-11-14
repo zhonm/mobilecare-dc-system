@@ -37,36 +37,47 @@ export default function FirstLoginLoadingScreen() {
   const [errorMessage, setErrorMessage] = useState('');
 
   const syncInitiatedRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const timersRef = useRef([]);
+
+  const clearPendingTimers = () => {
+    timersRef.current.forEach(t => clearTimeout(t));
+    timersRef.current = [];
+  };
 
   const performInitialHydration = async () => {
+    clearPendingTimers();
     setSyncStatus('syncing');
     setErrorMessage('');
     setActiveStepIndex(0);
     setProgressPct(15);
 
-    const stepTimers = [];
-
     // Progressive step animations for responsive, transparent user feedback
-    stepTimers.push(setTimeout(() => {
+    timersRef.current.push(setTimeout(() => {
+      if (!isMountedRef.current) return;
       setActiveStepIndex(1);
       setProgressPct(35);
     }, 400));
 
-    stepTimers.push(setTimeout(() => {
+    timersRef.current.push(setTimeout(() => {
+      if (!isMountedRef.current) return;
       setActiveStepIndex(2);
       setProgressPct(60);
     }, 900));
 
-    stepTimers.push(setTimeout(() => {
+    timersRef.current.push(setTimeout(() => {
+      if (!isMountedRef.current) return;
       setActiveStepIndex(3);
       setProgressPct(80);
     }, 1400));
 
+    let safetyTimerId = null;
     try {
-      // Safety timeout: If Supabase connection takes > 25s, fallback gracefully
-      const timeoutPromise = new Promise((resolve) =>
-        setTimeout(() => resolve({ timedOut: true }), 25000)
-      );
+      // Safety timeout: If Supabase connection takes > 45s, fallback gracefully
+      const timeoutPromise = new Promise((resolve) => {
+        safetyTimerId = setTimeout(() => resolve({ timedOut: true }), 45000);
+        timersRef.current.push(safetyTimerId);
+      });
 
       const syncPromise = (async () => {
         if (typeof hydrateFromSupabase === 'function') {
@@ -78,7 +89,8 @@ export default function FirstLoginLoadingScreen() {
 
       const result = await Promise.race([syncPromise, timeoutPromise]);
 
-      stepTimers.forEach(t => clearTimeout(t));
+      clearPendingTimers();
+      if (!isMountedRef.current) return;
 
       if (result?.timedOut) {
         setSyncStatus('error');
@@ -101,7 +113,8 @@ export default function FirstLoginLoadingScreen() {
       }
 
       // Brief pause at 100% to let user see successful completion
-      setTimeout(() => {
+      const finishTimer = setTimeout(() => {
+        if (!isMountedRef.current) return;
         setIsInitialSyncing(false);
         const hasDashboard = currentUser?.role === 'superadmin' || currentUser?.role === 'admin' || currentUser?.role === 'user' || currentUser?.permittedPages?.includes('dashboard');
         const landingPage = hasDashboard
@@ -114,8 +127,10 @@ export default function FirstLoginLoadingScreen() {
           showToast(`Live workspace ready for ${currentUser?.fullName || currentUser?.email || 'User'}!`, 'success');
         }
       }, 500);
+      timersRef.current.push(finishTimer);
     } catch (err) {
-      stepTimers.forEach(t => clearTimeout(t));
+      clearPendingTimers();
+      if (!isMountedRef.current) return;
       console.error('First login initial sync error:', err);
       setSyncStatus('error');
       setErrorMessage(err.message || 'An unexpected error occurred while hydrating live operational data.');
@@ -123,10 +138,15 @@ export default function FirstLoginLoadingScreen() {
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     if (!syncInitiatedRef.current) {
       syncInitiatedRef.current = true;
       performInitialHydration();
     }
+    return () => {
+      isMountedRef.current = false;
+      clearPendingTimers();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

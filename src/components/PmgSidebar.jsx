@@ -103,6 +103,17 @@ export default function PmgSidebar() {
       isActive: activeTab === 'request-parts' && pmgSubTab === 'usage_history'
     },
     {
+      id: 'consumables-tools',
+      label: 'Consumables & Tools',
+      description: 'Supplies, tools & packing lists',
+      section: 'Branch Operations',
+      icon: Wrench,
+      onClick: () => {
+        setActiveTab('consumables-tools');
+      },
+      isActive: activeTab === 'consumables-tools' || activeTab === 'consumables-receiving' || activeTab === 'consumables-shipping' || activeTab === 'consumables-history'
+    },
+    {
       id: 'multi-site',
       label: 'Multi-Site Dashboard',
       description: 'Branch aging & health analytics',

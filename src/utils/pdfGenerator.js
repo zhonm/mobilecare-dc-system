@@ -2922,3 +2922,443 @@ export function generateAuditTrailPDF(auditType = 'uploads', data = [], options 
     doc.save(fileName);
   }
 }
+
+/**
+ * Build a dedicated Consumables & Tools Packing List jsPDF document.
+ * Strictly separate from Battery & Display Repair Parts packing lists.
+ */
+export function buildConsumablesToolsPackingListDoc(shipment = {}, options = {}) {
+  const doc = getPdfDoc('portrait', 'mm', 'a4');
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 12;
+  const contentWidth = pageWidth - margin * 2;
+  const logoToUse = options.logoBase64 || MOBILECARE_NO_BG_LOGO_BASE64;
+
+  // Clean White Header
+  if (logoToUse && typeof window !== 'undefined') {
+    try {
+      doc.addImage(logoToUse, 'PNG', margin, 11.5, 22, 10.65);
+    } catch {
+      // Optional logo render in headless/browser
+    }
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(15, 23, 42);
+  doc.text('CONSUMABLES & TOOLS PACKING LIST', pageWidth - margin, 16.5, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('MOBILE CARE SERVICES PHILS. INC. — NON-REPAIR ASSETS & SUPPLIES', pageWidth - margin, 21.8, { align: 'right' });
+
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.4);
+  doc.line(margin, 26.5, pageWidth - margin, 26.5);
+
+  // Ship-From and Ship-To Side-by-Side Boxes
+  const boxTopY = 30;
+  const boxHeight = 32;
+  const halfW = (contentWidth - 4) / 2;
+
+  doc.setDrawColor(203, 213, 225);
+  doc.setFillColor(248, 250, 252);
+  doc.rect(margin, boxTopY, halfW, boxHeight, 'FD');
+  doc.rect(margin + halfW + 4, boxTopY, halfW, boxHeight, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text('SHIP FROM:', margin + 3, boxTopY + 5);
+  doc.text('SHIP TO:', margin + halfW + 7, boxTopY + 5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  const fromName = shipment.from_site_name || 'MOBILE CARE SERVICES PHILS. INC. - Distribution Center';
+  const fromCode = shipment.from_site_code || 'DC-MDC';
+  doc.text(`${fromName} (${fromCode})`, margin + 3, boxTopY + 10.5, { maxWidth: halfW - 6 });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(
+    shipment.from_address || '2/L Northeast Square, #47 Connecticut St. Northeast Greenhills, San Juan City, Metro Manila',
+    margin + 3,
+    boxTopY + 19,
+    { maxWidth: halfW - 6 }
+  );
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(15, 23, 42);
+  const toName = shipment.to_site_name || shipment.to_site_code || 'Destination Site';
+  const toCode = shipment.to_site_code || '';
+  doc.text(`${toName}${toCode && !String(toName).includes(toCode) ? ` (${toCode})` : ''}`, margin + halfW + 7, boxTopY + 10.5, {
+    maxWidth: halfW - 6
+  });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(51, 65, 85);
+  doc.text(
+    shipment.to_address || options.toAddress || `${toName}, Philippines`,
+    margin + halfW + 7,
+    boxTopY + 19,
+    { maxWidth: halfW - 6 }
+  );
+
+  // Shipment Metadata Row
+  const metaY = boxTopY + boxHeight + 4;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(margin, metaY, contentWidth, 14, 'FD');
+
+  const metaCols = [
+    { label: 'Packing List #', value: shipment.packing_list_number || shipment.shipment_number || 'CT-PL-DRAFT', width: 38 },
+    { label: 'TS Number', value: shipment.ts_number || 'N/A', width: 32 },
+    { label: 'Shipment #', value: shipment.shipment_number || 'N/A', width: 42 },
+    { label: 'Date', value: String(shipment.shipment_date || new Date().toISOString().slice(0, 10)).slice(0, 10), width: 26 },
+    { label: 'Carrier / Tracking', value: [shipment.carrier || 'Lalamove', shipment.tracking_number].filter(Boolean).join(' · '), width: 48 }
+  ];
+  let colOffsetX = margin + 3;
+  metaCols.forEach((col) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(col.label.toUpperCase(), colOffsetX, metaY + 5);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(String(col.value || ''), colOffsetX, metaY + 10.5, { maxWidth: col.width - 3 });
+    colOffsetX += col.width;
+  });
+
+  // Line Items Table
+  const items = Array.isArray(shipment.items) ? shipment.items : [];
+  const tableRows = items.map((it, idx) => {
+    const serials = Array.isArray(it.serial_numbers) ? it.serial_numbers.filter(Boolean) : [];
+    const tags = Array.isArray(it.asset_tags) ? it.asset_tags.filter(Boolean) : [];
+    const trackingLines = [
+      serials.length ? `SN: ${serials.join(', ')}` : null,
+      tags.length ? `Tag: ${tags.join(', ')}` : null
+    ].filter(Boolean);
+    const trackingStr =
+      trackingLines.length > 0
+        ? trackingLines.join('\n')
+        : it.item_kind === 'tool'
+          ? 'Unserialized Tool'
+          : 'Bulk Quantity';
+
+    return [
+      idx + 1,
+      it.part_number || '',
+      it.item_kind === 'tool' ? 'Tool' : 'Consumable',
+      it.description || '',
+      it.quantity || 1,
+      trackingStr
+    ];
+  });
+
+  const totalQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
+  tableRows.push(['', '', '', 'TOTAL QUANTITY DISPATCHED', totalQty, `${items.length} Line Item(s)`]);
+
+  autoTable(doc, {
+    startY: metaY + 18,
+    head: [['#', 'Item Number', 'Category', 'Description', 'Qty', 'Serial Numbers / Asset Tags']],
+    body: tableRows,
+    theme: 'grid',
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: 255,
+      fontSize: 8,
+      fontStyle: 'bold'
+    },
+    styles: {
+      fontSize: 7.8,
+      cellPadding: 2.5,
+      lineColor: [203, 213, 225],
+      lineWidth: 0.15,
+      textColor: [15, 23, 42]
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' },
+      1: { cellWidth: 28, fontStyle: 'bold' },
+      2: { cellWidth: 22, halign: 'center' },
+      3: { cellWidth: 56 },
+      4: { cellWidth: 14, halign: 'center', fontStyle: 'bold' },
+      5: { cellWidth: 56 }
+    },
+    didParseCell: (data) => {
+      if (data.row.index === tableRows.length - 1) {
+        data.cell.styles.fillColor = [241, 245, 249];
+        data.cell.styles.fontStyle = 'bold';
+      }
+    },
+    margin: { left: margin, right: margin }
+  });
+
+  // Notes & Standard Packing List Signature Footer
+  const afterTableY = (doc.lastAutoTable?.finalY || metaY + 40) + 8;
+  const sigNeededH = 38;
+  let sigY = afterTableY;
+  if (sigY + sigNeededH > pageHeight - 14) {
+    doc.addPage();
+    sigY = 20;
+  }
+
+  if (shipment.notes) {
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, sigY, contentWidth, 12);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.setTextColor(71, 85, 105);
+    doc.text('NOTES / REMARKS:', margin + 3, sigY + 4.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(String(shipment.notes), margin + 3, sigY + 9.2, { maxWidth: contentWidth - 6 });
+    sigY += 16;
+  }
+
+  // Horizontal divider matching main Packing List footer
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.35);
+  doc.line(margin, sigY + 2, pageWidth - margin, sigY + 2);
+
+  const sigRow1Y = sigY + 10;
+  const sigRow2Y = sigRow1Y + 8;
+  const colRightX = margin + contentWidth * 0.56;
+
+  const preparedByName = options.preparedByName || shipment.prepared_by_name || 'Zhon Manaois';
+  const verifiedByName = options.verifiedByName || shipment.verified_by_name || 'Anjo Alcazar';
+  const receivingBranchSig =
+    options.receivingSignature ||
+    (shipment.received_by_name
+      ? (toCode && !String(shipment.received_by_name).includes(toCode)
+        ? `${shipment.received_by_name} (${toCode})`
+        : shipment.received_by_name)
+      : (shipment.signature_name || toCode || '___________________'));
+  const pickupByName = options.pickupByName || shipment.courier_name || shipment.pickup_by || '___________________';
+
+  doc.setFontSize(8.2);
+
+  // Row 1 - Left: Prepared and Counted by
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Prepared and Counted by:', margin, sigRow1Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(String(preparedByName), margin + 44, sigRow1Y);
+
+  // Row 1 - Right: Verified by
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Verified by:', colRightX, sigRow1Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(String(verifiedByName), colRightX + 22, sigRow1Y);
+
+  // Row 2 - Left: Receiving Branch Signature
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Receiving Branch Signature:', margin, sigRow2Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(String(receivingBranchSig), margin + 44, sigRow2Y);
+
+  // Row 2 - Right: Pickup By
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text('Pickup By:', colRightX, sigRow2Y);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(51, 65, 85);
+  doc.text(String(pickupByName), colRightX + 22, sigRow2Y);
+
+  const manifestPagesCount = doc.internal.getNumberOfPages();
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PAGE 2: OFFICIAL SHIPMENT DECLARATION FORM (matching main Packing List)
+  // ══════════════════════════════════════════════════════════════════════════
+  const includeDeclaration = options.includeDeclarationForm !== false;
+  if (includeDeclaration) {
+    doc.addPage();
+
+    const decMargin = 20;
+    const decHeaderY = 26;
+    const decLogoWidth = 24;
+    const decLogoHeight = 11.62;
+    const decCompX = decMargin + decLogoWidth + 5;
+
+    if (logoToUse && typeof window !== 'undefined') {
+      try {
+        doc.addImage(logoToUse, 'PNG', decMargin, decHeaderY, decLogoWidth, decLogoHeight);
+      } catch {
+        // Optional logo render in headless/browser
+      }
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text('BUSINESS DISTRIBUTION CENTER', decCompX, decHeaderY + decLogoHeight / 2 + 1.4);
+
+    const formStartY = 58;
+    const decLeftColX = decMargin;
+    const decLeftColWidth = 84;
+    const idBoxX = decLeftColX + decLeftColWidth + 14;
+    const idBoxWidth = pageWidth - decMargin - idBoxX;
+    const idBoxHeight = 118;
+
+    const destDisplay = (toName || toCode || 'SERVICE HUB').toUpperCase();
+    const courierDisplayType = String(shipment.carrier || 'Lalamove').toUpperCase();
+    const rawBookingId = String(shipment.booking_id || shipment.tracking_number || shipment.airway_bill || '').trim();
+    const cleanBookingId = !rawBookingId || rawBookingId.toUpperCase() === 'N/A' ? '' : rawBookingId.toUpperCase();
+    const decCourierName = options.pickupByName || shipment.courier_name || shipment.pickup_by || '';
+    const decGuardOnDuty = options.guardOnDuty || shipment.guard_on_duty || '';
+    const decRowGap = 31;
+
+    // 1. TRANSFER TO (SITE)
+    const f1Y = formStartY;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('TRANSFER TO (SITE)', decLeftColX, f1Y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(destDisplay, decLeftColX, f1Y + 7.5, { maxWidth: decLeftColWidth });
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.35);
+    doc.line(decLeftColX, f1Y + 11, decLeftColX + decLeftColWidth, f1Y + 11);
+
+    // 2. TYPE OF COURIER
+    const f2Y = f1Y + decRowGap;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('TYPE OF COURIER', decLeftColX, f2Y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.text(courierDisplayType, decLeftColX, f2Y + 7.5, { maxWidth: decLeftColWidth });
+    doc.line(decLeftColX, f2Y + 11, decLeftColX + decLeftColWidth, f2Y + 11);
+
+    // 3. BOOKING ID / AIRWAY BILL:
+    const f3Y = f2Y + decRowGap;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('BOOKING ID / AIRWAY BILL:', decLeftColX, f3Y);
+    if (cleanBookingId) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.text(cleanBookingId, decLeftColX, f3Y + 7.5, { maxWidth: decLeftColWidth });
+    }
+    doc.line(decLeftColX, f3Y + 11, decLeftColX + decLeftColWidth, f3Y + 11);
+
+    // 4. COURIER NAME AND SIGNATURE
+    const f4Y = f3Y + decRowGap;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('COURIER NAME AND SIGNATURE', decLeftColX, f4Y);
+    if (decCourierName) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.text(String(decCourierName), decLeftColX, f4Y + 7.5, { maxWidth: decLeftColWidth });
+    }
+    doc.line(decLeftColX, f4Y + 11, decLeftColX + decLeftColWidth, f4Y + 11);
+
+    // Right Column: ID HERE Box
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.4);
+    doc.rect(idBoxX, f1Y - 4, idBoxWidth, idBoxHeight, 'S');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(15, 23, 42);
+    doc.text('ID HERE', idBoxX + idBoxWidth / 2, f1Y - 4 + idBoxHeight / 2 + 2, { align: 'center' });
+
+    // Bottom Section: MDC - SUPERVISOR, GUARD ON DUTY, DATE PICKED UP
+    const bottomY = 198;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('MDC - SUPERVISOR', decLeftColX, bottomY);
+    if (verifiedByName) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.text(String(verifiedByName), decLeftColX, bottomY + 16);
+    }
+    doc.setDrawColor(100, 116, 139);
+    doc.setLineWidth(0.35);
+    doc.line(decLeftColX, bottomY + 22, decLeftColX + decLeftColWidth, bottomY + 22);
+
+    const rightBottomColX = idBoxX;
+    const rightBottomWidth = idBoxWidth;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('GUARD ON DUTY:', rightBottomColX, bottomY);
+    if (decGuardOnDuty) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.text(String(decGuardOnDuty), rightBottomColX, bottomY + 16);
+    }
+    doc.line(rightBottomColX, bottomY + 22, rightBottomColX + rightBottomWidth, bottomY + 22);
+
+    const bottomDateY = bottomY + 36;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('DATE PICKED UP:', rightBottomColX, bottomDateY);
+    doc.line(rightBottomColX, bottomDateY + 16, rightBottomColX + rightBottomWidth, bottomDateY + 16);
+  }
+
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i += 1) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      'CONFIDENTIAL — MOBILE CARE SERVICES PHILS. INC. (DISTRIBUTION CENTER)',
+      margin,
+      pageHeight - 5
+    );
+    if (i <= manifestPagesCount) {
+      doc.text(`Page ${i} of ${manifestPagesCount}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
+    }
+  }
+
+  return doc;
+}
+
+export function generateConsumablesToolsPackingListPDF(shipment = {}, options = {}) {
+  const doc = buildConsumablesToolsPackingListDoc(shipment, options);
+  const plNum = String(shipment.packing_list_number || shipment.shipment_number || 'DRAFT').replace(/[^A-Za-z0-9_-]/g, '_');
+  const fileName = `MDC_CT_PACKING_LIST_${plNum}.pdf`;
+  if (typeof window !== 'undefined' && doc.save) {
+    doc.save(fileName);
+  }
+  return doc;
+}
+
+export function generateConsumablesToolsPackingListPdfBytes(shipment = {}, options = {}) {
+  const doc = buildConsumablesToolsPackingListDoc(shipment, options);
+  return new Uint8Array(doc.output('arraybuffer'));
+}
+
+export function printConsumablesToolsPackingListDirect(shipment = {}, options = {}) {
+  const doc = buildConsumablesToolsPackingListDoc(shipment, options);
+  if (typeof window !== 'undefined') {
+    const blobUrl = doc.output('bloburl');
+    const win = window.open(blobUrl, '_blank');
+    if (win) {
+      setTimeout(() => {
+        try {
+          win.print();
+        } catch {
+          // Ignore popup print blocks
+        }
+      }, 450);
+    } else {
+      doc.autoPrint?.();
+    }
+  }
+  return doc;
+}

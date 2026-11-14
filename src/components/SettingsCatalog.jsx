@@ -77,6 +77,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     scanLogs = [],
     savePart,
     deletePart,
+    refreshGsxCatalogFromCsv,
     saveSite,
     deleteSite,
     refreshSitesFromCloud,
@@ -100,6 +101,10 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
   const [activeTab, setActiveTab] = useState(defaultTab); // 'parts' | 'sites' | 'categories' | 'supervisor' | 'security' | 'egress' | 'sql' | 'feedback'
   const [copied, setCopied] = useState(false);
   const [isRefreshingSites, setIsRefreshingSites] = useState(false);
+  const PARTS_PAGE_SIZE = 50;
+  const [partsPage, setPartsPage] = useState(1);
+  const [isRefreshingGsx, setIsRefreshingGsx] = useState(false);
+  const [gsxRefreshInfo, setGsxRefreshInfo] = useState(null);
 
   const isSuperadmin =
     currentUser?.role === 'superadmin' ||
@@ -486,6 +491,33 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
     });
   }, [parts, partSearch, selectedCategoryFilter, categories]);
 
+  const totalPartsPages = Math.max(1, Math.ceil(filteredParts.length / PARTS_PAGE_SIZE));
+  const safePartsPage = Math.min(partsPage, totalPartsPages);
+  const paginatedParts = useMemo(() => {
+    const startIdx = (safePartsPage - 1) * PARTS_PAGE_SIZE;
+    return filteredParts.slice(startIdx, startIdx + PARTS_PAGE_SIZE);
+  }, [filteredParts, safePartsPage]);
+
+  useEffect(() => {
+    setPartsPage(1);
+  }, [partSearch, selectedCategoryFilter]);
+
+  const handleGsxCatalogCsvUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || typeof refreshGsxCatalogFromCsv !== 'function') return;
+    setIsRefreshingGsx(true);
+    try {
+      const csvText = await file.text();
+      const result = await refreshGsxCatalogFromCsv(csvText);
+      setGsxRefreshInfo(result);
+    } catch (err) {
+      showToast(`GSX Catalog CSV import failed: ${err.message}`, 'error');
+    } finally {
+      setIsRefreshingGsx(false);
+      e.target.value = '';
+    }
+  };
+
   return (
     <div className="settings-view" style={{ width: '100%', paddingBottom: '36px' }}>
       <div className="settings-shell">
@@ -859,8 +891,46 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     );
                   })}
                 </select>
+
+                {isSuperadmin && typeof refreshGsxCatalogFromCsv === 'function' && (
+                  <label
+                    className="btn btn-secondary btn-sm"
+                    style={{
+                      height: '40px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '0 12px',
+                      cursor: isRefreshingGsx ? 'wait' : 'pointer',
+                      borderRadius: '8px',
+                      fontWeight: 600,
+                      fontSize: '12.5px',
+                      marginBottom: 0
+                    }}
+                    title="Upload GSX all Parts.csv to refresh catalog idempotently (excludes obsolete devices)"
+                  >
+                    <RefreshCw size={14} className={isRefreshingGsx ? 'spin' : ''} />
+                    <span>{isRefreshingGsx ? 'Importing GSX...' : 'Refresh GSX CSV'}</span>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleGsxCatalogCsvUpload}
+                      disabled={isRefreshingGsx}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                )}
               </div>
             </div>
+
+            {gsxRefreshInfo && (
+              <div style={{ padding: '10px 24px', background: '#ecfdf5', borderBottom: '1px solid #a7f3d0', fontSize: '12.5px', color: '#065f46', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                <span>
+                  GSX Catalog Synced: <strong>{gsxRefreshInfo.importedCount?.toLocaleString()}</strong> current parts processed · <strong>{gsxRefreshInfo.addedCount}</strong> new SKUs added · <strong>{gsxRefreshInfo.stats?.excludedObsoleteDeviceCount}</strong> obsolete/vintage device groups excluded ({gsxRefreshInfo.stats?.excludedServiceIntangibleUniquePns} Service Intangible PNs skipped).
+                </span>
+                <button type="button" onClick={() => setGsxRefreshInfo(null)} style={{ background: 'none', border: 'none', color: '#065f46', cursor: 'pointer', fontWeight: 700 }}>Dismiss</button>
+              </div>
+            )}
 
             {/* Table Content */}
             {filteredParts.length === 0 ? (
@@ -879,6 +949,7 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                 )}
               </div>
             ) : (
+              <>
               <div className="table-container" style={{ maxHeight: 'calc(100vh - 350px)', minHeight: '520px', overflowY: 'auto' }}>
                 <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: '#f8fafc' }}>
@@ -894,21 +965,22 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredParts.map((p, i) => {
+                    {paginatedParts.map((p, i) => {
+                      const rowNum = (safePartsPage - 1) * PARTS_PAGE_SIZE + i;
                       const cat = getCategoryForPart(p, categories);
                       const isVariant = partNumberCounts[p.part_number?.toUpperCase()] > 1;
                       const catBadge = getCategoryBadgeStyle(cat?.name);
                       return (
                         <tr
-                          key={p.id || `${p.part_number}-${p.description}-${i}`}
+                          key={p.id || `${p.part_number}-${p.description}-${rowNum}`}
                           style={{
                             borderBottom: '1px solid #f1f5f9',
                             transition: 'background-color 0.1s ease',
-                            background: i % 2 === 0 ? '#ffffff' : '#fafafa'
+                            background: rowNum % 2 === 0 ? '#ffffff' : '#fafafa'
                           }}
                         >
                           <td className="font-mono" style={{ textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
-                            {i + 1}
+                            {rowNum + 1}
                           </td>
                           <td className="font-mono" style={{ padding: '14px 14px', fontWeight: 700, color: '#0f172a', fontSize: '13.5px' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -1023,6 +1095,35 @@ export default function SettingsCatalog({ defaultTab = 'parts' }) {
                   </tbody>
                 </table>
               </div>
+              {filteredParts.length > PARTS_PAGE_SIZE && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', flexWrap: 'wrap', gap: '10px' }}>
+                  <span style={{ fontSize: '12.5px', color: '#64748b' }}>
+                    Showing {((safePartsPage - 1) * PARTS_PAGE_SIZE) + 1}–{Math.min(safePartsPage * PARTS_PAGE_SIZE, filteredParts.length)} of {filteredParts.length.toLocaleString()} matching parts
+                  </span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safePartsPage <= 1}
+                      onClick={() => setPartsPage(p => Math.max(1, p - 1))}
+                    >
+                      Previous
+                    </button>
+                    <span className="font-mono" style={{ fontSize: '12.5px', fontWeight: 700, color: '#0f172a' }}>
+                      Page {safePartsPage} / {totalPartsPages}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={safePartsPage >= totalPartsPages}
+                      onClick={() => setPartsPage(p => Math.min(totalPartsPages, p + 1))}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
             )}
           </div>
         </div>

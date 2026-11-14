@@ -1,0 +1,41 @@
+# Priority Parts — Description Conflicts Report
+
+Generated: 2026-11-14T01:21:22.566Z
+
+Part numbers with multiple or non-GSX descriptions: **33**
+
+| Part Number | Resolved Canonical Description | GSX Description | Priority CSV Variants | Occurrences | Sample PO#s |
+|---|---|---|---|---:|---|
+| `076-00108` | Display Removal Tool with 20 pack of Wheels | Display Removal Tool with 20 pack of Wheels | "IMAC ADHESIVE CUTTER - Display Removal Tool with 20 pack of Wheels" | 1 | SVC20260171-ZAM |
+| `076-1417` | Kit, Display Removal Wheel, , iMac, 20 Pack | _(not in GSX CSV)_ | Display removal wheel, iMac • Kit, Display Removal Wheel, , iMac, 20 Pack | 13 | SVC20260153-APP ANX, SVC20260154-NEP, SVC20260155-MRK, SVC20260156-SMS, SVC20260158-APP FES |
+| `922-5065` | Stick, Flat Head, Nylon, 4 Pack | Stick, Flat Head, Nylon, 4 Pack | Black Stick, Nylon Probe, 4 PK | 1 | SVC20260159-APP MGM |
+| `922-9004` | Nylon Probe Tool, Black Stick, 24 PK | Nylon Probe Tool, Black Stick, 24 PK | Black Stick, Nylon Probe, 24 PK • Nylon Probe Tool (Black Stick) • Nylon Probe Tool, Black Stick, 24 PK | 8 | SVC20260157-APP MAG, SVC20260167-CDO, SVC20260170-APP BHS, SVC20260171-ZAM, SVC20260173-VER |
+| `922-9005` | Nylon Probe Tool, Black Stick, 96 PK | Nylon Probe Tool, Black Stick, 96 PK | Black Stick, Nylon Probe, 96 PK • Black stick (nylon probe tool) | 2 | SVC20260155-MRK, SVC20260181-APP FES |
+| `923-0247` | Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit | Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit | Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit • Torx Security Bit (1IPR) | 3 | SVC20260165-LAU, SVC20260173-VER, SVC20260181-APP FES |
+| `923-03045` | Cleaning Putty, 32pc | Cleaning Putty, 32pc | Cleaning Putty • Cleaning Putty, 32pc | 4 | SVC20260151-APP PPM, SVC20260171-ZAM, SVC20260173-VER, SVC20260184-APP TRI |
+| `923-04894` | Display Adhesive, iPhone 12 Pro, 30PK | Display Adhesive, iPhone 12 Pro, 30PK | Display Adhesive, iPhone 12 Pro • Display Adhesive, iPhone 12 Pro, 30PK | 2 | SVC20260150-APP MOA, SVC20260160-NES |
+| `923-04895` | Display Adhesive Liner, iPhone 12 Pro Max, 30PK | Display Adhesive Liner, iPhone 12 Pro Max, 30PK | Display Adhesive, iPhone 12 Pro Max | 1 | SVC20260150-APP MOA |
+| `923-06086` | Battery Cover, Macbook Pro 16-inch, 2 Pack | _(not in GSX CSV)_ | Battery Cover, Macbook Pro 14-inch, 2 Pack • Battery Cover, Macbook Pro 16-inch, 2 Pack | 2 | SVC20260171-ZAM, SVC20260174-EEST |
+| `923-06087` | Battery Cover, Macbook Pro 14-inch, 2 Pack | _(not in GSX CSV)_ | Battery Cover, Macbook Pro 14-inch, 2 Pack • Battery Cover, Macbook Pro 16-inch, 2 Pack | 2 | SVC20260171-ZAM, SVC20260174-EEST |
+| `923-06625` | Display Adhesive, iPhone 13 Pro Max, 30 PK | Display Adhesive, iPhone 13 Pro Max, 30 PK | Display Adhesive, iPhone 13 Pro Max • Display Adhesive, iPhone 13 Pro Max, 30 PK | 3 | SVC20260150-APP MOA, SVC20260159-APP MGM, SVC20260177-NAG |
+| `923-08085` | Tool, Torque Driver, Teal, 0.75 kgf cm, iPhone 14 | Tool, Torque Driver, Teal, 0.75 kgf cm, iPhone 14 | Torque Driver (teal, 0.75 kgf cm) | 1 | SVC20260174-EEST |
+| `923-08091` | Back Glass Adhesive, iPhone 14, 30PK | Back Glass Adhesive, iPhone 14, 30PK | Adhesive, Display, iPhone 15 • Back Glass Adhesive, iPhone 14, 30PK | 3 | SVC20260154-NEP, SVC20260158-APP FES, SVC20260160-NES |
+| `923-08094` | Display Adhesive, iPhone 14 Pro, 30PK | Display Adhesive, iPhone 14 Pro, 30PK | Display Adhesive, iPhone 14 Pro • Display Adhesive, iPhone 14 Pro, 30PK | 4 | SVC20260150-APP MOA, SVC20260153-APP ANX, SVC20260160-NES, SVC20260177-NAG |
+| `923-08387` | Screw, Security, Midnight, iPhone 14/Plus, 100PK | Screw, Security, Midnight, iPhone 14/Plus, 100PK | Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK | 1 | SVC20260176-LIM |
+| `923-09184` | Adhesive, Display, iPhone 15 | Adhesive, Display, iPhone 15 | Adhesive, Display, iPhone 15 • Back Glass Adhesive, iPhone 14, 30PK | 3 | SVC20260158-APP FES, SVC20260175-LIM, SVC20260177-NAG |
+| `923-09185` | Adhesive, Back Glass, iPhone 15 | Adhesive, Back Glass, iPhone 15 | Adhesive, Back Glass, iPhone 15 • Adhesive, Back Glass, iPhone 16 Pro, 30PK | 3 | SVC20260153-APP ANX, SVC20260160-NES, SVC20260162-APP FES |
+| `923-09186` | Adhesive, Display, iPhone 15 Plus, 30PK | Adhesive, Display, iPhone 15 Plus, 30PK | Adhesive, Display, iPhone 15 Pro Max, 30PK | 1 | SVC20260177-NAG |
+| `923-09190` | Adhesive, Display, iPhone 15 Pro Max, 30PK | Adhesive, Display, iPhone 15 Pro Max, 30PK | 923-09190 • Adhesive, Display, iPhone 15 Plus, 30PK • Adhesive, Display, iPhone 15 Pro Max, 30PK | 5 | SVC20260153-APP ANX, SVC20260163-DAV, SVC20260164-LAU, SVC20260177-NAG, SVC20260189-DAV |
+| `923-10961` | Display Protective Cover, iPhone 16 Pro, 10PK | Display Protective Cover, iPhone 16 Pro, 10PK | Protective Cover, Display, iPhone 16, 17, 18 Pro, 10PK | 2 | SVC20260158-APP FES, SVC20260182-CEB |
+| `923-11065` | Adhesive, Display , iPhone 16, 30PK | Adhesive, Display , iPhone 16, 30PK | Adhesive, Display , iPhone 16, 30PK • Display Adhesive, iPhone 16 | 3 | SVC20260150-APP MOA, SVC20260162-APP FES, SVC20260178-NAG |
+| `923-11067` | Adhesive, Display, iPhone 16 Pro, 30PK | Adhesive, Display, iPhone 16 Pro, 30PK | Adhesive, Back Glass, iPhone 16 Pro, 30PK • Adhesive, Display, iPhone 16 Pro, 30PK • DISPLAY ADHESIVE, IPHONE 16 PRO, 30PK • Display Adhesive, iPhone 16 Pro • dhesive, Display, iPhone 16 Pro, 30PK | 5 | SVC20260150-APP MOA, SVC20260159-APP MGM, SVC20260160-NES, SVC20260162-APP FES, SVC20260178-NAG |
+| `923-11071` | Adhesive, Back Glass, iPhone 16 Pro, 30PK | Adhesive, Back Glass, iPhone 16 Pro, 30PK | Adhesive, Back Glass, iPhone 15 • Adhesive, Back Glass, iPhone 16 Pro, 30PK • Adhesive, Display, iPhone 16 Pro, 30PK | 5 | SVC20260153-APP ANX, SVC20260160-NES, SVC20260162-APP FES, SVC20260163-DAV, SVC20260189-DAV |
+| `923-11208` | Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK | Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK | Screw, Security, Midnight, iPhone 14/Plus, 100PK | 1 | SVC20260176-LIM |
+| `923-12051` | Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack | Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack | Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack • Display Adhesive, iPhone 16E | 3 | SVC20260150-APP MOA, SVC20260160-NES, SVC20260178-NAG |
+| `923-12052` | Adhesive, Back Glass, iPhone 16e/iPhone 17e, 30 Pack | Adhesive, Back Glass, iPhone 16e/iPhone 17e, 30 Pack | Backglass Adhesive iPhone 16E | 1 | SVC20260150-APP MOA |
+| `923-12860` | Display Adhesive, iPhone 17 Pro Max, 30PK | Display Adhesive, iPhone 17 Pro Max, 30PK | Back Glass Adhesive, iPhone 17, 30 PK • DISPLAY ADHESIVE, IPHONE 17 PRO MAX, 30PK • Display Adhesive, iPhone 17 Pro Max, 30PK | 11 | SVC20260157-APP MAG, SVC20260159-APP MGM, SVC20260162-APP FES, SVC20260164-LAU, SVC20260167-CDO |
+| `923-12868` | Back Glass Adhesive, iPhone 17, 30 PK | Back Glass Adhesive, iPhone 17, 30 PK | 923-12860 • Back Glass Adhesive, iPhone 17, 30 PK • SVC,TOOL,PSA CUTTING,NYLON,20PK | 6 | SVC20260150-APP MOA, SVC20260161-NES, SVC20260162-APP FES, SVC20260164-LAU, SVC20260178-NAG |
+| `923-14003` | Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | 1 | SVC20260175-LIM |
+| `923-14004` | Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK | 1 | SVC20260175-LIM |
+| `923-14190` | Back Glass Adhesive, iPhone 17, 30 PK | _(not in GSX CSV)_ | "SVC,TOOL,PSA CUTTING,NYLON,20PK -adhesive cutters" • Adhesive Cutter • Adhesive cutter • Back Glass Adhesive, iPhone 17, 30 PK • SVC,TOOL,PSA CUTTING,NYLON,20PK | 18 | SVC20260150-APP MOA, SVC20260151-APP PPM, SVC20260153-APP ANX, SVC20260156-SMS, SVC20260157-APP MAG |
+| `923-14754` | Camera Cap | _(not in GSX CSV)_ | Camera Cap • Camera Cover | 2 | SVC20260170-APP BHS, SVC20260173-VER |

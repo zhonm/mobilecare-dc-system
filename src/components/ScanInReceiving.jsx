@@ -81,6 +81,7 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
     selectedPoId: globalSelectedPoId,
     setSelectedPoId: setGlobalSelectedPoId,
     parts,
+    ctCatalog = [],
     categories = [],
     inventoryUnits,
     dcIntakeRecords,
@@ -441,6 +442,13 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
     return resolvePartInfo(partNumberInput, parts);
   }, [partNumberInput, parts]);
 
+  // Detect Consumables & Tools catalog matches so Scan-In routes them to their separate module
+  const matchedCtItem = useMemo(() => {
+    const clean = String(partNumberInput || '').trim().toUpperCase();
+    if (!clean) return null;
+    return (ctCatalog || []).find(c => String(c.part_number || '').trim().toUpperCase() === clean) || null;
+  }, [partNumberInput, ctCatalog]);
+
   // Autocomplete Suggestions for Part Number field
   const suggestedParts = useMemo(() => {
     if (!partNumberInput.trim()) return [];
@@ -799,6 +807,21 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
       }
 
       const effectiveRawPn = rawPn || dup?.part_number || '';
+      if (effectiveRawPn) {
+        const cleanCtPn = String(effectiveRawPn).trim().toUpperCase();
+        const ctHit = (ctCatalog || []).find(c => String(c.part_number || '').trim().toUpperCase() === cleanCtPn);
+        if (ctHit && !resolvePartInfo(cleanCtPn, parts)) {
+          try {
+            localStorage.setItem('mdc_ct_pending_receive_pn', ctHit.part_number);
+          } catch {}
+          showToast(
+            `Detected ${ctHit.item_kind.toUpperCase()} "${ctHit.part_number}" — routed to Consumables & Tools Receiving.`,
+            'info'
+          );
+          if (onNavigateTab) onNavigateTab('consumables-receiving');
+          return false;
+        }
+      }
       if (!effectiveRawPn) {
         barcodeAudio.playError();
         setScanResult({
@@ -2282,6 +2305,39 @@ export default function ScanInReceiving({ initialTab = 'station', onNavigateTab:
                 </button>
               )}
             </div>
+
+            {/* Live Consumable / Tool Routing Banner */}
+            {matchedCtItem && (
+              <div style={{
+                marginTop: '8px',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                background: 'rgba(14, 165, 233, 0.14)',
+                border: '1px solid rgba(56, 189, 248, 0.45)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '8px',
+                flexWrap: 'wrap',
+                fontSize: '12px'
+              }}>
+                <span>
+                  Detected <strong>{matchedCtItem.item_kind.toUpperCase()}</strong> ({matchedCtItem.part_number}): {matchedCtItem.description}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    try {
+                      localStorage.setItem('mdc_ct_pending_receive_pn', matchedCtItem.part_number);
+                    } catch {}
+                    if (onNavigateTab) onNavigateTab('consumables-receiving');
+                  }}
+                >
+                  Open Consumables & Tools Receiving →
+                </button>
+              </div>
+            )}
 
             {/* Live Apple Genuine Part Recognition Banner */}
             {matchedPart && (

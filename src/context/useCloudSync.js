@@ -156,6 +156,7 @@ export function useCloudSync({
   const debounceRealtimeTimerRef = useRef(null);
   const trailingRefreshTimerRef = useRef(null);
   const autoRefreshDataRef = useRef(null);
+  const inFlightHydrationRef = useRef(null);
 
   const [activePackingStations, setActivePackingStations] = useState({});
   const activePackingStationsRef = useRef({});
@@ -446,6 +447,15 @@ export function useCloudSync({
   const hydrateFromSupabase = useCallback(async (selectiveTables = null, isForce = false) => {
     if (!supabase) return false;
 
+    // Deduplicate concurrent full-hydration calls (e.g. FirstLoginLoadingScreen + login transition autoRefresh)
+    if (!selectiveTables) {
+      const existing = inFlightHydrationRef.current;
+      if (existing && (!isForce || existing.isForce)) {
+        return existing.promise;
+      }
+    }
+
+    const executeHydration = async () => {
     const liveState = liveStateRef.current || {};
     const curUser = liveState.currentUser || currentUser;
 
@@ -694,6 +704,9 @@ export function useCloudSync({
           const shipmentRows = resShipments?.data || [];
 
 
+          // Fetch all conditional heavy documents in parallel rather than sequentially
+          await Promise.all([
+            (async () => {
           // 1. Conditional Egress Optimization for LIVE_MASTER_RECORD_ID:
           // Contains heavy forecasts, allocations, parts, and sites (~1-3 MB).
           // If remote updated_at matches local cache, skip payload download entirely.
@@ -743,6 +756,8 @@ export function useCloudSync({
               });
             }
           }
+            })(),
+            (async () => {
 
           // 2. Conditional Egress Optimization for master_masterlist_data_registry:
           // Masterlist files contain parsed intelligence for thousands of units (~2-4 MB).
@@ -786,6 +801,8 @@ export function useCloudSync({
               });
             }
           }
+            })(),
+            (async () => {
 
           // 2.5. Conditional Egress Optimization for live_master_dc_inventory:
           // Live inventory snapshots can contain thousands of serialized units (~1-2 MB).
@@ -843,6 +860,8 @@ export function useCloudSync({
               });
             }
           }
+            })(),
+            (async () => {
 
           // 2.6. Conditional Egress Optimization for master_branch_inventory_registry:
           const remoteBranchInvHeader = heavyHeaders.find(h => h.id === 'master_branch_inventory_registry');
@@ -891,6 +910,8 @@ export function useCloudSync({
               });
             }
           }
+            })(),
+            (async () => {
 
           // 2.7. Conditional Egress Optimization for master_fixably_inventory_snapshot:
           // Reconciled Fixably inventory snapshots can contain thousands of units (~1-2 MB).
@@ -1035,6 +1056,8 @@ export function useCloudSync({
               }
             }
           }
+            })(),
+            (async () => {
 
           // Supabase Egress & Quota Defense for Stock Transfer Reports:
           // Stock transfer files contain thousands of rows (~500 KB - 1 MB in JSON).
@@ -1083,6 +1106,8 @@ export function useCloudSync({
           if (stockTransferRow) {
             systemRows.push(stockTransferRow);
           }
+            })()
+          ]);
 
           return { data: [...systemRows, ...shipmentRows] };
         })() : Promise.resolve({ data: null }),
@@ -3542,6 +3567,19 @@ export function useCloudSync({
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
       return false;
     }
+    };
+
+    if (!selectiveTables) {
+      const promise = executeHydration().finally(() => {
+        if (inFlightHydrationRef.current?.promise === promise) {
+          inFlightHydrationRef.current = null;
+        }
+      });
+      inFlightHydrationRef.current = { promise, isForce };
+      return promise;
+    }
+
+    return executeHydration();
   }, [setCurrentUser, setMasterlistData, setPendingFirstTimeUser, showToast, setActivePackDraft, setActivePeriod, setAllocations, setCategories, setDcIntakeRecords, setDeletionAuditLogs, setForecastItems, setForecastingModel, setInventoryUnits, setIsInventoryLoaded, setParts, setPartsRequests, setPurchaseOrders, setRepairUsageRecords, setShipments, setSites, setUploadAuditLogs, setUsersList, setAutoLogoutConfig, setSessionAuditLogs, setSystemAuditLogs, setSupervisorSettings, setFixablySnapshot, broadcastCloudEvent, _dcIntakeRecords, _fixablySnapshot, _forecastingModel, _shipments, _usersList, activePackingStations, activePeriod, allocations, categories, currentUser, forecastItems, inventoryUnits, masterlistData, parts, sites]);
 
   // Centralized Auto-Refresh Controller with strict runaway loop prevention

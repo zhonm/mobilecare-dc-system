@@ -27,7 +27,8 @@ import {
   Building2,
   HardDrive,
   MessageSquare,
-  Activity
+  Activity,
+  Wrench
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -65,32 +66,44 @@ export default function Sidebar() {
   }, [sites, currentUser?.siteId, currentUser?.site_id, currentUser?.siteCode]);
 
   const isPartsActive = activeTab === 'request-parts' || activeTab === 'all-stocks' || activeTab === 'multi-site';
+  const isCtActive =
+    activeTab === 'consumables-tools' ||
+    activeTab === 'consumables-receiving' ||
+    activeTab === 'consumables-shipping' ||
+    activeTab === 'consumables-history';
 
-  const [isPartsDropdownOpen, setIsPartsDropdownOpen] = useState(() => isPartsActive);
+  const [openDropdowns, setOpenDropdowns] = useState(() => ({
+    'parts-group': isPartsActive,
+    'consumables-group': isCtActive
+  }));
 
-  // Automatically open dropdown when inside any parts sub-page, and close when accessing any other page
+  // Automatically open the active dropdown group when inside its sub-pages, and close others
   useEffect(() => {
-    if (isPartsActive) {
-      setIsPartsDropdownOpen(true);
-    } else {
-      setIsPartsDropdownOpen(false);
-    }
-  }, [isPartsActive]);
+    setOpenDropdowns({
+      'parts-group': isPartsActive,
+      'consumables-group': isCtActive
+    });
+  }, [isPartsActive, isCtActive]);
 
-  const handleDropdownParentClick = (_item) => {
-    if (!isPartsActive) {
-      setIsPartsDropdownOpen(true);
-      setActiveTab('request-parts');
-      if (setPmgSubTab) setPmgSubTab(pmgSubTab || 'requests_table');
+  const handleDropdownParentClick = (item) => {
+    const groupActive = item.id === 'consumables-group' ? isCtActive : isPartsActive;
+    if (!groupActive) {
+      setOpenDropdowns(prev => ({ ...prev, [item.id]: true }));
+      if (item.id === 'consumables-group') {
+        setActiveTab('consumables-tools');
+      } else {
+        setActiveTab('request-parts');
+        if (setPmgSubTab) setPmgSubTab(pmgSubTab || 'requests_table');
+      }
       setIsMobileNavOpen(false);
     } else {
-      setIsPartsDropdownOpen(prev => !prev);
+      setOpenDropdowns(prev => ({ ...prev, [item.id]: !prev[item.id] }));
     }
   };
 
-  const handleChevronToggle = (e) => {
+  const handleChevronToggle = (e, groupId) => {
     e.stopPropagation();
-    setIsPartsDropdownOpen(prev => !prev);
+    setOpenDropdowns(prev => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
   const handleSubItemClick = (child) => {
@@ -183,6 +196,21 @@ export default function Sidebar() {
       ]
     },
 
+    // 2b. Consumables & Tools (Separate Module Dropdown)
+    {
+      id: 'consumables-group',
+      label: 'Consumables & Tools',
+      icon: Wrench,
+      section: 'Operations & Logistics',
+      isDropdown: true,
+      children: [
+        { id: 'consumables-tools', label: 'Consumables & Tools', icon: Wrench },
+        { id: 'consumables-receiving', label: 'CT Receiving & Scan-In', icon: PackageCheck },
+        { id: 'consumables-shipping', label: 'CT Shipping & Packing List', icon: Truck },
+        { id: 'consumables-history', label: 'CT Movement History', icon: History }
+      ]
+    },
+
     // 3. Reports & Traceability
     { id: 'forecast-reports', label: 'Forecasting Reports', icon: BarChart3, section: 'Reports & Traceability' },
     { id: 'dc-stock-monitoring', label: 'DC Monitoring & SDR', icon: Activity, section: 'Reports & Traceability' },
@@ -264,34 +292,35 @@ export default function Sidebar() {
                     if (visibleChildren.length === 0) return null;
 
                     const isDropdownActive = visibleChildren.some(child => isChildActive(child));
+                    const isGroupOpen = Boolean(openDropdowns[item.id]);
 
                     return (
                       <div key={item.id} className="nav-dropdown-wrapper">
                         <div
                           className={`nav-item nav-dropdown-header ${isDropdownActive ? 'active-group' : ''}`}
                           onClick={() => handleDropdownParentClick(item)}
-                          title={`${item.label} (Click to ${isPartsDropdownOpen ? 'collapse' : 'expand'})`}
+                          title={`${item.label} (Click to ${isGroupOpen ? 'collapse' : 'expand'})`}
                         >
                           <div className="nav-item-left">
                             <item.icon size={17} className={`nav-icon ${isDropdownActive ? 'active-icon' : ''}`} />
                             <span className="nav-label">{item.label}</span>
                           </div>
                           <div className="nav-item-right">
-                            {(!isPartsDropdownOpen && item.badge > 0) && (
+                            {(!isGroupOpen && item.badge > 0) && (
                               <span className="nav-badge">{item.badge}</span>
                             )}
                             <button
                               type="button"
                               className="nav-dropdown-chevron-btn"
-                              onClick={handleChevronToggle}
-                              aria-label={isPartsDropdownOpen ? 'Collapse menu' : 'Expand menu'}
+                              onClick={(e) => handleChevronToggle(e, item.id)}
+                              aria-label={isGroupOpen ? 'Collapse menu' : 'Expand menu'}
                             >
-                              {isPartsDropdownOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {isGroupOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             </button>
                           </div>
                         </div>
 
-                        {isPartsDropdownOpen && (
+                        {isGroupOpen && (
                           <div className="nav-sub-menu">
                             {visibleChildren.map(child => {
                               const ChildIcon = child.icon;
@@ -325,7 +354,7 @@ export default function Sidebar() {
                       key={item.id}
                       className={`nav-item ${isActive ? 'active' : ''}`}
                       onClick={() => {
-                        setIsPartsDropdownOpen(false);
+                        setOpenDropdowns({});
                         setActiveTab(item.id);
                         setIsMobileNavOpen(false);
                       }}

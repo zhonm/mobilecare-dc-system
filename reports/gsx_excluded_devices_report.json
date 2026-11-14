@@ -1,0 +1,288 @@
+{
+  "generatedAt": "2026-11-14T01:21:22.565Z",
+  "rule": {
+    "prefixes": [
+      "OBS,",
+      "VIN,",
+      "~VIN,"
+    ],
+    "legacyModels": [
+      "iPhone 4S (8GB)",
+      "iPhone 7",
+      "iPhone 7 Plus",
+      "iPhone XR",
+      "iPhone XS Max",
+      "iPhone XR Smart Battery Case",
+      "iPhone Xs Smart Battery Case",
+      "iPhone Xs Max Smart Battery Case",
+      "iPhone 11 Smart Battery Case",
+      "iPhone 11 Pro Smart Battery Case",
+      "iPhone 11 Pro Max Smart Battery Case"
+    ],
+    "cutoffNote": "Excludes Apple Obsolete (OBS,*), Vintage (VIN,*/~VIN,*), pre-iPhone 11 legacy models (4S, 7, 7 Plus, XR, XS Max), Smart Battery Cases, and blank/0 rows. Keeps iPhone 11, 11 Pro Max, SE (2nd/3rd gen), iPhone 12-17/17e, iPhone Air, and MagSafe accessories."
+  },
+  "stats": {
+    "totalCsvRows": 24490,
+    "blankRows": 1,
+    "excludedObsoleteRows": 5764,
+    "excludedObsoleteDeviceCount": 36,
+    "excludedServiceIntangibleRows": 2474,
+    "excludedServiceIntangibleUniquePns": 459,
+    "keptDevicesCount": 33,
+    "importedUniquePartsCount": 4640,
+    "exclusionRule": "Excludes Apple Obsolete (OBS,*), Vintage (VIN,*/~VIN,*), pre-iPhone 11 legacy models (4S, 7, 7 Plus, XR, XS Max), Smart Battery Cases, and blank/0 rows. Keeps iPhone 11, 11 Pro Max, SE (2nd/3rd gen), iPhone 12-17/17e, iPhone Air, and MagSafe accessories."
+  },
+  "keptDevices": [
+    "iPhone 11",
+    "iPhone 11 Pro Max",
+    "iPhone 12",
+    "iPhone 12 Pro",
+    "iPhone 12 Pro Max",
+    "iPhone 12 mini",
+    "iPhone 13",
+    "iPhone 13 Pro",
+    "iPhone 13 Pro Max",
+    "iPhone 13 mini",
+    "iPhone 14",
+    "iPhone 14 Plus",
+    "iPhone 14 Pro",
+    "iPhone 14 Pro Max",
+    "iPhone 15",
+    "iPhone 15 Plus",
+    "iPhone 15 Pro",
+    "iPhone 15 Pro Max",
+    "iPhone 16",
+    "iPhone 16 Plus",
+    "iPhone 16 Pro",
+    "iPhone 16 Pro Max",
+    "iPhone 16e",
+    "iPhone 17",
+    "iPhone 17 Pro",
+    "iPhone 17 Pro Max",
+    "iPhone 17e",
+    "iPhone Air",
+    "iPhone Air MagSafe Battery",
+    "iPhone MagSafe Battery Pack",
+    "iPhone MagSafe Charger",
+    "iPhone SE (2nd generation)",
+    "iPhone SE (3rd generation)"
+  ],
+  "excludedDevices": [
+    {
+      "product_name": "~VIN,iPhone 3GS (8GB)",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 28,
+      "unique_part_numbers": 14
+    },
+    {
+      "product_name": "iPhone 11 Pro Max Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 6,
+      "unique_part_numbers": 3
+    },
+    {
+      "product_name": "iPhone 11 Pro Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 6,
+      "unique_part_numbers": 3
+    },
+    {
+      "product_name": "iPhone 11 Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 4,
+      "unique_part_numbers": 2
+    },
+    {
+      "product_name": "iPhone 4S (8GB)",
+      "reason": "Pre-iPhone 11 Legacy Model (outside current cutoff)",
+      "row_count": 74,
+      "unique_part_numbers": 37
+    },
+    {
+      "product_name": "iPhone 7",
+      "reason": "Pre-iPhone 11 Legacy Model (outside current cutoff)",
+      "row_count": 394,
+      "unique_part_numbers": 180
+    },
+    {
+      "product_name": "iPhone 7 Plus",
+      "reason": "Pre-iPhone 11 Legacy Model (outside current cutoff)",
+      "row_count": 376,
+      "unique_part_numbers": 178
+    },
+    {
+      "product_name": "iPhone XR",
+      "reason": "Pre-iPhone 11 Legacy Model (outside current cutoff)",
+      "row_count": 546,
+      "unique_part_numbers": 236
+    },
+    {
+      "product_name": "iPhone XR Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 4,
+      "unique_part_numbers": 2
+    },
+    {
+      "product_name": "iPhone XS Max",
+      "reason": "Pre-iPhone 11 Legacy Model (outside current cutoff)",
+      "row_count": 446,
+      "unique_part_numbers": 204
+    },
+    {
+      "product_name": "iPhone Xs Max Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 6,
+      "unique_part_numbers": 3
+    },
+    {
+      "product_name": "iPhone Xs Smart Battery Case",
+      "reason": "Legacy Smart Battery Case",
+      "row_count": 6,
+      "unique_part_numbers": 3
+    },
+    {
+      "product_name": "OBS, iPhone 5s",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 94,
+      "unique_part_numbers": 47
+    },
+    {
+      "product_name": "OBS,iPhone 3G",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 26,
+      "unique_part_numbers": 13
+    },
+    {
+      "product_name": "OBS,iPhone 3G (CHINA)",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 18,
+      "unique_part_numbers": 9
+    },
+    {
+      "product_name": "OBS,iPhone 3GS",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 28,
+      "unique_part_numbers": 14
+    },
+    {
+      "product_name": "OBS,iPhone 3GS (CHINA)",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 18,
+      "unique_part_numbers": 9
+    },
+    {
+      "product_name": "OBS,iPhone 4",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 48,
+      "unique_part_numbers": 24
+    },
+    {
+      "product_name": "OBS,iPhone 4 (8GB)",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 38,
+      "unique_part_numbers": 19
+    },
+    {
+      "product_name": "OBS,iPhone 4 CDMA",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 38,
+      "unique_part_numbers": 19
+    },
+    {
+      "product_name": "OBS,iPhone 4 CDMA (8GB)",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 34,
+      "unique_part_numbers": 17
+    },
+    {
+      "product_name": "OBS,iPhone 4S",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 80,
+      "unique_part_numbers": 40
+    },
+    {
+      "product_name": "OBS,iPhone 5",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 100,
+      "unique_part_numbers": 50
+    },
+    {
+      "product_name": "OBS,iPhone 5c",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 94,
+      "unique_part_numbers": 47
+    },
+    {
+      "product_name": "OBS,iPhone 5s",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 94,
+      "unique_part_numbers": 47
+    },
+    {
+      "product_name": "OBS,iPhone 6 Plus",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 114,
+      "unique_part_numbers": 57
+    },
+    {
+      "product_name": "OBS,iPhone 6s Plus",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 344,
+      "unique_part_numbers": 148
+    },
+    {
+      "product_name": "OBS,iPhone SE",
+      "reason": "Apple Obsolete (OBS prefix)",
+      "row_count": 108,
+      "unique_part_numbers": 54
+    },
+    {
+      "product_name": "VIN,iPhone 11 Pro",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 454,
+      "unique_part_numbers": 209
+    },
+    {
+      "product_name": "VIN,iPhone 5c",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 94,
+      "unique_part_numbers": 47
+    },
+    {
+      "product_name": "VIN,iPhone 6",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 170,
+      "unique_part_numbers": 80
+    },
+    {
+      "product_name": "VIN,iPhone 6s",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 352,
+      "unique_part_numbers": 144
+    },
+    {
+      "product_name": "VIN,iPhone 8",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 358,
+      "unique_part_numbers": 168
+    },
+    {
+      "product_name": "VIN,iPhone 8 Plus",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 398,
+      "unique_part_numbers": 188
+    },
+    {
+      "product_name": "VIN,iPhone X",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 334,
+      "unique_part_numbers": 162
+    },
+    {
+      "product_name": "VIN,iPhone XS",
+      "reason": "Apple Vintage (VIN prefix)",
+      "row_count": 432,
+      "unique_part_numbers": 197
+    }
+  ]
+}

@@ -34,6 +34,7 @@ const UserAccessManagement = lazy(() => import('./components/UserAccessManagemen
 const RequestParts = lazy(() => import('./components/RequestParts'));
 const Feedback = lazy(() => import('./components/Feedback'));
 const DriveDocumentHub = lazy(() => import('./components/DriveDocumentHub'));
+const ConsumablesToolsModule = lazy(() => import('./components/ConsumablesToolsModule'));
 
 function ModuleLoadingFallback() {
   return (
@@ -140,6 +141,14 @@ function MainApp() {
         return <UserAccessManagement />;
       case 'feedback':
         return <Feedback />;
+      case 'consumables-tools':
+        return <ConsumablesToolsModule initialSection="assets" key="ct-assets" />;
+      case 'consumables-receiving':
+        return <ConsumablesToolsModule initialSection="orders_receiving" key="ct-receiving" />;
+      case 'consumables-shipping':
+        return <ConsumablesToolsModule initialSection="shipping" key="ct-shipping" />;
+      case 'consumables-history':
+        return <ConsumablesToolsModule initialSection="history" key="ct-history" />;
       case 'drive-hub':
         return currentUser?.role === 'superadmin' ? <DriveDocumentHub /> : <UnauthorizedAccess />;
       default:

@@ -20,6 +20,7 @@ import { getBasePoNumber, normalizeDateToIso } from '../utils/appContextHelpers'
 export default function PurchaseOrders() {
   const {
     purchaseOrders = [],
+    parts = [],
     addPurchaseOrder,
     deletePurchaseOrder,
     clearCompletedPurchaseOrders,
@@ -347,6 +348,21 @@ export default function PurchaseOrders() {
     setItems(prev => {
       const copy = [...prev];
       copy[index] = { ...copy[index], [field]: value };
+      if (field === 'part_number') {
+        const cleanPn = String(value || '').trim().toUpperCase();
+        const catalogMatch = (parts || []).find(
+          p => String(p.part_number || '').trim().toUpperCase() === cleanPn
+        );
+        if (catalogMatch) {
+          if (!copy[index].description || copy[index].description === 'Apple Genuine Part') {
+            copy[index].description = catalogMatch.description || copy[index].description;
+          }
+          if (Number(catalogMatch.stocking_price) > 0 && (!copy[index].unit_price || copy[index].unit_price === 99)) {
+            copy[index].unit_price = Number(catalogMatch.stocking_price);
+            copy[index].extended_price = Number(copy[index].quantity_ordered || 1) * Number(catalogMatch.stocking_price);
+          }
+        }
+      }
       if (field === 'quantity_ordered' || field === 'unit_price') {
         const qty = field === 'quantity_ordered' ? Number(value) : Number(copy[index].quantity_ordered);
         const price = field === 'unit_price' ? Number(value) : Number(copy[index].unit_price);
@@ -365,7 +381,7 @@ export default function PurchaseOrders() {
       ...prev,
       {
         id: `po-item-${Date.now()}`,
-        part_number: '661-',
+        part_number: '',
         description: 'Apple Genuine Part',
         quantity_ordered: 1,
         quantity_shipped: 1,
@@ -1183,15 +1199,17 @@ export default function PurchaseOrders() {
                             <tbody>
                               {items.map((it, idx) => (
                                 <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                  <td>
-                                    <input
-                                      type="text"
-                                      className="form-control font-mono"
-                                      value={it.part_number}
-                                      onChange={(e) => handleItemChange(idx, 'part_number', e.target.value.toUpperCase())}
-                                      style={{ height: '30px', fontSize: '12px', padding: '2px 8px', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a' }}
-                                    />
-                                  </td>
+                                    <td>
+                                      <input
+                                        type="text"
+                                        list="po-gsx-parts-datalist"
+                                        placeholder="e.g. 661-30373 / 923-09536"
+                                        className="form-control font-mono"
+                                        value={it.part_number}
+                                        onChange={(e) => handleItemChange(idx, 'part_number', e.target.value.toUpperCase())}
+                                        style={{ height: '30px', fontSize: '12px', padding: '2px 8px', background: '#ffffff', border: '1px solid #cbd5e1', color: '#0f172a' }}
+                                      />
+                                    </td>
                                   <td>
                                     <input
                                       type="text"
@@ -1239,6 +1257,13 @@ export default function PurchaseOrders() {
                               ))}
                             </tbody>
                           </table>
+                          <datalist id="po-gsx-parts-datalist">
+                            {(parts || []).filter(p => p.is_active !== false).slice(0, 600).map((p, pIdx) => (
+                              <option key={`${p.part_number}-${pIdx}`} value={p.part_number}>
+                                {p.iphone_model ? `${p.iphone_model} — ` : ''}{p.description}
+                              </option>
+                            ))}
+                          </datalist>
                         </div>
                       )}
                     </div>

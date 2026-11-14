@@ -86,6 +86,26 @@ export default function Header() {
       title: 'Google Drive Document Hub & Archive',
       section: 'Cloud Storage & Documents',
       showCategories: false
+    },
+    'consumables-tools': {
+      title: 'Consumables & Service Tools',
+      section: 'Consumables & Tools',
+      showCategories: false
+    },
+    'consumables-receiving': {
+      title: 'Consumables & Tools Receiving',
+      section: 'Consumables & Tools',
+      showCategories: false
+    },
+    'consumables-shipping': {
+      title: 'Consumables & Tools Packing List',
+      section: 'Consumables & Tools',
+      showCategories: false
+    },
+    'consumables-history': {
+      title: 'CT Movement & Shipment Archive',
+      section: 'Consumables & Tools',
+      showCategories: false
     }
   };
 

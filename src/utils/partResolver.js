@@ -138,8 +138,8 @@ export function resolvePartInfo(rawInput, partsCatalog = []) {
     str = `${str.slice(0, 3)}-${str.slice(3)}`;
   }
 
-  // Extract from "Replacement Part (660-30373)" or "Replacement Part (668-30373)" or "Part 661-30373"
-  const embeddedPnMatch = str.match(/(?:66[0-9]|923|605|670)-[0-9]{4,6}/i);
+  // Extract from "Replacement Part (660-30373)" or "Replacement Part (923-09536)" or "Part 076-00580"
+  const embeddedPnMatch = str.match(/\b\d{3}-(?=[A-Z0-9]*\d)[A-Z0-9]{4,6}\b/i);
   if (embeddedPnMatch) {
     str = embeddedPnMatch[0];
   }

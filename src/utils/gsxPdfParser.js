@@ -269,9 +269,9 @@ export async function parseGsxInvoicePdf(pdfInput, filename = 'GSX_Invoice.pdf')
     }
   }
 
-  // 2. Extract Line Items (Apple Genuine Parts: 661-xxxxx)
+  // 2. Extract Line Items (Apple Genuine Parts: e.g. 661-xxxxx, 923-xxxxx, 076-xxxxx, 652-xxxxx)
   const items = [];
-  const partNumberRegex = /^(661-\d{5})$/i;
+  const partNumberRegex = /^(\d{3}-(?=[A-Z0-9]*\d)[A-Z0-9]{4,6})$/i;
 
   for (const lineTokens of visualLines) {
     const texts = lineTokens.map(t => t.text);
@@ -438,11 +438,11 @@ export async function parseGsxExcelOrCsv(fileData, filename = 'Purchase_Order.xl
     let qty = qtyCol !== -1 ? parseInt(String(row[qtyCol] || '0').replace(/,/g, ''), 10) : 0;
     let price = priceCol !== -1 ? parseFloat(String(row[priceCol] || '0').replace(/,/g, '')) : 0;
 
-    // If no designated columns, scan cells for Apple part number (661-xxxxx)
+    // If no designated columns, scan cells for Apple GSX part number (e.g. 661-xxxxx, 923-xxxxx, 076-xxxxx)
     if (!partNumber) {
       for (let c = 0; c < row.length; c++) {
         const val = String(row[c] || '').trim().toUpperCase();
-        if (/^661-\d{5}$/i.test(val)) {
+        if (/^\d{3}-(?=[A-Z0-9]*\d)[A-Z0-9]{4,6}$/i.test(val)) {
           partNumber = val;
           if (c + 1 < row.length && isNaN(parseFloat(row[c + 1]))) {
             description = String(row[c + 1]).trim();
@@ -452,7 +452,7 @@ export async function parseGsxExcelOrCsv(fileData, filename = 'Purchase_Order.xl
       }
     }
 
-    if (partNumber && /^661-\d{5}$/i.test(partNumber)) {
+    if (partNumber && /^\d{3}-(?=[A-Z0-9]*\d)[A-Z0-9]{4,6}$/i.test(partNumber)) {
       if (!qty || isNaN(qty) || qty <= 0) qty = 1;
       items.push({
         id: `po-item-${partNumber}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,

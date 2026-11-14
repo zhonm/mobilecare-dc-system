@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-11-14T01:21:22.565Z",
+  "stats": {
+    "totalCsvRows": 228,
+    "uniqueCatalogItems": 103,
+    "consumablesCount": 74,
+    "toolsCount": 29,
+    "syntheticSkusCount": 2,
+    "ordersCount": 40,
+    "needsReviewCount": 4,
+    "descriptionConflictsCount": 33
+  },
+  "needsReview": [
+    {
+      "csv_line": 118,
+      "po_number": "SVC20260171-ZAM",
+      "order_number": "",
+      "raw_site": "ZAM",
+      "resolved_site_code": "ASP ZAM",
+      "raw_part_number": "N/A",
+      "assigned_part_number": "CONS-IPA-WIPES",
+      "raw_description": "Isopropyl alcohol (IPA) wipes",
+      "raw_qty": "100",
+      "reasons": [
+        "Assigned synthetic SKU \"CONS-IPA-WIPES\" because PART NUMBER was \"N/A\""
+      ]
+    },
+    {
+      "csv_line": 130,
+      "po_number": "SVC20260172-ZAM",
+      "order_number": "",
+      "raw_site": "ZAM",
+      "resolved_site_code": "ASP ZAM",
+      "raw_part_number": "923-12859",
+      "assigned_part_number": "923-12859",
+      "raw_description": "Back Glass Adhesive, iPhone 17 Pro Max, 30PK",
+      "raw_qty": "<BLANK>",
+      "reasons": [
+        "Missing or non-positive QTY (\"BLANK\") — defaulted to 0 pending confirmation"
+      ]
+    },
+    {
+      "csv_line": 219,
+      "po_number": "SVC20260187-ILO",
+      "order_number": "",
+      "raw_site": "ILO",
+      "resolved_site_code": "ASP ILO",
+      "raw_part_number": "N/A",
+      "assigned_part_number": "CONS-IMAC-WHEEL",
+      "raw_description": "Adhesive cutter replacement wheel (iMac)",
+      "raw_qty": "5",
+      "reasons": [
+        "Assigned synthetic SKU \"CONS-IMAC-WHEEL\" because PART NUMBER was \"N/A\""
+      ]
+    },
+    {
+      "csv_line": 222,
+      "po_number": "SVC20260188-APP MAG",
+      "order_number": "",
+      "raw_site": "APP MAG",
+      "resolved_site_code": "APP RM",
+      "raw_part_number": "<BLANK>",
+      "assigned_part_number": "923-12850",
+      "raw_description": "Adhesive, Display, iPhone 17 Pro, 30PK",
+      "raw_qty": "<BLANK>",
+      "reasons": [
+        "Blank PART NUMBER matched by description to existing SKU 923-12850",
+        "Missing or non-positive QTY (\"BLANK\") — defaulted to 0 pending confirmation"
+      ]
+    }
+  ]
+}

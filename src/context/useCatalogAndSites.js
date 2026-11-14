@@ -10,6 +10,8 @@ import {
 } from '../utils/categoryFilter.js';
 import { resolveSafeRegion } from '../constants/config.js';
 import { OFFICIAL_BRANCH_DIRECTORY, enrichSiteWithDirectory } from '../constants/branchDirectory.js';
+import gsxPartsCatalogSeed from '../data/gsxPartsCatalog.json' with { type: 'json' };
+import { importGsxCatalogFromCsv, mergeGsxPartsIntoCatalog } from '../utils/gsxCatalogImporter.js';
 
 export const DEFAULT_SUPERVISOR_SETTINGS = {
   supervisor_name: 'Anjo Alcazar',
@@ -210,7 +212,7 @@ export function useCatalogAndSites({
         if (rawCats) activeCats = JSON.parse(rawCats);
       } catch (e) {}
 
-      return parsed.map(p => {
+      const normalizedSaved = (Array.isArray(parsed) ? parsed : []).map(p => {
         const cleanPrice = parseFloat(p.stocking_price) > 0 ? parseFloat(p.stocking_price) : 99;
         const { exchange_price: _exchangePrice, ...rest } = p;
         const correctCatId = resolvePartCategoryId(p, activeCats);
@@ -220,8 +222,12 @@ export function useCatalogAndSites({
           category_id: correctCatId
         };
       });
+
+      const seedParts = Array.isArray(gsxPartsCatalogSeed?.parts) ? gsxPartsCatalogSeed.parts : [];
+      return mergeGsxPartsIntoCatalog(normalizedSaved, seedParts, activeCats).merged;
     } catch {
-      return [];
+      const seedParts = Array.isArray(gsxPartsCatalogSeed?.parts) ? gsxPartsCatalogSeed.parts : [];
+      return mergeGsxPartsIntoCatalog([], seedParts, DEFAULT_PART_CATEGORIES).merged;
     }
   });
 
@@ -229,13 +235,15 @@ export function useCatalogAndSites({
   useEffect(() => {
     if (!parts || parts.length === 0) return;
     let hasMismatches = false;
-    const healed = parts.map(p => {
+    const changedIndexes = new Set();
+    const healed = parts.map((p, idx) => {
       const genuineCode = getPartCategory(p);
       const currentCat = categories.find(c => c.id === p.category_id);
       const currentCode = currentCat ? String(currentCat.code || '').toUpperCase() : '';
 
       if (currentCode !== genuineCode && !(genuineCode === 'OTHER' && (currentCode === 'GEN' || currentCode === 'ACC'))) {
         hasMismatches = true;
+        changedIndexes.add(idx);
         const targetCatId = resolvePartCategoryId(p, categories);
         return { ...p, category_id: targetCatId };
       }
@@ -256,7 +264,7 @@ export function useCatalogAndSites({
           } catch (e) {}
 
           const updates = healed
-            .filter(p => p.part_number)
+            .filter((p, idx) => p.part_number && changedIndexes.has(idx))
             .map(p => {
               const catUuid = resolvePartCategoryUUID(p, liveDbCats.length > 0 ? liveDbCats : categories);
               return {
@@ -811,6 +819,33 @@ export function useCatalogAndSites({
 
   const applyPmgDirectoryToSites = refreshSitesFromCloud;
 
+  const refreshGsxCatalogFromCsv = async (csvText, options = {}) => {
+    const imported = importGsxCatalogFromCsv(csvText, options);
+    const mergeResult = mergeGsxPartsIntoCatalog(parts, imported.parts, categories);
+    const merged = mergeResult.merged;
+
+    setParts(merged);
+    try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
+    try { await dbStorage.setItem('mdc_parts', merged); } catch (e) {}
+
+    if (showToast) {
+      showToast(
+        `GSX Catalog refreshed: ${imported.parts.length.toLocaleString()} current parts (${mergeResult.addedCount} new added, ${imported.stats.excludedObsoleteDeviceCount} obsolete device groups excluded)`,
+        'success'
+      );
+    }
+
+    return {
+      success: true,
+      importedCount: imported.parts.length,
+      addedCount: mergeResult.addedCount,
+      updatedCount: mergeResult.updatedCount,
+      totalCatalogCount: merged.length,
+      stats: imported.stats,
+      excludedDevicesReport: imported.excludedDevices
+    };
+  };
+
   return {
     categories,
     setCategories,
@@ -826,7 +861,8 @@ export function useCatalogAndSites({
     saveSite,
     deleteSite,
     refreshSitesFromCloud,
-    applyPmgDirectoryToSites
+    applyPmgDirectoryToSites,
+    refreshGsxCatalogFromCsv
   };
 }
 

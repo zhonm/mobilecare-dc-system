@@ -1,0 +1,493 @@
+{
+  "generatedAt": "2026-11-14T01:21:22.566Z",
+  "count": 33,
+  "descriptionConflicts": [
+    {
+      "part_number": "076-00108",
+      "resolved_description": "Display Removal Tool with 20 pack of Wheels",
+      "gsx_canonical_description": "Display Removal Tool with 20 pack of Wheels",
+      "priority_csv_descriptions": [
+        "\"IMAC ADHESIVE CUTTER - Display Removal Tool with 20 pack of Wheels\""
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260171-ZAM"
+      ]
+    },
+    {
+      "part_number": "076-1417",
+      "resolved_description": "Kit, Display Removal Wheel, , iMac, 20 Pack",
+      "gsx_canonical_description": null,
+      "priority_csv_descriptions": [
+        "Display removal wheel, iMac",
+        "Kit, Display Removal Wheel, , iMac, 20 Pack"
+      ],
+      "occurrences": 13,
+      "sample_po_numbers": [
+        "SVC20260153-APP ANX",
+        "SVC20260154-NEP",
+        "SVC20260155-MRK",
+        "SVC20260156-SMS",
+        "SVC20260158-APP FES"
+      ]
+    },
+    {
+      "part_number": "922-5065",
+      "resolved_description": "Stick, Flat Head, Nylon, 4 Pack",
+      "gsx_canonical_description": "Stick, Flat Head, Nylon, 4 Pack",
+      "priority_csv_descriptions": [
+        "Black Stick, Nylon Probe, 4 PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260159-APP MGM"
+      ]
+    },
+    {
+      "part_number": "922-9004",
+      "resolved_description": "Nylon Probe Tool, Black Stick, 24 PK",
+      "gsx_canonical_description": "Nylon Probe Tool, Black Stick, 24 PK",
+      "priority_csv_descriptions": [
+        "Black Stick, Nylon Probe, 24 PK",
+        "Nylon Probe Tool (Black Stick)",
+        "Nylon Probe Tool, Black Stick, 24 PK"
+      ],
+      "occurrences": 8,
+      "sample_po_numbers": [
+        "SVC20260157-APP MAG",
+        "SVC20260167-CDO",
+        "SVC20260170-APP BHS",
+        "SVC20260171-ZAM",
+        "SVC20260173-VER"
+      ]
+    },
+    {
+      "part_number": "922-9005",
+      "resolved_description": "Nylon Probe Tool, Black Stick, 96 PK",
+      "gsx_canonical_description": "Nylon Probe Tool, Black Stick, 96 PK",
+      "priority_csv_descriptions": [
+        "Black Stick, Nylon Probe, 96 PK",
+        "Black stick (nylon probe tool)"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260155-MRK",
+        "SVC20260181-APP FES"
+      ]
+    },
+    {
+      "part_number": "923-0247",
+      "resolved_description": "Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit",
+      "gsx_canonical_description": "Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit",
+      "priority_csv_descriptions": [
+        "Tool, Security bit, Pentalobe PL1.1 44 mm half-moon bit",
+        "Torx Security Bit (1IPR)"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260165-LAU",
+        "SVC20260173-VER",
+        "SVC20260181-APP FES"
+      ]
+    },
+    {
+      "part_number": "923-03045",
+      "resolved_description": "Cleaning Putty, 32pc",
+      "gsx_canonical_description": "Cleaning Putty, 32pc",
+      "priority_csv_descriptions": [
+        "Cleaning Putty",
+        "Cleaning Putty, 32pc"
+      ],
+      "occurrences": 4,
+      "sample_po_numbers": [
+        "SVC20260151-APP PPM",
+        "SVC20260171-ZAM",
+        "SVC20260173-VER",
+        "SVC20260184-APP TRI"
+      ]
+    },
+    {
+      "part_number": "923-04894",
+      "resolved_description": "Display Adhesive, iPhone 12 Pro, 30PK",
+      "gsx_canonical_description": "Display Adhesive, iPhone 12 Pro, 30PK",
+      "priority_csv_descriptions": [
+        "Display Adhesive, iPhone 12 Pro",
+        "Display Adhesive, iPhone 12 Pro, 30PK"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260160-NES"
+      ]
+    },
+    {
+      "part_number": "923-04895",
+      "resolved_description": "Display Adhesive Liner, iPhone 12 Pro Max, 30PK",
+      "gsx_canonical_description": "Display Adhesive Liner, iPhone 12 Pro Max, 30PK",
+      "priority_csv_descriptions": [
+        "Display Adhesive, iPhone 12 Pro Max"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA"
+      ]
+    },
+    {
+      "part_number": "923-06086",
+      "resolved_description": "Battery Cover, Macbook Pro 16-inch, 2 Pack",
+      "gsx_canonical_description": null,
+      "priority_csv_descriptions": [
+        "Battery Cover, Macbook Pro 14-inch, 2 Pack",
+        "Battery Cover, Macbook Pro 16-inch, 2 Pack"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260171-ZAM",
+        "SVC20260174-EEST"
+      ]
+    },
+    {
+      "part_number": "923-06087",
+      "resolved_description": "Battery Cover, Macbook Pro 14-inch, 2 Pack",
+      "gsx_canonical_description": null,
+      "priority_csv_descriptions": [
+        "Battery Cover, Macbook Pro 14-inch, 2 Pack",
+        "Battery Cover, Macbook Pro 16-inch, 2 Pack"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260171-ZAM",
+        "SVC20260174-EEST"
+      ]
+    },
+    {
+      "part_number": "923-06625",
+      "resolved_description": "Display Adhesive, iPhone 13 Pro Max, 30 PK",
+      "gsx_canonical_description": "Display Adhesive, iPhone 13 Pro Max, 30 PK",
+      "priority_csv_descriptions": [
+        "Display Adhesive, iPhone 13 Pro Max",
+        "Display Adhesive, iPhone 13 Pro Max, 30 PK"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260159-APP MGM",
+        "SVC20260177-NAG"
+      ]
+    },
+    {
+      "part_number": "923-08085",
+      "resolved_description": "Tool, Torque Driver, Teal, 0.75 kgf cm, iPhone 14",
+      "gsx_canonical_description": "Tool, Torque Driver, Teal, 0.75 kgf cm, iPhone 14",
+      "priority_csv_descriptions": [
+        "Torque Driver (teal, 0.75 kgf cm)"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260174-EEST"
+      ]
+    },
+    {
+      "part_number": "923-08091",
+      "resolved_description": "Back Glass Adhesive, iPhone 14, 30PK",
+      "gsx_canonical_description": "Back Glass Adhesive, iPhone 14, 30PK",
+      "priority_csv_descriptions": [
+        "Adhesive, Display, iPhone 15",
+        "Back Glass Adhesive, iPhone 14, 30PK"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260154-NEP",
+        "SVC20260158-APP FES",
+        "SVC20260160-NES"
+      ]
+    },
+    {
+      "part_number": "923-08094",
+      "resolved_description": "Display Adhesive, iPhone 14 Pro, 30PK",
+      "gsx_canonical_description": "Display Adhesive, iPhone 14 Pro, 30PK",
+      "priority_csv_descriptions": [
+        "Display Adhesive, iPhone 14 Pro",
+        "Display Adhesive, iPhone 14 Pro, 30PK"
+      ],
+      "occurrences": 4,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260153-APP ANX",
+        "SVC20260160-NES",
+        "SVC20260177-NAG"
+      ]
+    },
+    {
+      "part_number": "923-08387",
+      "resolved_description": "Screw, Security, Midnight, iPhone 14/Plus, 100PK",
+      "gsx_canonical_description": "Screw, Security, Midnight, iPhone 14/Plus, 100PK",
+      "priority_csv_descriptions": [
+        "Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260176-LIM"
+      ]
+    },
+    {
+      "part_number": "923-09184",
+      "resolved_description": "Adhesive, Display, iPhone 15",
+      "gsx_canonical_description": "Adhesive, Display, iPhone 15",
+      "priority_csv_descriptions": [
+        "Adhesive, Display, iPhone 15",
+        "Back Glass Adhesive, iPhone 14, 30PK"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260158-APP FES",
+        "SVC20260175-LIM",
+        "SVC20260177-NAG"
+      ]
+    },
+    {
+      "part_number": "923-09185",
+      "resolved_description": "Adhesive, Back Glass, iPhone 15",
+      "gsx_canonical_description": "Adhesive, Back Glass, iPhone 15",
+      "priority_csv_descriptions": [
+        "Adhesive, Back Glass, iPhone 15",
+        "Adhesive, Back Glass, iPhone 16 Pro, 30PK"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260153-APP ANX",
+        "SVC20260160-NES",
+        "SVC20260162-APP FES"
+      ]
+    },
+    {
+      "part_number": "923-09186",
+      "resolved_description": "Adhesive, Display, iPhone 15 Plus, 30PK",
+      "gsx_canonical_description": "Adhesive, Display, iPhone 15 Plus, 30PK",
+      "priority_csv_descriptions": [
+        "Adhesive, Display, iPhone 15 Pro Max, 30PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260177-NAG"
+      ]
+    },
+    {
+      "part_number": "923-09190",
+      "resolved_description": "Adhesive, Display, iPhone 15 Pro Max, 30PK",
+      "gsx_canonical_description": "Adhesive, Display, iPhone 15 Pro Max, 30PK",
+      "priority_csv_descriptions": [
+        "923-09190",
+        "Adhesive, Display, iPhone 15 Plus, 30PK",
+        "Adhesive, Display, iPhone 15 Pro Max, 30PK"
+      ],
+      "occurrences": 5,
+      "sample_po_numbers": [
+        "SVC20260153-APP ANX",
+        "SVC20260163-DAV",
+        "SVC20260164-LAU",
+        "SVC20260177-NAG",
+        "SVC20260189-DAV"
+      ]
+    },
+    {
+      "part_number": "923-10961",
+      "resolved_description": "Display Protective Cover, iPhone 16 Pro, 10PK",
+      "gsx_canonical_description": "Display Protective Cover, iPhone 16 Pro, 10PK",
+      "priority_csv_descriptions": [
+        "Protective Cover, Display, iPhone 16, 17, 18 Pro, 10PK"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260158-APP FES",
+        "SVC20260182-CEB"
+      ]
+    },
+    {
+      "part_number": "923-11065",
+      "resolved_description": "Adhesive, Display , iPhone 16, 30PK",
+      "gsx_canonical_description": "Adhesive, Display , iPhone 16, 30PK",
+      "priority_csv_descriptions": [
+        "Adhesive, Display , iPhone 16, 30PK",
+        "Display Adhesive, iPhone 16"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260162-APP FES",
+        "SVC20260178-NAG"
+      ]
+    },
+    {
+      "part_number": "923-11067",
+      "resolved_description": "Adhesive, Display, iPhone 16 Pro, 30PK",
+      "gsx_canonical_description": "Adhesive, Display, iPhone 16 Pro, 30PK",
+      "priority_csv_descriptions": [
+        "Adhesive, Back Glass, iPhone 16 Pro, 30PK",
+        "Adhesive, Display, iPhone 16 Pro, 30PK",
+        "DISPLAY ADHESIVE, IPHONE 16 PRO, 30PK",
+        "Display Adhesive, iPhone 16 Pro",
+        "dhesive, Display, iPhone 16 Pro, 30PK"
+      ],
+      "occurrences": 5,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260159-APP MGM",
+        "SVC20260160-NES",
+        "SVC20260162-APP FES",
+        "SVC20260178-NAG"
+      ]
+    },
+    {
+      "part_number": "923-11071",
+      "resolved_description": "Adhesive, Back Glass, iPhone 16 Pro, 30PK",
+      "gsx_canonical_description": "Adhesive, Back Glass, iPhone 16 Pro, 30PK",
+      "priority_csv_descriptions": [
+        "Adhesive, Back Glass, iPhone 15",
+        "Adhesive, Back Glass, iPhone 16 Pro, 30PK",
+        "Adhesive, Display, iPhone 16 Pro, 30PK"
+      ],
+      "occurrences": 5,
+      "sample_po_numbers": [
+        "SVC20260153-APP ANX",
+        "SVC20260160-NES",
+        "SVC20260162-APP FES",
+        "SVC20260163-DAV",
+        "SVC20260189-DAV"
+      ]
+    },
+    {
+      "part_number": "923-11208",
+      "resolved_description": "Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK",
+      "gsx_canonical_description": "Black, Screw, Security, iPhone 16, iPhone 16 Plus, 30PK",
+      "priority_csv_descriptions": [
+        "Screw, Security, Midnight, iPhone 14/Plus, 100PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260176-LIM"
+      ]
+    },
+    {
+      "part_number": "923-12051",
+      "resolved_description": "Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack",
+      "gsx_canonical_description": "Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack",
+      "priority_csv_descriptions": [
+        "Adhesive, Display, iPhone 16e/iPhone 17e, 30 Pack",
+        "Display Adhesive, iPhone 16E"
+      ],
+      "occurrences": 3,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260160-NES",
+        "SVC20260178-NAG"
+      ]
+    },
+    {
+      "part_number": "923-12052",
+      "resolved_description": "Adhesive, Back Glass, iPhone 16e/iPhone 17e, 30 Pack",
+      "gsx_canonical_description": "Adhesive, Back Glass, iPhone 16e/iPhone 17e, 30 Pack",
+      "priority_csv_descriptions": [
+        "Backglass Adhesive iPhone 16E"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA"
+      ]
+    },
+    {
+      "part_number": "923-12860",
+      "resolved_description": "Display Adhesive, iPhone 17 Pro Max, 30PK",
+      "gsx_canonical_description": "Display Adhesive, iPhone 17 Pro Max, 30PK",
+      "priority_csv_descriptions": [
+        "Back Glass Adhesive, iPhone 17, 30 PK",
+        "DISPLAY ADHESIVE, IPHONE 17 PRO MAX, 30PK",
+        "Display Adhesive, iPhone 17 Pro Max, 30PK"
+      ],
+      "occurrences": 11,
+      "sample_po_numbers": [
+        "SVC20260157-APP MAG",
+        "SVC20260159-APP MGM",
+        "SVC20260162-APP FES",
+        "SVC20260164-LAU",
+        "SVC20260167-CDO"
+      ]
+    },
+    {
+      "part_number": "923-12868",
+      "resolved_description": "Back Glass Adhesive, iPhone 17, 30 PK",
+      "gsx_canonical_description": "Back Glass Adhesive, iPhone 17, 30 PK",
+      "priority_csv_descriptions": [
+        "923-12860",
+        "Back Glass Adhesive, iPhone 17, 30 PK",
+        "SVC,TOOL,PSA CUTTING,NYLON,20PK"
+      ],
+      "occurrences": 6,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260161-NES",
+        "SVC20260162-APP FES",
+        "SVC20260164-LAU",
+        "SVC20260178-NAG"
+      ]
+    },
+    {
+      "part_number": "923-14003",
+      "resolved_description": "Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK",
+      "gsx_canonical_description": "Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK",
+      "priority_csv_descriptions": [
+        "Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260175-LIM"
+      ]
+    },
+    {
+      "part_number": "923-14004",
+      "resolved_description": "Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK",
+      "gsx_canonical_description": "Cosmic Orange, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK",
+      "priority_csv_descriptions": [
+        "Silver, Dock Screw, PL1.1, 17 Pro, Pro Max, iPhone 17 Pro, 100 PK"
+      ],
+      "occurrences": 1,
+      "sample_po_numbers": [
+        "SVC20260175-LIM"
+      ]
+    },
+    {
+      "part_number": "923-14190",
+      "resolved_description": "Back Glass Adhesive, iPhone 17, 30 PK",
+      "gsx_canonical_description": null,
+      "priority_csv_descriptions": [
+        "\"SVC,TOOL,PSA CUTTING,NYLON,20PK -adhesive cutters\"",
+        "Adhesive Cutter",
+        "Adhesive cutter",
+        "Back Glass Adhesive, iPhone 17, 30 PK",
+        "SVC,TOOL,PSA CUTTING,NYLON,20PK"
+      ],
+      "occurrences": 18,
+      "sample_po_numbers": [
+        "SVC20260150-APP MOA",
+        "SVC20260151-APP PPM",
+        "SVC20260153-APP ANX",
+        "SVC20260156-SMS",
+        "SVC20260157-APP MAG"
+      ]
+    },
+    {
+      "part_number": "923-14754",
+      "resolved_description": "Camera Cap",
+      "gsx_canonical_description": null,
+      "priority_csv_descriptions": [
+        "Camera Cap",
+        "Camera Cover"
+      ],
+      "occurrences": 2,
+      "sample_po_numbers": [
+        "SVC20260170-APP BHS",
+        "SVC20260173-VER"
+      ]
+    }
+  ]
+}

@@ -1,19 +1,25 @@
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'feedback', 'drive-hub'],
-  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'feedback'],
-  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'dc-stock-monitoring', 'orders', 'audit', 'feedback'],
-  parts_management: ['request-parts', 'scan-in', 'multi-site', 'feedback'],
+  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'settings', 'user-access', 'request-parts', 'all-stocks', 'multi-site', 'consumables-tools', 'consumables-receiving', 'consumables-shipping', 'consumables-history', 'feedback', 'drive-hub'],
+  admin: ['dashboard', 'forecast', 'allocation', 'scan-in', 'intake-records', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'orders', 'audit', 'request-parts', 'multi-site', 'consumables-tools', 'consumables-receiving', 'consumables-shipping', 'consumables-history', 'feedback'],
+  user: ['dashboard', 'forecast', 'allocation', 'forecast-reports', 'site-transfers-fifo', 'dc-stock-monitoring', 'orders', 'audit', 'consumables-tools', 'consumables-history', 'feedback'],
+  parts_management: ['request-parts', 'scan-in', 'multi-site', 'consumables-tools', 'consumables-receiving', 'consumables-shipping', 'consumables-history', 'feedback'],
   // Legacy aliases
-  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'request-parts', 'multi-site', 'feedback'],
-  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'feedback'],
-  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'feedback']
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'request-parts', 'multi-site', 'consumables-tools', 'consumables-receiving', 'consumables-shipping', 'consumables-history', 'feedback'],
+  site_staff: ['request-parts', 'scan-in', 'multi-site', 'dashboard', 'forecast', 'allocation', 'shipments', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'consumables-tools', 'consumables-history', 'feedback'],
+  management_viewer: ['dashboard', 'forecast', 'allocation', 'site-transfers-fifo', 'dc-stock-monitoring', 'forecast-reports', 'audit', 'consumables-tools', 'consumables-history', 'feedback']
 };
 
 /**
  * Modules that newly rolled out for all existing admin accounts unless
  * explicitly revoked via a `!<pageId>` sentinel in user_page_permissions.
  */
-export const DEFAULT_GRANTED_ADMIN_MODULES = ['dc-stock-monitoring'];
+export const DEFAULT_GRANTED_ADMIN_MODULES = [
+  'dc-stock-monitoring',
+  'consumables-tools',
+  'consumables-receiving',
+  'consumables-shipping',
+  'consumables-history'
+];
 
 /**
  * Extracts explicit revocation markers (`!pageId`) stored alongside permitted pages.

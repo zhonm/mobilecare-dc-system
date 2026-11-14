@@ -25,6 +25,7 @@ import { useInventory } from './useInventory';
 import { useIntakeRecords } from './useIntakeRecords';
 import { useShipments } from './useShipments';
 import { usePartsRequests } from './usePartsRequests';
+import { useConsumablesAndTools } from './useConsumablesAndTools';
 import { usePeriodRecordsAndReports } from './usePeriodRecordsAndReports';
 import { useCloudSync } from './useCloudSync';
 import { useAutoLogout } from '../hooks/useAutoLogout';
@@ -495,6 +496,15 @@ export function AppProvider({ children }) {
     logAuditEvent: auditLogs.logAuditEvent
   });
 
+  // 10b. Consumables & Tools Domain (Separate Module)
+  const consumablesToolsDomain = useConsumablesAndTools({
+    currentUser: auth.currentUser,
+    getCurrentUser: () => auth.currentUser,
+    parts: catalogAndSites.parts,
+    showToast,
+    logAuditEvent: auditLogs.logAuditEvent
+  });
+
   const autoLogoutRef = useRef(null);
   const cloudSyncRef = useRef(null);
 
@@ -681,6 +691,7 @@ export function AppProvider({ children }) {
         parts: catalogAndSites.parts,
         setParts: catalogAndSites.setParts,
         savePart: catalogAndSites.savePart,
+        refreshGsxCatalogFromCsv: catalogAndSites.refreshGsxCatalogFromCsv,
         supervisorSettings: catalogAndSites.supervisorSettings,
         setSupervisorSettings: catalogAndSites.setSupervisorSettings,
         saveSupervisorSettings: catalogAndSites.saveSupervisorSettings,
@@ -772,6 +783,27 @@ export function AppProvider({ children }) {
         saveShipment: shipmentsDomain.saveShipment,
         updateShipmentStatus: shipmentsDomain.updateShipmentStatus,
         confirmCourierPickup: shipmentsDomain.confirmCourierPickup,
+
+        // Consumables & Tools Module
+        ctCatalog: consumablesToolsDomain.ctCatalog,
+        ctOrders: consumablesToolsDomain.ctOrders,
+        ctStock: consumablesToolsDomain.ctStock,
+        ctToolAssets: consumablesToolsDomain.ctToolAssets,
+        ctMovements: consumablesToolsDomain.ctMovements,
+        ctShipments: consumablesToolsDomain.ctShipments,
+        saveCtCatalogItem: consumablesToolsDomain.saveCtCatalogItem,
+        addCtOrder: consumablesToolsDomain.addCtOrder,
+        updateCtOrder: consumablesToolsDomain.updateCtOrder,
+        deleteCtOrder: consumablesToolsDomain.deleteCtOrder,
+        receiveCtOrderLine: consumablesToolsDomain.receiveCtOrderLine,
+        bulkReceiveCtCsv: consumablesToolsDomain.bulkReceiveCtCsv,
+        checkoutTool: consumablesToolsDomain.checkoutTool,
+        checkinTool: consumablesToolsDomain.checkinTool,
+        updateToolStatus: consumablesToolsDomain.updateToolStatus,
+        consumeCtStock: consumablesToolsDomain.consumeCtStock,
+        createCtShipment: consumablesToolsDomain.createCtShipment,
+        confirmCtDelivery: consumablesToolsDomain.confirmCtDelivery,
+        importPriorityCsvText: consumablesToolsDomain.importPriorityCsvText,
         confirmSiteReceive: shipmentsDomain.confirmSiteReceive,
         loadArchivedShipments: shipmentsDomain.loadArchivedShipments,
         isLoadingArchivedShipments: shipmentsDomain.isLoadingArchivedShipments,

@@ -987,15 +987,15 @@ export function useAuth({
       localStorage.setItem('mdc_local_data_owner', user.id);
     } catch (e) {}
 
-    // Ensure calculated business data (forecasting, allocations, inventory snapshots) persists across sessions
+    // Ensure calculated business data (forecasting, allocations, inventory snapshots) persists across sessions.
+    // Set currentUser first so cloud hydration runs with an authenticated user context;
+    // when !isOwnerMatch, FirstLoginLoadingScreen drives the initial hydration.
+    setCurrentUser(user);
     if (!isOwnerMatch) {
       setIsInitialSyncing(true);
-    }
-    if (typeof hydrateFromSupabase === 'function') {
+    } else if (typeof hydrateFromSupabase === 'function') {
       hydrateFromSupabase();
     }
-
-    setCurrentUser(user);
     const hasDashboard = user.role === 'superadmin' || user.role === 'admin' || user.role === 'user' || user.permittedPages?.includes('dashboard');
     const initialPage = hasDashboard
       ? 'dashboard'
@@ -1245,15 +1245,15 @@ export function useAuth({
       localStorage.setItem('mdc_local_data_owner', updatedUser.id);
     } catch (e) {}
 
-    // Ensure calculated business data persists across sessions
+    // Ensure calculated business data persists across sessions.
+    // Set currentUser first so cloud hydration runs with an authenticated user context;
+    // when !isOwnerMatch, FirstLoginLoadingScreen drives the initial hydration.
+    setCurrentUser(updatedUser);
     if (!isOwnerMatch) {
       setIsInitialSyncing(true);
-    }
-    if (typeof hydrateFromSupabase === 'function') {
+    } else if (typeof hydrateFromSupabase === 'function') {
       hydrateFromSupabase();
     }
-
-    setCurrentUser(updatedUser);
 
     try {
       localStorage.setItem('mdc_users', JSON.stringify(nextList));
