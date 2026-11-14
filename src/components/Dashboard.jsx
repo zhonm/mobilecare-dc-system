@@ -1058,27 +1058,6 @@ export default function Dashboard() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('ct-receiving')}
-            >
-              Receiving &amp; POs
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('ct-shipping')}
-            >
-              Shipping &amp; PL
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setActiveTab('ct-movements')}
-            >
-              Movement History
-            </button>
-            <button
-              type="button"
               className="btn btn-primary btn-sm"
               onClick={() => setActiveTab('consumables-tools')}
             >
