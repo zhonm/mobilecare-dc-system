@@ -27,7 +27,8 @@ import {
   Upload,
   ChevronDown,
   FileText,
-  X
+  X,
+  Wrench
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -104,8 +105,41 @@ export default function Dashboard() {
     setMasterlistData,
     repairUsageRecords = [],
     applyParsedDataset,
-    selectedCategories = ['BATTERY', 'DISPLAY']
+    selectedCategories = ['BATTERY', 'DISPLAY'],
+    ctOrders = [],
+    ctStock = [],
+    ctToolAssets = [],
+    ctShipments = [],
+    ctMovements = [],
+    ctSyncStatus
   } = useApp();
+
+  const ctDashboardSummary = useMemo(() => {
+    const openOrders = (ctOrders || []).filter(o => o.status === 'ordered' || o.status === 'partially_received').length;
+    const consumablesOnHand = (ctStock || []).reduce((sum, s) => sum + (Number(s.qty_on_hand) || 0), 0);
+    const lowStockSkus = (ctStock || []).filter(s => {
+      const qty = Number(s.qty_on_hand) || 0;
+      const min = Number(s.min_stock_threshold ?? 2);
+      return qty > 0 && qty <= min;
+    }).length;
+    const toolsTotal = (ctToolAssets || []).length;
+    const toolsAvailable = (ctToolAssets || []).filter(t => t.status === 'available').length;
+    const toolsInUse = (ctToolAssets || []).filter(t => t.status === 'in_use').length;
+    const activeShipments = (ctShipments || []).filter(s => s.status !== 'delivered' && s.status !== 'cancelled').length;
+    const deliveredShipments = (ctShipments || []).filter(s => s.status === 'delivered').length;
+    return {
+      openOrders,
+      consumablesOnHand,
+      lowStockSkus,
+      toolsTotal,
+      toolsAvailable,
+      toolsInUse,
+      activeShipments,
+      totalShipments: (ctShipments || []).length,
+      deliveredShipments,
+      movementsCount: (ctMovements || []).length
+    };
+  }, [ctOrders, ctStock, ctToolAssets, ctShipments, ctMovements]);
 
   const isSuperadmin = Boolean(currentUser?.role === 'superadmin' || currentUser?.isSuperAdmin);
   // PDF Download Selection Modal State (Superadmin exclusive)
@@ -974,6 +1008,170 @@ export default function Dashboard() {
           </div>
           <div style={{ height: '4px', width: '100%', background: '#e2e8f0', borderRadius: '4px', marginTop: '6px', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: '100%', background: '#8b5cf6' }} />
+          </div>
+        </div>
+      </div>
+
+      {/* ───────────────────────────────────────────────────────────────── */}
+      {/* 2B. CONSUMABLES & SERVICE TOOLS LIVE OVERVIEW                     */}
+      {/* ───────────────────────────────────────────────────────────────── */}
+      <div
+        className="card"
+        style={{
+          padding: '18px 20px',
+          border: '1px solid #e2e8f0',
+          borderRadius: '12px',
+          background: '#ffffff',
+          marginBottom: '4px'
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: '#0f172a', color: '#38bdf8', padding: '8px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Wrench size={18} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: '15.5px', fontWeight: 800, color: '#0f172a' }}>
+                  Consumables &amp; Service Tools Center
+                </h3>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '999px',
+                    background: ctSyncStatus?.isSyncing ? '#fef3c7' : '#ecfdf5',
+                    color: ctSyncStatus?.isSyncing ? '#b45309' : '#047857',
+                    border: `1px solid ${ctSyncStatus?.isSyncing ? '#fde68a' : '#a7f3d0'}`
+                  }}
+                >
+                  {ctSyncStatus?.isSyncing ? 'Syncing Cloud...' : 'Live Cloud Synced'}
+                </span>
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                Real-time non-repair consumables stock, serialized tool assets, packing lists &amp; cross-site movement ledger
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setActiveTab('ct-receiving')}
+            >
+              Receiving &amp; POs
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setActiveTab('ct-shipping')}
+            >
+              Shipping &amp; PL
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setActiveTab('ct-movements')}
+            >
+              Movement History
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setActiveTab('consumables-tools')}
+            >
+              Open CT Center
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
+          <div
+            onClick={() => setActiveTab('ct-receiving')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>
+              Open CT Orders
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+              {ctDashboardSummary.openOrders}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#78350f' }}>
+              Pending or partial PO deliveries
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('consumables-tools')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>
+              Consumables On Hand
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+              {ctDashboardSummary.consumablesOnHand.toLocaleString()}
+            </div>
+            <div style={{ fontSize: '11.5px', color: ctDashboardSummary.lowStockSkus > 0 ? '#b45309' : '#64748b' }}>
+              {ctDashboardSummary.lowStockSkus > 0
+                ? `${ctDashboardSummary.lowStockSkus} SKU(s) at or below min threshold`
+                : 'Stocked across active sites'}
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('consumables-tools')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase' }}>
+              Tracked Tool Units
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+              {ctDashboardSummary.toolsTotal}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#1e40af' }}>
+              {ctDashboardSummary.toolsAvailable} available • {ctDashboardSummary.toolsInUse} in use
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab('ct-movements')}
+            style={{
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: '#ecfdf5',
+              border: '1px solid #a7f3d0',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#047857', textTransform: 'uppercase' }}>
+              CT Shipments &amp; Archive
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', marginTop: '2px' }}>
+              {ctDashboardSummary.totalShipments}
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#065f46' }}>
+              {ctDashboardSummary.activeShipments} in transit • {ctDashboardSummary.deliveredShipments} delivered
+            </div>
           </div>
         </div>
       </div>
@@ -2126,7 +2324,30 @@ export default function Dashboard() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Allocation Matrix</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Branch demand & weekly splitting</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Branch demand &amp; weekly splitting</div>
+            </div>
+            <ChevronRight size={16} color="#94a3b8" />
+          </div>
+
+          <div
+            onClick={() => setActiveTab('consumables-tools')}
+            className="card"
+            style={{
+              padding: '16px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '14px',
+              border: '1px solid var(--border-light)',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <div style={{ padding: '12px', background: '#0f172a', color: '#38bdf8', borderRadius: '10px' }}>
+              <Wrench size={22} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: '14px', color: '#0f172a' }}>Consumables &amp; Tools</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Non-repair supplies, tools &amp; PLs</div>
             </div>
             <ChevronRight size={16} color="#94a3b8" />
           </div>

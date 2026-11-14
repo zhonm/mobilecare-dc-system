@@ -20,6 +20,8 @@ import {
 import {
   generateCtId,
   normalizePartNumber,
+  isValidGsPoNumber,
+  normalizeLegacyCtOrders,
   validateAndReceiveOrderLine,
   parseConsumablesReceivingCsv,
   transitionToolAsset,
@@ -123,7 +125,7 @@ export function useConsumablesAndTools({
     const saved = readStorageJson(LS_KEYS.orders, []);
     const seedOrders = Array.isArray(consumablesToolsSeed?.orders) ? consumablesToolsSeed.orders : [];
     const merged = mergePriorityCatalogAndOrders([], saved, { catalogItems: [], orders: seedOrders });
-    return merged.orders;
+    return normalizeLegacyCtOrders(merged.orders);
   });
 
   const [ctStock, setCtStock] = useState(() => readStorageJson(LS_KEYS.stock, []));
@@ -180,7 +182,9 @@ export function useConsumablesAndTools({
 
     const nextState = {
       catalog: Array.isArray(remoteState.catalog) ? remoteState.catalog : latestStateRef.current.catalog,
-      orders: Array.isArray(remoteState.orders) ? remoteState.orders : latestStateRef.current.orders,
+      orders: Array.isArray(remoteState.orders)
+        ? normalizeLegacyCtOrders(remoteState.orders)
+        : latestStateRef.current.orders,
       stock: Array.isArray(remoteState.stock) ? remoteState.stock : latestStateRef.current.stock,
       toolAssets: Array.isArray(remoteState.toolAssets) ? remoteState.toolAssets : latestStateRef.current.toolAssets,
       movements: Array.isArray(remoteState.movements)
@@ -307,7 +311,19 @@ export function useConsumablesAndTools({
   const syncCtFromCloud = useCallback(async ({ force = false } = {}) => {
     if (!supabase) return { ok: false, error: 'Supabase unavailable' };
     setCtSyncStatus(prev => ({ ...prev, isSyncing: true }));
-    const res = await fetchCtSnapshotFromSupabase(supabase);
+    const res = await fetchCtSnapshotFromSupabase(supabase, {
+      localUpdatedAt: localUpdatedAtRef.current,
+      force
+    });
+    if (res.ok && res.skippedUnchanged) {
+      setCtSyncStatus(prev => ({
+        ...prev,
+        isSyncing: false,
+        lastSyncedAt: new Date().toISOString(),
+        error: null
+      }));
+      return { ok: true, source: 'unchanged' };
+    }
     if (res.ok && res.data) {
       applyRemoteCtState(res.data, { force });
       setCtSyncStatus(prev => ({
@@ -494,7 +510,7 @@ export function useConsumablesAndTools({
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         syncCtFromCloud({ force: false });
       }
-    }, 30000);
+    }, 300000);
 
     return () => {
       cancelled = true;
@@ -629,6 +645,11 @@ export function useConsumablesAndTools({
       showToast?.('PO Number and at least one line item are required.', 'error');
       return { ok: false, message: 'Missing PO Number or items.' };
     }
+    if (!isValidGsPoNumber(poNumber)) {
+      const msg = 'Invalid PO Number format. Use GS + 10 digits (e.g. GS1003315365).';
+      showToast?.(msg, 'error');
+      return { ok: false, message: msg };
+    }
 
     const orderId = orderPayload.id || generateCtId('ct-ord');
     const orderItems = orderPayload.items.map(it => {
@@ -715,6 +736,11 @@ export function useConsumablesAndTools({
     if (!poNumber || !Array.isArray(orderPayload.items) || orderPayload.items.length === 0) {
       showToast?.('PO Number and at least one line item are required.', 'error');
       return { ok: false, message: 'Missing PO Number or items.' };
+    }
+    if (!isValidGsPoNumber(poNumber)) {
+      const msg = 'Invalid PO Number format. Use GS + 10 digits (e.g. GS1003315365).';
+      showToast?.(msg, 'error');
+      return { ok: false, message: msg };
     }
 
     const updatedItems = orderPayload.items.map(it => {

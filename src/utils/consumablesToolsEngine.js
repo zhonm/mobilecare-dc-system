@@ -2,6 +2,94 @@ import { parseCsvRecords } from './gsxCatalogImporter.js';
 
 export const TOOL_ASSET_STATUSES = ['available', 'in_use', 'in_transit', 'shipped', 'missing', 'retired'];
 
+export const GS_PO_NUMBER_REGEX = /^GS\d{10}$/;
+const DEFAULT_GS_PO_BASE = 1003315827;
+
+/**
+ * Validates whether a Consumables & Tools PO Number matches the Priority/GSX standard (e.g. GS1003315365).
+ * @param {string} value
+ * @returns {boolean}
+ */
+export function isValidGsPoNumber(value) {
+  return GS_PO_NUMBER_REGEX.test(String(value || '').trim().toUpperCase());
+}
+
+/**
+ * Generates the next sequential GS-format PO Number (e.g. GS1003315828) from existing orders.
+ * @param {Array<object>} existingOrders
+ * @returns {string}
+ */
+export function generateNextGsPoNumber(existingOrders = []) {
+  let maxSeq = DEFAULT_GS_PO_BASE;
+  for (const ord of existingOrders || []) {
+    for (const candidate of [ord?.po_number, ord?.order_number]) {
+      const upper = String(candidate || '').trim().toUpperCase();
+      if (GS_PO_NUMBER_REGEX.test(upper)) {
+        const num = Number.parseInt(upper.slice(2), 10);
+        if (Number.isFinite(num) && num > maxSeq) {
+          maxSeq = num;
+        }
+      }
+    }
+  }
+  return `GS${maxSeq + 1}`;
+}
+
+/**
+ * Normalizes legacy PO numbers (such as SVC2026xxxx-SITE) to the GS1003315xxx standard.
+ * Preserves the original string in `legacy_po_number` when converted.
+ * @param {Array<object>} orders
+ * @returns {Array<object>}
+ */
+export function normalizeLegacyCtOrders(orders = []) {
+  if (!Array.isArray(orders) || orders.length === 0) return [];
+  const used = new Set();
+  let maxSeq = DEFAULT_GS_PO_BASE;
+
+  for (const ord of orders) {
+    for (const candidate of [ord?.po_number, ord?.order_number]) {
+      const upper = String(candidate || '').trim().toUpperCase();
+      if (GS_PO_NUMBER_REGEX.test(upper)) {
+        const num = Number.parseInt(upper.slice(2), 10);
+        if (Number.isFinite(num) && num > maxSeq) maxSeq = num;
+      }
+    }
+  }
+
+  return orders.map((ord) => {
+    if (!ord) return ord;
+    const currentPo = String(ord.po_number || '').trim().toUpperCase();
+    if (GS_PO_NUMBER_REGEX.test(currentPo) && !used.has(currentPo)) {
+      used.add(currentPo);
+      return currentPo === ord.po_number ? ord : { ...ord, po_number: currentPo };
+    }
+
+    const orderNum = String(ord.order_number || '').trim().toUpperCase();
+    if (GS_PO_NUMBER_REGEX.test(orderNum) && !used.has(orderNum)) {
+      used.add(orderNum);
+      return {
+        ...ord,
+        po_number: orderNum,
+        legacy_po_number: ord.legacy_po_number || ord.po_number || null
+      };
+    }
+
+    let nextPo;
+    do {
+      maxSeq += 1;
+      nextPo = `GS${maxSeq}`;
+    } while (used.has(nextPo));
+    used.add(nextPo);
+
+    return {
+      ...ord,
+      po_number: nextPo,
+      order_number: ord.order_number || nextPo,
+      legacy_po_number: ord.legacy_po_number || ord.po_number || null
+    };
+  });
+}
+
 export function generateCtId(prefix = 'ct') {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();

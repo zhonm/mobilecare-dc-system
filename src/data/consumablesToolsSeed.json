@@ -1869,7 +1869,7 @@
   "orders": [
     {
       "id": "9d987432-1b70-4ba4-838e-d31024b31494",
-      "po_number": "SVC20260150-APP MOA",
+      "po_number": "GS1003315365",
       "order_number": "GS1003315365",
       "site_code": "APP MOA",
       "raw_site_code": "APP MOA",
@@ -2022,11 +2022,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260150-APP MOA"
     },
     {
       "id": "6737cb11-3c57-479f-9338-150104ce877d",
-      "po_number": "SVC20260151-APP PPM",
+      "po_number": "GS1003315371",
       "order_number": "GS1003315371",
       "site_code": "APP PPM",
       "raw_site_code": "APP PPM",
@@ -2067,11 +2068,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260151-APP PPM"
     },
     {
       "id": "147d7de8-43aa-42a8-801c-5d24ca04808e",
-      "po_number": "SVC20260152-APP PPM",
+      "po_number": "GS1003315380",
       "order_number": "GS1003315380",
       "site_code": "APP PPM",
       "raw_site_code": "APP PPM",
@@ -2112,11 +2114,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260152-APP PPM"
     },
     {
       "id": "fd87521d-bbcf-4543-98f2-452d8e4a6425",
-      "po_number": "SVC20260153-APP ANX",
+      "po_number": "GS1003315539",
       "order_number": "GS1003315539",
       "site_code": "APP ANX",
       "raw_site_code": "APP ANX",
@@ -2241,11 +2244,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260153-APP ANX"
     },
     {
       "id": "24c53ba5-d6de-420d-b255-c99319814b75",
-      "po_number": "SVC20260154-NEP",
+      "po_number": "GS1003315563",
       "order_number": "GS1003315563",
       "site_code": "ASP NPM",
       "raw_site_code": "NEP",
@@ -2356,11 +2360,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260154-NEP"
     },
     {
       "id": "e2002c09-e59b-4a27-932e-4f81d5132e79",
-      "po_number": "SVC20260155-MRK",
+      "po_number": "GS1003315581",
       "order_number": "GS1003315581",
       "site_code": "ASP MRK",
       "raw_site_code": "MRK",
@@ -2401,12 +2406,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260155-MRK"
     },
     {
       "id": "6c615485-516e-47b9-b90f-2c6f305336c1",
-      "po_number": "SVC20260156-SMS",
-      "order_number": null,
+      "po_number": "GS1003315828",
+      "order_number": "GS1003315828",
       "site_code": "ASP SMS",
       "raw_site_code": "SMS",
       "ship_to_location": "0001103790 - SMS",
@@ -2558,11 +2564,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260156-SMS"
     },
     {
       "id": "1c3f0823-2667-4d6f-94c8-ab9df0703a7f",
-      "po_number": "SVC20260157-APP MAG",
+      "po_number": "GS1003315629",
       "order_number": "GS1003315629",
       "site_code": "APP RM",
       "raw_site_code": "APP MAG",
@@ -2645,11 +2652,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260157-APP MAG"
     },
     {
       "id": "324e2587-7a81-46f7-9f62-8845237e614f",
-      "po_number": "SVC20260158-APP FES",
+      "po_number": "GS1003315641",
       "order_number": "GS1003315641",
       "site_code": "APP FES",
       "raw_site_code": "APP FES",
@@ -2802,11 +2810,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260158-APP FES"
     },
     {
       "id": "f9612635-d3d9-44a9-b5ef-e3ff34695b4d",
-      "po_number": "SVC20260159-APP MGM",
+      "po_number": "GS1003315653",
       "order_number": "GS1003315653",
       "site_code": "APP MEG",
       "raw_site_code": "APP MGM",
@@ -2903,11 +2912,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260159-APP MGM"
     },
     {
       "id": "281643a3-fe2a-46b9-b5fc-df17cf73ec8f",
-      "po_number": "SVC20260160-NES",
+      "po_number": "GS1003315593",
       "order_number": "GS1003315593",
       "site_code": "ASP NES",
       "raw_site_code": "NES",
@@ -3060,11 +3070,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260160-NES"
     },
     {
       "id": "59078870-4d5b-41a8-852f-1924fe43665a",
-      "po_number": "SVC20260161-NES",
+      "po_number": "GS1003315695",
       "order_number": "GS1003315695",
       "site_code": "ASP NES",
       "raw_site_code": "NES",
@@ -3119,11 +3130,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260161-NES"
     },
     {
       "id": "6bfcc0aa-7142-4cfe-ad26-2b3233c07d0c",
-      "po_number": "SVC20260162-APP FES",
+      "po_number": "GS1003315677",
       "order_number": "GS1003315677",
       "site_code": "APP FES",
       "raw_site_code": "APP FES",
@@ -3276,11 +3288,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260162-APP FES"
     },
     {
       "id": "7c92d92f-7669-4e5d-b5d7-2fc7f6337e9f",
-      "po_number": "SVC20260163-DAV",
+      "po_number": "GS1003315725",
       "order_number": "GS1003315725",
       "site_code": "ASP ABR",
       "raw_site_code": "DAV",
@@ -3363,11 +3376,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260163-DAV"
     },
     {
       "id": "2a1efd1b-4278-44a1-bb01-0b679022be87",
-      "po_number": "SVC20260164-LAU",
+      "po_number": "GS1003315749",
       "order_number": "GS1003315749",
       "site_code": "ASP LAU",
       "raw_site_code": "LAU",
@@ -3464,11 +3478,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260164-LAU"
     },
     {
       "id": "1558c590-6f42-42b0-8133-5574ed4f5852",
-      "po_number": "SVC20260165-LAU",
+      "po_number": "GS1003315761",
       "order_number": "GS1003315761",
       "site_code": "ASP LAU",
       "raw_site_code": "LAU",
@@ -3551,11 +3566,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260165-LAU"
     },
     {
       "id": "5f29936f-f0dc-4867-90cb-d64dac8592d7",
-      "po_number": "SVC20260166-MRK",
+      "po_number": "GS1003315767",
       "order_number": "GS1003315767",
       "site_code": "ASP MRK",
       "raw_site_code": "MRK",
@@ -3582,11 +3598,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260166-MRK"
     },
     {
       "id": "3905db28-745a-4822-a203-13a23a5a1dd6",
-      "po_number": "SVC20260167-CDO",
+      "po_number": "GS1003315779",
       "order_number": "GS1003315779",
       "site_code": "ASP CDO",
       "raw_site_code": "CDO",
@@ -3655,11 +3672,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260167-CDO"
     },
     {
       "id": "82d2a7c5-8b58-40ad-b1e3-14b70644977d",
-      "po_number": "SVC20260168-CDO",
+      "po_number": "GS1003315785",
       "order_number": "GS1003315785",
       "site_code": "ASP CDO",
       "raw_site_code": "CDO",
@@ -3700,11 +3718,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260168-CDO"
     },
     {
       "id": "32fa6b45-90f1-4a13-99c6-5611dc7e17fd",
-      "po_number": "SVC20260169-POD",
+      "po_number": "GS1003315797",
       "order_number": "GS1003315797",
       "site_code": "ASP POD",
       "raw_site_code": "POD",
@@ -3759,11 +3778,12 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260169-POD"
     },
     {
       "id": "76ab801c-3324-4480-8238-1040c8e96dca",
-      "po_number": "SVC20260170-APP BHS",
+      "po_number": "GS1003315827",
       "order_number": "GS1003315827",
       "site_code": "APP BHS",
       "raw_site_code": "APP BHS",
@@ -3846,12 +3866,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260170-APP BHS"
     },
     {
       "id": "663b2c1f-6c5f-474b-99d2-46691f068d13",
-      "po_number": "SVC20260171-ZAM",
-      "order_number": null,
+      "po_number": "GS1003315829",
+      "order_number": "GS1003315829",
       "site_code": "ASP ZAM",
       "raw_site_code": "ZAM",
       "ship_to_location": "0001128342 - ZAMBOANGA",
@@ -4003,12 +4024,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260171-ZAM"
     },
     {
       "id": "241bb112-b07a-4e2c-8a15-541c1d9893cc",
-      "po_number": "SVC20260172-ZAM",
-      "order_number": null,
+      "po_number": "GS1003315830",
+      "order_number": "GS1003315830",
       "site_code": "ASP ZAM",
       "raw_site_code": "ZAM",
       "ship_to_location": "0001128342 - ZAMBOANGA",
@@ -4062,12 +4084,13 @@
           "needs_review": true,
           "review_reason": "Missing or non-positive QTY (\"BLANK\") — defaulted to 0 pending confirmation"
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260172-ZAM"
     },
     {
       "id": "8e679448-602d-4fb2-a198-a6729eee86ce",
-      "po_number": "SVC20260173-VER",
-      "order_number": null,
+      "po_number": "GS1003315831",
+      "order_number": "GS1003315831",
       "site_code": "ASP VN",
       "raw_site_code": "VER",
       "ship_to_location": "0001506282 - VERTIS NORTH",
@@ -4219,12 +4242,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260173-VER"
     },
     {
       "id": "2b1d4909-0559-4e15-9008-51a5923b834c",
-      "po_number": "SVC20260174-EEST",
-      "order_number": null,
+      "po_number": "GS1003315832",
+      "order_number": "GS1003315832",
       "site_code": "EEST",
       "raw_site_code": "EEST",
       "ship_to_location": "0001102538 - EEST",
@@ -4348,12 +4372,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260174-EEST"
     },
     {
       "id": "afb123a1-c87f-4a85-bd8d-68f78ebc70ed",
-      "po_number": "SVC20260175-LIM",
-      "order_number": null,
+      "po_number": "GS1003315833",
+      "order_number": "GS1003315833",
       "site_code": "ASP LIM",
       "raw_site_code": "LIM",
       "ship_to_location": "0001754212 - LIMA",
@@ -4505,12 +4530,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260175-LIM"
     },
     {
       "id": "f5d4a0a0-5939-41ae-aed8-c44ae6f73c36",
-      "po_number": "SVC20260176-LIM",
-      "order_number": null,
+      "po_number": "GS1003315834",
+      "order_number": "GS1003315834",
       "site_code": "ASP LIM",
       "raw_site_code": "LIM",
       "ship_to_location": "0001754212 - LIMA",
@@ -4662,12 +4688,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260176-LIM"
     },
     {
       "id": "69225497-572c-433b-9f9f-4089e40c4e23",
-      "po_number": "SVC20260177-NAG",
-      "order_number": null,
+      "po_number": "GS1003315835",
+      "order_number": "GS1003315835",
       "site_code": "ASP NAG",
       "raw_site_code": "NAG",
       "ship_to_location": "0001730389 - NAGA",
@@ -4819,12 +4846,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260177-NAG"
     },
     {
       "id": "89a2b406-d064-43b4-8112-8fec21357f14",
-      "po_number": "SVC20260178-NAG",
-      "order_number": null,
+      "po_number": "GS1003315836",
+      "order_number": "GS1003315836",
       "site_code": "ASP NAG",
       "raw_site_code": "NAG",
       "ship_to_location": "0001730389 - NAGA",
@@ -4976,12 +5004,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260178-NAG"
     },
     {
       "id": "f47cf82b-d715-465f-9b8c-f8a196052d7f",
-      "po_number": "SVC20260179-APP MOA",
-      "order_number": null,
+      "po_number": "GS1003315837",
+      "order_number": "GS1003315837",
       "site_code": "APP MOA",
       "raw_site_code": "APP MOA",
       "ship_to_location": "0001645876 - MOA",
@@ -5007,12 +5036,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260179-APP MOA"
     },
     {
       "id": "a04ca48d-4771-47cd-b76a-838b829331d5",
-      "po_number": "SVC20260180-GL5",
-      "order_number": null,
+      "po_number": "GS1003315838",
+      "order_number": "GS1003315838",
       "site_code": "ASP GL5",
       "raw_site_code": "GL5",
       "ship_to_location": "0001102537 - GL5",
@@ -5052,12 +5082,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260180-GL5"
     },
     {
       "id": "19da83bd-09e7-4013-94d6-f2f5160e0cb1",
-      "po_number": "SVC20260181-APP FES",
-      "order_number": null,
+      "po_number": "GS1003315839",
+      "order_number": "GS1003315839",
       "site_code": "APP FES",
       "raw_site_code": "APP FES",
       "ship_to_location": "0001815657 - FESTIVAL",
@@ -5111,12 +5142,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260181-APP FES"
     },
     {
       "id": "3851e93b-ab1f-4481-b0d4-ec0793bc39b7",
-      "po_number": "SVC20260182-CEB",
-      "order_number": null,
+      "po_number": "GS1003315840",
+      "order_number": "GS1003315840",
       "site_code": "ASP CEB",
       "raw_site_code": "CEB",
       "ship_to_location": "0001102534 - CEBU",
@@ -5212,12 +5244,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260182-CEB"
     },
     {
       "id": "976c9938-5ebe-4d92-a58d-a2669ac3c16a",
-      "po_number": "SVC20260183-APP ANX",
-      "order_number": null,
+      "po_number": "GS1003315841",
+      "order_number": "GS1003315841",
       "site_code": "APP ANX",
       "raw_site_code": "APP ANX",
       "ship_to_location": "0001764718 - APP THE ANNEX",
@@ -5243,12 +5276,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260183-APP ANX"
     },
     {
       "id": "d85361a5-5eae-49a9-bca6-b73bcf626565",
-      "po_number": "SVC20260184-APP TRI",
-      "order_number": null,
+      "po_number": "GS1003315842",
+      "order_number": "GS1003315842",
       "site_code": "APP TRI",
       "raw_site_code": "APP TRI",
       "ship_to_location": "0001764730 - TRINOMA",
@@ -5358,12 +5392,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260184-APP TRI"
     },
     {
       "id": "37da08b2-7794-42d0-8e69-e9e4b70f8c6c",
-      "po_number": "SVC20260185-GL5",
-      "order_number": null,
+      "po_number": "GS1003315843",
+      "order_number": "GS1003315843",
       "site_code": "ASP GL5",
       "raw_site_code": "GL5",
       "ship_to_location": "0001102537 - GL5",
@@ -5389,12 +5424,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260185-GL5"
     },
     {
       "id": "1de50df3-cd9b-47c5-b1b4-8ad3ce288f73",
-      "po_number": "SVC20260186-LIM",
-      "order_number": null,
+      "po_number": "GS1003315844",
+      "order_number": "GS1003315844",
       "site_code": "ASP LIM",
       "raw_site_code": "LIM",
       "ship_to_location": "0001754212 - LIMA",
@@ -5434,12 +5470,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260186-LIM"
     },
     {
       "id": "1b94def4-1436-485a-a4f9-3c9a20e99f16",
-      "po_number": "SVC20260187-ILO",
-      "order_number": null,
+      "po_number": "GS1003315845",
+      "order_number": "GS1003315845",
       "site_code": "ASP ILO",
       "raw_site_code": "ILO",
       "ship_to_location": "0001229790 - FESTIVE WALK",
@@ -5577,12 +5614,13 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260187-ILO"
     },
     {
       "id": "ce9a7547-67f7-4acd-bfb4-ecdbb59a62cf",
-      "po_number": "SVC20260188-APP MAG",
-      "order_number": null,
+      "po_number": "GS1003315846",
+      "order_number": "GS1003315846",
       "site_code": "APP RM",
       "raw_site_code": "APP MAG",
       "ship_to_location": "0001764735 - MAGNOLIA",
@@ -5608,12 +5646,13 @@
           "needs_review": true,
           "review_reason": "Blank PART NUMBER matched by description to existing SKU 923-12850; Missing or non-positive QTY (\"BLANK\") — defaulted to 0 pending confirmation"
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260188-APP MAG"
     },
     {
       "id": "1af3fa4f-707c-400d-b3e4-6427a106b0e7",
-      "po_number": "SVC20260189-DAV",
-      "order_number": null,
+      "po_number": "GS1003315847",
+      "order_number": "GS1003315847",
       "site_code": "ASP ABR",
       "raw_site_code": "DAV",
       "ship_to_location": "0001102535 - ABREEZA",
@@ -5723,7 +5762,8 @@
           "needs_review": false,
           "review_reason": null
         }
-      ]
+      ],
+      "legacy_po_number": "SVC20260189-DAV"
     }
   ],
   "movements": []

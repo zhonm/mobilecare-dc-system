@@ -3,7 +3,6 @@ import {
   Wrench,
   PackageCheck,
   Truck,
-  History,
   Download,
   Printer,
   FileText,
@@ -24,7 +23,9 @@ import {
   getSitePackingCandidates,
   normalizePartNumber,
   parseSerialTokens,
-  validateAndScanPackItem
+  validateAndScanPackItem,
+  isValidGsPoNumber,
+  generateNextGsPoNumber
 } from '../utils/consumablesToolsEngine';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import {
@@ -33,13 +34,6 @@ import {
 } from '../utils/pdfGenerator';
 import { formatTo12HourTime } from '../utils/dateUtils';
 import ToolLabelPrintModal from './ToolLabelPrintModal';
-
-const SECTION_TABS = [
-  { id: 'assets', label: 'Tool Assets', icon: Wrench },
-  { id: 'orders_receiving', label: 'Orders & Receiving', icon: PackageCheck },
-  { id: 'shipping', label: 'Shipping & Packing List', icon: Truck },
-  { id: 'history', label: 'Movement History', icon: History }
-];
 
 export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
   const {
@@ -406,7 +400,7 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
     setPoPartSearch('');
     setPoPartFilter('ALL');
     setNewPoForm({
-      po_number: '',
+      po_number: generateNextGsPoNumber(ctOrders),
       site_code: 'DC-MDC',
       supplier: 'Apple South Asia Pte Ltd',
       remarks: '',
@@ -468,6 +462,11 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
 
   const handleCreatePo = (e) => {
     e.preventDefault();
+    const cleanPo = String(newPoForm.po_number || '').trim().toUpperCase();
+    if (!isValidGsPoNumber(cleanPo)) {
+      showToast?.('Invalid PO Number format. Must start with GS followed by 10 digits (e.g. GS1003315365).', 'error');
+      return;
+    }
     if (!newPoForm.items || newPoForm.items.length === 0) {
       showToast?.('Select at least one part to include in the Purchase Order.', 'error');
       return;
@@ -946,37 +945,6 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
             <div style={{ fontSize: '11px', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>Dedicated Shipments</div>
             <div className="font-mono" style={{ fontSize: '20px', fontWeight: 800, color: '#15803d' }}>{kpis.shipmentsCount}</div>
           </div>
-        </div>
-
-        {/* Sub-navigation Tabs */}
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
-          {SECTION_TABS.map(tab => {
-            const Icon = tab.icon;
-            const active = section === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setSection(tab.id)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '8px 14px',
-                  borderRadius: '8px',
-                  border: active ? '1px solid #0f172a' : '1px solid #cbd5e1',
-                  background: active ? '#0f172a' : '#ffffff',
-                  color: active ? '#ffffff' : '#334155',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                <Icon size={15} />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
         </div>
       </div>
 
@@ -2429,7 +2397,40 @@ export default function ConsumablesToolsModule({ initialSection = 'assets' }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
                     <label className="form-label">PO Number *</label>
-                    <input type="text" className="form-control font-mono" value={newPoForm.po_number} onChange={(e) => setNewPoForm(f => ({ ...f, po_number: e.target.value.toUpperCase() }))} placeholder="e.g. SVC20261101" required />
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        className="form-control font-mono"
+                        value={newPoForm.po_number}
+                        onChange={(e) => setNewPoForm(f => ({ ...f, po_number: e.target.value.toUpperCase().replace(/\s+/g, '') }))}
+                        placeholder="e.g. GS1003315365"
+                        style={{
+                          borderColor: newPoForm.po_number && !isValidGsPoNumber(newPoForm.po_number) ? '#dc2626' : undefined
+                        }}
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ whiteSpace: 'nowrap' }}
+                        onClick={() => setNewPoForm(f => ({ ...f, po_number: generateNextGsPoNumber(ctOrders) }))}
+                        title="Auto-generate next GS PO Number"
+                      >
+                        Auto
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        marginTop: '4px',
+                        color: newPoForm.po_number && !isValidGsPoNumber(newPoForm.po_number) ? '#dc2626' : '#64748b',
+                        fontWeight: newPoForm.po_number && !isValidGsPoNumber(newPoForm.po_number) ? 600 : 400
+                      }}
+                    >
+                      {newPoForm.po_number && !isValidGsPoNumber(newPoForm.po_number)
+                        ? 'Invalid format: must be GS + 10 digits (e.g. GS1003315365)'
+                        : 'Format: GS + 10 digits (e.g. GS1003315365)'}
+                    </div>
                   </div>
                   <div>
                     <label className="form-label">Destination Site *</label>

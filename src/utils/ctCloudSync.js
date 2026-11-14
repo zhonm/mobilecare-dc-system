@@ -102,14 +102,35 @@ export function shouldApplyRemoteCtSnapshot({
 
 /**
  * Fetches the shared Consumables & Tools state snapshot from Supabase `saved_records`.
+ * Uses a lightweight `updated_at` header check first when `localUpdatedAt` is provided
+ * so unchanged payloads incur ~100 bytes instead of downloading full `snapshot_data`.
  * @param {object|null} supabaseClient
- * @returns {Promise<{ ok: boolean, data: object|null, updatedAt: string|null, error?: string }>}
+ * @param {object} options
+ * @returns {Promise<{ ok: boolean, data: object|null, updatedAt: string|null, skippedUnchanged?: boolean, error?: string }>}
  */
-export async function fetchCtSnapshotFromSupabase(supabaseClient) {
+export async function fetchCtSnapshotFromSupabase(supabaseClient, { localUpdatedAt = null, force = false } = {}) {
   if (!supabaseClient) {
     return { ok: false, data: null, updatedAt: null, error: 'Supabase client unavailable' };
   }
   try {
+    if (localUpdatedAt && !force) {
+      const { data: header, error: headerErr } = await supabaseClient
+        .from('saved_records')
+        .select('id, updated_at')
+        .eq('id', CT_CLOUD_RECORD_ID)
+        .maybeSingle();
+
+      if (headerErr) {
+        return { ok: false, data: null, updatedAt: null, error: headerErr.message || 'Header check failed' };
+      }
+      if (!header) {
+        return { ok: true, data: null, updatedAt: null };
+      }
+      if (header.updated_at && header.updated_at === localUpdatedAt) {
+        return { ok: true, data: null, updatedAt: header.updated_at, skippedUnchanged: true };
+      }
+    }
+
     const { data, error } = await supabaseClient
       .from('saved_records')
       .select('id, snapshot_data, updated_at, saved_by_name')

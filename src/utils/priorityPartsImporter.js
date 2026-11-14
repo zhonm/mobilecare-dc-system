@@ -9,6 +9,7 @@
  */
 
 import { parseCsvRecords } from './gsxCatalogImporter.js';
+import { isValidGsPoNumber, normalizeLegacyCtOrders } from './consumablesToolsEngine.js';
 
 export const PRIORITY_SITE_CODE_ALIASES = {
   'APP MAG': 'APP RM',
@@ -198,8 +199,9 @@ export function importPriorityPartsFromCsv(csvText, options = {}) {
     const rawQty = String(row['QTY'] || '').trim();
     const parsedQty = rawQty === '' ? null : parseInt(rawQty.replace(/,/g, ''), 10);
     const rawCost = parseFloat(String(row['COST'] || '0').replace(/,/g, '')) || 0;
-    const poNumber = String(row['PO#'] || '').trim();
-    const orderNumber = String(row['ORDER #'] || '').trim();
+    const rawPoNumber = String(row['PO#'] || '').trim();
+    const orderNumber = String(row['ORDER #'] || '').trim().toUpperCase();
+    const poNumber = isValidGsPoNumber(orderNumber) ? orderNumber : rawPoNumber;
     const rawSite = String(row['SITE'] || '').trim();
     const siteCode = normalizePrioritySiteCode(rawSite);
     const shipToLocation = String(row['SHIP TO LOCATION'] || '').trim();
@@ -417,9 +419,11 @@ export function importPriorityPartsFromCsv(csvText, options = {}) {
 
   const catalogItems = Array.from(catalogByPn.values()).sort((a, b) => a.part_number.localeCompare(b.part_number));
 
+  const normalizedOrders = normalizeLegacyCtOrders(orders);
+
   return {
     catalogItems,
-    orders,
+    orders: normalizedOrders,
     movements,
     needsReview,
     descriptionConflicts: descriptionConflicts.sort((a, b) => a.part_number.localeCompare(b.part_number)),
@@ -429,7 +433,7 @@ export function importPriorityPartsFromCsv(csvText, options = {}) {
       consumablesCount: catalogItems.filter((c) => c.item_kind === 'consumable').length,
       toolsCount: catalogItems.filter((c) => c.item_kind === 'tool').length,
       syntheticSkusCount: catalogItems.filter((c) => c.is_synthetic_sku).length,
-      ordersCount: orders.length,
+      ordersCount: normalizedOrders.length,
       needsReviewCount: needsReview.length,
       descriptionConflictsCount: descriptionConflicts.length
     }
